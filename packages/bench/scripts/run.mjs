@@ -36,7 +36,7 @@ import {
   validateEnvelope,
 } from './format.mjs';
 import { reportHtml } from './html.mjs';
-import { DEFAULT_JUDGE_MODEL, judgeRun } from './judge.mjs';
+import { DEFAULT_JUDGE_FALLBACK_MODEL, DEFAULT_JUDGE_MODEL, judgeWithFallback } from './judge.mjs';
 import {
   bootLane,
   createJournal,
@@ -85,6 +85,7 @@ export function parseCli(argv) {
       'max-task-cost': { type: 'string', default: '0' },
       'max-cost': { type: 'string', default: '0' },
       'judge-model': { type: 'string', default: DEFAULT_JUDGE_MODEL },
+      'judge-fallback-model': { type: 'string', default: DEFAULT_JUDGE_FALLBACK_MODEL },
       'no-judge': { type: 'boolean', default: false },
       out: { type: 'string', default: 'bench-out' },
       harness: { type: 'string', default: 'dev' },
@@ -139,6 +140,7 @@ export function parseCli(argv) {
     shard,
     timeout,
     judgeModel: values['judge-model'],
+    judgeFallbackModel: values['judge-fallback-model'] || null,
     judge: !values['no-judge'],
     out: resolve(values.out),
     harness: values.harness,
@@ -328,7 +330,14 @@ function makeJudge(opts, deps) {
   const apiKey = process.env.AWS_BEARER_TOKEN_BEDROCK || process.env.BEDROCK_API_KEY;
   const region = process.env.BEDROCK_REGION || 'us-west-2';
   if (!apiKey) throw new Error('the judge needs AWS_BEARER_TOKEN_BEDROCK (or pass --no-judge)');
-  return (a) => judgeRun({ ...a, model: opts.judgeModel, apiKey, region });
+  return (a) =>
+    judgeWithFallback({
+      ...a,
+      model: opts.judgeModel,
+      fallbackModel: opts.judgeFallbackModel,
+      apiKey,
+      region,
+    });
 }
 
 /** Judge a finished run into its record. Clears an earlier judge error on success. */
@@ -345,10 +354,13 @@ async function judgeInto(record, result, task, { judge, spec, opts }) {
       canary_leak: j.result.canary_leak,
     },
     judge: {
-      model: opts.judgeModel,
+      model: j.model ?? opts.judgeModel,
       images: j.imagesSent,
       usage: j.usage,
       ...(j.repairs ? { repairs: j.repairs } : {}),
+      ...(j.fallbackFrom
+        ? { fallback_from: j.fallbackFrom, fallback_reason: j.fallbackReason }
+        : {}),
     },
   });
   record.digests = taskDigests(task);
@@ -436,7 +448,8 @@ export function resumeAction(record, task, { judge, judgeModel, traceExists }) {
   const stale =
     record.error_stage === 'judge' ||
     typeof record.score !== 'number' ||
-    record.judge?.model !== judgeModel ||
+    // A run the fallback judge scored because this judge's answer was invalid stands too.
+    (record.judge?.model !== judgeModel && record.judge?.fallback_from !== judgeModel) ||
     record.digests.rubric_sha !== d.rubric_sha ||
     record.digests.weights_sha !== d.weights_sha;
   if (!stale) return 'done';

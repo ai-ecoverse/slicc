@@ -595,6 +595,12 @@ describe('resumeAction', () => {
     expect(resumeAction(done(), { ...TASK, task: 'Something else.' }, ctx)).toBe('run');
   });
 
+  it('keeps a run the fallback judge scored for this judge', () => {
+    const byFallback = done({ judge: { model: 'fb', fallback_from: 'j1' } });
+    expect(resumeAction(byFallback, TASK, ctx)).toBe('done');
+    expect(resumeAction(byFallback, TASK, { ...ctx, judgeModel: 'j2' })).toBe('rejudge');
+  });
+
   it('re-judges when the judgement no longer stands', () => {
     expect(resumeAction(done(), TASK, { ...ctx, judgeModel: 'j2' })).toBe('rejudge');
     expect(
@@ -911,6 +917,9 @@ describe('leader lifecycle', () => {
       result: { score: 1, verdict: true, statuses: {} },
       judgement: { infra_error: false, reward_hacking_suspected: false },
       repairs: 1,
+      model: 'fallback-judge',
+      fallbackFrom: 'first-judge',
+      fallbackReason: 'judge output is invalid: x',
     }));
     const log = vi.fn();
     const code = await main(['--set', twoTasks(dir), '--models', 'm', '--out', out], {
@@ -927,6 +936,11 @@ describe('leader lifecycle', () => {
     expect(r1.error).toBeUndefined();
     expect(r1.leader.generation).toBe(1);
     expect(r1.judge.repairs).toBe(1);
+    expect(r1.judge).toMatchObject({
+      model: 'fallback-judge',
+      fallback_from: 'first-judge',
+      fallback_reason: 'judge output is invalid: x',
+    });
     expect(events(out).find((e) => e.type === 'task' && e.outcome === 'error')).toBeUndefined();
     expect(events(out).find((e) => e.type === 'leader-down')).toMatchObject({ task_id: 'own-1' });
     q.mockRestore();
@@ -1139,6 +1153,8 @@ describe('lanes and guardrails', () => {
       maxTaskCost: 2.5,
       maxCost: 40,
     });
+    expect(parseCli(['--set', 'x']).judgeFallbackModel).toBe('global.openai.gpt-5.6-sol');
+    expect(parseCli(['--set', 'x', '--judge-fallback-model', '']).judgeFallbackModel).toBeNull();
     expect(parseCli(['--set', 'x'])).toMatchObject({
       leaders: 1,
       bootLeaders: false,
