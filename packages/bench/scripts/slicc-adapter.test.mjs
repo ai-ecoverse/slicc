@@ -15,6 +15,7 @@ import {
   FLAGS_PROBE,
   leaderHealth,
   NO_DEFAULT_SKILLS_MISSING,
+  PROMPT_ALL_SETTLED,
   parseExportListing,
   parseModelSpec,
   parseSkillNames,
@@ -917,7 +918,7 @@ describe('runTask', () => {
     ]);
     expect(calls[2].opts.stdin).toBe(Buffer.from('hello').toString('base64'));
     const prompt = calls.find((c) => c.kind === 'cli' && c.args[0] === 'prompt');
-    expect(prompt.args).toEqual(['prompt', '-']);
+    expect(prompt.args).toEqual(['prompt', '--allsettled', PROMPT_ALL_SETTLED, '-']);
     expect(prompt.opts).toMatchObject({
       stdin: buildPrompt(task),
       timeoutMs: 60000,

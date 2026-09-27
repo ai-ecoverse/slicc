@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   CONNECT_RETRIES,
   CONNECT_RETRY_DELAY_MS,
@@ -92,6 +92,23 @@ export function callLabel(args) {
   }`;
 }
 
+export const REQUIRED_CLI_OPTIONS = ['--allsettled'];
+
+const checkedClis = new Set();
+
+export function assertCliSupports(cli, options = REQUIRED_CLI_OPTIONS, run = spawnSync) {
+  if (checkedClis.has(cli)) return;
+  const help = run(cli, ['--help'], { encoding: 'utf8', timeout: 30_000 });
+  const text = `${help.stdout ?? ''}${help.stderr ?? ''}`;
+  const missing = options.filter((o) => !text.includes(o));
+  if (help.error || missing.length) {
+    throw new Error(
+      `${cli} does not support ${missing.join(', ') || options.join(', ')}; build the CLI from this checkout (packages/slicc-cli)`
+    );
+  }
+  checkedClis.add(cli);
+}
+
 export function createLeader({
   url,
   cli = process.env.SLICC_CLI || 'slicc',
@@ -102,6 +119,7 @@ export function createLeader({
   now = Date.now,
 } = {}) {
   if (!url) throw new Error('driving the leader needs its join URL (SLICC_JOIN_URL)');
+  if (run === runProcess) assertCliSupports(cli);
   let joinUrl = url;
   async function call(args, opts = {}) {
     const options = { ...opts, timeoutMs: opts.timeoutMs ?? defaultTimeoutMs };

@@ -113,6 +113,9 @@ type promptTurn struct {
 	
 	
 	held map[string][]heldFrame
+	
+	
+	resumed bool
 }
 
 
@@ -269,6 +272,15 @@ func (p *promptTurn) settled(now time.Time, grace time.Duration) (bool, time.Dur
 	return true, 0
 }
 
+
+
+func (p *promptTurn) endForSettle() {
+	p.mu.Lock()
+	p.resumed = true
+	p.readyAt = time.Time{}
+	p.mu.Unlock()
+}
+
 func (p *promptTurn) write(text string) {
 	w := p.out
 	if w == nil {
@@ -282,6 +294,13 @@ func (p *promptTurn) write(text string) {
 func (p *promptTurn) applyAgent(ev protocol.AgentEvent) (code int, done bool) {
 	switch ev.Type {
 	case protocol.AgentContentDelta:
+		p.mu.Lock()
+		sep := p.resumed
+		p.resumed = false
+		p.mu.Unlock()
+		if sep {
+			p.write("\n\n")
+		}
 		p.write(ev.Text)
 		p.activity()
 	case protocol.AgentToolUseStart:
@@ -488,7 +507,9 @@ func promptAckRejection(raw []byte, messageID string) (string, bool) {
 }
 
 
-func cmdPrompt(ctx context.Context, joinURL, text string) int {
+
+
+func cmdPrompt(ctx context.Context, joinURL, text string, allSettledQuiet time.Duration) int {
 	messageID := newID()
 	done := make(chan int, 1)
 	finish := func(code int) {
@@ -498,6 +519,10 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		}
 	}
 	turn := &promptTurn{}
+	var all *allSettled
+	if allSettledQuiet > 0 {
+		all = newAllSettled(allSettledQuiet, time.Now())
+	}
 	
 	
 	kick := make(chan struct{}, 1)
@@ -521,7 +546,18 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			}
 			return
 		}
-		if code, done := turn.ingest(messageID, typ, raw, time.Now()); done {
+		now := time.Now()
+		if all != nil {
+			all.observe(typ, raw, now)
+		}
+		if code, done := turn.ingest(messageID, typ, raw, now); done {
+			if all != nil && code == 0 {
+				
+				all.turnEnded()
+				turn.endForSettle()
+				wake()
+				return
+			}
 			finish(code)
 			return
 		}
@@ -548,7 +584,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	}
 	defer conn.Close()
 
-	return waitPromptTurn(ctx, conn, turn, done, kick, acked, &stopping)
+	return waitPromptTurn(ctx, conn, turn, all, done, kick, acked, &stopping)
 }
 
 
@@ -558,6 +594,7 @@ func waitPromptTurn(
 	ctx context.Context,
 	conn *tray.Conn,
 	turn *promptTurn,
+	all *allSettled,
 	done <-chan int,
 	kick <-chan struct{},
 	acked <-chan struct{},
@@ -620,13 +657,39 @@ func waitPromptTurn(
 		if stopping.Load() {
 			continue
 		}
-		if ok, wait := turn.settled(time.Now(), grace); ok {
+		if wait, finished := nextSettleCheck(turn, all, time.Now(), grace); finished {
 			fmt.Println()
 			return 0
 		} else if wait > 0 {
 			settle.Stop()
 			settle.Reset(wait)
 		}
+	}
+}
+
+
+
+
+func nextSettleCheck(turn *promptTurn, all *allSettled, now time.Time, grace time.Duration) (time.Duration, bool) {
+	ok, wait := turn.settled(now, grace)
+	if all == nil {
+		return wait, ok
+	}
+	if ok {
+		all.turnEnded()
+		turn.endForSettle()
+	}
+	allOK, allWait := all.settled(now)
+	if allOK {
+		return 0, true
+	}
+	switch {
+	case wait > 0 && allWait > 0:
+		return min(wait, allWait), false
+	case wait > 0:
+		return wait, false
+	default:
+		return allWait, false
 	}
 }
 

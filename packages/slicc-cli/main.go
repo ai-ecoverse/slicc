@@ -94,16 +94,7 @@ func run(args []string) int {
 func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) int {
 	switch sub {
 	case "prompt":
-		if len(rest) == 0 {
-			fmt.Fprintln(os.Stderr, "slicc prompt: missing prompt text")
-			return 2
-		}
-		text, err := readTextArg(rest, os.Stdin)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "slicc prompt: %s\n", err)
-			return 1
-		}
-		return cmdPrompt(ctx, joinURL, text)
+		return runPromptVerb(ctx, joinURL, "prompt", rest)
 	case "exec":
 		if len(rest) == 0 {
 			fmt.Fprintln(os.Stderr, "slicc exec: missing command")
@@ -183,7 +174,11 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `slicc — headless SLICC follower CLI
 
 Usage:
-  slicc <join-url> prompt "<text>"    Stream one assistant turn from the leader, then exit
+  slicc <join-url> prompt [--allsettled <dur>] "<text>"
+                                      Stream one assistant turn from the leader, then exit.
+                                      --allsettled 2m keeps going until the turn has ended,
+                                      no scoop is still processing, and no unit has said
+                                      anything for 2m; later cone turns stream too.
   slicc <join-url> exec "<command>"   Run a command in the leader's shell, stream stdout/stderr
   slicc <join-url> new-session [--save|--skip|--erase] [--timeout 30s]
                                       Start a fresh conversation on the cone, like "New chat":
@@ -282,6 +277,54 @@ NO_COLOR keeps the bar without color.
 
 
 
+
+
+
+func runPromptVerb(ctx context.Context, joinURL, name string, rest []string) int {
+	quiet, rest, perr := parsePromptArgs(rest)
+	if perr != "" {
+		fmt.Fprintf(os.Stderr, "slicc %s: %s\n", name, perr)
+		return 2
+	}
+	if len(rest) == 0 {
+		fmt.Fprintf(os.Stderr, "slicc %s: missing prompt text\n", name)
+		return 2
+	}
+	text, err := readTextArg(rest, os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "slicc %s: %s\n", name, err)
+		return 1
+	}
+	return cmdPrompt(ctx, joinURL, text, quiet)
+}
+
+
+
+
+func parsePromptArgs(args []string) (time.Duration, []string, string) {
+	var quiet time.Duration
+	for len(args) > 0 {
+		a := args[0]
+		var val string
+		switch {
+		case a == "--allsettled":
+			if len(args) < 2 {
+				return 0, nil, "--allsettled needs a duration, like 2m"
+			}
+			val, args = args[1], args[2:]
+		case strings.HasPrefix(a, "--allsettled="):
+			val, args = strings.TrimPrefix(a, "--allsettled="), args[1:]
+		default:
+			return quiet, args, ""
+		}
+		d, err := time.ParseDuration(val)
+		if err != nil || d <= 0 {
+			return 0, nil, fmt.Sprintf("--allsettled needs a positive duration, like 2m (got %q)", val)
+		}
+		quiet = d
+	}
+	return quiet, args, ""
+}
 
 func readTextArg(args []string, stdin io.Reader) (string, error) {
 	if len(args) == 1 {

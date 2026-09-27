@@ -90,16 +90,7 @@ func cmdCloud(ctx context.Context, verb string, args []string) int {
 		}
 		return cmdFollow(ctx, session.JoinURL, fa)
 	case "prompt-cloud":
-		if len(rest) == 0 {
-			fmt.Fprintln(os.Stderr, "slicc prompt-cloud: missing prompt text")
-			return 2
-		}
-		text, err := readTextArg(rest, os.Stdin)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "slicc prompt-cloud: %s\n", err)
-			return 1
-		}
-		return cmdPrompt(ctx, session.JoinURL, text)
+		return runPromptVerb(ctx, session.JoinURL, "prompt-cloud", rest)
 	case "exec-cloud":
 		if len(rest) == 0 {
 			fmt.Fprintln(os.Stderr, "slicc exec-cloud: missing command")

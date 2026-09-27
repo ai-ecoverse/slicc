@@ -7,6 +7,8 @@ export const SKILLS_STASH = '/workspace/.bench-skills-builtin';
 export const EXTRA_SKILLS_ROOT = '/workspace/bench-skills';
 export const MAX_SCREENSHOTS = 10;
 
+export const PROMPT_ALL_SETTLED = '2m';
+
 const POLL_MS = 10_000;
 const RECAPTURE_MS = 30_000;
 const STEP_CHARS = 4000;
@@ -740,7 +742,7 @@ export async function runTask({
     const shooter = startCapture(leader, dir, { now, ...capture });
     const abort = new AbortController();
     const watcher = maxCost > 0 ? watchSpend(leader, before, maxCost, abort, costPollMs) : null;
-    const reply = await leader.cli(['prompt', '-'], {
+    const reply = await leader.cli(['prompt', '--allsettled', PROMPT_ALL_SETTLED, '-'], {
       stdin: buildPrompt(task),
       timeoutMs: timeout * 1000,
       interrupt: true,
