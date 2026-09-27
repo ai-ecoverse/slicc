@@ -20,16 +20,9 @@ import {
   type SabPostLike,
   type SyncSabTransport,
 } from '../realm/sync-sab-bridge.js';
+import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import type { WasmProcessInitMsg } from './protocol.js';
-
-/** Emscripten's (WASI) errno numbers for the kernel errors a syscall returns. */
-const WASI_ERRNO: Readonly<Partial<Record<string, number>>> = {
-  EBADF: 8,
-  EINVAL: 28,
-  EIO: 29,
-  EMFILE: 33,
-  EPIPE: 64,
-};
+import { wasiErrno } from './wasi-errno.js';
 
 /** A kernel error from a syscall, carrying its errno name. */
 export class SyscallError extends Error {
@@ -69,10 +62,19 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
   };
 }
 
+/** An open stream of the module's FS; `sliccKernelFd` marks one backed by a kernel fd. */
+export interface ProcessStream {
+  stream_ops: StreamOps;
+  sliccKernelFd?: number;
+}
+
 /** The slice of Emscripten's FS the runtime uses. */
 export interface ProcessFs extends EmscriptenFsForHook {
-  getStream(fd: number): { stream_ops: StreamOps } | null;
+  getStream(fd: number): ProcessStream | null;
   mkdirTree(path: string): void;
+  cwd(): string;
+  read(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
+  write(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
 }
 
 interface StreamOps {
@@ -84,12 +86,15 @@ interface StreamOps {
 /** Point fds 0, 1, 2 of the module's FS at the kernel descriptors of the same numbers. */
 export function wireKernelStdio(Fs: ProcessFs, sys: ProcessSys): void {
   const fail = (e: unknown): never => {
-    if (e instanceof SyscallError) throw new Fs.ErrnoError(WASI_ERRNO[e.code] ?? WASI_ERRNO.EIO!);
+    if (e instanceof SyscallError) throw new Fs.ErrnoError(wasiErrno(e.code));
     throw e;
   };
   for (const fd of [0, 1, 2]) {
     const stream = Fs.getStream(fd);
     if (!stream) continue;
+    // Emscripten copies a stream's own properties on dup / dup2, so the mark
+    // follows the descriptor to whatever fd the program moves it to.
+    stream.sliccKernelFd = fd;
     stream.stream_ops = {
       ...stream.stream_ops,
       read: (_s, buffer, offset, length) => {
@@ -117,6 +122,8 @@ export function wireKernelStdio(Fs: ProcessFs, sys: ProcessSys): void {
 interface RunningModule {
   FS: ProcessFs;
   callMain(args: string[]): number | undefined;
+  /** posix_spawn / waitpid for the toolchain's libc shims. */
+  sliccKernel?: ProcessKernel;
 }
 
 /** Evaluate the glue with `Module` (overridable in tests). */
@@ -215,6 +222,13 @@ export async function runWasmProcess(
     { cwd: init.cwd }
   );
   wireKernelStdio(running.FS, sys);
+  running.sliccKernel = createProcessKernel({
+    transport,
+    Fs: running.FS,
+    env: init.env,
+    beforeSpawn: () => vfs.flush(),
+    afterChild: () => vfs.invalidate(),
+  });
   try {
     return running.callMain(init.args) ?? 0;
   } catch (e) {

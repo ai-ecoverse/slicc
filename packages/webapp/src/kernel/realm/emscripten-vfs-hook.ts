@@ -30,6 +30,14 @@ import type { SyncFsPosixBridge } from './sync-fs-xhr-bridge.js';
 /** Top-level names left to the module's own filesystem. */
 const MODULE_OWNED_DIRS = new Set(['dev', 'proc']);
 
+/**
+ * Directories the shell synthesizes without listing them at `/`: the command
+ * registry (`/usr/bin`, and `/bin` as its alias). Mounted when they stat as
+ * directories, so a tool that searches `$PATH` itself (make, a shell) finds
+ * `/usr/bin/<command>` and hands it to `posix_spawn`.
+ */
+const SYNTHETIC_DIRS = ['/usr', '/bin'];
+
 /** An Emscripten `FS` the hook can mount into. */
 export interface EmscriptenFsForHook extends LiveMountFsApi {
   chdir(path: string): void;
@@ -99,13 +107,16 @@ function topLevelDirs(bridge: SyncFsPosixBridge, warn: (message: string) => void
     warn(`cannot list the VFS root, nothing mounted: ${String(err)}`);
     return [];
   }
+  const candidates = names
+    .filter((name) => name && !name.includes('/') && !MODULE_OWNED_DIRS.has(name))
+    .map((name) => `/${name}`);
+  for (const dir of SYNTHETIC_DIRS) if (!candidates.includes(dir)) candidates.push(dir);
   const dirs: string[] = [];
-  for (const name of names) {
-    if (!name || name.includes('/') || MODULE_OWNED_DIRS.has(name)) continue;
+  for (const dir of candidates) {
     try {
-      if (bridge.stat(`/${name}`).isDirectory) dirs.push(`/${name}`);
+      if (bridge.stat(dir).isDirectory) dirs.push(dir);
     } catch {
-      /* vanished or not readable — skip */
+      /* vanished, not readable, or not synthesized here — skip */
     }
   }
   return dirs;
