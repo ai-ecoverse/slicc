@@ -19,6 +19,22 @@ export class KernelPipe {
     return this.size;
   }
 
+  get readReady(): boolean {
+    return this.size > 0 || this.writers === 0;
+  }
+
+  get writeReady(): boolean {
+    return this.size < this.capacity || this.readers === 0;
+  }
+
+  get writersGone(): boolean {
+    return this.writers === 0;
+  }
+
+  get readersGone(): boolean {
+    return this.readers === 0;
+  }
+
   openRead(): void {
     this.readers += 1;
   }

@@ -1,105 +1,73 @@
-import { type EmscriptenFsForHook, mountVfsIntoEmscripten } from '../realm/emscripten-vfs-hook.js';
+import { mountVfsIntoEmscripten } from '../realm/emscripten-vfs-hook.js';
 import { SyncFsCache } from '../realm/sync-fs-cache.js';
+import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import {
   createSyncFsSabBridge,
   createSyncSabTransport,
   type SabPostLike,
   type SyncSabTransport,
 } from '../realm/sync-sab-bridge.js';
+import type { SyncSabRequestBody } from '../realm/sync-sab-wire.js';
+import type { PollState } from './fd-table.js';
+import {
+  KernelStreams,
+  type ProcessFs,
+  type ProcessPipeFs,
+  type ProcessSys,
+  SyscallError,
+} from './kernel-streams.js';
 import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import type { WasmProcessInitMsg } from './protocol.js';
-import { wasiErrno } from './wasi-errno.js';
 
-export class SyscallError extends Error {
-  constructor(readonly code: string) {
-    super(code);
-  }
-}
-
-export interface ProcessSys {
-  read(fd: number, max: number): Uint8Array;
-
-  write(fd: number, bytes: Uint8Array): number;
-}
+export {
+  type ProcessFs,
+  type ProcessStream,
+  type ProcessSys,
+  SyscallError,
+} from './kernel-streams.js';
 
 export function kernelSys(transport: SyncSabTransport): ProcessSys {
+  const call = (req: SyncSabRequestBody, label: string): SyncFsResult => {
+    const r = transport.call(req, Number.POSITIVE_INFINITY, label);
+    if (!r.ok) throw new SyscallError(r.errno);
+    return r;
+  };
+  const json = (r: SyncFsResult): unknown => (r.ok && r.kind === 'json' ? r.json : undefined);
   return {
     read(fd, max) {
-      const r = transport.call(
-        { op: 'fd-read', fd, max },
-        Number.POSITIVE_INFINITY,
-        `fd-read ${fd}`
-      );
-      if (!r.ok) throw new SyscallError(r.errno);
-      return r.kind === 'bytes' ? r.bytes : new Uint8Array(0);
+      const r = call({ op: 'fd-read', fd, max }, `fd-read ${fd}`);
+      return r.ok && r.kind === 'bytes' ? r.bytes : new Uint8Array(0);
     },
     write(fd, bytes) {
-      const r = transport.call(
-        { op: 'fd-write', fd, body: bytes },
-        Number.POSITIVE_INFINITY,
-        `fd-write ${fd}`
-      );
-      if (!r.ok) throw new SyscallError(r.errno);
-      return r.kind === 'json' && typeof r.json === 'number' ? r.json : bytes.length;
+      const n = json(call({ op: 'fd-write', fd, body: bytes }, `fd-write ${fd}`));
+      return typeof n === 'number' ? n : bytes.length;
+    },
+    close(fd) {
+      call({ op: 'fd-close', fd }, `fd-close ${fd}`);
+    },
+    pipe() {
+      return json(call({ op: 'fd-pipe' }, 'fd-pipe')) as [number, number];
+    },
+    poll(fd) {
+      return json(call({ op: 'fd-poll', fd }, `fd-poll ${fd}`)) as PollState;
     },
   };
 }
 
-export interface ProcessStream {
-  stream_ops: StreamOps;
-  sliccKernelFd?: number;
-}
-
-export interface ProcessFs extends EmscriptenFsForHook {
-  getStream(fd: number): ProcessStream | null;
-  mkdirTree(path: string): void;
-  cwd(): string;
-  read(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
-  write(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
-}
-
-interface StreamOps {
-  read?: (stream: unknown, buffer: Uint8Array, offset: number, length: number) => number;
-  write?: (stream: unknown, buffer: Uint8Array, offset: number, length: number) => number;
-  fsync?: () => number;
-}
-
-export function wireKernelStdio(Fs: ProcessFs, sys: ProcessSys): void {
-  const fail = (e: unknown): never => {
-    if (e instanceof SyscallError) throw new Fs.ErrnoError(wasiErrno(e.code));
-    throw e;
-  };
+export function wireKernelStdio(Fs: ProcessFs, streams: KernelStreams): void {
   for (const fd of [0, 1, 2]) {
     const stream = Fs.getStream(fd);
-    if (!stream) continue;
-
-    stream.sliccKernelFd = fd;
-    stream.stream_ops = {
-      ...stream.stream_ops,
-      read: (_s, buffer, offset, length) => {
-        try {
-          const bytes = sys.read(fd, length);
-          buffer.set(bytes, offset);
-          return bytes.length;
-        } catch (e) {
-          return fail(e);
-        }
-      },
-      write: (_s, buffer, offset, length) => {
-        try {
-          return sys.write(fd, buffer.slice(offset, offset + length));
-        } catch (e) {
-          return fail(e);
-        }
-      },
-      fsync: () => 0,
-    };
+    if (stream) streams.attach(stream, fd);
   }
 }
 
 interface RunningModule {
   FS: ProcessFs;
   callMain(args: string[]): number | undefined;
+  sliccRunMain?: (args: string[]) => number | undefined;
+  PIPEFS?: ProcessPipeFs;
+
+  sliccSigpipe?: () => number;
 
   sliccKernel?: ProcessKernel;
 }
@@ -114,6 +82,10 @@ const GLUE_TRAILER = [
   'Object.assign(ENV, Module.sliccEnv);',
   "if (typeof FS !== 'undefined') Module.FS ??= FS;",
   "if (typeof callMain === 'function') Module.callMain ??= callMain;",
+  "if (typeof sliccRunMain === 'function') Module.sliccRunMain ??= sliccRunMain;",
+  "if (typeof PIPEFS !== 'undefined') Module.PIPEFS ??= PIPEFS;",
+
+  "Module.sliccSigpipe ??= () => (typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
 ].join('\n');
 
 export const evaluateGlue: GlueEvaluator = (glue, module) => {
@@ -185,7 +157,9 @@ export async function runWasmProcess(
     },
     { cwd: init.cwd }
   );
-  wireKernelStdio(running.FS, sys);
+  const streams = new KernelStreams(running.FS, sys, () => running.sliccSigpipe?.() === 1);
+  wireKernelStdio(running.FS, streams);
+  if (running.PIPEFS) streams.usePipes(running.PIPEFS);
   running.sliccKernel = createProcessKernel({
     transport,
     Fs: running.FS,
@@ -194,7 +168,7 @@ export async function runWasmProcess(
     afterChild: () => vfs.invalidate(),
   });
   try {
-    return running.callMain(init.args) ?? 0;
+    return (running.sliccRunMain ?? running.callMain)(init.args) ?? 0;
   } catch (e) {
     const status = (e as { status?: unknown })?.status;
     if (typeof status !== 'number') throw e;

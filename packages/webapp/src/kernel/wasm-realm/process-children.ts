@@ -1,6 +1,6 @@
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
 import type { ChildStdio } from './children.js';
-import type { ProcessFs, ProcessStream } from './process-runtime.js';
+import type { ProcessFs, ProcessStream } from './kernel-streams.js';
 import { wasiErrno } from './wasi-errno.js';
 
 export interface ProcessKernel {

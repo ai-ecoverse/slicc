@@ -8,12 +8,26 @@ export class KernelError extends Error {
   }
 }
 
+export interface PollState {
+  readable: boolean;
+
+  writable: boolean;
+
+  hangup: boolean;
+}
+
 export interface KernelFile {
   read?(max: number): Promise<Uint8Array>;
 
   write?(bytes: Uint8Array): Promise<number>;
 
   close(): void;
+
+  poll?(): PollState;
+}
+
+export function pollFile(file: KernelFile): PollState {
+  return file.poll?.() ?? { readable: !!file.read, writable: !!file.write, hangup: false };
 }
 
 export class OpenFile {
@@ -37,7 +51,11 @@ export function openPipe(capacity?: number): { read: OpenFile; write: OpenFile }
   pipe.openRead();
   pipe.openWrite();
   return {
-    read: new OpenFile({ read: (max) => pipe.read(max), close: () => pipe.closeRead() }),
+    read: new OpenFile({
+      read: (max) => pipe.read(max),
+      close: () => pipe.closeRead(),
+      poll: () => ({ readable: pipe.readReady, writable: false, hangup: pipe.writersGone }),
+    }),
     write: new OpenFile({
       write: async (bytes) => {
         try {
@@ -48,6 +66,7 @@ export function openPipe(capacity?: number): { read: OpenFile; write: OpenFile }
         }
       },
       close: () => pipe.closeWrite(),
+      poll: () => ({ readable: false, writable: pipe.writeReady, hangup: pipe.readersGone }),
     }),
   };
 }

@@ -66,10 +66,10 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
   const token = mintSyncFsToken({ fs: opts.fs, cwd: opts.cwd });
   const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + SAB_DEFAULT_WINDOW_BYTES);
   const worker = (opts.createWorker ?? defaultWorker)();
-  const dispatch = (req: SyncSabDispatchRequest): Promise<SyncFsResult> => {
+  const dispatch = async (req: SyncSabDispatchRequest): Promise<SyncFsResult> => {
     if (isWasmSyscall(req)) return process.syscall(req);
     if ('op' in req && typeof req.op === 'string' && 'path' in req) return dispatchSyncFs(req);
-    return Promise.resolve({ ok: false, errno: 'ENOSYS', message: 'wasm-realm: no exec yet' });
+    return { ok: false, errno: 'ENOSYS', message: 'wasm-realm: no exec yet' };
   };
   const responder = attachSyncSabResponder(worker, sab, token, { dispatch });
 
