@@ -1,6 +1,7 @@
 /**
  * Marking web links, GitHub issue/PR references, dates, times, and the
- * questions the agent asked. Questions also get inline answer controls.
+ * questions the agent asked. Question metadata stays in the message for hover
+ * previews, while the live answer controls are shown in the composer.
  *
  * The DOM half of four detectors (`core/github-mentions.ts`,
  * `core/time-mentions.ts`, `core/agent-questions.ts`, and markdown's own
@@ -10,7 +11,7 @@
  * exactly as the markdown renderer produced it.
  *
  * Decoration marks preview anchors with `data-preview="<kind>"`; showing a
- * card on hover and routing inline answers belongs to `ui/wc/wire-mention-previews.ts`.
+ * card on hover and routing composer answers belongs to `ui/wc/wire-mention-previews.ts`.
  *
  * ## Where it declines to look
  *
@@ -291,7 +292,7 @@ function addQuestion(root: HTMLElement, spans: QuestionTextSpan[], q: MarkedQues
   else lastBlock?.after(prompt);
 }
 
-/** Mark detected spans and place answer controls in the transcript itself. */
+/** Mark detected spans and keep their answer metadata beside them for hover cards. */
 async function markQuestions(root: HTMLElement, ctx: DecorateContext): Promise<void> {
   if (root.querySelector(`.${AGENT_QUESTION_CLASS}`)) return;
   const { text, spans } = questionText(root);
