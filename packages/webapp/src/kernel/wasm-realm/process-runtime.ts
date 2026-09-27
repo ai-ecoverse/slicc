@@ -127,14 +127,22 @@ export function glueBody(glue: string): string {
   return glue.startsWith('#!') ? glue.slice(glue.indexOf('\n') + 1) : glue;
 }
 
-const evaluateGlue: GlueEvaluator = (glue, module) => {
-  // ENV is the glue's own variable: filled right after the glue body runs,
-  // before the (asynchronous) instantiation reads it.
+/**
+ * Runs in the glue's scope right after its body. ENV, FS and callMain are the
+ * glue's own variables: ENV is filled before the (asynchronous) instantiation
+ * reads it, and FS and callMain are taken from the scope, so a program linked
+ * without exporting them (`-sEXPORTED_RUNTIME_METHODS`) still runs.
+ */
+const GLUE_TRAILER = [
+  'Object.assign(ENV, Module.sliccEnv);',
+  "if (typeof FS !== 'undefined') Module.FS ??= FS;",
+  "if (typeof callMain === 'function') Module.callMain ??= callMain;",
+].join('\n');
+
+export const evaluateGlue: GlueEvaluator = (glue, module) => {
   let run: (module: object) => void;
   try {
-    run = new Function('Module', `${glueBody(glue)}\n;Object.assign(ENV, Module.sliccEnv);`) as (
-      module: object
-    ) => void;
+    run = new Function('Module', `${glueBody(glue)}\n;${GLUE_TRAILER}`) as (module: object) => void;
   } catch (e) {
     throw e instanceof EvalError ? new Error(EVAL_BLOCKED) : e;
   }
