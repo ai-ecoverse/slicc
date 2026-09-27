@@ -20,7 +20,7 @@ if (mode !== 'never') {
     writeFileSync(
       process.env.SLICC_JOIN_FILE || process.env.SLICC_GW_JOIN_FILE,
       JSON.stringify({
-        joinUrl: 'https://www.sliccy.ai/join/fake.tray',
+        joinUrl: process.env.FAKE_JOIN_URL || 'https://www.sliccy.ai/join/fake.tray',
         trayId: 'fake-tray',
         sliccVersion: '0.0.0-fake',
         updatedAt: updatedAt.toISOString(),

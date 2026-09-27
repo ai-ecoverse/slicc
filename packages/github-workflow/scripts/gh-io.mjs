@@ -18,7 +18,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { CONE_CONFIG_PATH, formatGithubOutput, tailLines } from './lib.mjs';
+import { CONE_CONFIG_PATH, formatGithubOutput, JOIN_FILE_PATH, tailLines } from './lib.mjs';
 
 /**
  * True when `metaUrl` (a script's `import.meta.url`) is the entry point of
@@ -40,6 +40,14 @@ export function joinFilePath(home = homeDir()) {
   const override = process.env.SLICC_GW_JOIN_FILE?.trim();
   if (override) return override;
   return join(home, 'join.json');
+}
+
+/**
+ * Join file a published node-server writes. `SLICC_GW_LEGACY_JOIN_FILE` is the
+ * test seam; production stays {@link JOIN_FILE_PATH}.
+ */
+export function legacyJoinFilePath() {
+  return process.env.SLICC_GW_LEGACY_JOIN_FILE?.trim() || JOIN_FILE_PATH;
 }
 
 /** `/slicc/cone-config.json` unless overridden (test seam — node-server itself always reads the default). */

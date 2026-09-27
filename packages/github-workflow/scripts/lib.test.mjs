@@ -28,6 +28,7 @@ import {
   resolvePinnedWebapp,
   serializeSecretsEnv,
   shellQuote,
+  sourceHonorsJoinFile,
   tailLines,
   truncateForOutput,
   validateSecretEntry,
@@ -179,6 +180,12 @@ describe('leader argv and env', () => {
       joinFile: '   ',
     });
     expect(cleared.SLICC_JOIN_FILE).toBeUndefined();
+  });
+  it('recognises a node-server build by the join-file env name in its source', () => {
+    expect(sourceHonorsJoinFile('')).toBe(false);
+    expect(sourceHonorsJoinFile('writeFile("/tmp/slicc-join.json")')).toBe(false);
+    expect(sourceHonorsJoinFile('const key = "SLICC_JOIN_FILE";')).toBe(true);
+    expect(sourceHonorsJoinFile(null)).toBe(false);
   });
 });
 

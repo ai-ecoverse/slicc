@@ -3,13 +3,14 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FAKE_NODE_SERVER, setup } from '../tests/helpers.mjs';
+import { FAKE_LEGACY_NODE_SERVER, FAKE_NODE_SERVER, setup } from '../tests/helpers.mjs';
 import { isAlive, readState, terminate } from './gh-io.mjs';
 import {
   bootLeader,
   installNodeServer,
   launchPinnedWebapp,
   main,
+  nodeServerHonorsJoinFile,
   pollJoinFile,
   readBootInputs,
   removeCredentialFiles,
@@ -95,6 +96,71 @@ describe('start-leader', () => {
     expect(readFileSync(state.logPath, 'utf8')).toContain(`JOIN=${file}`);
     removeCredentialFiles(state.secretsFile, state.joinFile);
     expect(existsSync(file)).toBe(false);
+  });
+
+  it('boots a node-server that writes only the legacy join file', async () => {
+    const legacy = join(t.root, 'legacy-join.json');
+    process.env.SLICC_GW_LEGACY_JOIN_FILE = legacy;
+    t.inputs({
+      'node-server': FAKE_LEGACY_NODE_SERVER,
+      duration: '1m',
+      'boot-timeout': '10s',
+      'mask-join-url': 'false',
+    });
+    const result = await main({ pollMs: 40 });
+    expect(result.trayId).toBe('legacy-tray');
+    const state = readState(t.home);
+    expect(state.joinFile).toBe(legacy);
+    expect(existsSync(join(t.home, 'join.json'))).toBe(false);
+    expect(readFileSync(state.logPath, 'utf8')).toContain('per-leader-env=0');
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining(`join=${legacy} (legacy)`));
+  });
+
+  it('does not take another lane from the legacy file when both leaders are new', async () => {
+    delete process.env.SLICC_GW_JOIN_FILE;
+    const legacy = join(t.root, 'legacy-join.json');
+    process.env.SLICC_GW_LEGACY_JOIN_FILE = legacy;
+    const homeA = join(t.root, 'lane-a');
+    const homeB = join(t.root, 'lane-b');
+    mkdirSync(homeA, { recursive: true });
+    mkdirSync(homeB, { recursive: true });
+    const urlA = 'https://www.sliccy.ai/join/lane-a.tray';
+    const urlB = 'https://www.sliccy.ai/join/lane-b.tray';
+    t.inputs({ duration: '1m', 'boot-timeout': '10s', 'mask-join-url': 'false' });
+    const boot = async (home, ownUrl, otherUrl) => {
+      writeFileSync(
+        legacy,
+        JSON.stringify({ joinUrl: otherUrl, trayId: 'other', updatedAt: new Date().toISOString() })
+      );
+      process.env.FAKE_JOIN_URL = ownUrl;
+      return bootLeader({
+        home,
+        entry: FAKE_NODE_SERVER,
+        ...readBootInputs(),
+        pollMs: 40,
+        maskJoinUrl: false,
+      });
+    };
+    const a = await boot(homeA, urlA, urlB);
+    const b = await boot(homeB, urlB, urlA);
+    expect(a.joinUrl).toBe(urlA);
+    expect(b.joinUrl).toBe(urlB);
+    expect(readState(homeA).joinFile).toBe(join(homeA, 'join.json'));
+    expect(readState(homeB).joinFile).toBe(join(homeB, 'join.json'));
+    await terminate(a.pid, 500);
+    await terminate(b.pid, 500);
+  });
+
+  it('reads the join-file capability from the entry or its cloud-status sibling', () => {
+    const dir = join(t.root, 'pkg');
+    mkdirSync(dir, { recursive: true });
+    const entry = join(dir, 'index.js');
+    writeFileSync(entry, 'console.log("published")');
+    expect(nodeServerHonorsJoinFile(entry)).toBe(false);
+    writeFileSync(join(dir, 'cloud-status.js'), 'const name = "SLICC_JOIN_FILE";');
+    expect(nodeServerHonorsJoinFile(entry)).toBe(true);
+    writeFileSync(entry, 'const name = "SLICC_JOIN_FILE";');
+    expect(nodeServerHonorsJoinFile(join(t.root, 'missing.js'))).toBe(false);
   });
 
   it('masks the join url by default', async () => {
