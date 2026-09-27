@@ -640,6 +640,27 @@ pitfall in docs/pitfalls.md). Never move a decorative loop to
 `setTimeout`/`setInterval` for the same reason: timers keep firing in that tab
 even when it IS hidden; rAF is the only scheduler that pauses with visibility.
 
+## Theming and the always-dark terminal
+
+Extended reference for the theming bullet in the package guide. Components
+reference prototype tokens (`var(--canvas)`, `--ink`, `--ctx`, `--rainbow`, …)
+that inherit through shadow roots — don't re-declare them. Light is the default;
+dark is selected by `body.dark` / `.dark` / `[data-theme="dark"]`.
+
+- **The terminal surface is always dark** (`--term-bg` / `--term-fg`, resolved by
+  `terminal-theme.ts`) even under a light page theme. ANSI accents still follow
+  `--ctx` / `--rose` / `--cyan` / … so active theme preferences propagate to the
+  terminal palette.
+- **Resolve the palette from the terminal/container element**, not bare
+  `document.documentElement`, and watch `.wcui-frame` too — `applyShellContext`
+  sets scoop/freezer `--ctx` there.
+- The `term` dock-tree leaf uses `.dock-tree__tile--chrome-dark`; floating
+  `panel-id="term"` panels get the same always-dark chrome so panel-layouts do
+  not recreate a cream frame.
+- Kernel/Node code must deep-import
+  `@slicc/webcomponents/workbench/terminal-theme` (the barrel constructs
+  `CSSStyleSheet`).
+
 ## Storybook PR screenshots
 
 Agents can capture affected Storybook stories and attach useful screenshots to
