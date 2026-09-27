@@ -9,6 +9,7 @@ import {
   type SyncSabDispatchRequest,
 } from '../realm/sync-sab-responder.js';
 import { SAB_DEFAULT_WINDOW_BYTES, SAB_HEADER_BYTES } from '../realm/sync-sab-wire.js';
+import type { ChildSpawner } from './children.js';
 import type { FdTable } from './fd-table.js';
 import { isWasmSyscall, WasmProcess } from './process.js';
 import {
@@ -40,6 +41,8 @@ export interface SpawnWasmOptions {
   createWorker?: () => WasmWorkerLike;
 
   onError?: (message: string) => void;
+
+  spawner?: ChildSpawner;
 }
 
 export interface WasmProcessHandle {
@@ -59,7 +62,7 @@ function defaultWorker(): WasmWorkerLike {
 }
 
 export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
-  const process = new WasmProcess(opts.pid, opts.fds);
+  const process = new WasmProcess(opts.pid, opts.fds, opts.spawner);
   const token = mintSyncFsToken({ fs: opts.fs, cwd: opts.cwd });
   const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + SAB_DEFAULT_WINDOW_BYTES);
   const worker = (opts.createWorker ?? defaultWorker)();

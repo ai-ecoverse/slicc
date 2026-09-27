@@ -39,6 +39,10 @@ npm root -g                     # print /shared/lib/node_modules
 
 Global bins installed with `-g` are on the default `$PATH` via `/shared/bin/<name>.jsh` delegators — invoke them by bare name from any cwd (delegators run `ipx --global <bin>` so a same-named local package does not shadow the global install). Local uninstall/list/root work without `-g` against the cwd `package.json`.
 
+## Wasm programs (`wasm`)
+
+A global package that ships wasm-realm programs (a `slicc.commands` manifest in its `package.json`, or an `@ai-ecoverse/wasm-*` package with `bin/<x>` + `bin/<x>.wasm`) makes each program a command: `ipk add -g @ai-ecoverse/wasm-<tool>`, then run it by name. `wasm --list` lists them; `which <name>` shows the package. A built-in of the same name (`sed`, `grep`, `cat`, …) still wins, so run the program with `wasm <name> ARGS...`.
+
 ## Conda / emscripten-forge (`ipk mamba`)
 
 `ipk mamba install <pkg>[=<version>]` installs emscripten-wasm32 packages from emscripten-forge / conda-forge into `/shared/lib/conda` (not `node_modules`). Prefer this for **forge C/WASM libraries** (for example `zlib`, `libpng`) that provide headers, `.a`, and SIDE_MODULE `.so` under that prefix.

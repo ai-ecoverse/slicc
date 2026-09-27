@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SyncFsResult } from '../../../src/kernel/realm/sync-fs-dispatch.js';
 import type { SyncSabTransport } from '../../../src/kernel/realm/sync-sab-bridge.js';
 import {
+  evaluateGlue,
   glueBody,
   kernelSys,
   type ProcessFs,
@@ -108,5 +109,36 @@ describe('glueBody', () => {
   it("drops an extensionless output's shebang line and keeps other glue as is", () => {
     expect(glueBody('#!/usr/bin/env node\nvar Module = 1;\n')).toBe('var Module = 1;\n');
     expect(glueBody('var Module = 1;')).toBe('var Module = 1;');
+  });
+});
+
+describe('evaluateGlue', () => {
+  const glue = [
+    '#!/usr/bin/env node',
+    "var Module = typeof Module != 'undefined' ? Module : {};",
+    'var ENV = { HOME: "/" };',
+    'var FS = { own: true };',
+    'function callMain(args) { return args.length; }',
+  ].join('\n');
+
+  it('fills ENV and takes FS and callMain from the glue when it exports neither', () => {
+    const module: { sliccEnv: object; FS?: { own: boolean }; callMain?: (a: string[]) => number } =
+      { sliccEnv: { A: '1' } };
+    evaluateGlue(glue, module);
+    expect(module.FS).toEqual({ own: true });
+    expect(module.callMain?.(['x', 'y'])).toBe(2);
+  });
+
+  it('keeps what the glue exports itself', () => {
+    const exported = { exported: true };
+    const module = { sliccEnv: {}, FS: exported };
+    evaluateGlue(glue, module);
+    expect(module.FS).toBe(exported);
+  });
+
+  it('runs a glue without a filesystem', () => {
+    const module: { sliccEnv: object; FS?: object } = { sliccEnv: {} };
+    evaluateGlue('var ENV = {};', module);
+    expect(module.FS).toBeUndefined();
   });
 });

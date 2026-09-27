@@ -23,6 +23,14 @@ function ctx(files: Record<string, string>, stdin = ''): CommandContext {
         return files[p];
       },
       readFileBuffer: async (p: string) => bytes(files[p] ?? ''),
+      exists: async (p: string) => Object.keys(files).some((f) => f === p || f.startsWith(`${p}/`)),
+      readdir: async (p: string) => {
+        const names = Object.keys(files)
+          .filter((f) => f.startsWith(`${p}/`))
+          .map((f) => f.slice(p.length + 1).split('/')[0]);
+        if (names.length === 0) throw new Error(`ENOENT: no such directory, '${p}'`);
+        return [...new Set(names)];
+      },
       stat: async (p: string) => {
         if (!(p in files)) throw new Error(`ENOENT: no such file, '${p}'`);
         return { size: files[p].length, mtime: new Date(0) };
@@ -188,5 +196,67 @@ describe('wasm command', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  describe('installed programs', () => {
+    const pkg = '/shared/lib/node_modules/@ai-ecoverse/wasm-gnu';
+    const installed = {
+      [`${pkg}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-gnu',
+        slicc: {
+          commands: {
+            tac: { glue: 'bin/coreutils', wasm: 'lib/coreutils.wasm', argv0: 'tac' },
+            sed: { glue: 'bin/sed', wasm: 'bin/sed.wasm' },
+          },
+        },
+      }),
+      [`${pkg}/bin/coreutils`]: 'CORE',
+      [`${pkg}/lib/coreutils.wasm`]: 'W',
+      [`${pkg}/bin/sed`]: 'SED',
+      [`${pkg}/bin/sed.wasm`]: 'W',
+    };
+
+    beforeEach(() => {
+      compile.mockResolvedValue({});
+      spawn.mockImplementation((opts) => ({
+        pid: opts.pid,
+        exited: Promise.resolve(0),
+        kill: vi.fn(),
+      }));
+    });
+
+    it('lists them with --list', async () => {
+      const r = await runWasmCommand(['--list'], ctx(installed));
+      expect(r).toEqual({
+        stdout: 'sed  @ai-ecoverse/wasm-gnu\ntac  @ai-ecoverse/wasm-gnu\n',
+        stderr: '',
+        exitCode: 0,
+      });
+    });
+
+    it('runs a bare name with its glue, module and argv0', async () => {
+      await runWasmCommand(['tac', '-s', 'x'], ctx(installed));
+      const opts = spawn.mock.calls[0][0];
+      expect(opts.program.glue).toBe('CORE');
+      expect(opts.argv0).toBe('tac');
+      expect(opts.args).toEqual(['-s', 'x']);
+      expect(compile.mock.calls[0][1]).toBe(`${pkg}/lib/coreutils.wasm`);
+    });
+
+    it('prefers a file of that name in the working directory', async () => {
+      await runWasmCommand(['sed'], ctx({ ...installed, '/w/sed': 'LOCAL', '/w/sed.wasm': 'W' }));
+      expect(spawn.mock.calls[0][0].program.glue).toBe('LOCAL');
+    });
+
+    it('takes the module from --module', async () => {
+      const files = { '/w/g.js': 'G', '/w/elsewhere.wasm': 'W' };
+      await runWasmCommand(['--module', 'elsewhere.wasm', '--argv0', 'z', 'g.js'], ctx(files));
+      expect(compile.mock.calls[0][1]).toBe('/w/elsewhere.wasm');
+      expect(spawn.mock.calls[0][0].argv0).toBe('z');
+    });
+
+    it('rejects an option without a value', async () => {
+      expect((await runWasmCommand(['--module'], ctx({}))).exitCode).toBe(2);
+    });
   });
 });

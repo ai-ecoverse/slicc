@@ -414,3 +414,27 @@ describe('ScriptCatalog', () => {
     expect(map.get('triage:sweep')?.kind).toBe('skill');
   });
 });
+
+describe('ScriptCatalog wasm commands', () => {
+  it('lists installed wasm programs and rescans after a watcher event', async () => {
+    const watcher = new FsWatcher();
+    const fs = await VirtualFS.create({ dbName: `script-catalog-wasm-${dbCounter++}`, wipe: true });
+    const catalog = new ScriptCatalog({ jshFs: fs, watcher });
+    expect((await catalog.getWasmCommands()).size).toBe(0);
+
+    const dir = '/shared/lib/node_modules/@ai-ecoverse/wasm-sed';
+    await fs.mkdir(`${dir}/bin`, { recursive: true });
+    await fs.writeFile(`${dir}/package.json`, '{"name":"@ai-ecoverse/wasm-sed"}');
+    await fs.writeFile(`${dir}/bin/sed`, 'glue');
+    await fs.writeFile(`${dir}/bin/sed.wasm`, 'wasm');
+
+    expect((await catalog.getWasmCommands()).size).toBe(0);
+    watcher.notify([{ type: 'create', path: `${dir}/bin/sed.wasm`, entryType: 'file' }]);
+    expect((await catalog.getWasmCommands()).get('sed')?.glue).toBe(`${dir}/bin/sed`);
+  });
+
+  it('has none when the discovery filesystem cannot list directories', async () => {
+    const catalog = new ScriptCatalog({ jshFs: new MockScriptFs() });
+    expect((await catalog.getWasmCommands()).size).toBe(0);
+  });
+});

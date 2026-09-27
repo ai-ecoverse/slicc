@@ -1,12 +1,30 @@
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
+import { type ChildSpawner, type ChildStdio, ChildTable, SpawnError } from './children.js';
 import { type FdTable, KernelError } from './fd-table.js';
 
 export type WasmSyscall =
   | { op: 'fd-read'; fd: number; max: number }
   | { op: 'fd-write'; fd: number; body: Uint8Array }
-  | { op: 'fd-close'; fd: number };
+  | { op: 'fd-close'; fd: number }
+  | {
+      op: 'proc-spawn';
+      file: string;
+      argv: string[];
+      env: Record<string, string>;
+      cwd: string;
+      stdio: ChildStdio[];
+    }
+  | { op: 'proc-wait'; pid: number; nohang: boolean }
+  | { op: 'proc-captured'; pid: number; slot: number };
 
-const SYSCALL_OPS: ReadonlySet<string> = new Set(['fd-read', 'fd-write', 'fd-close']);
+const SYSCALL_OPS: ReadonlySet<string> = new Set([
+  'fd-read',
+  'fd-write',
+  'fd-close',
+  'proc-spawn',
+  'proc-wait',
+  'proc-captured',
+]);
 
 export function isWasmSyscall(req: object): req is WasmSyscall {
   const op = (req as { op?: unknown }).op;
@@ -17,11 +35,15 @@ const MAX_READ = 1024 * 1024;
 
 export class WasmProcess {
   private exited = false;
+  private readonly children: ChildTable;
 
   constructor(
     readonly pid: number,
-    readonly fds: FdTable
-  ) {}
+    readonly fds: FdTable,
+    spawner?: ChildSpawner
+  ) {
+    this.children = new ChildTable(fds, spawner);
+  }
 
   async syscall(req: WasmSyscall): Promise<SyncFsResult> {
     try {
@@ -40,9 +62,20 @@ export class WasmProcess {
         case 'fd-close':
           this.fds.close(req.fd);
           return { ok: true, kind: 'void' };
+        case 'proc-spawn': {
+          const { file, argv, env, cwd, stdio } = req;
+          const pid = await this.children.spawn({ file, argv, env, cwd }, stdio);
+          return { ok: true, kind: 'json', json: pid };
+        }
+        case 'proc-wait':
+          return { ok: true, kind: 'json', json: await this.children.wait(req.pid, req.nohang) };
+        case 'proc-captured':
+          return { ok: true, kind: 'bytes', bytes: this.children.captured(req.pid, req.slot) };
       }
     } catch (e) {
-      if (e instanceof KernelError) return { ok: false, errno: e.code, message: e.code };
+      if (e instanceof KernelError || e instanceof SpawnError) {
+        return { ok: false, errno: e.code, message: e.code };
+      }
       throw e;
     }
   }

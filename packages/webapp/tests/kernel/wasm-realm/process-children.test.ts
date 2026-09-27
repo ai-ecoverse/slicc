@@ -1,0 +1,110 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { SyncFsResult } from '../../../src/kernel/realm/sync-fs-wire.js';
+import type { SyncSabTransport } from '../../../src/kernel/realm/sync-sab-bridge.js';
+import { createProcessKernel } from '../../../src/kernel/wasm-realm/process-children.js';
+import type { ProcessFs, ProcessStream } from '../../../src/kernel/wasm-realm/process-runtime.js';
+
+const bytes = (s: string) => new TextEncoder().encode(s);
+const text = (b: Uint8Array) => new TextDecoder().decode(b);
+
+type Req = { op: string; [key: string]: unknown };
+
+function transport(answer: (req: Req) => SyncFsResult) {
+  const calls: Req[] = [];
+  const t = {
+    call: (req: Req) => {
+      calls.push(req);
+      return answer(req);
+    },
+  } as unknown as SyncSabTransport;
+  return { t, calls };
+}
+
+function fs(data = 'file-data') {
+  const written: string[] = [];
+  let offset = 0;
+  const streams: Record<number, ProcessStream> = {
+    0: { stream_ops: {}, sliccKernelFd: 0 },
+    1: { stream_ops: {}, sliccKernelFd: 1 },
+    2: { stream_ops: {}, sliccKernelFd: 2 },
+    5: { stream_ops: {} },
+    6: { stream_ops: {} },
+  };
+  const Fs = {
+    getStream: (fd: number) => streams[fd] ?? null,
+    cwd: () => '/work',
+    read: (_s: ProcessStream, buffer: Uint8Array, at: number, length: number) => {
+      const chunk = bytes(data).subarray(offset, offset + length);
+      buffer.set(chunk, at);
+      offset += chunk.length;
+      return chunk.length;
+    },
+    write: (_s: ProcessStream, buffer: Uint8Array, at: number, length: number) => {
+      written.push(text(buffer.subarray(at, at + length)));
+      return length;
+    },
+  } as unknown as ProcessFs;
+  return { Fs, written };
+}
+
+function kernel(answer: (req: Req) => SyncFsResult, data?: string) {
+  const { t, calls } = transport(answer);
+  const { Fs, written } = fs(data);
+  const deps = { beforeSpawn: vi.fn(), afterChild: vi.fn() };
+  const k = createProcessKernel({ transport: t, Fs, env: { HOME: '/' }, ...deps });
+  return { k, calls, written, ...deps };
+}
+
+const json = (value: unknown): SyncFsResult => ({ ok: true, kind: 'json', json: value });
+
+describe('createProcessKernel', () => {
+  it('hands kernel descriptors to the kernel and returns at once', () => {
+    const { k, calls, beforeSpawn } = kernel(() => json(7));
+    expect(k.spawn('make', ['make', '-j'], null, null, [0, 1, 2])).toBe(7);
+    expect(beforeSpawn).toHaveBeenCalled();
+    expect(calls).toEqual([
+      {
+        op: 'proc-spawn',
+        file: 'make',
+        argv: ['make', '-j'],
+        env: { HOME: '/' },
+        cwd: '/work',
+        stdio: [{ fd: 0 }, { fd: 1 }, { fd: 2 }],
+      },
+    ]);
+  });
+
+  it('feeds a program-internal stdin and runs a capturing child to completion', () => {
+    const { k, calls, written, afterChild } = kernel((req) => {
+      if (req.op === 'proc-spawn') return json(9);
+      if (req.op === 'proc-wait') return json([9, 256]);
+      return { ok: true, kind: 'bytes', bytes: bytes('captured') };
+    });
+    expect(k.spawn('sed', ['sed'], { A: '1' }, '/x', [5, 6, -1])).toBe(9);
+    const spawn = calls[0] as unknown as { stdio: unknown[]; env: unknown; cwd: unknown };
+    expect(spawn.stdio).toEqual([{ input: bytes('file-data') }, { capture: true }, { none: true }]);
+    expect(spawn.env).toEqual({ A: '1' });
+    expect(spawn.cwd).toBe('/x');
+    expect(calls.map((c) => c.op)).toEqual(['proc-spawn', 'proc-wait', 'proc-captured']);
+    expect(written).toEqual(['captured']);
+    expect(afterChild).toHaveBeenCalled();
+
+    expect(k.wait(9, false)).toEqual([9, 256]);
+    expect(calls).toHaveLength(3);
+  });
+
+  it('returns a negative WASI errno when the kernel refuses', () => {
+    const { k } = kernel(() => ({ ok: false, errno: 'ENOENT', message: 'ENOENT' }));
+    expect(k.spawn('nope', ['nope'], null, null, [0, 1, 2])).toBe(-44);
+    expect(k.wait(-1, false)).toBe(-44);
+  });
+
+  it('waits through the kernel, invalidating the VFS view only when a child was reaped', () => {
+    const answers = [json([0, 0]), json([4, 0])];
+    const { k, afterChild } = kernel(() => answers.shift()!);
+    expect(k.wait(-1, true)).toEqual([0, 0]);
+    expect(afterChild).not.toHaveBeenCalled();
+    expect(k.wait(-1, false)).toEqual([4, 0]);
+    expect(afterChild).toHaveBeenCalledTimes(1);
+  });
+});

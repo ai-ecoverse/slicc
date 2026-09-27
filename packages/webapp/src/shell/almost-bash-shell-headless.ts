@@ -25,6 +25,7 @@ import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import { filesystemExecutionLimits } from './filesystem-budgets.js';
 import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
+import { isInstalledProgramPath } from './ipk/wasm-programs.js';
 import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
 import { executeJsCode, executeJshFile } from './jsh-executor.js';
@@ -250,6 +251,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   protected registeredWorkflowCommands = new Set<string>();
 
+  protected registeredWasmCommands = new Set<string>();
+
   private jshSyncInflight: Promise<void> | null = null;
 
   private jshSyncDirty = false;
@@ -321,6 +324,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       getScriptRegisteredNames: () => [
         ...this.registeredJshCommands.keys(),
         ...this.registeredWorkflowCommands,
+        ...this.registeredWasmCommands,
       ],
       fs: options.fs,
       fetch: fetchFn,
@@ -393,7 +397,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     if (scriptWatcher) {
       scriptWatcher.watch(
         '/',
-        (path) => path.endsWith('.jsh') || path.endsWith('.workflow.js'),
+        (path) =>
+          path.endsWith('.jsh') || path.endsWith('.workflow.js') || isInstalledProgramPath(path),
         () => {
           void this.syncJshCommands().catch(() => undefined);
         }
@@ -932,6 +937,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         );
       }
       const wfMap = await this.getFilteredWorkflowCommands();
+      const wasmMap = await this.scriptCatalog.getWasmCommands();
 
       for (const [name, scriptPath] of jshMap) {
         if (!this.isCommandAllowed(name)) continue;
@@ -942,23 +948,34 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         this.builtinCommandNames.add(name);
       }
 
-      for (const name of wfMap.keys()) {
-        if (this.registeredWorkflowCommands.has(name)) continue;
-        if (this.registeredJshCommands.has(name)) {
-          this.registeredWorkflowCommands.add(name);
-          continue;
-        }
-        if (this.builtinCommandNames.has(name)) continue;
-        this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
-        this.registeredWorkflowCommands.add(name);
-        this.builtinCommandNames.add(name);
-      }
+      const wasmNames = [...wasmMap.keys()].filter((name) => this.isCommandAllowed(name));
+      this.registerLateScriptNames(wasmNames, this.registeredWasmCommands);
+      this.registerLateScriptNames(wfMap.keys(), this.registeredWorkflowCommands);
     } finally {
       this.jshSyncInflight = null;
       if (this.jshSyncDirty) {
         this.jshSyncDirty = false;
         void this.syncJshCommands().catch(() => undefined);
       }
+    }
+  }
+
+  private registerLateScriptNames(names: Iterable<string>, registered: Set<string>): void {
+    const scriptSources = [
+      this.registeredJshCommands,
+      this.registeredWasmCommands,
+      this.registeredWorkflowCommands,
+    ];
+    for (const name of names) {
+      if (registered.has(name)) continue;
+      if (scriptSources.some((source) => source !== registered && source.has(name))) {
+        registered.add(name);
+        continue;
+      }
+      if (this.builtinCommandNames.has(name)) continue;
+      this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
+      registered.add(name);
+      this.builtinCommandNames.add(name);
     }
   }
 
@@ -991,6 +1008,16 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           code,
           ['node', jshPath, ...args],
           { fs: ctx.fs, cwd: ctx.cwd, env: ctx.env, stdin: ctx.stdin, exec: execFn },
+          this.buildJshProcessConfig(runPidFromEnv(ctx.env))
+        );
+      }
+
+      const wasm = (await catalog.getWasmCommands()).get(cmdName);
+      if (wasm) {
+        const { runWasmCommand } = await import('./supplemental-commands/wasm/run.js');
+        return runWasmCommand(
+          ['--argv0', wasm.argv0, '--module', wasm.wasm, wasm.glue, ...args],
+          ctx,
           this.buildJshProcessConfig(runPidFromEnv(ctx.env))
         );
       }

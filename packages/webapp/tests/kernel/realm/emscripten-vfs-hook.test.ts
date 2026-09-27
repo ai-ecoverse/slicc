@@ -119,6 +119,26 @@ describe('mountVfsIntoEmscripten', () => {
     expect(warnings).toEqual([]);
   });
 
+  it('mounts the synthetic command registry (/usr) that the root listing omits', () => {
+    nodeFs.mkdirSync(at('/usr/bin'), { recursive: true });
+    nodeFs.writeFileSync(at('/usr/bin/cc'), '');
+
+    const hiding: SyncFsPosixBridge = {
+      ...bridge,
+      readdir: (p) => bridge.readdir(p).filter((name) => p !== '/' || name !== 'usr'),
+    };
+    const { cache } = fakeSyncFs(false);
+    const handle = mountVfsIntoEmscripten(FS, {
+      bridge: hiding,
+      syncFs: cache,
+      cwd: '/',
+      warn: (m) => warnings.push(m),
+    });
+    mounted = handle.mounted;
+    expect(handle.mounted).toEqual(['/proj', '/usr']);
+    expect(py(`import os; os.path.exists('/usr/bin/cc')`)).toBe(true);
+  });
+
   it('honors an explicit cwd', () => {
     const { cache } = fakeSyncFs(false);
     mounted = mountVfsIntoEmscripten(

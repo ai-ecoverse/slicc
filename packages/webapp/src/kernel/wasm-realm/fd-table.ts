@@ -1,6 +1,6 @@
 import { KernelPipe, PipeError } from './pipe.js';
 
-export type KernelErrno = 'EBADF' | 'EPIPE' | 'EMFILE' | 'EINVAL';
+export type KernelErrno = 'EBADF' | 'EPIPE' | 'EMFILE' | 'EINVAL' | 'ENOENT' | 'ECHILD' | 'ENOSYS';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {
