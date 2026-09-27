@@ -287,6 +287,35 @@ describe('start-leader', () => {
     expect(resolveNodeServer(t.home, exec)).toMatch(/index\.js$/);
   });
 
+  it('installNodeServer retries a failed npm install with backoff', () => {
+    const entry = join(t.home, 'leader', 'node_modules', 'sliccy', 'dist', 'node-server');
+    let calls = 0;
+    const exec = vi.fn(() => {
+      calls++;
+      if (calls < 3) throw new Error('npm error 404 Not Found - sliccy@6.198.1');
+      mkdirSync(entry, { recursive: true });
+      writeFileSync(join(entry, 'index.js'), '');
+    });
+    const wait = vi.fn();
+    expect(installNodeServer(t.home, '6.198.1', exec, { delaysMs: [10, 20, 40], wait })).toBe(
+      join(entry, 'index.js')
+    );
+    expect(exec).toHaveBeenCalledTimes(3);
+    expect(wait.mock.calls).toEqual([[10], [20]]);
+  });
+
+  it('installNodeServer rethrows once the retries are exhausted', () => {
+    const exec = vi.fn(() => {
+      throw new Error('npm error 404 Not Found');
+    });
+    const wait = vi.fn();
+    expect(() => installNodeServer(t.home, '6.198.1', exec, { delaysMs: [10, 20], wait })).toThrow(
+      /404 Not Found/
+    );
+    expect(exec).toHaveBeenCalledTimes(3);
+    expect(wait.mock.calls).toEqual([[10], [20]]);
+  });
+
   it('writeCredentialFiles removes a stale cone-config when nothing is configured', () => {
     mkdirSync(join(t.root, 'slicc'), { recursive: true });
     writeFileSync(t.coneConfig, '{"stale":true}');
