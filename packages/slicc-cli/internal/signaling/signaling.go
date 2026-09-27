@@ -28,8 +28,10 @@ const defaultRequestTimeout = 30 * time.Second
 // A deploy resets the tray Durable Object for a few seconds. The hub answers
 // that with JSON 503, and an uncaught reset still arrives as Cloudflare's
 // plain-text "error code: 1101" page. Both are safe to repeat: nothing has
-// been delivered to the leader yet. The budget stops a hung request (the 30s
-// client timeout) from being multiplied by the attempt count.
+// been delivered to the leader yet. The whole retry, including every request
+// and the backoff between them, stays inside signalingRetryBudget. A single
+// attempt is also capped at defaultRequestTimeout, and it never starts once
+// the budget is already spent.
 const (
 	signalingAttempts    = 4
 	signalingRetryBase   = time.Second
@@ -119,6 +121,9 @@ type Client struct {
 	logf    func(string, ...any)
 	// sleep is the backoff between transient attempts. Tests replace it.
 	sleep func(context.Context, time.Duration) bool
+	// retryBudget overrides signalingRetryBudget. Tests set a short one so a
+	// stalled server does not hold the suite for the production budget.
+	retryBudget time.Duration
 }
 
 // New builds a signaling client for the given join URL.
@@ -305,11 +310,14 @@ type responseMeta struct {
 // error is transient: the same request is repeated with backoff. A redirect
 // that names a successor is returned immediately so the caller can follow it.
 func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte, responseMeta, error) {
+	deadline := c.retryDeadline(ctx)
 	backoff := signalingRetryBase
-	started := time.Now()
 	var last error
 	for attempt := 1; attempt <= signalingAttempts; attempt++ {
-		data, meta, err := c.postOnce(ctx, body)
+		if !time.Now().Before(deadline) {
+			break
+		}
+		data, meta, err := c.postBounded(ctx, body, deadline)
 		var net *networkError
 		switch {
 		case err == nil && !transientResponse(meta, data):
@@ -321,7 +329,10 @@ func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte,
 		default:
 			return nil, responseMeta{}, err
 		}
-		if attempt == signalingAttempts || time.Since(started) >= signalingRetryBudget {
+		// The next attempt has to fit its backoff and still have time to run.
+		// A request that finished 0.5s before the deadline must not sleep 1s
+		// and then hang for the 30s client timeout.
+		if attempt == signalingAttempts || time.Until(deadline) <= backoff {
 			break
 		}
 		c.logRetry(last, backoff)
@@ -336,6 +347,34 @@ func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte,
 		last = ctx.Err()
 	}
 	return nil, responseMeta{}, last
+}
+
+// retryDeadline is the moment this call stops trying. The caller's deadline
+// wins when it is sooner, so a bootstrap that is about to time out is not
+// extended by the retry budget.
+func (c *Client) retryDeadline(ctx context.Context) time.Time {
+	budget := signalingRetryBudget
+	if c.retryBudget > 0 {
+		budget = c.retryBudget
+	}
+	deadline := time.Now().Add(budget)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	return deadline
+}
+
+// postBounded runs one attempt. Its deadline is the earlier of the retry
+// budget and defaultRequestTimeout, so a stall cannot use the client's 30s
+// timeout once less than that remains.
+func (c *Client) postBounded(ctx context.Context, body map[string]any, deadline time.Time) ([]byte, responseMeta, error) {
+	bound := deadline
+	if capAt := time.Now().Add(defaultRequestTimeout); capAt.Before(bound) {
+		bound = capAt
+	}
+	reqCtx, cancel := context.WithDeadline(ctx, bound)
+	defer cancel()
+	return c.postOnce(reqCtx, body)
 }
 
 func (c *Client) postOnce(ctx context.Context, body map[string]any) ([]byte, responseMeta, error) {

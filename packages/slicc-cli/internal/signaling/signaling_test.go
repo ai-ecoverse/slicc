@@ -7,14 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func bootstrapObj(id string, cursor int) map[string]any {
+func bootstrapObj(cursor int) map[string]any {
 	return map[string]any{
 		"controllerId":     "ctrl",
-		"bootstrapId":      id,
+		"bootstrapId":      "b1",
 		"attempt":          1,
 		"state":            "offered",
 		"expiresAt":        "2030-01-01T00:00:00Z",
@@ -49,7 +50,7 @@ func TestAttachSignal(t *testing.T) {
 	srv := newMock(t, func(_ string, body map[string]any) any {
 		return map[string]any{
 			"trayId": "t1", "controllerId": body["controllerId"], "role": "follower", "participantCount": 1,
-			"result":     map[string]any{"action": "signal", "code": "LEADER_CONNECTED", "bootstrap": bootstrapObj("b1", 0)},
+			"result":     map[string]any{"action": "signal", "code": "LEADER_CONNECTED", "bootstrap": bootstrapObj(0)},
 			"iceServers": []any{map[string]any{"urls": []string{"stun:stun.example:3478"}, "username": "u", "credential": "c"}},
 		}
 	})
@@ -192,7 +193,7 @@ func TestNewDoesNotMutateCallerClient(t *testing.T) {
 
 func TestPollDecodesEvents(t *testing.T) {
 	srv := newMock(t, func(action string, body map[string]any) any {
-		base := map[string]any{"trayId": "t1", "controllerId": body["controllerId"], "role": "follower", "participantCount": 1, "bootstrap": bootstrapObj("b1", 2)}
+		base := map[string]any{"trayId": "t1", "controllerId": body["controllerId"], "role": "follower", "participantCount": 1, "bootstrap": bootstrapObj(2)}
 		switch action {
 		case "poll":
 			base["events"] = []any{
@@ -254,7 +255,7 @@ func TestPollRetriesCloudflareErrorPage(t *testing.T) {
 			return
 		}
 		writeJSON(w, map[string]any{
-			"role": "follower", "bootstrap": bootstrapObj("b1", 1), "events": []any{},
+			"role": "follower", "bootstrap": bootstrapObj(1), "events": []any{},
 		})
 	}))
 	defer srv.Close()
@@ -314,7 +315,7 @@ func TestPollRetriesTrayUnavailableJSON(t *testing.T) {
 			return
 		}
 		writeJSON(w, map[string]any{
-			"role": "follower", "bootstrap": bootstrapObj("b1", 0), "events": []any{},
+			"role": "follower", "bootstrap": bootstrapObj(0), "events": []any{},
 		})
 	}))
 	defer srv.Close()
@@ -348,5 +349,35 @@ func TestPollDoesNotRetryClientError(t *testing.T) {
 	}
 	if hits != 1 {
 		t.Fatalf("requests = %d, want 1", hits)
+	}
+}
+
+// A stalled hub must not keep the attempt's 30s HTTP timeout, and the backoff
+// that follows must not start another request once the retry budget is gone.
+func TestPollStallStopsAtRetryBudget(t *testing.T) {
+	var hits atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		hits.Add(1)
+		<-release
+	}))
+	t.Cleanup(func() {
+		close(release)
+		srv.Close()
+	})
+
+	client := New(srv.URL, nil)
+	client.retryBudget = 200 * time.Millisecond
+	started := time.Now()
+	_, err := client.Poll(context.Background(), "ctrl", "b1", 0)
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("expected the stalled poll to fail")
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1", got)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("stalled poll took %s; the retry budget must bound the request", elapsed)
 	}
 }
