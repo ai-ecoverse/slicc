@@ -35,6 +35,7 @@ import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import { describeForFork, restoreForkedStreams } from './process-fork.js';
 import { SignalGate } from './process-signals.js';
 import type { ForkState, WasmProcessInitMsg } from './protocol.js';
+import type { Termios } from './tty.js';
 
 export {
   type ProcessFs,
@@ -88,6 +89,20 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
     },
     flush(fd) {
       call({ op: 'fd-flush', fd }, `fd-flush ${fd}`);
+    },
+    isatty(fd) {
+      return (
+        (json(call({ op: 'fd-info', fd }, `fd-info ${fd}`)) as { tty?: boolean })?.tty === true
+      );
+    },
+    tcgets(fd) {
+      return json(call({ op: 'tty-get', fd }, `tty-get ${fd}`)) as Termios;
+    },
+    tcsets(fd, termios) {
+      call({ op: 'tty-set', fd, termios }, `tty-set ${fd}`);
+    },
+    winsize(fd) {
+      return json(call({ op: 'tty-winsz', fd }, `tty-winsz ${fd}`)) as [number, number];
     },
   };
 }

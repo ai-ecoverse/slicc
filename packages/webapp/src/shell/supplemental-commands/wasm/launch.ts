@@ -240,6 +240,11 @@ export class WasmSession {
     return name !== undefined && pm.signal(pid, name);
   }
 
+  /** Signal every process of the invocation (the terminal's foreground job: ^C, ^Z, SIGWINCH). */
+  signalAll(sig: number): void {
+    for (const handle of this.live) handle.signal(sig);
+  }
+
   /** End every process of the invocation (an abort, the output limit). */
   killAll(code: number): void {
     for (const handle of this.live) handle.kill(code);
@@ -273,7 +278,7 @@ export class WasmSession {
         ppid,
         fork: state,
       });
-      return { pid: handle.pid, exited: handle.exited };
+      return { pid: handle.pid, exited: handle.exited, termsig: handle.termsig };
     };
   }
 
@@ -289,7 +294,7 @@ export class WasmSession {
         fds,
         ppid,
       });
-      return { pid: handle.pid, exited: handle.exited };
+      return { pid: handle.pid, exited: handle.exited, termsig: handle.termsig };
     };
   }
 

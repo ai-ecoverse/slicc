@@ -22,6 +22,7 @@ import { type FdTable, KernelError, openPipe, pollFile } from './fd-table.js';
 import type { ForkState } from './protocol.js';
 import { selectFds } from './select.js';
 import { type DefaultAction, defaultAction, isSignal, SIG, sigbit } from './signals.js';
+import type { KernelTty, Termios } from './tty.js';
 import { type VfsFileFs, vfsFile } from './vfs-file.js';
 
 /** The syscalls of a wasm-realm process (the request bodies on the SAB wire). */
@@ -43,6 +44,10 @@ export type WasmSyscall =
     }
   | { op: 'fd-seek'; fd: number; offset: number; whence: number }
   | { op: 'fd-select'; read: number[]; write: number[]; timeoutMs: number }
+  | { op: 'fd-info'; fd: number }
+  | { op: 'tty-get'; fd: number }
+  | { op: 'tty-set'; fd: number; termios: Termios }
+  | { op: 'tty-winsz'; fd: number }
   | { op: 'fd-flush'; fd: number }
   | {
       op: 'proc-spawn';
@@ -66,6 +71,10 @@ function isFdSyscall(req: WasmSyscall): req is FdSyscall {
   return req.op.startsWith('fd-');
 }
 
+function isTtySyscall(req: WasmSyscall): req is TtySyscall {
+  return req.op.startsWith('tty-');
+}
+
 const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-read',
   'fd-write',
@@ -75,6 +84,10 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-open-vfs',
   'fd-seek',
   'fd-select',
+  'fd-info',
+  'tty-get',
+  'tty-set',
+  'tty-winsz',
   'fd-flush',
   'proc-spawn',
   'proc-wait',
@@ -86,6 +99,9 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether a SAB request is a process syscall (else it is a sync-fs / exec op). */
+/** Descriptor syscalls, plus the terminal ones (which also name an fd). */
+type TtySyscall = Extract<WasmSyscall, { op: `tty-${string}` }>;
+
 export function isWasmSyscall(req: object): req is WasmSyscall {
   const op = (req as { op?: unknown }).op;
   return typeof op === 'string' && SYSCALL_OPS.has(op);
@@ -128,6 +144,11 @@ export class WasmProcess {
    * it): signals sent to this process go to that program.
    */
   private execChild: number | undefined;
+  /**
+   * The signal the program this process exec'd died of: the process stands
+   * for that program, so its parent sees it end by the same signal.
+   */
+  execTermsig: number | undefined;
 
   constructor(
     readonly pid: number,
@@ -161,7 +182,9 @@ export class WasmProcess {
 
   async syscall(req: WasmSyscall): Promise<SyncFsResult> {
     try {
-      return isFdSyscall(req) ? await this.fdSyscall(req) : await this.procSyscall(req);
+      if (isFdSyscall(req)) return await this.fdSyscall(req);
+      if (isTtySyscall(req)) return this.ttySyscall(req);
+      return await this.procSyscall(req);
     } catch (e) {
       if (e instanceof KernelError || e instanceof SpawnError) {
         return { ok: false, errno: e.code, message: e.code };
@@ -230,6 +253,12 @@ export class WasmProcess {
         });
         return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
       }
+      case 'fd-info':
+        return {
+          ok: true,
+          kind: 'json',
+          json: { tty: this.fds.get(req.fd).file.tty !== undefined },
+        };
       case 'fd-select': {
         const { read, write, timeoutMs } = req;
         const signal = this.blockingSignal();
@@ -249,8 +278,30 @@ export class WasmProcess {
     }
   }
 
+  /** Terminal syscalls: termios and window size of an fd that is a terminal (else ENOTTY). */
+  private ttySyscall(req: TtySyscall): SyncFsResult {
+    const tty = this.tty(req.fd);
+    switch (req.op) {
+      case 'tty-get':
+        return { ok: true, kind: 'json', json: tty.tcgets() };
+      case 'tty-set':
+        tty.tcsets(req.termios);
+        return { ok: true, kind: 'void' };
+      case 'tty-winsz':
+        return { ok: true, kind: 'json', json: tty.winsize() };
+    }
+  }
+
+  private tty(fd: number): KernelTty {
+    const tty = this.fds.get(fd).file.tty;
+    if (!tty) throw new KernelError('ENOTTY');
+    return tty;
+  }
+
   /** Process and signal syscalls. */
-  private async procSyscall(req: Exclude<WasmSyscall, FdSyscall>): Promise<SyncFsResult> {
+  private async procSyscall(
+    req: Exclude<WasmSyscall, FdSyscall | TtySyscall>
+  ): Promise<SyncFsResult> {
     switch (req.op) {
       case 'proc-fork':
         return { ok: true, kind: 'json', json: await this.children.fork(req.state) };
@@ -268,7 +319,10 @@ export class WasmProcess {
         // execve(): this process now stands for the program it spawned.
         this.execChild = req.pid;
         try {
-          return { ok: true, kind: 'json', json: await this.children.wait(req.pid, false) };
+          const waited = await this.children.wait(req.pid, false);
+          const termsig = waited[1] & 0x7f;
+          if (termsig) this.execTermsig = termsig;
+          return { ok: true, kind: 'json', json: waited };
         } finally {
           this.execChild = undefined;
         }

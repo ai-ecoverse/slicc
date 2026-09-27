@@ -26,12 +26,13 @@
  * event. A future streaming runtime can switch to chunked emission
  * without changing the envelope shape.
  *
- * `terminal-stdin` and `terminal-resize` are intentionally
- * unhandled today: the panel-side line editor accumulates
- * keystrokes locally and sends committed lines via `terminal-exec`,
- * so stdin doesn't need a wire round-trip; resize is informational
- * (the worker shell doesn't render). They're reserved on the wire
- * for when a streaming pty-style mode lands.
+ * `terminal-stdin` and `terminal-resize` serve pty mode: the panel's line
+ * editor normally sends committed lines via `terminal-exec`, but a program
+ * can lease the session's terminal (`SessionTerminal`, `wasm -t`). While it
+ * holds it the host emits `terminal-mode: pty`, the panel sends every
+ * keystroke raw as `terminal-stdin` (routed to the lease), resizes arrive as
+ * `terminal-resize`, and the program's output streams as `terminal-output`;
+ * on release, `terminal-mode: line`.
  */
 
 import { base64ToUint8 } from '@slicc/shared-ts';
@@ -41,6 +42,7 @@ import type {
   HeadlessShellOptions,
 } from '../shell/almost-bash-shell-headless.js';
 import { bytesToStdin, EMPTY_BYTES } from '../shell/just-bash-compat.js';
+import type { TerminalPort } from '../shell/terminal-port.js';
 import type {
   TerminalCloseMsg,
   TerminalControlMsg,
@@ -59,6 +61,7 @@ import type {
   PanelToOffscreenMessage,
 } from './messages.js';
 import type { Process, ProcessManager, ProcessOwner, Signal } from './process-manager.js';
+import { SessionTerminal } from './session-terminal.js';
 import type { KernelTransport } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -76,7 +79,7 @@ import type { KernelTransport } from './types.js';
  */
 export type TerminalShellFactory = (
   sid: TerminalSessionId,
-  options: { cwd?: string; env?: Record<string, string> }
+  options: { cwd?: string; env?: Record<string, string>; terminal?: TerminalPort }
 ) => HeadlessShellLike & { dispose?: () => void };
 
 export interface TerminalSessionHostOptions {
@@ -132,6 +135,10 @@ interface Session {
    * so `handleSignal` can route through the manager.
    */
   currentProcess: Process | null;
+  /** The running exec: where a program's terminal output is attributed. */
+  currentExecMsg: TerminalExecMsg | null;
+  /** The session's terminal, which a program can lease (`wasm -t`). */
+  terminal: SessionTerminal;
 }
 
 export class TerminalSessionHost {
@@ -204,10 +211,11 @@ export class TerminalSessionHost {
       case 'terminal-signal':
         return this.handleSignal(msg);
       case 'terminal-stdin':
+        // Keystrokes for a program holding the terminal (pty mode).
+        this.sessions.get(msg.sid)?.terminal.input(msg.data);
+        return;
       case 'terminal-resize':
-        // Reserved on the wire for a future streaming-pty mode. No
-        // semantic action today; silently accept so existing clients
-        // can ship the messages without breaking.
+        this.sessions.get(msg.sid)?.terminal.resize(msg.cols, msg.rows);
         return;
     }
   }
@@ -218,8 +226,19 @@ export class TerminalSessionHost {
       return;
     }
     try {
-      const shell = this.createShell(msg.sid, { cwd: msg.cwd, env: msg.env });
-      this.sessions.set(msg.sid, { shell, currentExec: null, currentProcess: null });
+      const session: Partial<Session> = { currentExec: null, currentProcess: null };
+      session.currentExecMsg = null;
+      const terminal = new SessionTerminal({
+        output: (text) => {
+          const exec = session.currentExecMsg;
+          if (exec) this.emitStream(exec, 'stdout', text);
+        },
+        mode: (mode) => this.emit({ type: 'terminal-mode', sid: msg.sid, mode }),
+      });
+      if (msg.cols && msg.rows) terminal.resize(msg.cols, msg.rows);
+      session.terminal = terminal;
+      session.shell = this.createShell(msg.sid, { cwd: msg.cwd, env: msg.env, terminal });
+      this.sessions.set(msg.sid, session as Session);
       this.emitStatus(msg.sid, 'opened');
     } catch (err) {
       this.emitStatus(msg.sid, 'error', err instanceof Error ? err.message : String(err));
@@ -285,6 +304,7 @@ export class TerminalSessionHost {
     // a manager, we fall back to a fresh local controller.
     const abort = new AbortController();
     session.currentExec = abort;
+    session.currentExecMsg = msg;
     session.shell.applySessionOverrides?.({ cwd: msg.cwd, env: msg.env });
     const proc = this.pm
       ? this.pm.spawn({
@@ -329,6 +349,7 @@ export class TerminalSessionHost {
       if (session.currentExec === abort) {
         session.currentExec = null;
         session.currentProcess = null;
+        session.currentExecMsg = null;
       }
     }
   }

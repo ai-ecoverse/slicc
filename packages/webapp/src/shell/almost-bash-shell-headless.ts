@@ -102,6 +102,7 @@ import { createSkillCommand, createUpskillCommand } from './supplemental-command
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
 import { emitShellCommand } from './telemetry-hook.js';
+import type { TerminalPort } from './terminal-port.js';
 import { VfsAdapter } from './vfs-adapter.js';
 import { buildWorkflowRunArgv, type WorkflowCommandEntry } from './workflow-discovery.js';
 
@@ -150,6 +151,8 @@ export interface HeadlessShellOptions {
   processManager?: ProcessManager;
   /** Default owner for spawned `kind:'jsh'` processes. */
   processOwner?: ProcessOwner;
+  /** The panel terminal this shell runs in, which a program can lease (`wasm -t`). */
+  terminal?: TerminalPort;
   /**
    * Returns the active `kind:'shell'` pid the jsh script runs
    * under (e.g. the bash command the user typed that resolved
@@ -606,6 +609,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       getParentJid: options.getParentJid,
       isScoop: options.isScoop,
       buildProcessConfig: this.resolveJshProcessConfig,
+      terminal: options.terminal,
       // Thread the manager into `ps` / `kill`. When the
       // shell is constructed without one (extension offscreen,
       // inline standalone), the commands fall back to

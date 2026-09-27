@@ -83,6 +83,8 @@ export interface WasmProcessHandle {
    * next syscall boundary.
    */
   signal(sig: number): void;
+  /** The signal that ended the process (its parent's WIFSIGNALED), once it ended by one. */
+  termsig(): number | undefined;
 }
 
 /** Exit code of a process whose worker failed outside the program. */
@@ -118,9 +120,12 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
   let settle!: (code: number) => void;
   const exited = new Promise<number>((resolve) => (settle = resolve));
   let done = false;
-  const finish = (code: number): void => {
+  let endedBy: number | undefined;
+  /** `sig`: the signal that ends it; else the one its exec'd program died of, if any. */
+  const finish = (code: number, sig?: number): void => {
     if (done) return;
     done = true;
+    endedBy = sig ?? process.execTermsig;
     worker.removeEventListener('message', onMessage);
     worker.removeEventListener('error', onError);
     responder.dispose();
@@ -164,7 +169,10 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
   // A fork's memory copy is the child's alone: hand it over instead of cloning it.
   worker.postMessage(init, opts.fork ? [opts.fork.memory.buffer] : []);
   const signal = (sig: number): void => {
-    if (process.signal(sig) === 'terminate') finish(sig === SIG.KILL ? 137 : 128 + sig);
+    if (process.signal(sig) === 'terminate') finish(sig === SIG.KILL ? 137 : 128 + sig, sig);
   };
-  return { pid: opts.pid, exited, kill: (code = 137) => finish(code), signal };
+  // A kill's code is 128 + the signal it stands for (137 SIGKILL, 130 an abort's SIGINT).
+  const kill = (code = 137): void =>
+    finish(code, code > 128 && code < 160 ? code - 128 : undefined);
+  return { pid: opts.pid, exited, kill, signal, termsig: () => endedBy };
 }
