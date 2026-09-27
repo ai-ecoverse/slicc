@@ -16,9 +16,15 @@ default `global.openai.gpt-5.6-luna` (a non-Claude judge, as #3180 prefers). A
 judgement that fails validation is answered with a repair turn (its own tool
 call answered with a result naming each problem; no `status` field, which
 Bedrock supports for Claude and Nova only), up to `JUDGE_ATTEMPTS` (3) in all;
-the record's `judge.repairs` counts them. Plain re-asking was not enough: in the
-V2.1 pilot the judge omitted `not_assessable_reason` twice in a row on 5 of 28
-runs.
+the record's `judge.repairs` counts them. A judgement still invalid after those
+attempts goes to a fallback judge (`--judge-fallback-model`, default
+`global.openai.gpt-5.6-sol`; `bench.yml` input `judge-fallback-model`, `none`
+turns it off): the record's `judge.model` names the judge that scored, with
+`fallback_from` and `fallback_reason`, and a resume keeps it. Only invalid
+judgements fall back; a failed request is the same for either judge. In the
+V2.1 pilot of 2026-09-27, the primary judge stayed invalid on 9 of 72 runs.
+Plain re-asking was not enough: in the V2.1 pilot the judge omitted
+`not_assessable_reason` twice in a row on 5 of 28 runs.
 
 ## Transcript collection
 
