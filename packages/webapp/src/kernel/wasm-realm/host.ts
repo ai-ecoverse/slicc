@@ -5,8 +5,8 @@
  * One worker per process. The SAB responder is the one the node realm uses,
  * with a dispatcher that sends process syscalls to the process's fd table
  * and file operations to the token-scoped sync-fs dispatch (the gated
- * `ctx.fs` of whoever started the process). Exit, a crash, or a kill all end
- * in {@link finish}: the responder detaches, the token is revoked, the
+ * `ctx.fs` of whoever started the process). Exit, a crash, a kill, or a write
+ * to a pipe nobody reads (SIGPIPE, 141) all end in {@link finish}: the responder detaches, the token is revoked, the
  * process's descriptors are released (pipes see EOF / EPIPE) and the worker is
  * terminated.
  */
@@ -69,6 +69,9 @@ export interface WasmProcessHandle {
 /** Exit code of a process whose worker failed outside the program. */
 const CRASHED = 70; // EX_SOFTWARE
 
+/** SIGPIPE's default action: a write to a pipe with no reader ends the writer. */
+const KILLED_BY_SIGPIPE = 128 + 13;
+
 function defaultWorker(): WasmWorkerLike {
   return new Worker(new URL('./process-worker.ts', import.meta.url), {
     type: 'module',
@@ -80,10 +83,17 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
   const token = mintSyncFsToken({ fs: opts.fs, cwd: opts.cwd });
   const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + SAB_DEFAULT_WINDOW_BYTES);
   const worker = (opts.createWorker ?? defaultWorker)();
-  const dispatch = (req: SyncSabDispatchRequest): Promise<SyncFsResult> => {
-    if (isWasmSyscall(req)) return process.syscall(req);
+  const dispatch = async (req: SyncSabDispatchRequest): Promise<SyncFsResult> => {
+    if (isWasmSyscall(req)) {
+      const result = await process.syscall(req);
+      // The worker never sees this answer: it is gone, as with a real SIGPIPE.
+      if (req.op === 'fd-write' && !result.ok && result.errno === 'EPIPE') {
+        finish(KILLED_BY_SIGPIPE);
+      }
+      return result;
+    }
     if ('op' in req && typeof req.op === 'string' && 'path' in req) return dispatchSyncFs(req);
-    return Promise.resolve({ ok: false, errno: 'ENOSYS', message: 'wasm-realm: no exec yet' });
+    return { ok: false, errno: 'ENOSYS', message: 'wasm-realm: no exec yet' };
   };
   const responder = attachSyncSabResponder(worker, sab, token, { dispatch });
 

@@ -179,6 +179,34 @@ describe('spawnWasmProcess', () => {
     expect(await read.file.read!(64)).toHaveLength(0);
   });
 
+  it('ends a writer whose pipe has no reader with 141 (SIGPIPE)', async () => {
+    const { read, write } = openPipe();
+    read.release(); // the reader is gone
+    const fds = new FdTable();
+    fds.install(bytesSource(new Uint8Array(0)));
+    fds.install(write);
+    let after = false;
+    const worker = fakeWorker(async (call) => {
+      await call({ op: 'fd-write', fd: 1, body: bytes('y\n') });
+      after = true; // never reached: the process is gone
+      return 0;
+    });
+    const handle = spawnWasmProcess({
+      pid: 3010,
+      program,
+      argv0: 'yes',
+      args: [],
+      env: {},
+      cwd: '/',
+      fds,
+      fs: memFs({}),
+      createWorker: () => worker,
+    });
+    expect(await handle.exited).toBe(141);
+    expect(worker.terminated).toBe(true);
+    expect(after).toBe(false);
+  });
+
   it('kill ends the process at once with 137 and releases everything', async () => {
     const { read, write } = openPipe();
     const fds = new FdTable();

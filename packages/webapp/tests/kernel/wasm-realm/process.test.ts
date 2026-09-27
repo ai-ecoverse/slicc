@@ -75,3 +75,25 @@ describe('WasmProcess syscalls', () => {
     expect(isWasmSyscall({})).toBe(false);
   });
 });
+
+describe('WasmProcess pipes and poll', () => {
+  it('makes a kernel pipe above the stdio fds and reports readiness', async () => {
+    const p = new WasmProcess(3000, stdio('', []));
+    const made = await p.syscall({ op: 'fd-pipe' });
+    expect(made).toEqual({ ok: true, kind: 'json', json: [3, 4] });
+    const poll = async (fd: number) => {
+      const r = await p.syscall({ op: 'fd-poll', fd });
+      return r.ok && r.kind === 'json' ? r.json : r;
+    };
+    expect(await poll(3)).toEqual({ readable: false, writable: false, hangup: false });
+    expect(await poll(4)).toEqual({ readable: false, writable: true, hangup: false });
+    await p.syscall({ op: 'fd-write', fd: 4, body: bytes('x') });
+    expect(await poll(3)).toMatchObject({ readable: true });
+    await p.syscall({ op: 'fd-close', fd: 4 });
+    expect(await poll(3)).toEqual({ readable: true, writable: false, hangup: true });
+    // A byte source and a sink never wait.
+    expect(await poll(0)).toEqual({ readable: true, writable: false, hangup: false });
+    expect(await poll(1)).toEqual({ readable: false, writable: true, hangup: false });
+    expect(await p.syscall({ op: 'fd-poll', fd: 9 })).toMatchObject({ ok: false, errno: 'EBADF' });
+  });
+});

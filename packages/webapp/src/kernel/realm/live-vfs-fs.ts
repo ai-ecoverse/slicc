@@ -63,6 +63,11 @@ interface LiveNodeState {
   loaded: boolean;
   dirty: boolean;
   openCount: number;
+  /**
+   * Unlinked while open (a temp file: mkstemp, unlink, write, read back):
+   * its bytes live on in `data` for the open streams, never written back.
+   */
+  orphan?: boolean;
 }
 
 export interface LiveFsNode {
@@ -256,6 +261,9 @@ function createHelpers(Fs: LiveFsApi, ops: LiveOpsTables) {
   }
 
   function statOf(node: LiveFsNode): SyncFsBridgeStat {
+    if (node.live.orphan) {
+      return { ...(node.live.stat as SyncFsBridgeStat), size: node.live.len };
+    }
     if (!node.live.stat) {
       const st = call(() => bridgeOf(node).lstat(liveNodePath(node)));
       node.live.stat = st;
@@ -292,7 +300,7 @@ function createHelpers(Fs: LiveFsApi, ops: LiveOpsTables) {
   /** Write a dirty buffer back to the VFS. */
   function flushNode(node: LiveFsNode): void {
     const s = node.live;
-    if (!s.dirty || !s.data) return;
+    if (!s.dirty || !s.data || s.orphan) return;
     const bytes = s.data.slice(0, s.len);
     call(() => bridgeOf(node).writeFile(liveNodePath(node), bytes));
     s.dirty = false;
@@ -340,6 +348,7 @@ type LiveHelpers = ReturnType<typeof createHelpers>;
 
 function createNodeOps(h: LiveHelpers): LiveNodeOps {
   const { Fs, bridgeOf, call, metadataCall, makeNode, statOf, childPath, flushNode, truncate } = h;
+  const { ensureLoaded } = h;
   return {
     getattr(node) {
       const st = statOf(node);
@@ -363,6 +372,14 @@ function createNodeOps(h: LiveHelpers): LiveNodeOps {
       };
     },
     setattr(node, attr) {
+      if (node.live.orphan) {
+        // Gone from the VFS: only what the open streams see changes.
+        if (attr.mode !== undefined && attr.mode !== null) {
+          node.mode = (node.mode & ~PERM_MASK) | (attr.mode & PERM_MASK);
+        }
+        if (attr.size !== undefined && attr.size !== null) truncate(node, attr.size);
+        return;
+      }
       const path = liveNodePath(node);
       if (attr.mode !== undefined && attr.mode !== null) {
         const perm = attr.mode & PERM_MASK;
@@ -424,7 +441,20 @@ function createNodeOps(h: LiveHelpers): LiveNodeOps {
       oldNode.live.stat = undefined;
     },
     unlink(parent, name) {
+      // A file still open lives on for its streams: keep its bytes and stat.
+      let open: LiveFsNode | undefined;
+      try {
+        const node = Fs.lookupNode?.(parent, name);
+        if (node && node.live?.openCount > 0 && Fs.isFile(node.mode)) open = node;
+      } catch {
+        /* not there: the unlink below reports it */
+      }
+      if (open) {
+        statOf(open);
+        ensureLoaded(open);
+      }
       call(() => bridgeOf(parent).unlink(childPath(parent, name)));
+      if (open) open.live.orphan = true;
     },
     rmdir(parent, name) {
       call(() => bridgeOf(parent).rmdir(childPath(parent, name)));
