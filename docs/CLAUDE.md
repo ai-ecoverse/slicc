@@ -73,6 +73,7 @@ Subsystems:
 - `electron.md` — Electron float workflow
 - `sliccstart-browser.md` — Sliccstart's browser-like surfaces: the macOS default-browser role (registration, Info.plist declarations, incoming-link routing over CDP) and previous-session tab restore
 - `ios-simulator-qa.md` — hand-running the iOS follower in a Simulator: boot/build/install/launch, seeding `@AppStorage` via launch arguments, getting a real Join URL
+- `bench-runner.md` — benchmark runner internals: judge repair turns, transcript collection over the 8 MiB tray limit, leader lifecycle and diagnostics, publishing pipeline
 
 Review & gotchas:
 
