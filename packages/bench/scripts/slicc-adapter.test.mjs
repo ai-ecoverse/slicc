@@ -1311,6 +1311,44 @@ describe('a prompt that returns while the agent still works', () => {
     expect(err.message).toMatch(/interrupted/);
     expect(calls.some((c) => /session export/.test(c.command ?? ''))).toBe(false);
     expect(calls.some((c) => /tab-close/.test(c.command ?? ''))).toBe(false);
+    expect(err.leaderDown).toBe(true);
+  });
+
+  it('gives up when cost keeps failing after an interrupt and marks the leader down', async () => {
+    const timeouts = [];
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: { stdout: '', stderr: '', status: 130, timedOut: true },
+      },
+      commands: [
+        [
+          /^cost --json --all$/,
+          (_command, opts) => {
+            timeouts.push(opts?.timeoutMs);
+            return { stdout: '', stderr: 'timed out', status: 1, timedOut: true };
+          },
+        ],
+      ],
+    });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'rf',
+      model: 'm',
+      busyProbeMs: 5,
+      stopProbeIntervals: 2,
+      stopProbeBudgetMs: 60_000,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.leaderDown).toBe(true);
+    expect(err.stillWorking).toBe(true);
+    expect(err.message).toMatch(/stopped answering cost/);
+    expect(calls.some((c) => /session export/.test(c.command ?? ''))).toBe(false);
+    // The probe readings are bounded; the setup reading has no short timeout.
+    expect(timeouts.filter((ms) => ms === 15_000).length).toBeGreaterThanOrEqual(2);
   });
 
   it('does not score a transcript lost while the agent is still busy', async () => {

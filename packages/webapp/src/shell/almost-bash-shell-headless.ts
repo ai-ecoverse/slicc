@@ -381,6 +381,26 @@ function stripRunPid(env: Record<string, string>): Record<string, string> {
   return rest;
 }
 
+/** One signal that aborts when any of `cuts` does. `release` drops the listeners. */
+function linkAbort(cuts: Array<AbortSignal | undefined>): {
+  signal: AbortSignal;
+  release(): void;
+} {
+  const linked = new AbortController();
+  const live = cuts.filter((cut): cut is AbortSignal => cut !== undefined);
+  const onCut = (): void => linked.abort();
+  for (const cut of live) {
+    if (cut.aborted) linked.abort();
+    else cut.addEventListener('abort', onCut, { once: true });
+  }
+  return {
+    signal: linked.signal,
+    release() {
+      for (const cut of live) cut.removeEventListener('abort', onCut);
+    },
+  };
+}
+
 export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected bash: Bash;
   protected vfsAdapter: VfsAdapter;
@@ -468,6 +488,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * concurrency — a stale read only costs one extra 250 ms tick.
    */
   private activeRunSignal: AbortSignal | undefined;
+  /**
+   * Aborted by {@link cancelActiveCommand} to cut a run whose own signal
+   * the caller cannot reach (a turn force-release). Replaced on each cancel
+   * so the next command is not born already aborted.
+   */
+  private commandAbort = new AbortController();
 
   /**
    * Script-level progress unit for the run currently inside `bash.exec`
@@ -872,6 +898,16 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * realm child to it — enabling terminal-signal fan-out to the realm
    * (#1116). Restored to the prior value on return so nested execs are safe.
    */
+  /**
+   * Abort the run currently inside `bash.exec`, if any. A stop that only
+   * signals the turn leaves a custom command (one that never reads its
+   * signal) holding this shell, and the next `exec` waits behind it.
+   */
+  cancelActiveCommand(): void {
+    this.commandAbort.abort();
+    this.commandAbort = new AbortController();
+  }
+
   async executeCommand(
     command: string,
     signal?: AbortSignal,
@@ -1147,7 +1183,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         : {}),
     };
     const pathBeforeExec = this.lastEnv.PATH;
-    this.activeRunSignal = signal;
+    const linked = linkAbort([signal, this.commandAbort.signal]);
+    execOptions.signal = linked.signal;
+    this.activeRunSignal = linked.signal;
     const scriptRun = this.beginScriptRun(command);
     let result: BashExecResult & { pipeStatus?: number[] };
     try {
@@ -1156,7 +1194,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         execOptions
       );
     } finally {
-      if (this.activeRunSignal === signal) this.activeRunSignal = undefined;
+      linked.release();
+      if (this.activeRunSignal === linked.signal) this.activeRunSignal = undefined;
       this.endScriptRun(scriptRun);
     }
     // Persist any "Always" command grants confirmed during dispatch now that we

@@ -105,6 +105,13 @@ export {
 export { buildScoopShellEnv, ownLickTargetFor } from './scoop-context/shell-env.js';
 export { resolveThinkingLevel } from './scoop-context/thinking-level.js';
 
+/**
+ * How long a stop waits for the turn to unwind before it is force-released.
+ * Inside the follower's abort-confirm bound, so a tool that ignores the
+ * abort still lets the leader ack and keep serving `exec`.
+ */
+export const STOP_FORCE_RELEASE_MS = 2_000;
+
 /** How a cleared root treats its live compaction snapshot. */
 export interface ClearSessionOptions {
   /**
@@ -128,6 +135,8 @@ export class ScoopContext {
   private unsubscribe: (() => void) | null = null;
   /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
   private promptAbortController: AbortController | null = null;
+  /** Armed by {@link stop} and cleared when the turn actually settles. */
+  private forceReleaseTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Generation of {@link runTurn}. A superseded turn's `finally` must not
    * publish `ready` or clear `isProcessing`: a second prompt (a redial that
@@ -464,6 +473,7 @@ export class ScoopContext {
     if (lastError || abortSignal.aborted) {
       this.sessions.persistNow();
     }
+    this.disarmForceRelease();
     this.isProcessing = false;
     // The turn settled in THIS page life — success, error or abort — so
     // there is nothing for a reload to recover.
@@ -691,6 +701,41 @@ export class ScoopContext {
     // is what marks the turn settled once `runTurn`'s finally runs. Publishing
     // ready eagerly let `abort_ack` and `session export` treat the unit as
     // idle while the outstanding `agent.prompt()` was still unwinding.
+    // A tool that never observes the abort used to leave that finally
+    // unreachable, so the leader stayed `processing` and later `exec` calls
+    // queued behind it. Force-release is the bound on that wait.
+    this.armForceRelease();
+  }
+
+  private disarmForceRelease(): void {
+    if (this.forceReleaseTimer === null) return;
+    clearTimeout(this.forceReleaseTimer);
+    this.forceReleaseTimer = null;
+  }
+
+  /**
+   * The cooperative abort did not unwind this turn. SIGKILL the process tree
+   * (realm workers included) and the scoop's in-flight shell command, then
+   * settle the unit so `abort_ack` and `exec` are not stuck behind it.
+   */
+  private armForceRelease(): void {
+    this.disarmForceRelease();
+    const epoch = this.turnEpoch;
+    const proc = this.currentTurnProcess;
+    this.forceReleaseTimer = setTimeout(() => {
+      this.forceReleaseTimer = null;
+      if (this.disposed || this.turnEpoch !== epoch || !this.isProcessing) return;
+      if (proc && this.processManager) {
+        this.processManager.signal(proc.pid, 'SIGKILL');
+        this.processManager.exit(proc.pid, null);
+      }
+      this.bashJobs.reapAll();
+      this.shell?.cancelActiveCommand();
+      this.agent?.abort?.();
+      if (this.turnEpoch !== epoch || !this.isProcessing) return;
+      this.isProcessing = false;
+      if (this.status === 'processing') this.setStatus('ready');
+    }, STOP_FORCE_RELEASE_MS);
   }
 
   /** Clear the agent's in-memory conversation history (used by clear-chat). */
@@ -942,6 +987,7 @@ export class ScoopContext {
     // A deliberate teardown (drop, clear, shutdown) is not an interruption.
     this.turnJournal?.end(this.scoop.jid);
     this.disposed = true;
+    this.disarmForceRelease();
     this.idleCompaction?.cancel();
     // Clear the run-bound wall-clock timer symmetrically with
     // `cleanupPromptState` (#1972): a dispose mid-bounded-run (shutdown,

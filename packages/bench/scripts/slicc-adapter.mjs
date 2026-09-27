@@ -271,8 +271,8 @@ export function costTotals(costJson) {
   return totals;
 }
 
-async function spend(leader) {
-  const r = await leader.exec('cost --json --all');
+async function spend(leader, timeoutMs) {
+  const r = await leader.exec('cost --json --all', timeoutMs ? { timeoutMs } : undefined);
   return r.status === 0 ? costTotals(r.stdout) : null;
 }
 
@@ -730,11 +730,19 @@ export const COST_POLL_MS = 30_000;
 export const BUSY_PROBE_MS = 20_000;
 
 /**
- * How many gaps an interrupted prompt is watched across before the agent is
- * treated as not having stopped. At {@link BUSY_PROBE_MS} this is five minutes,
- * which is the tail after SIGINT — not the old ten-minute export hang.
+ * How many cost readings an interrupted prompt is watched across before the
+ * agent is treated as not having stopped. Failed readings count. The wall
+ * clock cap is {@link STOP_PROBE_BUDGET_MS}: one hung `cost` used to burn the
+ * CLI's 180s exec timeout, and fifteen of those held the lane until the job
+ * limit (benchmark 36313001183).
  */
-export const STOP_PROBE_INTERVALS = 15;
+export const STOP_PROBE_INTERVALS = 6;
+
+/** Wall clock for the post-interrupt spend watch, including failed readings. */
+export const STOP_PROBE_BUDGET_MS = 3 * 60 * 1000;
+
+/** One post-interrupt cost reading. Short so a wedged leader cannot spend the whole budget on a single call. */
+export const STOP_PROBE_READ_TIMEOUT_MS = 15_000;
 
 /**
  * Whether the agent is still working although `slicc prompt` returned. In the V2.1 pilot
@@ -763,29 +771,44 @@ function spendRising(before, after) {
 /**
  * After an interrupt, read spend until two readings in a row are flat, and
  * return the later one so the recorded cost includes what the turn spent
- * while it was stopping. `stopped: false` means it was still rising at the
- * end of the watch. A failed reading is skipped, never treated as zero or as
- * proof that the agent halted.
+ * while it was stopping. `stopped: false` means the watch gave up: the spend
+ * was still rising, or `cost` kept failing. A failed reading counts toward
+ * `maxIntervals` and toward `budgetMs`. It is never treated as zero.
  */
 export async function awaitQuiescent(
   leader,
-  { probeMs = BUSY_PROBE_MS, sleep, maxIntervals = STOP_PROBE_INTERVALS } = {}
+  {
+    probeMs = BUSY_PROBE_MS,
+    sleep,
+    maxIntervals = STOP_PROBE_INTERVALS,
+    budgetMs = STOP_PROBE_BUDGET_MS,
+    readTimeoutMs = STOP_PROBE_READ_TIMEOUT_MS,
+    now = Date.now,
+  } = {}
 ) {
+  const deadline = now() + budgetMs;
   let previous = null;
   let latest = null;
-  for (let i = 0; i < maxIntervals; i += 1) {
-    const now = await spend(leader);
-    if (now) {
-      latest = now;
-      if (previous && !spendRising(previous, now)) return { stopped: true, spend: now };
-      previous = now;
+  let failures = 0;
+  // `maxIntervals` is the number of gaps between readings, so a value of 1
+  // still takes the two readings a flat pair needs.
+  for (let attempt = 0; attempt <= maxIntervals && now() < deadline; attempt += 1) {
+    const remaining = deadline - now();
+    const reading = await spend(leader, Math.min(readTimeoutMs, Math.max(1, remaining)));
+    if (!reading) failures += 1;
+    else {
+      latest = reading;
+      if (previous && !spendRising(previous, reading)) {
+        return { stopped: true, spend: reading, failures };
+      }
+      previous = reading;
     }
-    await sleep(probeMs);
+    if (attempt === maxIntervals) break;
+    const gap = deadline - now();
+    if (gap <= 0) break;
+    await sleep(Math.min(probeMs, gap));
   }
-  const now = await spend(leader);
-  if (now) latest = now;
-  if (previous && now && !spendRising(previous, now)) return { stopped: true, spend: now };
-  return { stopped: false, spend: latest };
+  return { stopped: false, spend: latest, failures };
 }
 
 /**
@@ -836,6 +859,7 @@ export async function runTask({
   costPollMs = COST_POLL_MS,
   busyProbeMs = BUSY_PROBE_MS,
   stopProbeIntervals = STOP_PROBE_INTERVALS,
+  stopProbeBudgetMs = STOP_PROBE_BUDGET_MS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   condition = null,
 }) {
@@ -881,12 +905,19 @@ export async function runTask({
         probeMs: busyProbeMs,
         sleep,
         maxIntervals: stopProbeIntervals,
+        budgetMs: stopProbeBudgetMs,
+        now,
       });
       if (!quiet.stopped) {
         const err = new Error(
-          `slicc prompt was interrupted after ${Math.round(durationMs / 1000)} s but the agent kept working (its spend kept rising)`
+          quiet.failures > 0 && !quiet.spend
+            ? `slicc prompt was interrupted after ${Math.round(durationMs / 1000)} s and the leader stopped answering cost`
+            : `slicc prompt was interrupted after ${Math.round(durationMs / 1000)} s but the agent kept working (its spend kept rising)`
         );
         err.stillWorking = true;
+        // The lane cannot tell a wedged leader from one whose turn never
+        // released the shell. Restart it and move on (runFresh).
+        err.leaderDown = true;
         throw err;
       }
       after = quiet.spend;
