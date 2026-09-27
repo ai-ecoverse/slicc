@@ -36,9 +36,16 @@ func coneAck(id string) protocol.UserMessageAck {
 }
 
 func rosterFrame(jids ...string) map[string]any {
+	return rosterWithState("", jids...)
+}
+
+func rosterWithState(state string, jids ...string) map[string]any {
 	scoops := []map[string]any{}
 	for _, jid := range jids {
 		entry := map[string]any{"jid": jid, "parentId": "cone-1"}
+		if state != "" && jid != "cone-1" {
+			entry["state"] = state
+		}
 		if jid == "cone-1" {
 			entry["parentId"] = nil
 		}
@@ -157,6 +164,28 @@ func TestCLIPromptAllSettledHoldsWhileAScoopIsBusy(t *testing.T) {
 	}
 	if took < 1500*time.Millisecond {
 		t.Fatalf("prompt exited after %s, while the scoop was still processing", took)
+	}
+}
+
+// A scoop already working when the prompt connects shows up only in the
+// roster snapshot; it must hold the prompt open like a processing status.
+func TestCLIPromptAllSettledCountsWorkingScoopsFromTheRoster(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := ackLeader(t, coneAck, []any{
+		rosterWithState("working", "cone-1", "scout"),
+		statusFrameFor("cone-1", "processing"),
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "DONE"),
+		agentFrameFor("cone-1", protocol.AgentTurnEnd, "m1", ""),
+		statusFrameFor("cone-1", "ready"),
+		1200 * time.Millisecond,
+		rosterWithState("idle", "cone-1", "scout"),
+	})
+	_, stderr, took, err := runPromptArgs(t, bin, leader.joinURL, "--allsettled", "300ms")
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if took < 1500*time.Millisecond {
+		t.Fatalf("prompt exited after %s, while the roster still showed the scoop working", took)
 	}
 }
 

@@ -53,32 +53,43 @@ func (a *allSettled) observe(typ string, raw []byte, now time.Time) {
 		a.last = now
 		a.mu.Unlock()
 	case "scoops.list":
-		a.dropGone(raw)
+		a.applyRoster(raw, now)
 	}
 }
 
-// dropGone forgets busy units that are no longer on the roster: a dropped
-// scoop never sends its own `ready`.
-func (a *allSettled) dropGone(raw []byte) {
+// applyRoster reads a `scoops.list` snapshot. A unit already `working` (or
+// still `initializing`) when the prompt connects appears only here, before
+// any status frame of its own. A unit that left the roster stops counting: a
+// dropped scoop never sends its own `ready`. A leader without `state` leaves
+// the statuses as they are.
+func (a *allSettled) applyRoster(raw []byte, now time.Time) {
 	var msg struct {
 		Scoops []struct {
-			Jid string `json:"jid"`
+			Jid   string `json:"jid"`
+			State string `json:"state"`
 		} `json:"scoops"`
 	}
 	if json.Unmarshal(raw, &msg) != nil {
 		return
 	}
 	present := map[string]bool{}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	for _, s := range msg.Scoops {
 		present[s.Jid] = true
+		switch s.State {
+		case "working", "initializing":
+			a.busy[s.Jid] = true
+		case "idle", "broken":
+			delete(a.busy, s.Jid)
+		}
 	}
-	a.mu.Lock()
 	for jid := range a.busy {
 		if jid != "" && !present[jid] {
 			delete(a.busy, jid)
 		}
 	}
-	a.mu.Unlock()
+	a.last = now
 }
 
 // turnEnded marks the prompted turn as ended (a `turn_end` or a settled

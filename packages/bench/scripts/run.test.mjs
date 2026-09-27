@@ -377,6 +377,15 @@ describe('main', () => {
     ).rejects.toThrow(/unknown task id\(s\) smoke-001 in Own/);
   });
 
+  it('checks task ids against the whole set, before --limit trims it', async () => {
+    const dir = tmp();
+    const out = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const args = ['--set', setFile(dir), '--models', 'm', '--tasks', 'own-1,own-2'];
+    expect(await main([...args, '--limit', '1', '--plan'], { log: vi.fn() })).toBe(0);
+    expect(out.mock.calls.map((c) => c[0])).toEqual(['Own\tbuiltin\tm\tr1\town-1']);
+    out.mockRestore();
+  });
+
   it('prints the plan without touching a leader', async () => {
     const dir = tmp();
     const log = vi.fn();

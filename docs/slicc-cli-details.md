@@ -128,7 +128,7 @@ above are unchanged against it.
 The cone can end its turn while scoops it started are still working, then wake when they report back and write the real answer. A plain `prompt` exits at the first turn end. With `--allsettled`, `prompt_settled.go` watches every unit's `status` and `agent_event` frames, not only the prompted one:
 
 - The prompt exits 0 once the prompted turn has ended at least once, no unit's last status is `processing`, and no frame from any unit has arrived for the duration.
-- A unit that leaves the `scoops.list` roster stops counting as busy; a dropped scoop never sends its own `ready`.
+- A `scoops.list` snapshot counts units whose `state` is `working` or `initializing` as busy (a scoop already running when the prompt connects appears only there), `idle` and `broken` as not busy, and a unit that leaves the roster stops counting; a dropped scoop never sends its own `ready`.
 - The cone's later turns stream to stdout after a blank line; scoops' text does not.
 - Errors, SIGINT and a closed connection exit as for a plain prompt. A unit that never settles keeps the prompt open, so a caller needs its own timeout; the bench's is SIGINT.
 
