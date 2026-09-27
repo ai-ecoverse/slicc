@@ -87,6 +87,7 @@ import { ElectronTrayFollower } from './electron-tray-follower.js';
 import { shouldParseGlobalJson } from './fetch-proxy-headers.js';
 import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
+import { runHostedPageWatchdog } from './hosted-page-watchdog.js';
 import { registerHostFsRoutes, resolveHostMountRoots } from './hostfs.js';
 import { startHostFsWatchers } from './hostfs-watch.js';
 import { createBridgeServer } from './http-keepalive.js';
@@ -249,6 +250,8 @@ interface ServerState {
   messageBuffer: ClientFrameBuffer | null;
 
   chromeReconnect: ChromeReconnectController | null;
+
+  hostedLaunchUrl: string | null;
 }
 
 function createServerState(): ServerState {
@@ -273,6 +276,7 @@ function createServerState(): ServerState {
     clientConnectionSeq: 0,
     messageBuffer: null,
     chromeReconnect: null,
+    hostedLaunchUrl: null,
   };
 }
 
@@ -482,6 +486,9 @@ function resolveChromeProfileOrExit(
 
 async function launchChromeTarget(state: ServerState): Promise<void> {
   const browserLaunchUrl = buildBrowserLaunchUrl(state);
+  if (RUNTIME_FLAGS.hosted) {
+    state.hostedLaunchUrl = browserLaunchUrl;
+  }
   const chromeProfile = resolveChromeProfileOrExit(state);
 
   const chromePath = findChromeExecutable({
@@ -938,11 +945,28 @@ async function preconnectCdp(
     console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
 
     if (RUNTIME_FLAGS.hosted) {
+      const pageUrlPrefix = resolveThinLeaderOrigin() + '/';
       registerLeaderRestartEndpoint(app, {
         cdp: createHttpCdp(cdpPort),
-        pageUrlPrefix: resolveThinLeaderOrigin() + '/',
+        pageUrlPrefix,
       });
       console.log('[hosted] /api/leader-restart endpoint registered');
+
+      if (state.hostedLaunchUrl) {
+        void runHostedPageWatchdog({
+          cdp: createHttpCdp(cdpPort),
+          cdpPort,
+          launchUrl: state.hostedLaunchUrl,
+          pageUrlPrefix,
+          isAlive: () =>
+            state.activeClientWs !== null && state.activeClientWs.readyState === WebSocket.OPEN,
+        }).catch((err) => {
+          console.warn(
+            '[hosted] page watchdog stopped:',
+            err instanceof Error ? err.message : String(err)
+          );
+        });
+      }
     }
   } catch (err) {
     console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);

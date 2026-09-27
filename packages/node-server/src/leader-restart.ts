@@ -118,6 +118,27 @@ export function createHttpCdp(cdpPort: number): CdpLike {
   let cachedClient: CdpClient | null = null;
   let cachedWebSocketUrl: string | null = null;
 
+  let pageWsById = new Map<string, string>();
+  let fallbackPageWs: string | null = null;
+
+  const dropCachedClient = (): void => {
+    cachedClient?.close();
+    cachedClient = null;
+    cachedWebSocketUrl = null;
+  };
+
+  const ensureClient = async (preferredWs: string | null): Promise<CdpClient> => {
+    const ws = preferredWs ?? cachedWebSocketUrl ?? fallbackPageWs;
+    if (!ws) {
+      throw new Error('createHttpCdp: no ws url cached — call Target.getTargets first');
+    }
+    if (cachedClient && cachedWebSocketUrl === ws) return cachedClient;
+    dropCachedClient();
+    cachedClient = await openCdpClient(ws);
+    cachedWebSocketUrl = ws;
+    return cachedClient;
+  };
+
   return {
     async send(method, params, sessionId) {
       if (method === 'Target.getTargets') {
@@ -128,10 +149,13 @@ export function createHttpCdp(cdpPort: number): CdpLike {
           url: string;
           webSocketDebuggerUrl?: string;
         }>;
-
-        cachedWebSocketUrl =
-          list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)?.webSocketDebuggerUrl ??
-          null;
+        pageWsById = new Map();
+        for (const t of list) {
+          if (t.type === 'page' && t.webSocketDebuggerUrl) {
+            pageWsById.set(t.id, t.webSocketDebuggerUrl);
+          }
+        }
+        fallbackPageWs = pageWsById.values().next().value ?? null;
         return {
           targetInfos: list.map((t) => ({
             id: t.id,
@@ -141,19 +165,17 @@ export function createHttpCdp(cdpPort: number): CdpLike {
           })),
         };
       }
-      if (!cachedClient) {
-        if (!cachedWebSocketUrl) {
-          throw new Error('createHttpCdp: no ws url cached — call Target.getTargets first');
-        }
-        cachedClient = await openCdpClient(cachedWebSocketUrl);
+      let preferredWs: string | null = null;
+      if (method === 'Target.attachToTarget') {
+        const targetId = (params as { targetId?: string } | undefined)?.targetId;
+        if (targetId) preferredWs = pageWsById.get(targetId) ?? null;
       }
+      const client = await ensureClient(preferredWs);
       try {
-        return await cachedClient.send(method, params, sessionId);
+        return await client.send(method, params, sessionId);
       } finally {
-        if (method === 'Page.reload') {
-          cachedClient.close();
-          cachedClient = null;
-          cachedWebSocketUrl = null;
+        if (method === 'Page.reload' || method === 'Page.navigate') {
+          dropCachedClient();
         }
       }
     },

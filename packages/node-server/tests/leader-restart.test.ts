@@ -243,6 +243,74 @@ describe('createHttpCdp — real WebSocket roundtrip', () => {
     expect(result).toMatchObject({ ok: false, code: 'CDP_NOT_READY' });
   });
 
+  it('attaches over the target page WebSocket and clears the client after Page.navigate', async () => {
+    const received: string[] = [];
+    let wsConnections = 0;
+    const httpServer = createServer((req, res) => {
+      if (req.url === '/json') {
+        const port = (httpServer.address() as { port: number }).port;
+        res.setHeader('content-type', 'application/json');
+        res.end(
+          JSON.stringify([
+            {
+              id: 'blank',
+              type: 'page',
+              url: 'about:blank',
+              webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/blank`,
+            },
+            {
+              id: 'slicc',
+              type: 'page',
+              url: 'http://localhost:5710/?runtime=hosted-leader',
+              webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/slicc`,
+            },
+          ])
+        );
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+    const port = (httpServer.address() as { port: number }).port;
+    const wss = new WebSocketServer({ server: httpServer });
+    wss.on('connection', (sock, req) => {
+      wsConnections += 1;
+      const path = req.url ?? '';
+      sock.on('message', (data) => {
+        const msg = JSON.parse(data.toString()) as {
+          id: number;
+          method: string;
+          params?: { targetId?: string };
+        };
+        received.push(`${path}:${msg.method}:${msg.params?.targetId ?? ''}`);
+        if (msg.method === 'Target.attachToTarget') {
+          sock.send(JSON.stringify({ id: msg.id, result: { sessionId: 'sess' } }));
+        } else if (msg.method === 'Page.navigate') {
+          sock.send(JSON.stringify({ id: msg.id, result: {} }));
+        }
+      });
+    });
+
+    try {
+      const cdp = createHttpCdp(port);
+      await cdp.send('Target.getTargets');
+      const { sessionId } = (await cdp.send('Target.attachToTarget', {
+        targetId: 'slicc',
+        flatten: true,
+      })) as { sessionId: string };
+      await cdp.send('Page.navigate', { url: 'http://localhost:5710/' }, sessionId);
+
+      await cdp.send('Target.getTargets');
+      await cdp.send('Target.attachToTarget', { targetId: 'blank', flatten: true });
+      expect(received[0]).toContain('/devtools/page/slicc:Target.attachToTarget:slicc');
+      expect(wsConnections).toBe(2);
+    } finally {
+      wss.close();
+      httpServer.close();
+    }
+  });
+
   it('re-opens the WebSocket on a second restartLeader cycle (cache cleared on Page.reload)', async () => {
     let wsConnections = 0;
     const httpServer = createServer((req, res) => {

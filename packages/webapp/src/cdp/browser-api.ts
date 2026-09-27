@@ -10,6 +10,7 @@ import {
 } from './cdp-reconnect-policy.js';
 import { raceAbort, throwIfAborted } from './command-abort.js';
 import { HarRecorder } from './har-recorder.js';
+import { MAX_TAB_SESSIONS, SessionCache, type TabSession } from './session-cache.js';
 import type {
   CdpPayload,
   ExecutionWorld,
@@ -43,8 +44,6 @@ export interface TrayTargetProvider {
 const FALLBACK_CDP_URL = 'ws://localhost:5710/cdp';
 const log = createLogger('browser-api');
 
-const MAX_TAB_SESSIONS = 32;
-
 const STALE_SESSION_ERRORS = [
   'Session with given id not found',
   'Target closed',
@@ -68,13 +67,6 @@ function statsOf(counters: TabLockCounters | undefined): TabLockStats {
     bridgeWaitMs: c.bridgeWaitMs,
     acquisitions: c.acquisitions,
   };
-}
-
-interface TabSession {
-  sessionId: string;
-  transport: CDPTransport;
-
-  remote?: { runtimeId: string; localTargetId: string };
 }
 
 interface BridgeHold {
@@ -188,15 +180,14 @@ export class BrowserAPI implements TabHost {
 
   private _frameContexts = new Map<string, Map<string, number>>();
 
-  private _sessions = new Map<string, TabSession>();
+  private readonly sessions = new SessionCache(MAX_TAB_SESSIONS, (targetId, entry) => {
+    log.debug('Evicting least-recently-used CDP session', { targetId });
+    void this.detachSession(targetId, entry);
+  });
 
   private _listenedTransports = new Set<CDPTransport>();
 
   private _sessionReplacedSubs = new Map<string, Set<SessionChangeCallback>>();
-
-  private _appliedSends = new Map<string, number>();
-
-  private _pinnedTargets = new Map<string, number>();
 
   private _tabLocks = new Map<string, Promise<void>>();
 
@@ -284,23 +275,16 @@ export class BrowserAPI implements TabHost {
   private readonly handleDetachedFromTarget = (params: CdpPayload): void => {
     const sessionId = params['sessionId'];
     if (typeof sessionId !== 'string') return;
-    for (const [targetId, entry] of this._sessions) {
-      if (entry.sessionId === sessionId) {
-        this.forgetSession(targetId, entry);
-        return;
-      }
-    }
+    const hit = this.sessions.findBySessionId(sessionId);
+    if (hit) this.forgetSession(hit[0], hit[1]);
   };
 
   private readonly handleTargetDestroyed = (params: CdpPayload): void => {
     const targetId = params['targetId'];
     if (typeof targetId !== 'string') return;
-    for (const [key, entry] of this._sessions) {
-      if (key === targetId || entry.remote?.localTargetId === targetId) {
-        this.forgetSession(key, entry);
-        return;
-      }
-    }
+
+    const hit = this.sessions.findByTargetOrLocalId(targetId)[0];
+    if (hit) this.forgetSession(hit[0], hit[1]);
   };
 
   constructor(client?: CDPTransport) {
@@ -330,7 +314,7 @@ export class BrowserAPI implements TabHost {
   }
 
   private noteApplied(sessionId: string): void {
-    this._appliedSends.set(sessionId, (this._appliedSends.get(sessionId) ?? 0) + 1);
+    this.sessions.noteApplied(sessionId);
   }
 
   createHarRecorder(fs: VirtualFS, transport: CDPTransport): HarRecorder {
@@ -381,7 +365,7 @@ export class BrowserAPI implements TabHost {
       throw err;
     }
 
-    const unpin = this.pinTarget(targetId);
+    const unpin = this.sessions.pin(targetId);
     try {
       counters.acquisitions += 1;
       return await this.runOnTab(targetId, fn, signal);
@@ -419,12 +403,12 @@ export class BrowserAPI implements TabHost {
 
     throwIfAborted(signal, `about to run a command on tab ${targetId}`);
     const sessionId = tab.sessionId;
-    const before = this._appliedSends.get(sessionId) ?? 0;
+    const before = this.sessions.appliedCount(sessionId);
     try {
       return await fn(tab);
     } catch (err) {
       if (!isStaleSessionError(err)) throw err;
-      const applied = (this._appliedSends.get(sessionId) ?? 0) - before;
+      const applied = this.sessions.appliedCount(sessionId) - before;
       if (applied === 0) throw err;
       this.invalidateSession(targetId);
       const reason = err instanceof Error ? err.message : String(err);
@@ -443,7 +427,7 @@ export class BrowserAPI implements TabHost {
     signal?: AbortSignal
   ): Promise<TabHandle> {
     const sessionId = await this.attachToPageOwned(targetId, owner, signal);
-    const entry = this._sessions.get(targetId);
+    const entry = this.sessions.get(targetId);
     return new TabHandle(
       this,
       targetId,
@@ -928,7 +912,7 @@ export class BrowserAPI implements TabHost {
     try {
       await this.ensureConnected();
 
-      const existing = this._sessions.get(targetId);
+      const existing = this.sessions.get(targetId);
       if (existing) {
         this.activateSession(targetId, existing);
         return existing.sessionId;
@@ -1115,10 +1099,7 @@ export class BrowserAPI implements TabHost {
   }
 
   private transportForSession(sessionId: string): CDPTransport {
-    for (const entry of this._sessions.values()) {
-      if (entry.sessionId === sessionId) return entry.transport;
-    }
-    return this.client;
+    return this.sessions.findBySessionId(sessionId)?.[1].transport ?? this.client;
   }
 
   private addTransportListeners(transport: CDPTransport): void {
@@ -1135,7 +1116,7 @@ export class BrowserAPI implements TabHost {
   private releaseLifecycleTransport(transport: CDPTransport): void {
     if (transport === this.localClient) return;
     if (!this._listenedTransports.has(transport)) return;
-    for (const entry of this._sessions.values()) if (entry.transport === transport) return;
+    if (this.sessions.anyOnTransport(transport)) return;
     this._listenedTransports.delete(transport);
     transport.off('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
     transport.off('Runtime.executionContextCreated', this.handleExecutionContextCreated);
@@ -1155,60 +1136,14 @@ export class BrowserAPI implements TabHost {
     this.remoteTargetInfo = null;
     this.setClient(this.localClient);
     if (!remote) return;
-    const stillUsed = [...this._sessions.values()].some(
-      (e) =>
-        e.remote?.runtimeId === remote.runtimeId && e.remote.localTargetId === remote.localTargetId
-    );
-    if (!stillUsed) {
+    if (!this.sessions.anyMatchingRemote(remote.runtimeId, remote.localTargetId)) {
       this.trayTargetProvider?.removeRemoteTransport?.(remote.runtimeId, remote.localTargetId);
-    }
-  }
-
-  private pruneAppliedSends(): void {
-    if (this._appliedSends.size <= MAX_TAB_SESSIONS * 4) return;
-    const live = new Set([...this._sessions.values()].map((e) => e.sessionId));
-    for (const sessionId of [...this._appliedSends.keys()]) {
-      if (!live.has(sessionId)) this._appliedSends.delete(sessionId);
     }
   }
 
   private rememberSession(targetId: string, entry: TabSession): void {
     this.addTransportListeners(entry.transport);
-    this.pruneAppliedSends();
-    this._sessions.set(targetId, entry);
-    this.enforceSessionCap(targetId);
-  }
-
-  private enforceSessionCap(protect?: string): void {
-    while (this._sessions.size > MAX_TAB_SESSIONS) {
-      let victim: string | undefined;
-      for (const targetId of this._sessions.keys()) {
-        if (targetId === protect || this._pinnedTargets.has(targetId)) continue;
-        victim = targetId;
-        break;
-      }
-      if (victim === undefined) return;
-      const evicted = this._sessions.get(victim);
-      this._sessions.delete(victim);
-      if (evicted) {
-        log.debug('Evicting least-recently-used CDP session', { targetId: victim });
-        void this.detachSession(victim, evicted);
-      }
-    }
-  }
-
-  private pinTarget(targetId: string): () => void {
-    this._pinnedTargets.set(targetId, (this._pinnedTargets.get(targetId) ?? 0) + 1);
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      const left = (this._pinnedTargets.get(targetId) ?? 1) - 1;
-      if (left > 0) this._pinnedTargets.set(targetId, left);
-      else this._pinnedTargets.delete(targetId);
-
-      this.enforceSessionCap();
-    };
+    this.sessions.remember(targetId, entry);
   }
 
   private activateSession(targetId: string, entry: TabSession): void {
@@ -1220,9 +1155,7 @@ export class BrowserAPI implements TabHost {
     }
     this.sessionId = entry.sessionId;
     this.attachedTargetId = targetId;
-
-    this._sessions.delete(targetId);
-    this._sessions.set(targetId, entry);
+    this.sessions.touch(targetId, entry);
   }
 
   private notifySessionChange(targetId: string, entry: TabSession): void {
@@ -1248,9 +1181,9 @@ export class BrowserAPI implements TabHost {
   }
 
   private unregisterSession(targetId: string): void {
-    const entry = this._sessions.get(targetId);
+    const entry = this.sessions.get(targetId);
     if (entry) this.dropFrameContexts(entry.sessionId);
-    this._sessions.delete(targetId);
+    this.sessions.delete(targetId);
     if (this.attachedTargetId === targetId) {
       this.sessionId = null;
       this.attachedTargetId = null;
@@ -1260,12 +1193,7 @@ export class BrowserAPI implements TabHost {
   private disposeSessionTransport(entry: TabSession): void {
     this.releaseLifecycleTransport(entry.transport);
     if (entry.remote) {
-      const stillUsed = [...this._sessions.values()].some(
-        (e) =>
-          e.remote?.runtimeId === entry.remote?.runtimeId &&
-          e.remote?.localTargetId === entry.remote?.localTargetId
-      );
-      if (!stillUsed) {
+      if (!this.sessions.anyMatchingRemote(entry.remote.runtimeId, entry.remote.localTargetId)) {
         this.trayTargetProvider?.removeRemoteTransport?.(
           entry.remote.runtimeId,
           entry.remote.localTargetId
@@ -1285,7 +1213,7 @@ export class BrowserAPI implements TabHost {
   }
 
   private async dropSession(targetId: string): Promise<void> {
-    const entry = this._sessions.get(targetId);
+    const entry = this.sessions.get(targetId);
     if (!entry) {
       if (this.attachedTargetId === targetId) {
         this.sessionId = null;
@@ -1297,19 +1225,19 @@ export class BrowserAPI implements TabHost {
   }
 
   private invalidateSession(targetId: string): void {
-    const entry = this._sessions.get(targetId);
+    const entry = this.sessions.get(targetId);
     if (entry) this.forgetSession(targetId, entry);
   }
 
   private clearSessionsForTransport(transport: CDPTransport): void {
-    for (const [targetId, entry] of [...this._sessions]) {
+    for (const [targetId, entry] of this.sessions.snapshot()) {
       if (entry.transport === transport) this.forgetSession(targetId, entry);
     }
   }
 
   private clearSessions(): void {
-    for (const [targetId, entry] of [...this._sessions]) this.forgetSession(targetId, entry);
-    this._sessions.clear();
+    for (const [targetId, entry] of this.sessions.snapshot()) this.forgetSession(targetId, entry);
+    this.sessions.clear();
     this.sessionId = null;
     this.attachedTargetId = null;
   }
