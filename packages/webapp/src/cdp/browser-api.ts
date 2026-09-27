@@ -9,12 +9,8 @@ import type { TrayTargetEntry } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { CDPClient } from './cdp-client.js';
-import {
-  CdpBridgeRejectedError,
-  type CdpConnectFailureClassifier,
-  CdpReconnectBackoffError,
-  nextCdpReconnectDelayMs,
-} from './cdp-reconnect-policy.js';
+import { CdpConnectionManager } from './cdp-connection-manager.js';
+import type { CdpConnectFailureClassifier } from './cdp-reconnect-policy.js';
 import { throwIfAborted } from './command-abort.js';
 import { FrameContextRegistry } from './frame-context-registry.js';
 import { HarRecorder } from './har-recorder.js';
@@ -43,6 +39,7 @@ import type {
 } from './types.js';
 import { ViewportOverrideStore } from './viewport-override-store.js';
 
+export { getDefaultCdpUrl } from './cdp-connection-manager.js';
 export type { TabLockStats } from './tab-lock-manager.js';
 
 /**
@@ -57,7 +54,6 @@ export interface TrayTargetProvider {
   openRemoteTab?(runtimeId: string, url: string): Promise<string>;
 }
 
-const FALLBACK_CDP_URL = 'ws://localhost:5710/cdp';
 const log = createLogger('browser-api');
 
 /**
@@ -104,16 +100,6 @@ export type SessionChangeCallback = (
   transport: CDPTransport,
   targetId: string
 ) => void;
-
-export function getDefaultCdpUrl(
-  locationLike: Pick<Location, 'protocol' | 'host'> | null = typeof window !== 'undefined'
-    ? window.location
-    : null
-): string {
-  if (!locationLike?.host) return FALLBACK_CDP_URL;
-  const protocol = locationLike.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${locationLike.host}/cdp`;
-}
 
 /**
  * The transport handed out by {@link BrowserAPI.getTransport}: forwards every
@@ -217,41 +203,12 @@ export class BrowserAPI implements TabHost {
   private readonly locks = new TabLockManager();
   /** Viewport overrides that survive session replacement; re-apply stays here. */
   private readonly viewports = new ViewportOverrideStore();
+  /**
+   * Transport dialing, lazy reconnect, backoff, and superseded /
+   * bridge-rejected notification. Session clearing / remote restore stay here.
+   */
+  private readonly connection = new CdpConnectionManager();
   private _onSessionChange?: SessionChangeCallback | undefined;
-  /**
-   * Last-used connect options (url + protocols) captured on the first
-   * successful (or attempted) `connect()`. Lazy reconnects via
-   * `ensureConnected()` / `ensureLocalConnected()` reuse this so the
-   * bridge URL + subprotocol survive a transport drop — without it, a
-   * thin-bridge reconnect would fall back to `getDefaultCdpUrl()` and
-   * try to hit `wss://<hosted-leader-host>/cdp`, which doesn't exist.
-   */
-  private _lastConnectOptions: Partial<CDPConnectOptions> | null = null;
-  /**
-   * Fired once when the local CDP client is superseded by a newer client
-   * (another SLICC tab/window on the same standalone instance). Boot wires
-   * this to a user-facing banner. Standalone-only — extension `DebuggerClient`
-   * has no `/cdp` proxy, so it never supersedes.
-   */
-  private supersededHandler: (() => void) | null = null;
-  private supersededNotified = false;
-  /**
-   * Transient-failure backoff for lazy reconnects (`ensureConnected`).
-   * `connect()` itself still dials immediately so the boot race can retry
-   * on its own short schedule; the gate stops the 5s target-refresh loop
-   * from opening a WebSocket on every tick.
-   */
-  private _reconnectAttempt = 0;
-  private _reconnectNotBefore = 0;
-  /** Set when the bridge refused the token. Further dials cannot succeed. */
-  private _bridgeRejection: string | null = null;
-  private bridgeRejectedHandler: (() => void) | null = null;
-  private bridgeRejectedNotified = false;
-  /**
-   * Defaults to "transient" so unit tests that reject `connect()` do not
-   * probe a live bridge. Standalone boot installs {@link classifyCdpConnectFailure}.
-   */
-  private classifyConnectFailure: CdpConnectFailureClassifier = async () => 'transient';
   private readonly handleJavaScriptDialogOpening = (params: CdpPayload): void => {
     void this.dismissJavaScriptDialog(params);
   };
@@ -719,45 +676,9 @@ export class BrowserAPI implements TabHost {
    * `ExtensionBridgeTransport` (thin extension) ignores these options.
    */
   async connect(options?: Partial<CDPConnectOptions>): Promise<void> {
-    // An explicit connect (boot's bounded retry) dials even during the
-    // backoff window. A rejected token does not: another handshake cannot
-    // succeed until the tab is opened with the current token.
-    if (this._bridgeRejection) {
-      this.notifyBridgeRejected();
-      throw new CdpBridgeRejectedError(this._bridgeRejection);
-    }
-    // Capture the connect options BEFORE attempting the connection so
-    // subsequent lazy reconnects via `ensureConnected()` can replay the
-    // same bridge URL + subprotocol even when the very first connect
-    // racing against bridge startup failed.
-    this._lastConnectOptions = options ? { ...options } : {};
-    try {
-      await this.client.connect({
-        url: options?.url ?? getDefaultCdpUrl(),
-        timeout: options?.timeout,
-        ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
-      });
-    } catch (err) {
-      await this.noteReconnectFailure(options);
-      if (this._bridgeRejection) throw new CdpBridgeRejectedError(this._bridgeRejection);
-      throw err;
-    }
-    this.noteReconnectSuccess();
+    await this.connection.connect(this.client, options);
   }
 
-  /**
-   * Record the connect options WITHOUT dialing the bridge.
-   *
-   * The Electron follower-overlay boot path deliberately skips the eager
-   * `connect()` so multiple overlay tabs don't all race for the single-client
-   * `/cdp` proxy slot. But a follower overlay that later acts as a tray
-   * follower must still federate its local page targets, which goes through
-   * `listPages()` → `ensureConnected()`. Without a captured
-   * `_lastConnectOptions`, that lazy connect falls back to
-   * `getDefaultCdpUrl()` — the hosted-leader origin, which has no `/cdp` — so
-   * the listing fails and nothing is advertised to the leader. Priming the
-   * options here lets the on-demand connect reach the LOCAL bridge instead.
-   */
   /**
    * Re-dial the local bridge if its client is disconnected (and not
    * superseded), replaying the captured connect options.
@@ -776,8 +697,21 @@ export class BrowserAPI implements TabHost {
     if (this.client !== this.localClient) await this.ensureLocalConnected();
   }
 
+  /**
+   * Record the connect options WITHOUT dialing the bridge.
+   *
+   * The Electron follower-overlay boot path deliberately skips the eager
+   * `connect()` so multiple overlay tabs don't all race for the single-client
+   * `/cdp` proxy slot. But a follower overlay that later acts as a tray
+   * follower must still federate its local page targets, which goes through
+   * `listPages()` → `ensureConnected()`. Without a captured
+   * `_lastConnectOptions`, that lazy connect falls back to
+   * `getDefaultCdpUrl()` — the hosted-leader origin, which has no `/cdp` — so
+   * the listing fails and nothing is advertised to the leader. Priming the
+   * options here lets the on-demand connect reach the LOCAL bridge instead.
+   */
   primeConnectOptions(options?: Partial<CDPConnectOptions>): void {
-    this._lastConnectOptions = options ? { ...options } : {};
+    this.connection.primeConnectOptions(options);
   }
 
   /**
@@ -787,7 +721,7 @@ export class BrowserAPI implements TabHost {
    * two tabs evict each other over the single proxy slot in silence.
    */
   setCdpSupersededHandler(handler: (() => void) | null): void {
-    this.supersededHandler = handler;
+    this.connection.setSupersededHandler(handler);
   }
 
   /**
@@ -795,63 +729,12 @@ export class BrowserAPI implements TabHost {
    * Pass `null` to clear.
    */
   setCdpBridgeRejectedHandler(handler: (() => void) | null): void {
-    this.bridgeRejectedHandler = handler;
+    this.connection.setBridgeRejectedHandler(handler);
   }
 
   /** Standalone boot installs the HTTP probe. Tests install a fake. */
   setCdpConnectFailureClassifier(classifier: CdpConnectFailureClassifier): void {
-    this.classifyConnectFailure = classifier;
-  }
-
-  private throwIfReconnectPaused(): void {
-    if (this._bridgeRejection) {
-      this.notifyBridgeRejected();
-      throw new CdpBridgeRejectedError(this._bridgeRejection);
-    }
-    if (Date.now() < this._reconnectNotBefore) throw new CdpReconnectBackoffError();
-  }
-
-  private noteReconnectSuccess(): void {
-    this._reconnectAttempt = 0;
-    this._reconnectNotBefore = 0;
-    // A successful (re)connect re-arms the supersede notification so a later
-    // eviction can surface again.
-    this.supersededNotified = false;
-  }
-
-  private async noteReconnectFailure(options?: Partial<CDPConnectOptions>): Promise<void> {
-    const kind = await this.classifyConnectFailure({
-      url: options?.url ?? '',
-      ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
-    });
-    if (kind === 'terminal') {
-      this._bridgeRejection = new CdpBridgeRejectedError().message;
-      this.notifyBridgeRejected();
-      return;
-    }
-    const delay = nextCdpReconnectDelayMs(this._reconnectAttempt);
-    this._reconnectAttempt += 1;
-    this._reconnectNotBefore = Date.now() + delay;
-  }
-
-  private notifyBridgeRejected(): void {
-    if (this.bridgeRejectedNotified) return;
-    this.bridgeRejectedNotified = true;
-    try {
-      this.bridgeRejectedHandler?.();
-    } catch {
-      // A banner failure must not break the agent's CDP path.
-    }
-  }
-
-  private notifySuperseded(): void {
-    if (this.supersededNotified) return;
-    this.supersededNotified = true;
-    try {
-      this.supersededHandler?.();
-    } catch {
-      // A banner failure must not break the agent's CDP path.
-    }
+    this.connection.setConnectFailureClassifier(classifier);
   }
 
   /**
@@ -1334,64 +1217,33 @@ export class BrowserAPI implements TabHost {
    * If the current client is a disconnected remote transport, restores the local transport.
    */
   private async ensureLocalConnected(): Promise<void> {
-    // A superseded local client lost the single CDP proxy slot to a newer
-    // tab/window — re-dialing would evict that newcomer and restart the war.
-    // Surface it and leave the client disconnected.
-    if (this.localClient.superseded === true) {
-      this.notifySuperseded();
-      return;
-    }
-    if (this.localClient.state === 'disconnected') {
-      this.throwIfReconnectPaused();
-      const opts = this._lastConnectOptions;
-      try {
-        await this.localClient.connect({
-          url: opts?.url ?? getDefaultCdpUrl(),
-          ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
-          ...(opts?.protocols !== undefined ? { protocols: opts.protocols } : {}),
-        });
-      } catch (err) {
-        await this.noteReconnectFailure(opts ?? undefined);
-        if (this._bridgeRejection) throw new CdpBridgeRejectedError(this._bridgeRejection);
-        throw err;
-      }
-      this.noteReconnectSuccess();
-    }
+    await this.connection.ensureLocalConnected(this.localClient);
   }
 
   private async ensureConnected(): Promise<void> {
-    // See ensureLocalConnected: don't re-dial a slot we were evicted from.
-    if (this.client.superseded === true) {
-      this.notifySuperseded();
-      return;
-    }
-    if (this.client.state === 'disconnected') {
-      // Before clearing sessions: a backoff tick must not drop live state
-      // or open another socket.
-      this.throwIfReconnectPaused();
-      const dropped = this.client;
-      // If we were using a remote transport that got disconnected (follower went away),
-      // restore the local transport and clear stale remote state.
-      if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
-        this.trayTargetProvider.removeRemoteTransport(
-          this.remoteTargetInfo.runtimeId,
-          this.remoteTargetInfo.localTargetId
-        );
-        this.setClient(this.localClient);
-        this.remoteTargetInfo = null;
-      }
+    await this.connection.ensureConnected({
+      client: this.client,
+      restoreLocalAfterRemoteDrop: () => {
+        // If we were using a remote transport that got disconnected (follower
+        // went away), restore the local transport and clear stale remote state.
+        if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
+          this.trayTargetProvider.removeRemoteTransport(
+            this.remoteTargetInfo.runtimeId,
+            this.remoteTargetInfo.localTargetId
+          );
+          this.setClient(this.localClient);
+          this.remoteTargetInfo = null;
+        }
+      },
       // ONLY the sessions on the transport that dropped: the registry spans
       // several (the local `/cdp` client and a transport per tray runtime), and
       // Chrome discards sessions per connection. Wiping the whole map when one
       // follower went away forgot healthy local sessions WITHOUT detaching
       // them, so the next local command minted duplicates — the fan-out leak
       // this registry exists to close.
-      this.clearSessionsForTransport(dropped);
-      if (this.client.state === 'disconnected') {
-        // Replay the last-used connect options so the bridge URL + subprotocol survive.
-        await this.connect(this._lastConnectOptions ?? undefined);
-      }
-    }
+      clearSessionsForTransport: (transport) => this.clearSessionsForTransport(transport),
+      getClient: () => this.client,
+    });
   }
 
   /** The transport a live session lives on; the current client if unknown. */
