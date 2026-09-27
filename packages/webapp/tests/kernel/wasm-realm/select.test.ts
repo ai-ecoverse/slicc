@@ -96,4 +96,25 @@ describe('fd-select syscall', () => {
     expect(await p.syscall({ op: 'fd-read', fd: 3, max: 4 })).toMatchObject({ errno: 'EINTR' });
     expect(await p.syscall({ op: 'fd-read', fd: 6, max: 4 })).toMatchObject({ ok: true });
   });
+
+  it('a write with a signal pending takes what fits and returns the short count', async () => {
+    const fds = new FdTable();
+    const pipe = openPipe(4);
+    fds.installAt(3, pipe.read);
+    fds.installAt(4, pipe.write);
+    const p = new WasmProcess(1, fds, { hasPending: () => true });
+    expect(await p.syscall({ op: 'fd-write', fd: 4, body: bytes('abcdef') })).toEqual({
+      ok: true,
+      kind: 'json',
+      json: 4,
+    });
+  });
+
+  it('detaches from the interrupt signal when it returns', async () => {
+    const interrupt = new AbortController();
+    const add = vi.spyOn(interrupt.signal, 'addEventListener');
+    const remove = vi.spyOn(interrupt.signal, 'removeEventListener');
+    expect(await selectFds(table(), [3], [], 5, interrupt.signal)).toEqual({ read: [], write: [] });
+    expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0]![1]);
+  });
 });

@@ -27,12 +27,15 @@ function ready(fds: FdTable, read: readonly number[], write: readonly number[]):
 }
 
 /** Never resolves; rejects with EINTR once `signal` aborts. */
-function interruption(signal: AbortSignal): Promise<never> {
-  return new Promise((_, reject) => {
-    const fail = (): void => reject(new KernelError('EINTR'));
+function interruption(signal: AbortSignal): { promise: Promise<never>; done(): void } {
+  let fail = (): void => {};
+  const promise = new Promise<never>((_, reject) => {
+    fail = () => reject(new KernelError('EINTR'));
     if (signal.aborted) fail();
     else signal.addEventListener('abort', fail, { once: true });
   });
+  // The process's interrupt signal outlives this call: detach when it is over.
+  return { promise, done: () => signal.removeEventListener('abort', fail) };
 }
 
 /** `timeoutMs` < 0 waits forever; 0 only polls. */
@@ -45,7 +48,21 @@ export async function selectFds(
 ): Promise<SelectResult> {
   const deadline = timeoutMs < 0 ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
   const interrupted = interruption(interrupt);
-  interrupted.catch(() => {}); // raced below; unobserved when nothing interrupts
+  interrupted.promise.catch(() => {}); // raced below; unobserved when nothing interrupts
+  try {
+    return await waitReady(fds, read, write, deadline, interrupted.promise);
+  } finally {
+    interrupted.done();
+  }
+}
+
+async function waitReady(
+  fds: FdTable,
+  read: readonly number[],
+  write: readonly number[],
+  deadline: number,
+  interrupted: Promise<never>
+): Promise<SelectResult> {
   for (;;) {
     const now = ready(fds, read, write);
     if (now.read.length > 0 || now.write.length > 0 || Date.now() >= deadline) return now;

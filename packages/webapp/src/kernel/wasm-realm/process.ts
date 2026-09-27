@@ -193,7 +193,13 @@ export class WasmProcess {
       case 'fd-write': {
         const file = this.fds.get(req.fd).file;
         if (!file.write) throw new KernelError('EBADF');
-        const signal = pollFile(file).writable ? this.interrupt.signal : this.blockingSignal();
+        // Room for some of it: with a signal pending, the write takes what fits
+        // and returns that short count instead of waiting for the rest.
+        const signal = pollFile(file).writable
+          ? this.options.hasPending?.()
+            ? AbortSignal.abort()
+            : this.interrupt.signal
+          : this.blockingSignal();
         return { ok: true, kind: 'json', json: await file.write(req.body, signal) };
       }
       case 'fd-close':
