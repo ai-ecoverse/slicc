@@ -60,6 +60,7 @@ import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import { filesystemExecutionLimits } from './filesystem-budgets.js';
 import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
+import { isInstalledProgramPath } from './ipk/wasm-programs.js';
 import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
 import { executeJsCode, executeJshFile } from './jsh-executor.js';
@@ -414,6 +415,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected registeredJshCommands = new Map<string, string>();
   /** Workflow command names we've registered (handler is dynamic, so a Set suffices). */
   protected registeredWorkflowCommands = new Set<string>();
+  /** Wasm-program command names of installed packages we've registered (#3530). */
+  protected registeredWasmCommands = new Set<string>();
   /** Promise for the currently in-flight jsh sync. */
   private jshSyncInflight: Promise<void> | null = null;
   /** Re-sync requested while one was already in flight. */
@@ -591,6 +594,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       getScriptRegisteredNames: () => [
         ...this.registeredJshCommands.keys(),
         ...this.registeredWorkflowCommands,
+        ...this.registeredWasmCommands,
       ],
       fs: options.fs,
       fetch: fetchFn,
@@ -676,7 +680,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     if (scriptWatcher) {
       scriptWatcher.watch(
         '/',
-        (path) => path.endsWith('.jsh') || path.endsWith('.workflow.js'),
+        (path) =>
+          path.endsWith('.jsh') || path.endsWith('.workflow.js') || isInstalledProgramPath(path),
         () => {
           void this.syncJshCommands().catch(() => undefined);
         }
@@ -1483,6 +1488,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         );
       }
       const wfMap = await this.getFilteredWorkflowCommands();
+      const wasmMap = await this.scriptCatalog.getWasmCommands();
 
       // .jsh names: keep the existing path-keyed registry + guard.
       for (const [name, scriptPath] of jshMap) {
@@ -1494,21 +1500,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         this.builtinCommandNames.add(name);
       }
 
-      // Workflow names: register the SAME unified handler ONCE per name (it resolves
-      // .jsh-vs-workflow at dispatch, so the order between the two loops is irrelevant).
-      for (const name of wfMap.keys()) {
-        if (this.registeredWorkflowCommands.has(name)) continue; // already handled
-        if (this.registeredJshCommands.has(name)) {
-          // A .jsh already installed the unified handler for this name; it already resolves
-          // the workflow fallback at dispatch. Just record it so we don't reconsider.
-          this.registeredWorkflowCommands.add(name);
-          continue;
-        }
-        if (this.builtinCommandNames.has(name)) continue; // never override a real built-in
-        this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
-        this.registeredWorkflowCommands.add(name);
-        this.builtinCommandNames.add(name);
-      }
+      // Wasm programs (filtered like workflows) and workflows share the unified handler.
+      const wasmNames = [...wasmMap.keys()].filter((name) => this.isCommandAllowed(name));
+      this.registerLateScriptNames(wasmNames, this.registeredWasmCommands);
+      this.registerLateScriptNames(wfMap.keys(), this.registeredWorkflowCommands);
     } finally {
       this.jshSyncInflight = null;
       if (this.jshSyncDirty) {
@@ -1519,9 +1514,35 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   }
 
   /**
+   * Register the SAME unified handler ONCE per name for a script source below `.jsh`
+   * (wasm programs, workflows). It resolves precedence at dispatch, so a name that
+   * another source already registered is only recorded, and a real built-in is never
+   * overridden.
+   */
+  private registerLateScriptNames(names: Iterable<string>, registered: Set<string>): void {
+    const scriptSources = [
+      this.registeredJshCommands,
+      this.registeredWasmCommands,
+      this.registeredWorkflowCommands,
+    ];
+    for (const name of names) {
+      if (registered.has(name)) continue; // already handled
+      if (scriptSources.some((source) => source !== registered && source.has(name))) {
+        registered.add(name);
+        continue;
+      }
+      if (this.builtinCommandNames.has(name)) continue; // never override a real built-in
+      this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
+      registered.add(name);
+      this.builtinCommandNames.add(name);
+    }
+  }
+
+  /**
    * One late-binding handler per script-command name. Resolves precedence at DISPATCH
-   * against current VFS state: built-in > .jsh > saved-workflow. (just-bash has no
-   * unregister, so we never rebuild the table — the handler reads live discovery each call.)
+   * against current VFS state: built-in > .jsh > installed wasm program > saved-workflow.
+   * (just-bash has no unregister, so we never rebuild the table — the handler reads live
+   * discovery each call.)
    */
   private makeScriptCommand(name: string): Command {
     const catalog = this.scriptCatalog;
@@ -1560,7 +1581,18 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         );
       }
 
-      // 2) Else a workflow (saved bare or skill <skill>:<name>) — route through the
+      // 2) Else a wasm program of an installed package (#3530).
+      const wasm = (await catalog.getWasmCommands()).get(cmdName);
+      if (wasm) {
+        const { runWasmCommand } = await import('./supplemental-commands/wasm/run.js');
+        return runWasmCommand(
+          ['--argv0', wasm.argv0, '--module', wasm.wasm, wasm.glue, ...args],
+          ctx,
+          this.buildJshProcessConfig(runPidFromEnv(ctx.env))
+        );
+      }
+
+      // 3) Else a workflow (saved bare or skill <skill>:<name>) — route through the
       //    `workflow run` command path (NOT executeJsCode on the raw file).
       const wfMap = await catalog.getWorkflowCommands();
       const wf = wfMap.get(cmdName);
@@ -1569,7 +1601,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         return execFn(argv[0], { args: argv.slice(1), cwd: ctx.cwd });
       }
 
-      // 3) Gone.
+      // 4) Gone.
       return { stdout: '', stderr: `${cmdName}: command no longer exists\n`, exitCode: 127 };
     };
     return {

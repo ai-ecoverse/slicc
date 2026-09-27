@@ -20,16 +20,9 @@ import {
   type SabPostLike,
   type SyncSabTransport,
 } from '../realm/sync-sab-bridge.js';
+import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import type { WasmProcessInitMsg } from './protocol.js';
-
-/** Emscripten's (WASI) errno numbers for the kernel errors a syscall returns. */
-const WASI_ERRNO: Readonly<Partial<Record<string, number>>> = {
-  EBADF: 8,
-  EINVAL: 28,
-  EIO: 29,
-  EMFILE: 33,
-  EPIPE: 64,
-};
+import { wasiErrno } from './wasi-errno.js';
 
 /** A kernel error from a syscall, carrying its errno name. */
 export class SyscallError extends Error {
@@ -69,10 +62,19 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
   };
 }
 
+/** An open stream of the module's FS; `sliccKernelFd` marks one backed by a kernel fd. */
+export interface ProcessStream {
+  stream_ops: StreamOps;
+  sliccKernelFd?: number;
+}
+
 /** The slice of Emscripten's FS the runtime uses. */
 export interface ProcessFs extends EmscriptenFsForHook {
-  getStream(fd: number): { stream_ops: StreamOps } | null;
+  getStream(fd: number): ProcessStream | null;
   mkdirTree(path: string): void;
+  cwd(): string;
+  read(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
+  write(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
 }
 
 interface StreamOps {
@@ -84,12 +86,15 @@ interface StreamOps {
 /** Point fds 0, 1, 2 of the module's FS at the kernel descriptors of the same numbers. */
 export function wireKernelStdio(Fs: ProcessFs, sys: ProcessSys): void {
   const fail = (e: unknown): never => {
-    if (e instanceof SyscallError) throw new Fs.ErrnoError(WASI_ERRNO[e.code] ?? WASI_ERRNO.EIO!);
+    if (e instanceof SyscallError) throw new Fs.ErrnoError(wasiErrno(e.code));
     throw e;
   };
   for (const fd of [0, 1, 2]) {
     const stream = Fs.getStream(fd);
     if (!stream) continue;
+    // Emscripten copies a stream's own properties on dup / dup2, so the mark
+    // follows the descriptor to whatever fd the program moves it to.
+    stream.sliccKernelFd = fd;
     stream.stream_ops = {
       ...stream.stream_ops,
       read: (_s, buffer, offset, length) => {
@@ -117,6 +122,8 @@ export function wireKernelStdio(Fs: ProcessFs, sys: ProcessSys): void {
 interface RunningModule {
   FS: ProcessFs;
   callMain(args: string[]): number | undefined;
+  /** posix_spawn / waitpid for the toolchain's libc shims. */
+  sliccKernel?: ProcessKernel;
 }
 
 /** Evaluate the glue with `Module` (overridable in tests). */
@@ -127,14 +134,22 @@ export function glueBody(glue: string): string {
   return glue.startsWith('#!') ? glue.slice(glue.indexOf('\n') + 1) : glue;
 }
 
-const evaluateGlue: GlueEvaluator = (glue, module) => {
-  // ENV is the glue's own variable: filled right after the glue body runs,
-  // before the (asynchronous) instantiation reads it.
+/**
+ * Runs in the glue's scope right after its body. ENV, FS and callMain are the
+ * glue's own variables: ENV is filled before the (asynchronous) instantiation
+ * reads it, and FS and callMain are taken from the scope, so a program linked
+ * without exporting them (`-sEXPORTED_RUNTIME_METHODS`) still runs.
+ */
+const GLUE_TRAILER = [
+  'Object.assign(ENV, Module.sliccEnv);',
+  "if (typeof FS !== 'undefined') Module.FS ??= FS;",
+  "if (typeof callMain === 'function') Module.callMain ??= callMain;",
+].join('\n');
+
+export const evaluateGlue: GlueEvaluator = (glue, module) => {
   let run: (module: object) => void;
   try {
-    run = new Function('Module', `${glueBody(glue)}\n;Object.assign(ENV, Module.sliccEnv);`) as (
-      module: object
-    ) => void;
+    run = new Function('Module', `${glueBody(glue)}\n;${GLUE_TRAILER}`) as (module: object) => void;
   } catch (e) {
     throw e instanceof EvalError ? new Error(EVAL_BLOCKED) : e;
   }
@@ -207,6 +222,13 @@ export async function runWasmProcess(
     { cwd: init.cwd }
   );
   wireKernelStdio(running.FS, sys);
+  running.sliccKernel = createProcessKernel({
+    transport,
+    Fs: running.FS,
+    env: init.env,
+    beforeSpawn: () => vfs.flush(),
+    afterChild: () => vfs.invalidate(),
+  });
   try {
     return running.callMain(init.args) ?? 0;
   } catch (e) {
