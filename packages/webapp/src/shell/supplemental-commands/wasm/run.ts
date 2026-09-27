@@ -3,10 +3,12 @@
  * worker, stdio on kernel descriptors, files on the live VFS. Loaded lazily
  * by `wasm-command.ts`.
  *
- *   wasm [--argv0 NAME] PROGRAM [ARGS...]
+ *   wasm [--argv0 NAME] [--module PATH] PROGRAM [ARGS...]
+ *   wasm --list
  *
- * PROGRAM is the Emscripten glue; its module sits next to it (`x.js` →
- * `x.wasm`, `x` → `x.wasm`). The glue must be linked with `-sENVIRONMENT`
+ * PROGRAM is the Emscripten glue, or the name of a command an installed
+ * package provides (`wasm --list`). Its module sits next to it (`x.js` →
+ * `x.wasm`, `x` → `x.wasm`) unless `--module` names it. The glue must be linked with `-sENVIRONMENT`
  * including `worker`. `--argv0` sets `argv[0]` (the program of a multi-call
  * binary such as coreutils); the default is PROGRAM's base name.
  */
@@ -14,6 +16,8 @@ import type { CommandContext } from 'just-bash';
 import { compileWasmFromVfs } from '../../../kernel/realm/wasm-compiler.js';
 import { bytesSource, FdTable, sinkFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess } from '../../../kernel/wasm-realm/host.js';
+import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
+import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
 import { stdinAsLatin1 } from '../../just-bash-compat.js';
 
@@ -24,7 +28,7 @@ type Result = {
   stdoutKind?: 'text' | 'bytes';
 };
 
-const USAGE = 'usage: wasm [--argv0 NAME] PROGRAM [ARGS...]\n';
+const USAGE = 'usage: wasm [--argv0 NAME] [--module PATH] PROGRAM [ARGS...]\n       wasm --list\n';
 
 const NO_SAB =
   'the wasm realm needs SharedArrayBuffer, which this page lacks (it is not cross-origin isolated)';
@@ -47,20 +51,59 @@ let nextPid = 40000;
 
 interface Invocation {
   argv0?: string;
+  module?: string;
   program: string;
   args: string[];
 }
 
 function parse(args: string[]): Invocation | undefined {
-  let argv0: string | undefined;
+  const call: Partial<Invocation> = {};
   let i = 0;
-  if (args[i] === '--argv0') {
-    argv0 = args[i + 1];
-    i += 2;
+  for (; args[i] === '--argv0' || args[i] === '--module'; i += 2) {
+    const value = args[i + 1];
+    if (value === undefined) return undefined;
+    if (args[i] === '--argv0') call.argv0 = value;
+    else call.module = value;
   }
   const program = args[i];
   if (!program || program.startsWith('-')) return undefined;
-  return { argv0, program, args: args.slice(i + 1) };
+  return { ...call, program, args: args.slice(i + 1) };
+}
+
+/** The installed-package scan over the command's filesystem. */
+function programFs(ctx: CommandContext): ProgramFs {
+  return {
+    exists: (path) => ctx.fs.exists(path),
+    readDir: async (path) => (await ctx.fs.readdir(path)).map((name) => ({ name })),
+    readFile: (path) => ctx.fs.readFile(path),
+  };
+}
+
+function installedCommands(ctx: CommandContext): Promise<Map<string, WasmCommand>> {
+  return scanWasmCommands(programFs(ctx), GLOBAL_NODE_MODULES);
+}
+
+function listing(commands: Map<string, WasmCommand>): string {
+  const rows = [...commands.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const width = Math.max(0, ...rows.map((c) => c.name.length));
+  return rows.map((c) => `${c.name.padEnd(width)}  ${c.pkg}\n`).join('');
+}
+
+/**
+ * A bare PROGRAM that is no file in the working directory names an
+ * installed command: run its glue and module with its `argv[0]`.
+ */
+async function resolveInstalled(ctx: CommandContext, call: Invocation): Promise<Invocation> {
+  if (call.program.includes('/')) return call;
+  if (await ctx.fs.exists(ctx.fs.resolvePath(ctx.cwd, call.program))) return call;
+  const command = (await installedCommands(ctx)).get(call.program);
+  if (!command) return call;
+  return {
+    argv0: call.argv0 ?? command.argv0,
+    module: call.module ?? command.wasm,
+    program: command.glue,
+    args: call.args,
+  };
 }
 
 function modulePath(glue: string): string {
@@ -102,18 +145,25 @@ export async function runWasmCommand(
   processConfig?: JshProcessConfig
 ): Promise<Result> {
   if (args[0] === '--help' || args[0] === '-h') return { stdout: USAGE, stderr: '', exitCode: 0 };
-  const call = parse(args);
-  if (!call) return { stdout: '', stderr: USAGE, exitCode: 2 };
+  if (args[0] === '--list' && args.length === 1) {
+    return { stdout: listing(await installedCommands(ctx)), stderr: '', exitCode: 0 };
+  }
+  const parsed = parse(args);
+  if (!parsed) return { stdout: '', stderr: USAGE, exitCode: 2 };
   if (typeof SharedArrayBuffer !== 'function') {
     // Syscalls block in Atomics.wait on a shared buffer.
     return { stdout: '', stderr: `wasm: ${NO_SAB}\n`, exitCode: 126 };
   }
+  const call = await resolveInstalled(ctx, parsed);
   const gluePath = ctx.fs.resolvePath(ctx.cwd, call.program);
   let glue: string;
   let module: WebAssembly.Module;
   try {
     glue = await ctx.fs.readFile(gluePath);
-    module = await loadModule(ctx, modulePath(gluePath));
+    module = await loadModule(
+      ctx,
+      call.module ? ctx.fs.resolvePath(ctx.cwd, call.module) : modulePath(gluePath)
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { stdout: '', stderr: `wasm: ${call.program}: ${message}\n`, exitCode: 127 };

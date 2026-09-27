@@ -1,6 +1,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
+import type { WasmCommand } from '../ipk/wasm-programs.js';
 import {
   discoverJshCommandIndex,
   type JshCommandCollision,
@@ -51,33 +52,58 @@ async function getWorkflowMap(
   return new Map();
 }
 
+/** Wasm-realm commands of installed packages; none without a catalog. */
+async function getWasmMap(opts: WhichCommandOptions): Promise<Map<string, WasmCommand>> {
+  return opts.scriptCatalog ? opts.scriptCatalog.getWasmCommands() : new Map();
+}
+
+/** The script-backed candidates for one name, in dispatch order. */
+interface ScriptCandidates {
+  jshPath: string | undefined;
+  collision: JshCommandCollision | undefined;
+  wasm: WasmCommand | undefined;
+  wf: WorkflowCommandEntry | undefined;
+}
+
+function wasmLine(wasm: WasmCommand, note?: string): string {
+  return `${wasm.glue} (wasm, ${wasm.pkg}${note ? `, ${note}` : ''})`;
+}
+
+/** A static built-in's lines: its path, then every script it shadows. */
+function builtinLines(name: string, { jshPath, collision, wasm, wf }: ScriptCandidates): string[] {
+  const lines = [`/usr/bin/${name}`];
+  if (jshPath || wasm || wf) lines.push(`  (shadowed by built-in ${name})`);
+  if (wasm) lines.push(`  (shadowed ${wasmLine(wasm)})`);
+  if (jshPath) {
+    const shadowedJsh = collision ? [jshPath, ...collision.shadowedPaths] : [jshPath];
+    for (const path of shadowedJsh) lines.push(`  (shadowed ${path})`);
+  }
+  return lines;
+}
+
+/** A `.jsh`'s lines: its path, then its shadowed copies and lower-precedence scripts. */
+function jshLines(jshPath: string, { collision, wasm, wf }: ScriptCandidates): string[] {
+  const lines = [jshPath];
+  for (const shadowed of collision?.shadowedPaths ?? []) lines.push(`  (shadowed ${shadowed})`);
+  if (wasm) lines.push(`  ${wasmLine(wasm, 'shadowed by .jsh')}`);
+  if (wf) lines.push(`  ${wf.path} (workflow, shadowed by .jsh)`);
+  return lines;
+}
+
 /** Resolves the path(s) for a single command name according to precedence rules. */
 function resolveCommandPath(
   name: string,
-  jshPath: string | undefined,
-  collision: JshCommandCollision | undefined,
-  wf: WorkflowCommandEntry | undefined,
+  candidates: ScriptCandidates,
   staticBuiltins: Set<string>,
   builtinSet: Set<string>,
   scriptRegistered: Set<string>
 ): { lines: string[]; found: boolean } {
-  if (staticBuiltins.has(name)) {
-    const lines = [`/usr/bin/${name}`];
-    if (jshPath || wf) lines.push(`  (shadowed by built-in ${name})`);
-    if (jshPath) {
-      const shadowedJsh = collision ? [jshPath, ...collision.shadowedPaths] : [jshPath];
-      for (const path of shadowedJsh) lines.push(`  (shadowed ${path})`);
-    }
-    return { lines, found: true };
-  }
-  if (jshPath) {
-    const lines = [jshPath];
-    if (collision) {
-      for (const shadowed of collision.shadowedPaths) {
-        lines.push(`  (shadowed ${shadowed})`);
-      }
-    }
-    if (wf) lines.push(`  ${wf.path} (workflow, shadowed by .jsh)`);
+  const { jshPath, wasm, wf } = candidates;
+  if (staticBuiltins.has(name)) return { lines: builtinLines(name, candidates), found: true };
+  if (jshPath) return { lines: jshLines(jshPath, candidates), found: true };
+  if (wasm) {
+    const lines = [wasmLine(wasm)];
+    if (wf) lines.push(`  ${wf.path} (workflow, shadowed by wasm)`);
     return { lines, found: true };
   }
   if (wf) {
@@ -108,6 +134,7 @@ Usage: which <command> [command...]
 Prints the path of the given command(s).
   - Built-in commands resolve to /usr/bin/<name>
   - .jsh scripts resolve to their actual VFS path
+  - Wasm programs of installed packages resolve to their glue path
   - Duplicate .jsh names print the live path first, then each shadowed copy
 
 Exit code 0 if all commands found, 1 if any not found.
@@ -138,6 +165,7 @@ Exit code 0 if all commands found, 1 if any not found.
     const jshCommands = jshIndex.commands;
     const jshCollisions = new Map(jshIndex.collisions.map((c) => [c.name, c]));
     const workflowCommands = await getWorkflowMap(resolvedOptions);
+    const wasmCommands = await getWasmMap(resolvedOptions);
 
     // Static built-ins (echo, ls, …) win over any same-named script. Falls back to the
     // registered set when not supplied (legacy fs-only construction).
@@ -152,13 +180,14 @@ Exit code 0 if all commands found, 1 if any not found.
     let allFound = true;
 
     for (const name of parsed.positionals) {
-      const jshPath = jshCommands.get(name);
-      const wf = workflowCommands.get(name);
       const result = resolveCommandPath(
         name,
-        jshPath,
-        jshCollisions.get(name),
-        wf,
+        {
+          jshPath: jshCommands.get(name),
+          collision: jshCollisions.get(name),
+          wasm: wasmCommands.get(name),
+          wf: workflowCommands.get(name),
+        },
         staticBuiltins,
         builtinSet,
         scriptRegistered

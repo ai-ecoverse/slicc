@@ -5,6 +5,8 @@ import {
   discoverBshScripts,
   findMatchingScripts,
 } from './bsh-discovery.js';
+import { GLOBAL_NODE_MODULES } from './ipk/global-prefix.js';
+import { isProgramFs, scanWasmCommands, type WasmCommand } from './ipk/wasm-programs.js';
 import {
   DEFAULT_JSH_SEARCH_ROOTS,
   discoverJshCommandIndex,
@@ -52,6 +54,10 @@ function cloneJshIndex(index: JshCommandIndex): JshCommandIndex {
 function cloneWorkflowCommands(
   commands: Map<string, WorkflowCommandEntry>
 ): Map<string, WorkflowCommandEntry> {
+  return new Map([...commands].map(([k, v]) => [k, { ...v }]));
+}
+
+function cloneWasmCommands(commands: Map<string, WasmCommand>): Map<string, WasmCommand> {
   return new Map([...commands].map(([k, v]) => [k, { ...v }]));
 }
 
@@ -123,6 +129,7 @@ export class ScriptCatalog {
   private readonly jshByRoots = new Map<string, CachedSource<JshCommandIndex>>();
   private readonly bsh: CachedSource<BshEntry[]> = createCachedSource();
   private readonly workflow: CachedSource<Map<string, WorkflowCommandEntry>> = createCachedSource();
+  private readonly wasm: CachedSource<Map<string, WasmCommand>> = createCachedSource();
 
   constructor(options: ScriptCatalogOptions) {
     this.jshFs = options.jshFs;
@@ -137,6 +144,7 @@ export class ScriptCatalog {
           () => {
             this.invalidateJsh();
             this.invalidateWorkflows();
+            this.invalidateWasm();
           }
         )
       );
@@ -165,6 +173,7 @@ export class ScriptCatalog {
     this.invalidateJsh();
     this.invalidateBsh();
     this.invalidateWorkflows();
+    this.invalidateWasm();
   }
 
   invalidateJsh(): void {
@@ -179,6 +188,10 @@ export class ScriptCatalog {
 
   invalidateWorkflows(): void {
     bumpGeneration(this.workflow);
+  }
+
+  invalidateWasm(): void {
+    bumpGeneration(this.wasm);
   }
 
   async getJshIndex(roots: readonly string[] = DEFAULT_JSH_SEARCH_ROOTS): Promise<JshCommandIndex> {
@@ -212,6 +225,14 @@ export class ScriptCatalog {
     return cloneWorkflowCommands(commands);
   }
 
+  /**
+   * Wasm-realm commands of the globally installed packages (#3530), by name.
+   * Empty when the discovery filesystem cannot list directories.
+   */
+  async getWasmCommands(): Promise<Map<string, WasmCommand>> {
+    return cloneWasmCommands(await this.loadWasmCommands());
+  }
+
   // A mount overlapping a search root makes external changes invisible to
   // the FsWatcher, so those root sets stay uncached. Before #2085 ANY mount
   // disabled the cache — because the scan itself covered the whole VFS.
@@ -229,6 +250,10 @@ export class ScriptCatalog {
   // intent explicit and to give the predicate room to diverge later.
   private shouldCacheWorkflows(): boolean {
     return !!this.watcher && !hasMountsUnderRoots(this.jshFs, WORKFLOW_DISCOVERY_ROOTS);
+  }
+
+  private shouldCacheWasm(): boolean {
+    return !!this.watcher && !hasMountsUnderRoots(this.jshFs, [GLOBAL_NODE_MODULES]);
   }
 
   private loadCached<T>(
@@ -293,6 +318,17 @@ export class ScriptCatalog {
       this.shouldCacheWorkflows(),
       () => discoverWorkflowCommands(this.jshFs),
       cloneWorkflowCommands
+    );
+  }
+
+  private loadWasmCommands(): Promise<Map<string, WasmCommand>> {
+    const fs = this.jshFs;
+    if (!isProgramFs(fs)) return Promise.resolve(new Map());
+    return this.loadCached(
+      this.wasm,
+      this.shouldCacheWasm(),
+      () => scanWasmCommands(fs, GLOBAL_NODE_MODULES),
+      cloneWasmCommands
     );
   }
 }
