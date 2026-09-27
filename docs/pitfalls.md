@@ -1412,6 +1412,29 @@ route through the extension service worker under `host_permissions`, not a
 public → local `fetch`), and extension contexts are not subject to the LNA
 prompt.
 
+## Hosted Leader: Chrome Up, Join URL Never Minted
+
+**The Problem**
+
+A hosted `--hosted` boot can report Chrome CDP ready and register
+`/api/leader-restart`, then sit until `start-leader`'s join-file poll times out
+(180s). Bench artifacts show no `/cdp` client, no `/api/hosted-bootstrap`, no
+`/api/cloud-status`, and no WebGL noise — the page never dialed the thin bridge.
+`bootTwice` in `packages/bench/scripts/run.mjs` recycles the leader and usually
+recovers, which masks the failure in aggregate scores.
+
+This is separate from leaders on one host sharing `/tmp/slicc-join.json` (that
+cross-lane handoff is the per-leader join-file fix). When diagnosing a missing
+mint after that lands, check `$SLICC_GW_HOME/join.json` first.
+
+**The Fix**
+
+After CDP is warm, `packages/node-server/src/hosted-page-watchdog.ts` waits a
+short grace for the page to connect to `/cdp`. If it stays quiet, the watchdog
+navigates an idle tab (or opens one via CDP `/json/new`) to the hosted launch
+URL, then reloads once more if the tab is present but still silent. Prefer that
+path over raising the join-poll timeout.
+
 ## Kernel-Worker Fetch Bypass: Same-Origin Only
 
 `packages/webapp/src/kernel/kernel-worker.ts` wraps `globalThis.fetch` to
