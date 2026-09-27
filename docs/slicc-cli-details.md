@@ -121,6 +121,19 @@ but a debug log line (`SLICC_DEBUG=1`). Acks for other `messageId`s and
 unknown states are ignored, and a leader < 10 sends none, so the exit rules
 above are unchanged against it.
 
+## `prompt --allsettled`
+
+`slicc <join-url> prompt --allsettled <duration> "<text>"` (also `--allsettled=<d>`, and on `prompt-cloud`). Options are read only from the front of the arguments.
+
+The cone can end its turn while scoops it started are still working, then wake when they report back and write the real answer. A plain `prompt` exits at the first turn end. With `--allsettled`, `prompt_settled.go` watches every unit's `status` and `agent_event` frames, not only the prompted one:
+
+- The prompt exits 0 once the prompted turn has ended at least once, no unit's last status is `processing`, and no frame from any unit has arrived for the duration.
+- A unit that leaves the `scoops.list` roster stops counting as busy; a dropped scoop never sends its own `ready`.
+- The cone's later turns stream to stdout after a blank line; scoops' text does not.
+- Errors, SIGINT and a closed connection exit as for a plain prompt. A unit that never settles keeps the prompt open, so a caller needs its own timeout; the bench's is SIGINT.
+
+The benchmark runner uses `--allsettled 2m` (`PROMPT_ALL_SETTLED` in `packages/bench/scripts/slicc-adapter.mjs`) and refuses to start with a CLI whose `--help` does not list it: an older CLI joins the option into the prompt text.
+
 ## `thinking`
 
 `slicc <join-url> thinking [--json] [--allow-downgrade] [<level>]`, in `session.go`.

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assertCliSupports,
   callLabel,
   connectionLost,
   createLeader,
@@ -11,6 +12,31 @@ import {
   runProcess,
   unreachable,
 } from './executors.mjs';
+
+describe('assertCliSupports', () => {
+  it('passes a CLI whose help lists every option the runner uses', () => {
+    const run = vi.fn(() => ({ stdout: 'slicc <join-url> prompt [--allsettled <dur>] "<text>"' }));
+    expect(() => assertCliSupports('/tmp/new-slicc', ['--allsettled'], run)).not.toThrow();
+    // Checked once per binary.
+    assertCliSupports('/tmp/new-slicc', ['--allsettled'], run);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith('/tmp/new-slicc', ['--help'], expect.any(Object));
+  });
+
+  it('refuses an older CLI, which would send the option as the prompt text', () => {
+    const run = vi.fn(() => ({ stdout: 'slicc <join-url> prompt "<text>"' }));
+    expect(() => assertCliSupports('/tmp/old-slicc', ['--allsettled'], run)).toThrow(
+      /\/tmp\/old-slicc does not support --allsettled; build the CLI from this checkout/
+    );
+  });
+
+  it('refuses a CLI that cannot be run', () => {
+    const run = vi.fn(() => ({ error: new Error('ENOENT'), stdout: '', stderr: '' }));
+    expect(() => assertCliSupports('/tmp/missing-slicc', ['--allsettled'], run)).toThrow(
+      /does not support/
+    );
+  });
+});
 
 describe('createLeader', () => {
   it('puts the join URL before every verb, wraps exec, and bounds every call', async () => {

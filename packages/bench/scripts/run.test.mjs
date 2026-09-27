@@ -22,6 +22,7 @@ import {
   shardRuns,
   tracePath,
 } from './run.mjs';
+import { PROMPT_ALL_SETTLED } from './slicc-adapter.mjs';
 
 describe('runConfig', () => {
   it('records whether the condition seeds bundled skills', () => {
@@ -337,7 +338,7 @@ function leader({ failOn, down = () => false } = {}) {
   return { deps: { leader: { cli, exec, setUrl }, now: () => clock }, commands, urls };
 }
 
-const PROMPT = 'slicc prompt -';
+const PROMPT = `slicc prompt --allsettled ${PROMPT_ALL_SETTLED} -`;
 
 const fakeJudge = vi.fn(async ({ task }) => ({
   judgement: { infra_error: false, reward_hacking_suspected: false },
@@ -366,6 +367,15 @@ describe('main', () => {
     );
     return path;
   }
+
+  it('fails on task ids that are in none of the sets instead of planning nothing', async () => {
+    const dir = tmp();
+    await expect(
+      main(['--set', setFile(dir), '--models', 'm', '--tasks', 'own-1,smoke-001', '--plan'], {
+        log: vi.fn(),
+      })
+    ).rejects.toThrow(/unknown task id\(s\) smoke-001 in Own/);
+  });
 
   it('prints the plan without touching a leader', async () => {
     const dir = tmp();
@@ -1282,7 +1292,7 @@ describe('lanes and guardrails', () => {
           .leader.lane
     );
     expect(lanesUsed.sort()).toEqual([0, 0, 1, 1].sort());
-    expect(fakes.every((f) => f.commands.includes('slicc prompt -'))).toBe(true);
+    expect(fakes.every((f) => f.commands.includes(PROMPT))).toBe(true);
     expect(stops.every((s) => s.mock.calls.length === 1)).toBe(true);
     // Leaders it booted are stopped, not restored.
     expect(
