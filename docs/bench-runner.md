@@ -26,6 +26,29 @@ V2.1 pilot of 2026-09-27, the primary judge stayed invalid on 9 of 72 runs.
 Plain re-asking was not enough: in the V2.1 pilot the judge omitted
 `not_assessable_reason` twice in a row on 5 of 28 runs.
 
+## None skills condition
+
+Staging probes `command -v flags`, then `flags set no-default-skills on`
+(`off` for any other base) before rewriting `/workspace/skills`. No `flags`:
+skip the set except for `none`, which fails before the directory is emptied
+(`pin-webapp`, or wait for a release). A `flags set` that runs and fails still
+fails the stage. Restore turns the flag off when the verb exists.
+
+Unit init used to re-seed every missing bundled skill on `new-session`, so a
+`none` run still had the whole library. The flag stops that seed: unit init,
+filesystem reset, and `upgrade apply`. `/shared` and `/etc` still seed. The
+flag is a local override, so the next `new-session` on the same leader sees it,
+including when a lane runs `builtin` and `none` in turn.
+
+After `new-session`, the runner lists `/workspace/skills` and fails the run if
+it is not exactly the condition: empty for `none`, the stashed builtin set for
+`builtin`, plus any extra set. The record's `config.default_skills` is false
+when the base is `none`. **`none` results from before this flag are not
+comparable** (they still had bundled skills). Resume treats missing/mismatched
+`config.default_skills` as `run`; aggregation keys pre-flag `none` separately
+(`configKey` / `skills_*_preflag` result files) so they do not share a cell
+with real no-skill runs.
+
 ## Transcript collection
 
 While the cone works, the runner polls `playwright-cli tab-list` and screenshots
