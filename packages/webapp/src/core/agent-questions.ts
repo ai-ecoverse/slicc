@@ -15,7 +15,14 @@
  */
 
 /** Which control a question gets. Mirrors `QuestionKind` in `@slicc/webcomponents`. */
-export type AgentQuestionKind = 'yes-no' | 'text' | 'number' | 'datetime' | 'date' | 'email';
+export type AgentQuestionKind =
+  | 'yes-no'
+  | 'choice'
+  | 'text'
+  | 'number'
+  | 'datetime'
+  | 'date'
+  | 'email';
 
 /** A question found in a text. */
 export interface AgentQuestion {

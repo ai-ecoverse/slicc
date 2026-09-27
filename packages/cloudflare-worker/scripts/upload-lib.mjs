@@ -8,6 +8,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { matchHashedAssetPath, mimeForAssetPath } from '../src/asset-archive.mjs';
 
+/** Find relative asset paths, including versioned directories such as gpu-ask. */
+export async function listAssetFiles(dir, prefix = '') {
+  const found = [];
+  for (const entry of await fs.readdir(join(dir, prefix), { withFileTypes: true })) {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) found.push(...(await listAssetFiles(dir, path)));
+    else if (entry.isFile()) found.push(path);
+  }
+  return found.sort();
+}
+
 /**
  * Throws if any filename lacks a content hash (fails the invariant).
  */

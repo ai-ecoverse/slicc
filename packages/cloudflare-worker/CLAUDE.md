@@ -110,7 +110,8 @@ creation per team+key, so per-tray minting broke its floor. Secrets, cap, events
 Worker serves `dist/ui/` via Static Assets (`ASSETS`); `?json=true`/POST/WS → API, else SPA.
 `frame-ancestors`/isolation headers branch on cherry (`?cherry=1`) vs electron vs plain SPA.
 **25 MiB per-asset cap** (CI `wrangler deploy --dry-run` gates it). `ASSET_ARCHIVE` (R2) retains
-hashed `/assets/*` across deploys (14-day GC). [docs](../../docs/cloudflare-worker-details.md#static-assets).
+hashed `/assets/*`, including nested gpu-ask model files, across deploys (14-day GC).
+[docs](../../docs/cloudflare-worker-details.md#static-assets).
 
 ## Commands
 

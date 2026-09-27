@@ -1,6 +1,5 @@
 /**
- * Wiring hover previews into the live transcript: link cards, GitHub issue/PR
- * cards, date/time cards, and answerable agent questions.
+ * Wiring hover previews and composer question answers into the live transcript.
  *
  * Decoration (`ui/mention-previews.ts`) marks what has a preview; this module
  * owns the lifecycle around it — which messages to decorate and when, what
@@ -22,8 +21,8 @@
  * ## Which questions can be answered
  *
  * Only a question in the LATEST agent message, before the user has replied,
- * in a transcript the user can write to. Everything else still shows its card,
- * inert, with the reason. Answering dispatches {@link AGENT_QUESTION_ANSWER_EVENT}
+ * in a transcript the user can write to. The composer shows active controls;
+ * other questions retain their hover status. Answering dispatches {@link AGENT_QUESTION_ANSWER_EVENT}
  * on the thread; the chat controller turns that into a lick for the cone.
  */
 
@@ -31,8 +30,13 @@ import {
   type QuestionAnswerDetail,
   type QuestionState,
   SliccHoverCard,
+  type SliccInputCard,
   type TimePreviewData,
 } from '@slicc/webcomponents';
+import {
+  type AgentQuestionParser,
+  loadAgentQuestionParser,
+} from '../../core/agent-question-model.js';
 import { GitRemoteRepoResolver } from '../../core/git-remote-repo.js';
 import { githubRefUrl, githubRepoHints } from '../../core/github-mentions.js';
 import { currentTimeContext, loadTimeParser, type TimeParser } from '../../core/time-mentions.js';
@@ -53,7 +57,12 @@ import {
   PREVIEW_ATTR,
   type PreviewKind,
   QUESTION_ANSWERED_ATTR,
+  QUESTION_CONTROLS_ATTR,
+  QUESTION_DEFAULT_ATTR,
+  QUESTION_ID_ATTR,
   QUESTION_KIND_ATTR,
+  QUESTION_MULTI_ATTR,
+  QUESTION_OPTIONS_ATTR,
   QUESTION_TEXT_ATTR,
   timeMentionOf,
 } from '../mention-previews.js';
@@ -61,6 +70,8 @@ import {
 export interface MentionPreviewWiringDeps {
   /** The `<slicc-chat-thread>` messages render into. */
   thread: HTMLElement;
+  /** The live composer card, when answers should be shown beside the draft. */
+  inputCard?: SliccInputCard;
   /** The transcript is read-only (a scoop, a thawed session). */
   isReadOnly: () => boolean;
   log: { error(message: string, ...data: unknown[]): void };
@@ -68,6 +79,8 @@ export interface MentionPreviewWiringDeps {
   getFetch?: () => PreviewFetch | Promise<PreviewFetch>;
   /** The time parser; defaults to the lazily-loaded `gpu-time` one. */
   getTimeParser?: () => Promise<TimeParser>;
+  /** Override the model parser (tests and alternate runtimes). */
+  getQuestionParser?: () => AgentQuestionParser;
   /** The hover card; defaults to the document's shared one. */
   getCard?: () => SliccHoverCard;
   /** The current instant; tests pin it. */
@@ -208,10 +221,15 @@ function touchedBubbles(records: MutationRecord[]): Set<Element> {
 }
 
 /** Call `process` for every agent message in `thread`, now and as they change. */
-function observeAgentMessages(thread: HTMLElement, process: (bubble: Element) => void): () => void {
+function observeAgentMessages(
+  thread: HTMLElement,
+  process: (bubble: Element) => void,
+  refresh: () => void
+): () => void {
   for (const bubble of thread.querySelectorAll(AGENT_TAG)) process(bubble);
   const observer = new MutationObserver((records) => {
     for (const bubble of touchedBubbles(records)) process(bubble);
+    refresh();
   });
   observer.observe(thread, {
     childList: true,
@@ -237,7 +255,8 @@ class QuestionAnswers {
 
   constructor(
     private readonly thread: HTMLElement,
-    private readonly isReadOnly: () => boolean
+    private readonly isReadOnly: () => boolean,
+    private readonly onAnswered: () => void = () => {}
   ) {}
 
   #key(bubble: Element | null, question: string): string {
@@ -250,6 +269,22 @@ class QuestionAnswers {
       const key = this.#key(bubble, span.getAttribute(QUESTION_TEXT_ATTR) ?? '');
       span.toggleAttribute(QUESTION_ANSWERED_ATTR, this.#answered.has(key));
     }
+    for (const prompt of bubble.querySelectorAll<HTMLElement>(`[${QUESTION_CONTROLS_ATTR}]`)) {
+      const id = prompt.getAttribute(QUESTION_CONTROLS_ATTR);
+      const span = Array.from(bubble.querySelectorAll<HTMLElement>(`[${QUESTION_ID_ATTR}]`)).find(
+        (candidate) => candidate.getAttribute(QUESTION_ID_ATTR) === id
+      );
+      if (!span) continue;
+      const { state, note, answer } = this.statusOf(span);
+      if (prompt.getAttribute('state') !== state) prompt.setAttribute('state', state);
+      if (note) prompt.setAttribute('note', note);
+      else prompt.removeAttribute('note');
+      if (answer !== undefined) prompt.setAttribute('answer', answer);
+    }
+  }
+
+  refresh(): void {
+    for (const bubble of this.thread.querySelectorAll(AGENT_TAG)) this.mark(bubble);
   }
 
   statusOf(span: Element): QuestionStatus {
@@ -283,6 +318,7 @@ class QuestionAnswers {
     const question = span.getAttribute(QUESTION_TEXT_ATTR) ?? '';
     this.#answered.set(this.#key(bubble, question), detail.answer);
     if (bubble) this.mark(bubble);
+    this.onAnswered();
     const messageId = bubble?.getAttribute('data-msg-id');
     const out: AgentQuestionAnswerDetail = {
       question,
@@ -376,6 +412,14 @@ function questionContent(
   const { state, note, answer } = ctx.questions.statusOf(span);
   el.setAttribute('question', span.getAttribute(QUESTION_TEXT_ATTR) ?? '');
   el.setAttribute('kind', span.getAttribute(QUESTION_KIND_ATTR) ?? 'text');
+  const id = span.getAttribute(QUESTION_ID_ATTR);
+  const inline = Array.from(
+    span.closest(AGENT_TAG)?.querySelectorAll(`[${QUESTION_CONTROLS_ATTR}]`) ?? []
+  ).find((candidate) => candidate.getAttribute(QUESTION_CONTROLS_ATTR) === id);
+  for (const name of [QUESTION_OPTIONS_ATTR, QUESTION_DEFAULT_ATTR, QUESTION_MULTI_ATTR]) {
+    const value = inline?.getAttribute(name);
+    if (value !== null && value !== undefined) el.setAttribute(name, value);
+  }
   el.setAttribute('state', state);
   if (note) el.setAttribute('note', note);
   if (answer !== undefined) el.setAttribute('answer', answer);
@@ -535,7 +579,66 @@ function wireMentionPreviewsUnsafe(deps: MentionPreviewWiringDeps): () => void {
 
   const now = deps.now ?? (() => new Date());
   const getTimeParser = deps.getTimeParser ?? loadTimeParser;
-  const questions = new QuestionAnswers(thread, deps.isReadOnly);
+  const questions = new QuestionAnswers(thread, deps.isReadOnly, () => syncComposer());
+  let mountedSources: HTMLElement[] = [];
+  const syncComposer = (): void => {
+    const inputCard = deps.inputCard;
+    if (!inputCard) return;
+    const sources = Array.from(thread.querySelectorAll<HTMLElement>(`[${QUESTION_CONTROLS_ATTR}]`));
+    for (const source of sources) {
+      if (!source.hidden) source.hidden = true;
+    }
+    const active = sources
+      .map((source) => {
+        const bubble = source.closest(AGENT_TAG);
+        const id = source.getAttribute(QUESTION_CONTROLS_ATTR);
+        const span = Array.from(
+          bubble?.querySelectorAll<HTMLElement>(`[${QUESTION_ID_ATTR}]`) ?? []
+        ).find((candidate) => candidate.getAttribute(QUESTION_ID_ATTR) === id);
+        return span && questions.statusOf(span).state === 'open' ? { source, span } : null;
+      })
+      .filter((entry): entry is { source: HTMLElement; span: HTMLElement } => entry !== null);
+    if (inputCard.disabled) active.length = 0;
+    if (
+      active.length === mountedSources.length &&
+      active.every(({ source }, index) => source === mountedSources[index])
+    )
+      return;
+    mountedSources = active.map(({ source }) => source);
+    const prompts = active.map(({ source, span }) => {
+      const prompt = document.createElement('slicc-question-prompt');
+      for (const name of [
+        'question',
+        'kind',
+        QUESTION_OPTIONS_ATTR,
+        QUESTION_DEFAULT_ATTR,
+        QUESTION_MULTI_ATTR,
+      ]) {
+        const value = source.getAttribute(name);
+        if (value !== null) prompt.setAttribute(name, value);
+      }
+      prompt.setAttribute('composer', '');
+      prompt.addEventListener('question-answer', (event) => {
+        if (inputCard.disabled) return;
+        if (questions.answer(span, (event as CustomEvent<QuestionAnswerDetail>).detail)) {
+          inputCard.focus();
+        }
+      });
+      return prompt;
+    });
+    inputCard.setQuestionContent(prompts);
+  };
+  const onInlineAnswer = (event: Event): void => {
+    const prompt = event.target;
+    if (!(prompt instanceof Element) || !prompt.hasAttribute(QUESTION_CONTROLS_ATTR)) return;
+    const bubble = prompt.closest(AGENT_TAG);
+    const id = prompt.getAttribute(QUESTION_CONTROLS_ATTR);
+    const span = Array.from(
+      bubble?.querySelectorAll<HTMLElement>(`[${QUESTION_ID_ATTR}]`) ?? []
+    ).find((candidate) => candidate.getAttribute(QUESTION_ID_ATTR) === id);
+    if (span) questions.answer(span, (event as CustomEvent<QuestionAnswerDetail>).detail);
+  };
+  thread.addEventListener('question-answer', onInlineAnswer);
   const ctx: CardContentContext = {
     fetcher: new LinkPreviewFetcher({ getFetch: deps.getFetch ?? defaultFetch }),
     questions,
@@ -571,13 +674,35 @@ function wireMentionPreviewsUnsafe(deps: MentionPreviewWiringDeps): () => void {
           getTimeParser,
           timeContext: currentTimeContext(writtenAt(bubble, now)),
           questions: true,
+          getQuestionParser:
+            deps.getQuestionParser ??
+            (typeof Worker === 'function' ? loadAgentQuestionParser : undefined),
         },
         (stepName, err) => log.error(`Mention preview step "${stepName}" failed`, err)
-      ).then(() => questions.mark(bubble));
+      ).then(() => {
+        questions.mark(bubble);
+        syncComposer();
+      });
     });
   };
 
-  const stopObserving = observeAgentMessages(thread, process);
+  const stopObserving = observeAgentMessages(thread, process, () => {
+    questions.refresh();
+    syncComposer();
+  });
+  const availabilityObserver = new MutationObserver(syncComposer);
+  if (deps.inputCard) {
+    availabilityObserver.observe(deps.inputCard, {
+      attributes: true,
+      attributeFilter: ['disabled'],
+    });
+    const composer = deps.inputCard.closest('slicc-composer');
+    if (composer)
+      availabilityObserver.observe(composer, {
+        attributes: true,
+        attributeFilter: ['hidden'],
+      });
+  }
   const stopHover = wireHoverTriggers({
     thread,
     getCard: deps.getCard ?? ((): SliccHoverCard => SliccHoverCard.shared(document)),
@@ -587,7 +712,13 @@ function wireMentionPreviewsUnsafe(deps: MentionPreviewWiringDeps): () => void {
   });
 
   return () => {
+    thread.removeEventListener('question-answer', onInlineAnswer);
     stopHover();
     stopObserving();
+    availabilityObserver.disconnect();
+    deps.inputCard?.setQuestionContent(null);
+    for (const source of thread.querySelectorAll<HTMLElement>(`[${QUESTION_CONTROLS_ATTR}]`)) {
+      if (source.hidden) source.hidden = false;
+    }
   };
 }

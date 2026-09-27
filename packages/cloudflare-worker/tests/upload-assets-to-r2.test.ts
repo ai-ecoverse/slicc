@@ -1,10 +1,13 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertAllHashed,
   buildBulkPutArgs,
   buildManifestGroups,
   chunkEntries,
+  listAssetFiles,
   MANIFEST_CHUNK_SIZE,
   RETRY_BASE_DELAY_MS,
   RETRY_MAX_DELAY_MS,
@@ -46,6 +49,33 @@ describe('assertAllHashed', () => {
       'Asset not hashed: index.html'
     );
   });
+
+  it('accepts model files beneath a directory hashed from their content', () => {
+    expect(() =>
+      assertAllHashed([
+        'gpu-ask-0123456789abcdef/v13/member0.onnx',
+        'gpu-ask-0123456789abcdef/runtime/inference.wasm',
+      ])
+    ).not.toThrow();
+    expect(() => assertAllHashed(['gpu-ask/v13/member0.onnx'])).toThrow();
+  });
+});
+
+describe('listAssetFiles', () => {
+  it('includes versioned model files beneath the assets directory', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-asset-list-'));
+    try {
+      await mkdir(join(dir, 'gpu-ask-0123456789abcdef', 'v13'), { recursive: true });
+      await writeFile(join(dir, 'app-abc12345.js'), 'app');
+      await writeFile(join(dir, 'gpu-ask-0123456789abcdef', 'v13', 'config.json'), '{}');
+      expect(await listAssetFiles(dir)).toEqual([
+        'app-abc12345.js',
+        'gpu-ask-0123456789abcdef/v13/config.json',
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('buildManifestGroups', () => {
@@ -84,6 +114,28 @@ describe('buildManifestGroups', () => {
           ],
         },
       ])
+    );
+  });
+
+  it('archives nested model files under the paths the loader requests', () => {
+    const groups = buildManifestGroups(
+      [
+        'gpu-ask-0123456789abcdef/v13/config.json',
+        'gpu-ask-0123456789abcdef/v13/member0.onnx',
+        'gpu-ask-0123456789abcdef/runtime/inference.wasm',
+      ],
+      '/assets'
+    );
+    expect(groups.flatMap((group) => group.entries)).toEqual(
+      expect.arrayContaining([
+        {
+          key: 'assets/gpu-ask-0123456789abcdef/v13/member0.onnx',
+          file: '/assets/gpu-ask-0123456789abcdef/v13/member0.onnx',
+        },
+      ])
+    );
+    expect(groups.find((group) => group.contentType === 'application/wasm')?.entries).toHaveLength(
+      1
     );
   });
 });

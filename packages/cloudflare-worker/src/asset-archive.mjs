@@ -8,8 +8,12 @@
 export const HASHED_ASSET_RE =
   /^\/assets\/[A-Za-z0-9_][A-Za-z0-9._-]*-[A-Za-z0-9_-]{8,}(\.[a-z0-9]+)*\.(js|mjs|css|map|wasm|woff2|woff|ttf|otf|svg|png|jpg|jpeg|gif|webp|avif|ico|json)$/;
 
+/** Fixed loader filenames inside a directory hashed from every gpu-ask asset. */
+export const GPU_ASK_ASSET_RE =
+  /^\/assets\/gpu-ask-[a-f0-9]{16}\/(?:v13\/(?:config|crf|manifest|static_vocab)\.json|v13\/member[0-9]+\.onnx|runtime\/inference\.(?:wasm|mjs))$/;
+
 export function matchHashedAssetPath(pathname) {
-  return HASHED_ASSET_RE.test(pathname);
+  return HASHED_ASSET_RE.test(pathname) || GPU_ASK_ASSET_RE.test(pathname);
 }
 
 const MIME = {

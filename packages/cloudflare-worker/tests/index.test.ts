@@ -4291,6 +4291,26 @@ describe('asset archive fallback (#1330 retention)', () => {
     expect(getSpy).toHaveBeenCalledWith(ARCHIVE_KEY);
   });
 
+  it('recovers a previous gpu-ask model version from the asset archive', async () => {
+    const path = '/assets/gpu-ask-0123456789abcdef/v13/member0.onnx';
+    const { env, getSpy } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('MODEL', { contentType: 'application/octet-stream' }),
+    });
+    const { ctx, settle } = makeCtx();
+    const response = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai${path}`),
+      env,
+      undefined,
+      ctx
+    );
+    await settle();
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('MODEL');
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(getSpy).toHaveBeenCalledWith(path.slice(1));
+  });
+
   it('serves an archive hit through the default NOOP execution context (2-arg call)', async () => {
     const { env, getSpy } = archiveEnv({
       assets: () => shell(),

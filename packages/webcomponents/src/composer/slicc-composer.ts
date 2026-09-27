@@ -61,6 +61,11 @@ slicc-composer[keys] > .slicc-composer__inner > * {
   opacity: 0.55;
   transition: opacity 160ms ease;
 }
+/* An answerable question remains legible while the rest of the typing surface
+   recedes in keyboard mode. The controls still accept pointer and key focus. */
+slicc-composer[keys] > .slicc-composer__inner > slicc-input-card[has-question] {
+  opacity: 1;
+}
 @media (prefers-reduced-motion: reduce) {
   slicc-composer[keys] > .slicc-composer__inner > * {
     transition: none;

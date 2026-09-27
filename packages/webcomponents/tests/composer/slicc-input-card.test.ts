@@ -98,6 +98,30 @@ describe('slicc-input-card', () => {
       // The default add-menu is NOT injected when the host supplied a toolbar.
       expect(toolbar(el).querySelector('slicc-add-menu')).toBeNull();
     });
+
+    it('places question controls inside the card without replacing the draft or caret', () => {
+      const el = mount();
+      el.value = 'An unfinished reply';
+      const ta = textarea(el);
+      ta.focus();
+      ta.setSelectionRange(5, 5);
+      const prompt = document.createElement('button');
+      prompt.textContent = 'Wait for CI';
+      el.setQuestionContent(prompt);
+      const region = el.querySelector('[part="question"]') as HTMLElement;
+      expect(region.firstElementChild).toBe(prompt);
+      expect(region.hidden).toBe(false);
+      expect(el.hasAttribute('has-question')).toBe(true);
+      expect(card(el).firstElementChild).toBe(region);
+      expect(el.value).toBe('An unfinished reply');
+      expect(document.activeElement).toBe(ta);
+      expect(ta.selectionStart).toBe(5);
+      el.setQuestionContent(null);
+      expect(region.hidden).toBe(true);
+      expect(el.hasAttribute('has-question')).toBe(false);
+      expect(region.childElementCount).toBe(0);
+      expect(el.value).toBe('An unfinished reply');
+    });
   });
 
   describe('attribute ↔ property reflection', () => {

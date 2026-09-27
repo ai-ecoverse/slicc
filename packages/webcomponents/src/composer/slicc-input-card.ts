@@ -54,6 +54,16 @@ slicc-input-card .ta {
   max-height: 140px;
   overflow-y: hidden;
 }
+slicc-input-card .slicc-input-card__question {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 11px;
+}
+slicc-input-card .slicc-input-card__question[hidden] {
+  display: none;
+}
 slicc-input-card .ta::placeholder {
   color: var(--txt-3);
   /* Long (LLM-suggested) placeholders ellipsize instead of clipping when
@@ -142,7 +152,9 @@ function focusIsNowhere(doc: Document): boolean {
  * @attr disabled - boolean; disables the textarea. Disabling a FOCUSED
  *   textarea remembers the caret the browser drops, and re-enabling puts it
  *   back — unless the focus has gone somewhere since
+ * @attr has-question - present while answer controls occupy the question region
  * @csspart card - the rounded white card surface (carries the focus ring)
+ * @csspart question - optional answer controls above the textarea
  * @csspart textarea - the borderless autosizing `<textarea>`
  * @csspart toolbar - the control row below the textarea
  * @slot toolbar - controls relocated into the toolbar row (light DOM has no
@@ -163,6 +175,7 @@ export class SliccInputCard extends HTMLElement {
   static readonly observedAttributes = ['value', 'placeholder', 'suggestion', 'disabled'];
 
   #card!: HTMLDivElement;
+  #questionRegion!: HTMLDivElement;
   #textarea!: HTMLTextAreaElement;
   #toolbar!: HTMLDivElement;
   #built = false;
@@ -242,6 +255,15 @@ export class SliccInputCard extends HTMLElement {
     this.value = '';
   }
 
+  /** Show or clear answer controls above the textarea without disturbing its draft or focus. */
+  setQuestionContent(content: HTMLElement | HTMLElement[] | null): void {
+    this.#build();
+    const nodes = content === null ? [] : Array.isArray(content) ? content : [content];
+    this.#questionRegion.replaceChildren(...nodes);
+    this.#questionRegion.hidden = nodes.length === 0;
+    this.toggleAttribute('has-question', nodes.length > 0);
+  }
+
   /**
    * Build the card scaffold once and relocate any pre-existing toolbar children
    * into the toolbar row. Idempotent — safe across re-connects (light DOM
@@ -264,6 +286,11 @@ export class SliccInputCard extends HTMLElement {
     this.#card.className = 'slicc-input-card__card';
     this.#card.setAttribute('part', 'card');
 
+    this.#questionRegion = doc.createElement('div');
+    this.#questionRegion.className = 'slicc-input-card__question';
+    this.#questionRegion.setAttribute('part', 'question');
+    this.#questionRegion.hidden = true;
+
     this.#textarea = doc.createElement('textarea');
     this.#textarea.className = 'ta';
     this.#textarea.setAttribute('part', 'textarea');
@@ -280,7 +307,7 @@ export class SliccInputCard extends HTMLElement {
       this.#toolbar.append(h('slicc-add-menu'), h('slicc-send-button'));
     }
 
-    this.#card.append(this.#textarea, this.#toolbar);
+    this.#card.append(this.#questionRegion, this.#textarea, this.#toolbar);
     this.appendChild(this.#card);
 
     this.#textarea.addEventListener('input', this.#onInput);

@@ -56,6 +56,46 @@ describe('slicc-question-prompt', () => {
     expect(onDoc).toHaveBeenCalled();
   });
 
+  it('shows model choices inline and sends the selected answer', () => {
+    const el = mount({
+      inline: '',
+      question: 'Merge now or wait?',
+      kind: 'choice',
+      'data-question-options': JSON.stringify(['Merge now', 'Wait for CI']),
+      'data-question-default': '1',
+    });
+    const seen = answers(el);
+    const buttons = Array.from(
+      el.shadowRoot?.querySelectorAll<HTMLButtonElement>('[part="choice"]') ?? []
+    );
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      'Merge now',
+      'Wait for CIRecommended',
+    ]);
+    expect(buttons[1]?.classList.contains('recommended')).toBe(true);
+    buttons[1]?.click();
+    expect(seen).toEqual([
+      { question: 'Merge now or wait?', kind: 'choice', answer: 'Wait for CI' },
+    ]);
+  });
+
+  it('submits several model choices only when at least one is selected', () => {
+    const el = mount({
+      question: 'Which checks?',
+      kind: 'choice',
+      'data-question-options': JSON.stringify(['Lint', 'Tests', 'Build']),
+      'data-question-multi': '',
+    });
+    const seen = answers(el);
+    q(el, '.multi button')?.click();
+    expect(seen).toEqual([]);
+    const boxes = el.shadowRoot?.querySelectorAll<HTMLInputElement>('.multi input');
+    boxes?.[0]?.click();
+    boxes?.[2]?.click();
+    q(el, '.multi button')?.click();
+    expect(seen).toEqual([{ question: 'Which checks?', kind: 'choice', answer: 'Lint, Build' }]);
+  });
+
   it.each([
     ['text', 'text'],
     ['number', 'number'],

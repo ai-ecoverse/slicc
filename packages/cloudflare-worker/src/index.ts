@@ -195,13 +195,13 @@ const NOOP_CTX: ExecutionContext = {
 const ASSET_IMMUTABLE = 'public, max-age=31536000, immutable';
 
 /**
- * #1330 retention: serve a content-hashed `/assets/*` chunk from the R2 archive
+ * #1330 retention: serve a content-hashed `/assets/*` file from the R2 archive
  * when the current build no longer has it, so a long-lived tab keeps fetching
  * its own build's lazy chunks after a deploy instead of getting the SPA shell
  * (which would fail as a dynamic-import). ASSETS-first; R2 only on a miss.
  *
  * Conditional (304/412) and Range (206) are intentionally NOT implemented —
- * archived chunks are small, immutable, content-hashed, and fetched in full.
+ * archived files are bounded, immutable, content-hashed, and fetched in full.
  * Every request (incl. any carrying `Range`/`If-*`) gets a full `200` (or a
  * bodyless `HEAD`). Never `500`s an asset — any R2/cache error falls back to
  * the classification-probe shell (HEAD → bodyless).

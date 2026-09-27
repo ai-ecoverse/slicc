@@ -29,6 +29,7 @@ import {
 // Adobe Clean @font-face — the library tokens reference the family but the
 // declarations lived only in the (never-loaded) legacy stylesheet.
 import '../styles/fonts.css';
+import type { SliccInputCard } from '@slicc/webcomponents';
 import { createLogger } from '../../base/logger.js';
 import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
@@ -532,6 +533,7 @@ export function buildWcShellFrame(root: HTMLElement, options: WcShellOptions): W
   // that have a VFS (`attachMentionPreviewFs` in `wc-live`).
   wireMentionPreviews({
     thread,
+    inputCard: inputCard as SliccInputCard,
     isReadOnly: () => composer.hasAttribute('hidden'),
     log: createLogger('mention-preview'),
   });
