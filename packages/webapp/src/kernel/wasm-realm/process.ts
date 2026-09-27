@@ -29,8 +29,18 @@ export type WasmSyscall =
   | { op: 'fd-close'; fd: number }
   | { op: 'fd-pipe' }
   | { op: 'fd-poll'; fd: number }
-  | { op: 'fd-open-vfs'; path: string; flags: number; position: number }
+  | {
+      op: 'fd-open-vfs';
+      path: string;
+      flags: number;
+      position: number;
+      /** Live bytes of an unlinked-while-open file (mkstemp). */
+      contents?: Uint8Array;
+      /** Never write back: the path is gone from the VFS. */
+      orphan?: boolean;
+    }
   | { op: 'fd-seek'; fd: number; offset: number; whence: number }
+  | { op: 'fd-flush'; fd: number }
   | {
       op: 'proc-spawn';
       file: string;
@@ -51,6 +61,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-poll',
   'fd-open-vfs',
   'fd-seek',
+  'fd-flush',
   'proc-spawn',
   'proc-wait',
   'proc-captured',
@@ -102,7 +113,7 @@ export class WasmProcess {
           return { ok: true, kind: 'json', json: await file.write(req.body) };
         }
         case 'fd-close':
-          this.fds.close(req.fd);
+          await Promise.resolve(this.fds.close(req.fd));
           return { ok: true, kind: 'void' };
         case 'fd-pipe': {
           const pipe = openPipe();
@@ -111,7 +122,7 @@ export class WasmProcess {
           try {
             write = this.fds.install(pipe.write, 3);
           } catch (e) {
-            this.fds.close(read);
+            await Promise.resolve(this.fds.close(read));
             throw e;
           }
           return { ok: true, kind: 'json', json: [read, write] };
@@ -120,13 +131,24 @@ export class WasmProcess {
           return { ok: true, kind: 'json', json: pollFile(this.fds.get(req.fd).file) };
         case 'fd-open-vfs': {
           if (!this.options.fs) throw new SpawnError('ENOSYS');
-          const file = vfsFile(this.options.fs, req);
+          const file = vfsFile(this.options.fs, {
+            path: req.path,
+            flags: req.flags,
+            position: req.position,
+            ...(req.contents !== undefined ? { contents: req.contents } : {}),
+            ...(req.orphan ? { orphan: true } : {}),
+          });
           return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
         }
         case 'fd-seek': {
           const file = this.fds.get(req.fd).file;
           if (!file.seek) throw new KernelError('ESPIPE');
           return { ok: true, kind: 'json', json: await file.seek(req.offset, req.whence) };
+        }
+        case 'fd-flush': {
+          const file = this.fds.get(req.fd).file;
+          if (file.flush) await file.flush();
+          return { ok: true, kind: 'void' };
         }
         case 'proc-fork':
           return { ok: true, kind: 'json', json: await this.children.fork(req.state) };
@@ -149,9 +171,9 @@ export class WasmProcess {
   }
 
   /** The process is gone (exit, crash, SIGKILL): release its descriptors once. */
-  exit(): void {
+  async exit(): Promise<void> {
     if (this.exited) return;
     this.exited = true;
-    this.fds.closeAll();
+    await this.fds.closeAll();
   }
 }

@@ -54,9 +54,16 @@ export interface ProcessSys {
   pipe(): [number, number];
   poll(fd: number): PollState;
   /** Hand a VFS file to the kernel as a shared description; its new kernel fd. */
-  openVfs(path: string, flags: number, position: number): number;
+  openVfs(
+    path: string,
+    flags: number,
+    position: number,
+    opts?: { contents?: Uint8Array; orphan?: boolean }
+  ): number;
   /** lseek(2) on a kernel description's shared offset. */
   seek(fd: number, offset: number, whence: number): number;
+  /** fsync(2): write back a VFS file description's buffered content. */
+  flush(fd: number): void;
 }
 
 export interface StreamOps {
@@ -138,6 +145,12 @@ export class KernelStreams {
     stream.stream_ops = {
       ...stream.stream_ops,
       llseek: (_s, offset, whence) => this.call(() => this.sys.seek(kfd, offset, whence)),
+      // KernelStreams.ops leaves fsync as a no-op; a VFS description must flush.
+      fsync: () =>
+        this.call(() => {
+          this.sys.flush(kfd);
+          return 0;
+        }),
     };
   }
 

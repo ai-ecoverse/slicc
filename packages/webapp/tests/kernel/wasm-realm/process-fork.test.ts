@@ -61,11 +61,12 @@ function sys(): ProcessSys & { opened: unknown[] } {
     close: () => {},
     pipe: () => [5, 6],
     poll: () => ({ readable: true, writable: true, hangup: false }),
-    openVfs: (path, flags, position) => {
-      opened.push([path, flags, position]);
+    openVfs: (path, flags, position, opts) => {
+      opened.push([path, flags, position, opts]);
       return next++;
     },
     seek: (_fd, offset) => offset,
+    flush: () => {},
   };
 }
 
@@ -93,7 +94,7 @@ describe('describeForFork', () => {
     });
     streams[5] = make({ fd: 5, path: '/dev/null', flags: 2 });
     const table = describeForFork(Fs, s, kernel, () => '/workspace/out.txt');
-    expect(s.opened).toEqual([['/workspace/out.txt', 1, 7]]);
+    expect(s.opened).toEqual([['/workspace/out.txt', 1, 7, undefined]]);
     expect(table).toEqual([
       { fd: 0, kernel: 0, kind: 'tty' },
       { fd: 1, kernel: 4, kind: 'stream' },
@@ -104,6 +105,34 @@ describe('describeForFork', () => {
     // The parent now reads and writes the file through the kernel too.
     expect(streams[3]!.sliccKernelFd).toBe(10);
     expect(streams[3]!.stream_ops.llseek).toBeDefined();
+    expect(streams[3]!.stream_ops.fsync).toBeDefined();
+  });
+
+  it('hands the live buffer of an unlinked-while-open file (mkstemp)', () => {
+    const { Fs, streams, make } = fakeFs();
+    const s = sys();
+    const kernel = new KernelStreams(Fs, s);
+    const bytes = new TextEncoder().encode('temp-body');
+    streams[3] = make({
+      fd: 3,
+      flags: 2,
+      position: 4,
+      shared: {},
+      node: {
+        mode: S_IFREG,
+        live: { orphan: true, data: bytes, len: bytes.length },
+      } as never,
+    });
+    describeForFork(Fs, s, kernel, () => '/tmp/gone');
+    expect(s.opened).toHaveLength(1);
+    const [, , , opts] = s.opened[0] as [
+      string,
+      number,
+      number,
+      { contents: Uint8Array; orphan: boolean },
+    ];
+    expect(opts.orphan).toBe(true);
+    expect(new TextDecoder().decode(opts.contents)).toBe('temp-body');
   });
 });
 

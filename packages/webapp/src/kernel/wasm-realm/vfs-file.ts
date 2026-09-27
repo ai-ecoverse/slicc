@@ -10,6 +10,8 @@
  *
  * The content is loaded on first use and written back when the last
  * reference closes (or on a flush), like the live mount does per worker.
+ * An unlinked-while-open file (mkstemp) carries its live bytes across the
+ * handoff and is never written back — the path is gone.
  */
 import { KernelError, OpenFile } from './fd-table.js';
 
@@ -35,14 +37,27 @@ export interface VfsFileOptions {
   flags: number;
   /** Its offset when it was handed over. */
   position: number;
+  /**
+   * Bytes already in the live node (an unlinked-while-open file). When set,
+   * the description never re-reads the path — it is gone from the VFS.
+   */
+  contents?: Uint8Array;
+  /** Unlinked while open: never write back (the live mount's orphan rule). */
+  orphan?: boolean;
 }
 
 export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions): OpenFile {
   const access = opts.flags & O_ACCMODE;
   const readable = access !== O_WRONLY;
   const writable = access === O_WRONLY || access === O_RDWR;
-  let data: Uint8Array | undefined;
-  let length = 0;
+  // Orphans carry their live bytes (possibly empty); never re-read a gone path.
+  let data: Uint8Array | undefined =
+    opts.contents !== undefined
+      ? new Uint8Array(opts.contents)
+      : opts.orphan
+        ? new Uint8Array(0)
+        : undefined;
+  let length = data?.length ?? 0;
   let dirty = false;
   let offset = opts.position;
   // One operation at a time: a read and a write from two processes interleave
@@ -76,7 +91,7 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions): OpenFile {
   };
 
   const flush = async (): Promise<void> => {
-    if (!dirty || !data) return;
+    if (!dirty || !data || opts.orphan) return;
     dirty = false;
     await fs.writeFile(opts.path, data.slice(0, length));
   };
@@ -119,8 +134,7 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions): OpenFile {
         return offset;
       }),
     flush: () => serial(flush),
-    close: () => {
-      void serial(flush);
-    },
+    // Awaitable: process exit and fd-close wait for the final writeback.
+    close: () => serial(flush),
   });
 }

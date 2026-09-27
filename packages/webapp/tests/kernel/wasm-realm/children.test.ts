@@ -97,7 +97,7 @@ describe('ChildTable', () => {
     await expect(failing.spawn(REQ, [{ none: true }, { fd: 1 }])).rejects.toMatchObject({
       code: 'ENOENT',
     });
-    parent.closeAll();
+    await parent.closeAll();
     expect(close).toHaveBeenCalledTimes(1); // the child's reference was released
   });
 
@@ -193,7 +193,7 @@ describe('fork', () => {
       },
     });
     expect(await failing.syscall({ op: 'proc-fork', state })).toMatchObject({ errno: 'ENOENT' });
-    parent.closeAll();
+    await parent.closeAll();
     expect(close).toHaveBeenCalledTimes(1);
   });
 });
@@ -223,5 +223,37 @@ describe('VFS file syscalls', () => {
     expect(await p.syscall({ op: 'fd-seek', fd: readEnd!, offset: 0, whence: 0 })).toMatchObject({
       errno: 'ESPIPE',
     });
+  });
+
+  it('keeps orphan contents across open-vfs and flushes writable files', async () => {
+    const writes: string[] = [];
+    const fs = {
+      readFileBuffer: async () => {
+        throw new Error('ENOENT');
+      },
+      writeFile: async (_p: string, content: Uint8Array) => {
+        writes.push(text(content));
+      },
+    };
+    const p = new WasmProcess(1, new FdTable(), { fs });
+    const opened = await p.syscall({
+      op: 'fd-open-vfs',
+      path: '/tmp/gone',
+      flags: 2,
+      position: 0,
+      contents: bytes('live'),
+      orphan: true,
+    });
+    expect(opened).toEqual({ ok: true, kind: 'json', json: 3 });
+    const r = await p.syscall({ op: 'fd-read', fd: 3, max: 4 });
+    expect(r.ok && r.kind === 'bytes' && text(r.bytes)).toBe('live');
+    await p.exit();
+    expect(writes).toEqual([]);
+
+    const w = new WasmProcess(2, new FdTable(), { fs });
+    await w.syscall({ op: 'fd-open-vfs', path: '/out', flags: 1, position: 0 });
+    await w.syscall({ op: 'fd-write', fd: 3, body: bytes('done') });
+    expect(await w.syscall({ op: 'fd-flush', fd: 3 })).toEqual({ ok: true, kind: 'void' });
+    expect(writes).toEqual(['done']);
   });
 });

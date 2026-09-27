@@ -43,10 +43,27 @@ describe('vfsFile', () => {
     await file.file.write!(bytes('a\n'));
     await child.file.write!(bytes('child\n'));
     await file.file.write!(bytes('b\n'));
-    child.release();
+    await Promise.resolve(child.release());
     expect(writes).toEqual([]);
-    file.release();
-    await vi.waitFor(() => expect(writes).toEqual([['/o', 'a\nchild\nb\n']]));
+    await Promise.resolve(file.release());
+    expect(writes).toEqual([['/o', 'a\nchild\nb\n']]);
+  });
+
+  it('keeps handed-over orphan contents and never writes them back', async () => {
+    const { fs, writes } = memFs({});
+    const file = vfsFile(fs, {
+      path: '/tmp/gone',
+      flags: O_RDWR,
+      position: 0,
+      contents: bytes('secret'),
+      orphan: true,
+    });
+    expect(text(await file.file.read!(6))).toBe('secret');
+    expect(fs.readFileBuffer).not.toHaveBeenCalled();
+    await file.file.write!(bytes('!'));
+    await file.file.flush!();
+    await Promise.resolve(file.release());
+    expect(writes).toEqual([]);
   });
 
   it('appends with O_APPEND, seeks, and zero-fills a gap', async () => {
@@ -62,8 +79,8 @@ describe('vfsFile', () => {
     expect(writes.at(-1)).toEqual(['/f', 'head+tail']);
     const gap = vfsFile(fs, { path: '/g', flags: O_WRONLY, position: 2 });
     await gap.file.write!(bytes('x'));
-    gap.release();
-    await vi.waitFor(() => expect(writes.at(-1)).toEqual(['/g', '\0\0x']));
+    await Promise.resolve(gap.release());
+    expect(writes.at(-1)).toEqual(['/g', '\0\0x']);
   });
 
   it('is read-only or write-only as its flags say, and never writes back unchanged content', async () => {
@@ -72,8 +89,7 @@ describe('vfsFile', () => {
     expect(vfsFile(fs, { path: '/r', flags: O_WRONLY, position: 0 }).file.read).toBeUndefined();
     const reader = vfsFile(fs, { path: '/r', flags: 0, position: 0 });
     await reader.file.read!(2);
-    reader.release();
-    await new Promise((r) => setTimeout(r, 0));
+    await Promise.resolve(reader.release());
     expect(writes).toEqual([]);
   });
 });

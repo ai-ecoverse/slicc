@@ -67,13 +67,26 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
     poll(fd) {
       return json(call({ op: 'fd-poll', fd }, `fd-poll ${fd}`)) as PollState;
     },
-    openVfs(path, flags, position) {
+    openVfs(path, flags, position, opts) {
       return json(
-        call({ op: 'fd-open-vfs', path, flags, position }, `fd-open-vfs ${path}`)
+        call(
+          {
+            op: 'fd-open-vfs',
+            path,
+            flags,
+            position,
+            ...(opts?.contents !== undefined ? { contents: opts.contents } : {}),
+            ...(opts?.orphan ? { orphan: true } : {}),
+          },
+          `fd-open-vfs ${path}`
+        )
       ) as number;
     },
     seek(fd, offset, whence) {
       return json(call({ op: 'fd-seek', fd, offset, whence }, `fd-seek ${fd}`)) as number;
+    },
+    flush(fd) {
+      call({ op: 'fd-flush', fd }, `fd-flush ${fd}`);
     },
   };
 }

@@ -41,6 +41,7 @@ function fakeSys(overrides: Partial<ProcessSys> = {}): ProcessSys & { closed: nu
     poll: () => ({ readable: true, writable: true, hangup: false }),
     openVfs: () => 9,
     seek: (_fd, offset) => offset,
+    flush: () => {},
     ...overrides,
   };
 }
@@ -164,6 +165,19 @@ describe('KernelStreams', () => {
       expect.objectContaining({ errno: 64 })
     );
     expect(handled).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes fsync on a promoted VFS file to the kernel flush', () => {
+    const flushed: number[] = [];
+    const sys = fakeSys({
+      flush: (fd) => {
+        flushed.push(fd);
+      },
+    });
+    const { fs, streams } = fakeFs(1);
+    new KernelStreams(fs, sys).attachFile(streams[0]!, 11);
+    expect(streams[0]!.stream_ops.fsync!()).toBe(0);
+    expect(flushed).toEqual([11]);
   });
 
   it("gives the kernel's pipe ends back when Emscripten cannot make its own pipe", () => {

@@ -106,9 +106,14 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     worker.removeEventListener('error', onError);
     responder.dispose();
     revokeSyncFsToken(token);
-    process.exit();
     worker.terminate();
-    settle(code);
+    // Await the final VFS writeback before publishing exit: waitpid / the next
+    // shell command must see what the process wrote, and a rejected write must
+    // not become an unhandled rejection after settle.
+    void process.exit().then(
+      () => settle(code),
+      () => settle(code)
+    );
   };
   const onMessage = (event: MessageEvent): void => {
     const data = event.data as { type?: string; code?: unknown; message?: unknown } | undefined;
