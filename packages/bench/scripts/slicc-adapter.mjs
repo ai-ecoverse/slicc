@@ -30,6 +30,14 @@ export const SKILLS_DIR = '/workspace/skills';
 export const SKILLS_STASH = '/workspace/.bench-skills-builtin';
 export const EXTRA_SKILLS_ROOT = '/workspace/bench-skills';
 export const MAX_SCREENSHOTS = 10;
+/**
+ * `slicc prompt --allsettled`: the prompt ends only when the cone's turn has ended, no scoop
+ * is still processing, and nothing has happened for this long. The cone can end a turn while
+ * scoops it started keep working, then resume with the real answer; stage 1 of the V2.1 run
+ * (36331957787) lost 7 of 60 runs that way ("session export timed out while the agent was
+ * still working").
+ */
+export const PROMPT_ALL_SETTLED = '2m';
 // Each poll is a fresh follower connection, so capture stays sparse: every 10 s, and an unchanged
 // tab again after 30 s.
 const POLL_MS = 10_000;
@@ -926,7 +934,7 @@ export async function runTask({
     const shooter = startCapture(leader, dir, { now, ...capture });
     const abort = new AbortController();
     const watcher = maxCost > 0 ? watchSpend(leader, before, maxCost, abort, costPollMs) : null;
-    const reply = await leader.cli(['prompt', '-'], {
+    const reply = await leader.cli(['prompt', '--allsettled', PROMPT_ALL_SETTLED, '-'], {
       stdin: buildPrompt(task),
       timeoutMs: timeout * 1000,
       interrupt: true,

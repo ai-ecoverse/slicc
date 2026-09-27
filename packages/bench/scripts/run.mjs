@@ -316,10 +316,20 @@ export function readTrace(path, benchmark) {
 
 async function loadAndPlan(opts, deps, log) {
   const sets = [];
+  const known = new Set();
   for (const spec of opts.sets) {
     const set = await loadSet(spec, deps);
+    for (const t of set.tasks) known.add(t.id);
     sets.push({ ...set, tasks: selectTasks(set.tasks, opts) });
     log(`${set.benchmark}: ${sets.at(-1).tasks.length} of ${set.tasks.length} tasks`);
+  }
+  if (opts.taskIds) {
+    const unknown = opts.taskIds.filter((id) => !known.has(id));
+    // A misspelt or wrong-set id would otherwise plan zero runs and "succeed".
+    if (unknown.length)
+      throw new Error(
+        `unknown task id(s) ${unknown.join(', ')} in ${sets.map((s) => s.benchmark).join(', ')}`
+      );
   }
   const runs = shardRuns(planRuns(sets, opts), opts.shard);
   const shard = opts.shard ? ` (shard ${opts.shard.index}/${opts.shard.count})` : '';

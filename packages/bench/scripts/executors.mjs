@@ -18,7 +18,7 @@
  * SIGINT by sending the leader an `abort`, so a stopped task does not go on spending tokens.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   CONNECT_RETRIES,
   CONNECT_RETRY_DELAY_MS,
@@ -135,6 +135,29 @@ export function callLabel(args) {
   }`;
 }
 
+/** Options of `slicc prompt` the runner relies on (see `runTask`). */
+export const REQUIRED_CLI_OPTIONS = ['--allsettled'];
+
+const checkedClis = new Set();
+
+/**
+ * Fail before any run when the CLI is too old. An older `slicc prompt` does not know
+ * `--allsettled` and joins it into the prompt text, so the agent would be asked the wrong
+ * question rather than the run failing.
+ */
+export function assertCliSupports(cli, options = REQUIRED_CLI_OPTIONS, run = spawnSync) {
+  if (checkedClis.has(cli)) return;
+  const help = run(cli, ['--help'], { encoding: 'utf8', timeout: 30_000 });
+  const text = `${help.stdout ?? ''}${help.stderr ?? ''}`;
+  const missing = options.filter((o) => !text.includes(o));
+  if (help.error || missing.length) {
+    throw new Error(
+      `${cli} does not support ${missing.join(', ') || options.join(', ')}; build the CLI from this checkout (packages/slicc-cli)`
+    );
+  }
+  checkedClis.add(cli);
+}
+
 export function createLeader({
   url,
   cli = process.env.SLICC_CLI || 'slicc',
@@ -145,6 +168,7 @@ export function createLeader({
   now = Date.now,
 } = {}) {
   if (!url) throw new Error('driving the leader needs its join URL (SLICC_JOIN_URL)');
+  if (run === runProcess) assertCliSupports(cli);
   let joinUrl = url;
   async function call(args, opts = {}) {
     const options = { ...opts, timeoutMs: opts.timeoutMs ?? defaultTimeoutMs };
