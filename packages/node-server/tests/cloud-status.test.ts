@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import type { Request as ExpressRequest, Response as ExpressResponse, NextFunction } from 'express';
 import express from 'express';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { registerCloudStatusEndpoint, requireLoopback } from '../src/cloud-status.js';
+import {
+  DEFAULT_JOIN_FILE_PATH,
+  registerCloudStatusEndpoint,
+  requireLoopback,
+  resolveJoinFilePath,
+} from '../src/cloud-status.js';
 
 async function makeRequest(
   app: express.Express,
@@ -29,6 +34,30 @@ async function makeRequest(
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
+
+describe('resolveJoinFilePath', () => {
+  it('keeps the sandbox default when SLICC_JOIN_FILE is unset or blank', () => {
+    expect(resolveJoinFilePath({})).toBe(DEFAULT_JOIN_FILE_PATH);
+    expect(resolveJoinFilePath({ SLICC_JOIN_FILE: '   ' })).toBe('/tmp/slicc-join.json');
+  });
+
+  it('uses a trimmed SLICC_JOIN_FILE so each leader can write its own file', () => {
+    expect(resolveJoinFilePath({ SLICC_JOIN_FILE: '  /leaders/lane1/join.json  ' })).toBe(
+      '/leaders/lane1/join.json'
+    );
+  });
+
+  it('reads SLICC_JOIN_FILE from process.env when no env bag is passed', () => {
+    const previous = process.env.SLICC_JOIN_FILE;
+    process.env.SLICC_JOIN_FILE = '/leaders/from-env/join.json';
+    try {
+      expect(resolveJoinFilePath()).toBe('/leaders/from-env/join.json');
+    } finally {
+      if (previous === undefined) delete process.env.SLICC_JOIN_FILE;
+      else process.env.SLICC_JOIN_FILE = previous;
+    }
+  });
+});
 
 describe('POST /api/cloud-status', () => {
   let tmpDir: string;

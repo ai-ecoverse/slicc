@@ -131,8 +131,13 @@ export function createLock() {
 
 export function laneEnv(i, env = process.env) {
   const base = env.SLICC_GW_HOME || join(env.RUNNER_TEMP || tmpdir(), 'slicc-gw');
+  const home = `${base}-lane${i}`;
   const port = (Number.parseInt(env.BENCH_LEADER_BASE_PORT, 10) || 5710) + i;
-  return { SLICC_GW_HOME: `${base}-lane${i}`, INPUT_PORT: String(port) };
+  return {
+    SLICC_GW_HOME: home,
+    INPUT_PORT: String(port),
+    SLICC_GW_JOIN_FILE: join(home, 'join.json'),
+  };
 }
 
 export async function stopLeader({ scriptsDir, env, run = runNode }) {

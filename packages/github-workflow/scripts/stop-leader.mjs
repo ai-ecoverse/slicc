@@ -7,6 +7,7 @@ import {
   homeDir,
   isAlive,
   isMain,
+  joinFilePath,
   logTail,
   readState,
   setOutput,
@@ -60,7 +61,8 @@ export async function main(options = {}) {
       console.log(`[stop-leader] pinned webapp pid=${state.uiServer} already exited`);
     }
   }
-  removeCredentialFiles(state.secretsFile);
+  const recorded = typeof state.joinFile === 'string' ? state.joinFile.trim() : '';
+  removeCredentialFiles(state.secretsFile, recorded || joinFilePath());
   console.log('[stop-leader] credential files removed');
   for (const pid of chromePidsForProfile(state.profileDir, options.exec)) {
     console.log(`[stop-leader] stopping leftover chrome pid=${pid}`);

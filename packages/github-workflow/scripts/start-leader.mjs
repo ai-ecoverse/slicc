@@ -16,6 +16,7 @@ import {
   input,
   isMain,
   joinFilePath,
+  legacyJoinFilePath,
   logTail,
   notice,
   setOutput,
@@ -35,6 +36,7 @@ import {
   parseMountLines,
   parsePort,
   resolvePinnedWebapp,
+  sourceHonorsJoinFile,
 } from './lib.mjs';
 
 export const NPM_INSTALL_DELAYS_MS = [5_000, 15_000, 45_000];
@@ -77,6 +79,16 @@ export function installNodeServer(
   return entry;
 }
 
+export function nodeServerHonorsJoinFile(entry, read = readFileSync) {
+  const files = [entry, join(dirname(entry), 'cloud-status.js')];
+  for (const file of files) {
+    try {
+      if (sourceHonorsJoinFile(read(file, 'utf8'))) return true;
+    } catch {}
+  }
+  return false;
+}
+
 export function resolveNodeServer(home, exec = execFileSync) {
   const explicit = input('node-server');
   if (explicit) {
@@ -88,9 +100,10 @@ export function resolveNodeServer(home, exec = execFileSync) {
   return installNodeServer(home, input('slicc-version', { fallback: 'latest' }), exec);
 }
 
-export function removeCredentialFiles(secretsFile) {
+export function removeCredentialFiles(secretsFile, joinFile = joinFilePath()) {
   rmSync(coneConfigPath(), { force: true });
   if (secretsFile) rmSync(secretsFile, { force: true });
+  if (joinFile) rmSync(joinFile, { force: true });
 }
 
 export function writeCredentialFiles(home) {
@@ -128,13 +141,19 @@ export function writeCredentialFiles(home) {
   return { secretsFile, coneConfigWritten: Boolean(coneConfigJson), summary };
 }
 
-export async function pollJoinFile({ child, logPath, startedAt, timeoutMs, pollMs = 1000 }) {
+export async function pollJoinFile({
+  child,
+  logPath,
+  startedAt,
+  timeoutMs,
+  pollMs = 1000,
+  file = joinFilePath(),
+}) {
   const deadline = Date.now() + timeoutMs;
   let exited = null;
   child.on('exit', (code, signal) => {
     exited = { code, signal };
   });
-  const file = joinFilePath();
   while (Date.now() < deadline) {
     if (exited) {
       group('leader log (tail)', logTail(logPath, 80));
@@ -253,7 +272,9 @@ export async function bootLeader(opts) {
   const { secretsFile, coneConfigWritten } = writeCredentialFiles(home);
   const profileDir = ensureDir(join(home, 'profile'));
   const logPath = join(home, 'leader.log');
-  rmSync(joinFilePath(), { force: true });
+  const honors = opts.honorsJoinFile ?? nodeServerHonorsJoinFile(entry);
+  const file = opts.joinFile ?? (honors ? joinFilePath(home) : legacyJoinFilePath());
+  rmSync(file, { force: true });
 
   const env = buildLeaderEnv({
     base: process.env,
@@ -264,6 +285,7 @@ export async function bootLeader(opts) {
     trayWorkerBaseUrl: trayWorkerBaseUrl ?? input('tray-worker-base-url'),
     bridgeDevAllowedOrigins,
     cdpLaunchTimeoutMs,
+    joinFile: honors ? file : undefined,
   });
   const args = [entry, ...buildLeaderArgs({ mounts })];
   for (const m of mounts) console.log(`[start-leader] mount ${m.hostPath} → ${m.path}`);
@@ -276,7 +298,9 @@ export async function bootLeader(opts) {
     stdio: ['ignore', logFd, logFd],
   });
   child.unref();
-  console.log(`[start-leader] node-server pid=${child.pid} port=${port} log=${logPath}`);
+  console.log(
+    `[start-leader] node-server pid=${child.pid} port=${port} log=${logPath} join=${file} (${honors ? 'per-leader' : 'legacy'})`
+  );
 
   const joinInfo = await pollJoinFile({
     child,
@@ -284,6 +308,7 @@ export async function bootLeader(opts) {
     startedAt: startedAt - 1000,
     timeoutMs: bootTimeoutMs,
     pollMs: opts.pollMs,
+    file,
   });
   if (maskJoinUrl) addMask(joinInfo.joinUrl);
 
@@ -297,6 +322,7 @@ export async function bootLeader(opts) {
       profileDir,
       secretsFile,
       coneConfigPath: coneConfigWritten ? coneConfigPath() : null,
+      joinFile: file,
       joinUrl: joinInfo.joinUrl,
       trayId: joinInfo.trayId,
       sliccVersion: joinInfo.sliccVersion,
@@ -328,6 +354,8 @@ export async function main(options = {}) {
   const home = ensureDir(homeDir());
   const inputs = readBootInputs();
   const entry = resolveNodeServer(home, options.exec);
+  const honorsJoinFile = nodeServerHonorsJoinFile(entry);
+  const polledJoinFile = honorsJoinFile ? joinFilePath(home) : legacyJoinFilePath();
   const pin = resolvePinnedWebapp({
     pin: inputs.pinWebapp,
     entry,
@@ -353,6 +381,8 @@ export async function main(options = {}) {
       entry,
       ...inputs,
       pollMs: options.pollMs,
+      honorsJoinFile,
+      joinFile: polledJoinFile,
       uiOrigin: pin?.uiOrigin,
       trayWorkerBaseUrl: pin?.trayWorkerBaseUrl,
       bridgeDevAllowedOrigins: pin?.bridgeDevAllowedOrigins,
@@ -360,7 +390,7 @@ export async function main(options = {}) {
     });
   } catch (err) {
     if (ui?.pid) await terminate(ui.pid, 2_000);
-    removeCredentialFiles(secretsFile);
+    removeCredentialFiles(secretsFile, polledJoinFile);
     throw err;
   }
 }

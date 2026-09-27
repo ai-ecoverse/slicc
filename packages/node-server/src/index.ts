@@ -68,7 +68,7 @@ import { runPause } from './cloud/pause.js';
 import { FileRegistry } from './cloud/registry-file.js';
 import { runResume } from './cloud/resume.js';
 import { runStart } from './cloud/start.js';
-import { registerCloudStatusEndpoint } from './cloud-status.js';
+import { registerCloudStatusEndpoint, resolveJoinFilePath } from './cloud-status.js';
 import {
   ComputerDemoState,
   createComputerDemoFrameServer,
@@ -1185,7 +1185,7 @@ async function main() {
   registerSecretRoutes(app, { secretStore, secretProxy, oauthStore, devMode: false });
 
   if (RUNTIME_FLAGS.hosted) {
-    registerCloudStatusEndpoint(app, { joinFilePath: '/tmp/slicc-join.json' });
+    registerCloudStatusEndpoint(app, { joinFilePath: resolveJoinFilePath() });
     registerHostedBootstrapEndpoint(app, { secretStore });
     registerSecretsReloadEndpoint(app, { secretProxy, secretStore, oauthStore });
   }

@@ -2,6 +2,13 @@ import { promises as fs } from 'node:fs';
 import { isLoopbackHostname } from '@slicc/shared-ts';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 
+export const DEFAULT_JOIN_FILE_PATH = '/tmp/slicc-join.json';
+
+export function resolveJoinFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.SLICC_JOIN_FILE?.trim();
+  return configured || DEFAULT_JOIN_FILE_PATH;
+}
+
 export interface CloudStatusEndpointOptions {
   joinFilePath: string;
 }

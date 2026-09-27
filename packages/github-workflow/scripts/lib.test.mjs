@@ -28,6 +28,7 @@ import {
   resolvePinnedWebapp,
   serializeSecretsEnv,
   shellQuote,
+  sourceHonorsJoinFile,
   tailLines,
   truncateForOutput,
   validateSecretEntry,
@@ -160,6 +161,31 @@ describe('leader argv and env', () => {
     });
     expect(env.BRIDGE_DEV_ALLOWED_ORIGINS).toBe('http://localhost:6710');
     expect(env.WORKER_BASE_URL).toBe('http://localhost:6710');
+  });
+  it("points node-server at this leader's join file and drops a path inherited from the parent", () => {
+    const env = buildLeaderEnv({
+      base: { PATH: '/bin', SLICC_JOIN_FILE: '/tmp/slicc-join.json' },
+      port: 5711,
+      secretsFile: '/s',
+      profileDir: '/p',
+      joinFile: '  /leaders/lane1/join.json  ',
+    });
+    expect(env.SLICC_JOIN_FILE).toBe('/leaders/lane1/join.json');
+    expect(env.PATH).toBe('/bin');
+    const cleared = buildLeaderEnv({
+      base: { SLICC_JOIN_FILE: '/tmp/slicc-join.json' },
+      port: 5710,
+      secretsFile: '/s',
+      profileDir: '/p',
+      joinFile: '   ',
+    });
+    expect(cleared.SLICC_JOIN_FILE).toBeUndefined();
+  });
+  it('recognises a node-server build by the join-file env name in its source', () => {
+    expect(sourceHonorsJoinFile('')).toBe(false);
+    expect(sourceHonorsJoinFile('writeFile("/tmp/slicc-join.json")')).toBe(false);
+    expect(sourceHonorsJoinFile('const key = "SLICC_JOIN_FILE";')).toBe(true);
+    expect(sourceHonorsJoinFile(null)).toBe(false);
   });
 });
 

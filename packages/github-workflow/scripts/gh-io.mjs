@@ -19,8 +19,14 @@ export function isMain(metaUrl) {
   return Boolean(entry) && metaUrl === pathToFileURL(entry).href;
 }
 
-export function joinFilePath() {
-  return process.env.SLICC_GW_JOIN_FILE?.trim() || JOIN_FILE_PATH;
+export function joinFilePath(home = homeDir()) {
+  const override = process.env.SLICC_GW_JOIN_FILE?.trim();
+  if (override) return override;
+  return join(home, 'join.json');
+}
+
+export function legacyJoinFilePath() {
+  return process.env.SLICC_GW_LEGACY_JOIN_FILE?.trim() || JOIN_FILE_PATH;
 }
 
 export function coneConfigPath() {

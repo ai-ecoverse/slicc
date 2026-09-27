@@ -12,6 +12,12 @@ export const PINNED_UI_PORT_OFFSET = 1000;
 
 export const JOIN_FILE_PATH = '/tmp/slicc-join.json';
 
+export const JOIN_FILE_ENV = 'SLICC_JOIN_FILE';
+
+export function sourceHonorsJoinFile(text) {
+  return typeof text === 'string' && text.includes(JOIN_FILE_ENV);
+}
+
 export const CONE_CONFIG_PATH = '/slicc/cone-config.json';
 
 export const DEFAULT_INJECT_MAX_BYTES = 64 * 1024 * 1024;
@@ -122,6 +128,10 @@ export function buildLeaderEnv(options) {
   env.SLICC_SECRETS_FILE = options.secretsFile;
   env.CHROME_USER_DATA_DIR = options.profileDir;
   env.SLICC_CDP_LAUNCH_TIMEOUT_MS = String(options.cdpLaunchTimeoutMs ?? 60_000);
+
+  const joinFile = options.joinFile?.trim();
+  if (joinFile) env[JOIN_FILE_ENV] = joinFile;
+  else delete env[JOIN_FILE_ENV];
   if (options.uiOrigin) env.WORKER_BASE_URL = options.uiOrigin.replace(/\/+$/, '');
   else delete env.WORKER_BASE_URL;
   if (options.trayWorkerBaseUrl) {

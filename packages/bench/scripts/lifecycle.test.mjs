@@ -224,16 +224,21 @@ describe('lanes', () => {
     expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
   });
 
-  it('gives each lane its own home and port', () => {
+  it('gives each lane its own home, port, and join file', () => {
     expect(laneEnv(2, { SLICC_GW_HOME: '/h', BENCH_LEADER_BASE_PORT: '5800' })).toEqual({
       SLICC_GW_HOME: '/h-lane2',
       INPUT_PORT: '5802',
+      SLICC_GW_JOIN_FILE: '/h-lane2/join.json',
     });
     expect(laneEnv(0, { RUNNER_TEMP: '/r' })).toEqual({
       SLICC_GW_HOME: '/r/slicc-gw-lane0',
       INPUT_PORT: '5710',
+      SLICC_GW_JOIN_FILE: '/r/slicc-gw-lane0/join.json',
     });
     expect(laneEnv(1, {}).SLICC_GW_HOME).toMatch(/slicc-gw-lane1$/);
+    const shared = { SLICC_GW_HOME: '/h', SLICC_GW_JOIN_FILE: '/tmp/slicc-join.json' };
+    expect(laneEnv(0, shared).SLICC_GW_JOIN_FILE).toBe('/h-lane0/join.json');
+    expect(laneEnv(1, shared).SLICC_GW_JOIN_FILE).toBe('/h-lane1/join.json');
   });
 
   it('boots a lane through the lock and stops it with the stop script', async () => {
@@ -266,6 +271,7 @@ describe('lanes', () => {
     expect(run.mock.calls[1][1].env).toMatchObject({
       SLICC_GW_HOME: '/h-lane1',
       INPUT_PORT: '5711',
+      SLICC_GW_JOIN_FILE: '/h-lane1/join.json',
       A: 'x',
     });
     await lane.recycle();
