@@ -36,6 +36,7 @@ import {
   notice,
   setOutput,
   sleep,
+  sleepSync,
   terminate,
   writeState,
 } from './gh-io.mjs';
@@ -52,26 +53,47 @@ import {
   resolvePinnedWebapp,
 } from './lib.mjs';
 
-/** Install the published `sliccy` package (node-server) into a private prefix. */
-export function installNodeServer(home, version, exec = execFileSync) {
+/** Backoff between `npm install` attempts; the registry briefly 404s freshly published versions. */
+export const NPM_INSTALL_DELAYS_MS = [5_000, 15_000, 45_000];
+
+/**
+ * Install the published `sliccy` package (node-server) into a private prefix.
+ * Retries a failed `npm install` with backoff: a transient registry 404 right
+ * after a release once failed every leader boot in a benchmark check.
+ */
+export function installNodeServer(
+  home,
+  version,
+  exec = execFileSync,
+  { delaysMs = NPM_INSTALL_DELAYS_MS, wait = sleepSync } = {}
+) {
   const prefix = join(home, 'leader');
   ensureDir(prefix);
   const spec = `sliccy@${version || 'latest'}`;
-  console.log(`[start-leader] installing ${spec} into ${prefix}`);
-  exec(
-    'npm',
-    [
-      'install',
-      '--prefix',
-      prefix,
-      '--no-audit',
-      '--no-fund',
-      '--ignore-scripts',
-      '--omit=dev',
-      spec,
-    ],
-    { stdio: 'inherit' }
-  );
+  const args = [
+    'install',
+    '--prefix',
+    prefix,
+    '--no-audit',
+    '--no-fund',
+    '--ignore-scripts',
+    '--omit=dev',
+    spec,
+  ];
+  for (let attempt = 0; ; attempt++) {
+    console.log(`[start-leader] installing ${spec} into ${prefix}`);
+    try {
+      exec('npm', args, { stdio: 'inherit' });
+      break;
+    } catch (err) {
+      if (attempt >= delaysMs.length) throw err;
+      const delay = delaysMs[attempt];
+      console.log(
+        `[start-leader] npm install ${spec} failed (attempt ${attempt + 1}/${delaysMs.length + 1}); retrying in ${Math.round(delay / 1000)}s`
+      );
+      wait(delay);
+    }
+  }
   const entry = join(prefix, 'node_modules', 'sliccy', 'dist', 'node-server', 'index.js');
   if (!existsSync(entry)) throw new Error(`installed ${spec} but ${entry} is missing`);
   return entry;
