@@ -77,6 +77,6 @@ Live check against a local dev harness (build the CLI from this checkout for `ne
 ## Related
 
 - [`README.md`](./README.md) — usage, inputs, task format, report guide, adding skill evals
-- [`docs/bench-runner.md`](../../docs/bench-runner.md) — judge, none-skills, transcript collection, leader lifecycle, publishing
+- [`docs/bench-runner.md`](../../docs/bench-runner.md) — judge, none-skills, interrupt/spend, transcript, lifecycle, publishing
 - `packages/github-workflow/CLAUDE.md` — the leader and CLI this runs on
 - `.github/workflows/bench.yml` (plan → shard matrix → report, + PR smoke) · `.github/workflows/bench-reaper.yml` (cancels stuck runs)

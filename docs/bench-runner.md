@@ -49,6 +49,18 @@ comparable** (they still had bundled skills). Resume treats missing/mismatched
 (`configKey` / `skills_*_preflag` result files) so they do not share a cell
 with real no-skill runs.
 
+## Interrupt and spend
+
+On timeout the runner sends the CLI SIGINT. The CLI exits 130 only after the
+leader confirms the cone and its scoops stopped (`abort_ack`); exit 1 if no
+confirm within 12s (`SLICC_ABORT_CONFIRM`); SIGKILL at 20s. Closing the
+connection on the signal used to drop the abort before the leader read it.
+
+`cost --json --all` is the record's spend (cone plus every scoop, dropped ones
+included). `session export` only includes still-registered scoops. After an
+interrupt, spend is read until flat or for 3 minutes (failed readings count,
+15s each). Giving up sets `leader_down` and the lane restarts the leader.
+
 ## Transcript collection
 
 While the cone works, the runner polls `playwright-cli tab-list` and screenshots

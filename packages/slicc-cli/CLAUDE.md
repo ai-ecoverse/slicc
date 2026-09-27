@@ -24,7 +24,7 @@ slicc <verb>-cloud [--index N|--session <id>]   Resolve join URL from iCloud, ru
   `tool_use_start`. A tool-using turn flips `ready` **twice** — exiting on the
   first gives an empty reply. A v10 leader's `user_message_ack` `rejected` exits 1;
   leaders < 10 send none. [Exit codes](../../docs/slicc-cli-details.md#prompt-exit-codes).
-- SIGINT does not exit alone: `prompt` sends `abort`, waits for `abort_ack` (cone + scoops stopped), then exits 130. No ack within `SLICC_ABORT_CONFIRM` (12s) → exit 1. Closing on the signal used to drop the abort; the cone kept spending.
+- SIGINT: `prompt` sends `abort`, waits for `abort_ack` (cone + scoops stopped), exits 130; no ack in `SLICC_ABORT_CONFIRM` (12s) → exit 1 (closing on signal used to drop the abort).
 - `new-session`/`model` (`session.go`) send the same follower control messages
   browser/iOS use: `new-session` polls `request_snapshot` until the transcript has
   no user message (no ack); `model` resolves an exact catalogue id, awaits `model.state`.
@@ -123,8 +123,7 @@ flags the `follow bash` vs `follow bash -c` footgun.
 
 `execrun.EvalSession` spawns the runner once; responses framed by output
 quiescence (`--eval-quiet`, default 500 ms). **Session outlives connections**:
-a cancelled per-connection context interrupts the in-flight work (SIGINT; no-op
-on Windows) but never kills the REPL — only `Close`/leader SIGTERM/SIGKILL do.
+cancelled per-connection context interrupts in-flight work (SIGINT; no-op on Windows) but never kills the REPL — only `Close`/leader SIGTERM/SIGKILL.
 [Lifecycle](../../docs/slicc-cli-details.md#follow---eval-persistent-repl-lifecycle).
 
 ## Self-update (`slicc update`)
