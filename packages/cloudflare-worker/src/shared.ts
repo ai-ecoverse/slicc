@@ -402,6 +402,43 @@ export function jsonResponse(payload: unknown, status = 200, headers?: HeadersIn
   });
 }
 
+/**
+ * JSON a client can retry when the tray Durable Object cannot answer.
+ *
+ * A deploy (`wrangler secret put` or a new script version) resets live
+ * objects. `stub.fetch` then rejects with "Durable Object reset because its
+ * code was updated", and an uncaught rejection becomes Cloudflare's plain-text
+ * `error code: 1101` page. Callers must return this response instead.
+ */
+export function trayTemporarilyUnavailableResponse(): Response {
+  return jsonResponse(
+    {
+      error: 'Tray hub temporarily unavailable',
+      code: 'TRAY_TEMPORARILY_UNAVAILABLE',
+      retryable: true,
+    },
+    503,
+    { 'retry-after': '1', 'cache-control': 'no-store' }
+  );
+}
+
+/** `stub.fetch` that answers {@link trayTemporarilyUnavailableResponse} instead of throwing. */
+export async function fetchTrayStub(
+  stub: { fetch(request: Request): Promise<Response> },
+  request: Request
+): Promise<Response> {
+  try {
+    return await stub.fetch(request);
+  } catch (error) {
+    // The message is a platform reset or a DO exception name, not a capability.
+    console.error(
+      'tray durable object fetch failed',
+      error instanceof Error ? error.message : String(error)
+    );
+    return trayTemporarilyUnavailableResponse();
+  }
+}
+
 export function websocketResponse(client: unknown): Response {
   try {
     return new Response(null, { status: 101, webSocket: client } as ResponseInit & {

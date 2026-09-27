@@ -1040,6 +1040,26 @@ and any left by a superseded or departed client — are dropped with a
 replaying them would re-run duplicate-tab commands. Only initial-connect
 buffering (`chromeConnectionId: null`) still flushes.
 
+## Tray bootstrap during a worker deploy
+
+**The Problem**
+
+`wrangler secret put` and a script deploy each publish a new worker version.
+In-flight Durable Object calls reject with `Durable Object reset because its
+code was updated`. If that rejection escapes `fetch`, Cloudflare replaces the
+response with the plain-text page `error code: 1101`. The Go CLI's bootstrap
+poll used to treat that page as a malformed reply and fail the dial. The bench
+retries text that matches `tray signaling` / `tray attach`, so this shape was
+not retried.
+
+**The Solution**
+
+`fetchTrayStub` and the worker `fetch` catch turn that rejection into JSON
+`503` `TRAY_TEMPORARILY_UNAVAILABLE`. The CLI repeats a non-JSON body, any
+HTTP 5xx, or a network error with backoff, and the error it finally returns
+includes the status and the body it saw. A redirect that names a successor is
+still returned immediately.
+
 ## Leader Tray WebSocket: Extension Mode
 
 **The Problem**

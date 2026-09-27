@@ -159,6 +159,7 @@ func Dial(ctx context.Context, joinURL string, opts Options) (*Conn, error) {
 			return nil, err
 		}
 		sig := signaling.New(currentURL, opts.HTTPClient)
+		sig.SetLogf(opts.Logf)
 
 		// Attach loop: retry on `wait`, proceed on `signal`, redirect on supersede.
 		plan, err := attachWait(ctx, sig, controllerID, opts.Runtime, opts.logf)

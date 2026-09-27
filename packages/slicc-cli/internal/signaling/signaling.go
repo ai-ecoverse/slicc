@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,20 @@ import (
 // replies would hang attach/poll forever (the bootstrap deadline is only checked
 // between requests).
 const defaultRequestTimeout = 30 * time.Second
+
+// A deploy resets the tray Durable Object for a few seconds. The hub answers
+// that with JSON 503, and an uncaught reset still arrives as Cloudflare's
+// plain-text "error code: 1101" page. Both are safe to repeat: nothing has
+// been delivered to the leader yet. The whole retry, including every request
+// and the backoff between them, stays inside signalingRetryBudget. A single
+// attempt is also capped at defaultRequestTimeout, and it never starts once
+// the budget is already spent.
+const (
+	signalingAttempts    = 4
+	signalingRetryBase   = time.Second
+	signalingRetryMax    = 4 * time.Second
+	signalingRetryBudget = 8 * time.Second
+)
 
 // TurnIceServer mirrors the worker-supplied ICE server list.
 type TurnIceServer struct {
@@ -103,6 +118,12 @@ type BootstrapPlan struct {
 type Client struct {
 	joinURL string
 	http    *http.Client
+	logf    func(string, ...any)
+	// sleep is the backoff between transient attempts. Tests replace it.
+	sleep func(context.Context, time.Duration) bool
+	// retryBudget overrides signalingRetryBudget. Tests set a short one so a
+	// stalled server does not hold the suite for the production budget.
+	retryBudget time.Duration
 }
 
 // New builds a signaling client for the given join URL.
@@ -121,8 +142,12 @@ func New(joinURL string, httpClient *http.Client) *Client {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	return &Client{joinURL: joinURL, http: &client}
+	return &Client{joinURL: joinURL, http: &client, sleep: sleepSignaling}
 }
+
+// SetLogf receives one line per transient retry. Nil discards them. The
+// returned error still names the status and body when the budget runs out.
+func (c *Client) SetLogf(fn func(string, ...any)) { c.logf = fn }
 
 // JoinURL returns the URL this client posts to.
 func (c *Client) JoinURL() string { return c.joinURL }
@@ -264,6 +289,13 @@ func (c *Client) post(ctx context.Context, body map[string]any) ([]byte, error) 
 	return data, err
 }
 
+// networkError is a transport failure, as opposed to a request we could not
+// even build. Only the former is retried.
+type networkError struct{ err error }
+
+func (e *networkError) Error() string { return "tray signaling network error: " + e.err.Error() }
+func (e *networkError) Unwrap() error { return e.err }
+
 // responseMeta is the part of a signaling response that outlives its body: the
 // status and headers the supersede hop is read from (#1957).
 type responseMeta struct {
@@ -273,7 +305,79 @@ type responseMeta struct {
 
 // postWithMeta is post plus the response status and headers, for the callers
 // that read the RFC 8288 Link header and the 308 Location.
+//
+// A non-JSON body (Cloudflare's "error code: 1101"), a 5xx, or a network
+// error is transient: the same request is repeated with backoff. A redirect
+// that names a successor is returned immediately so the caller can follow it.
 func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte, responseMeta, error) {
+	deadline := c.retryDeadline(ctx)
+	backoff := signalingRetryBase
+	var last error
+	for attempt := 1; attempt <= signalingAttempts; attempt++ {
+		if !time.Now().Before(deadline) {
+			break
+		}
+		data, meta, err := c.postBounded(ctx, body, deadline)
+		var net *networkError
+		switch {
+		case err == nil && !transientResponse(meta, data):
+			return data, meta, nil
+		case err == nil:
+			last = fmt.Errorf("tray signaling: transient response: %s", describeResponse(meta.Status, data))
+		case errors.As(err, &net) && ctx.Err() == nil:
+			last = err
+		default:
+			return nil, responseMeta{}, err
+		}
+		// The next attempt has to fit its backoff and still have time to run.
+		// A request that finished 0.5s before the deadline must not sleep 1s
+		// and then hang for the 30s client timeout.
+		if attempt == signalingAttempts || time.Until(deadline) <= backoff {
+			break
+		}
+		c.logRetry(last, backoff)
+		if !c.wait(ctx, backoff) {
+			break
+		}
+		if backoff < signalingRetryMax {
+			backoff *= 2
+		}
+	}
+	if last == nil {
+		last = ctx.Err()
+	}
+	return nil, responseMeta{}, last
+}
+
+// retryDeadline is the moment this call stops trying. The caller's deadline
+// wins when it is sooner, so a bootstrap that is about to time out is not
+// extended by the retry budget.
+func (c *Client) retryDeadline(ctx context.Context) time.Time {
+	budget := signalingRetryBudget
+	if c.retryBudget > 0 {
+		budget = c.retryBudget
+	}
+	deadline := time.Now().Add(budget)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	return deadline
+}
+
+// postBounded runs one attempt. Its deadline is the earlier of the retry
+// budget and defaultRequestTimeout, so a stall cannot use the client's 30s
+// timeout once less than that remains.
+func (c *Client) postBounded(ctx context.Context, body map[string]any, deadline time.Time) ([]byte, responseMeta, error) {
+	bound := deadline
+	if capAt := time.Now().Add(defaultRequestTimeout); capAt.Before(bound) {
+		bound = capAt
+	}
+	reqCtx, cancel := context.WithDeadline(ctx, bound)
+	defer cancel()
+	return c.postOnce(reqCtx, body)
+}
+
+func (c *Client) postOnce(ctx context.Context, body map[string]any) ([]byte, responseMeta, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, responseMeta{}, err
@@ -285,14 +389,62 @@ func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte,
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, responseMeta{}, fmt.Errorf("tray signaling network error: %w", err)
+		return nil, responseMeta{}, &networkError{err: err}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, responseMeta{}, err
+		return nil, responseMeta{}, &networkError{err: err}
 	}
 	return data, responseMeta{Status: resp.StatusCode, Header: resp.Header}, nil
+}
+
+// transientResponse reports a body the follower should send again. A named
+// successor is never transient: the tray moved, and retrying the old URL
+// cannot finish the hop.
+func transientResponse(meta responseMeta, data []byte) bool {
+	if SuccessorVersionFromLinkHeader(meta.Header) != "" ||
+		RedirectLocation(meta.Status, meta.Header.Get("Location")) != "" {
+		return false
+	}
+	if meta.Status >= 500 {
+		return true
+	}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return false
+	}
+	return !json.Valid(trimmed)
+}
+
+func describeResponse(status int, body []byte) string {
+	return fmt.Sprintf("status %d body: %s", status, truncate(body))
+}
+
+func (c *Client) logRetry(err error, backoff time.Duration) {
+	if c.logf == nil {
+		return
+	}
+	c.logf("tray signaling: %s; retrying in %s", err, backoff)
+}
+
+func (c *Client) wait(ctx context.Context, d time.Duration) bool {
+	sleep := c.sleep
+	if sleep == nil {
+		sleep = sleepSignaling
+	}
+	return sleep(ctx, d)
+}
+
+func sleepSignaling(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // RedirectLocation returns the replacement join URL named by a suppressed 3xx,

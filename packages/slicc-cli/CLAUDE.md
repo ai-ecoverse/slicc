@@ -132,7 +132,9 @@ JSON and update the Go structs alongside the TS + Swift mirrors.
 
 - **User-facing** — `prompt`/`exec`/`watch` write leader bytes to stdout, status
   to stderr. **Never route through the logger**; the CLI is pipeable.
-- **Diagnostics** — signaling retries, supersede redirects (`OnJoinURLChanged`
+- **Diagnostics** — signaling retries (a non-JSON hub body such as Cloudflare's
+  `error code: 1101`, an HTTP 5xx, or a network error, with backoff; the final
+  error names the status and body), supersede redirects (`OnJoinURLChanged`
   persists the replacement across `follow`/`watch` reconnects), ICE failures,
   and unparseable frames go through `internal/logging` (`diagLogger` → stderr);
   `debugLogf` adapts to `tray.Options.Logf`.
