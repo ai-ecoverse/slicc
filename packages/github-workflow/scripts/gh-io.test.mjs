@@ -203,7 +203,10 @@ describe('gh-io process + leader helpers', () => {
   it('isConnectFailure only matches dial errors on non-zero status', () => {
     expect(isConnectFailure(1, 'slicc exec: tray connect timed out after 30s')).toBe(true);
     expect(
-      isConnectFailure(1, 'slicc exec: tray signaling: transient response: status 500 body: error code: 1101')
+      isConnectFailure(
+        1,
+        'slicc exec: tray signaling: transient response: status 500 body: error code: 1101'
+      )
     ).toBe(true);
     expect(isConnectFailure(0, 'tray connect timed out')).toBe(false);
     expect(isConnectFailure(1, 'command not found')).toBe(false);
