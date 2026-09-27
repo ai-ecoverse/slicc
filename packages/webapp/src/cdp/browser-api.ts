@@ -2,12 +2,8 @@ import type { TrayTargetEntry } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { CDPClient } from './cdp-client.js';
-import {
-  CdpBridgeRejectedError,
-  type CdpConnectFailureClassifier,
-  CdpReconnectBackoffError,
-  nextCdpReconnectDelayMs,
-} from './cdp-reconnect-policy.js';
+import { CdpConnectionManager } from './cdp-connection-manager.js';
+import type { CdpConnectFailureClassifier } from './cdp-reconnect-policy.js';
 import { throwIfAborted } from './command-abort.js';
 import { FrameContextRegistry } from './frame-context-registry.js';
 import { HarRecorder } from './har-recorder.js';
@@ -36,6 +32,7 @@ import type {
 } from './types.js';
 import { ViewportOverrideStore } from './viewport-override-store.js';
 
+export { getDefaultCdpUrl } from './cdp-connection-manager.js';
 export type { TabLockStats } from './tab-lock-manager.js';
 
 export interface TrayTargetProvider {
@@ -46,7 +43,6 @@ export interface TrayTargetProvider {
   openRemoteTab?(runtimeId: string, url: string): Promise<string>;
 }
 
-const FALLBACK_CDP_URL = 'ws://localhost:5710/cdp';
 const log = createLogger('browser-api');
 
 const STALE_SESSION_ERRORS = [
@@ -72,16 +68,6 @@ export type SessionChangeCallback = (
   transport: CDPTransport,
   targetId: string
 ) => void;
-
-export function getDefaultCdpUrl(
-  locationLike: Pick<Location, 'protocol' | 'host'> | null = typeof window !== 'undefined'
-    ? window.location
-    : null
-): string {
-  if (!locationLike?.host) return FALLBACK_CDP_URL;
-  const protocol = locationLike.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${locationLike.host}/cdp`;
-}
 
 class AccountedTransport implements CDPTransport {
   onStateChange?: CDPTransport['onStateChange'];
@@ -162,21 +148,9 @@ export class BrowserAPI implements TabHost {
   private readonly locks = new TabLockManager();
 
   private readonly viewports = new ViewportOverrideStore();
+
+  private readonly connection = new CdpConnectionManager();
   private _onSessionChange?: SessionChangeCallback | undefined;
-
-  private _lastConnectOptions: Partial<CDPConnectOptions> | null = null;
-
-  private supersededHandler: (() => void) | null = null;
-  private supersededNotified = false;
-
-  private _reconnectAttempt = 0;
-  private _reconnectNotBefore = 0;
-
-  private _bridgeRejection: string | null = null;
-  private bridgeRejectedHandler: (() => void) | null = null;
-  private bridgeRejectedNotified = false;
-
-  private classifyConnectFailure: CdpConnectFailureClassifier = async () => 'transient';
   private readonly handleJavaScriptDialogOpening = (params: CdpPayload): void => {
     void this.dismissJavaScriptDialog(params);
   };
@@ -465,24 +439,7 @@ export class BrowserAPI implements TabHost {
   }
 
   async connect(options?: Partial<CDPConnectOptions>): Promise<void> {
-    if (this._bridgeRejection) {
-      this.notifyBridgeRejected();
-      throw new CdpBridgeRejectedError(this._bridgeRejection);
-    }
-
-    this._lastConnectOptions = options ? { ...options } : {};
-    try {
-      await this.client.connect({
-        url: options?.url ?? getDefaultCdpUrl(),
-        timeout: options?.timeout,
-        ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
-      });
-    } catch (err) {
-      await this.noteReconnectFailure(options);
-      if (this._bridgeRejection) throw new CdpBridgeRejectedError(this._bridgeRejection);
-      throw err;
-    }
-    this.noteReconnectSuccess();
+    await this.connection.connect(this.client, options);
   }
 
   async reconnectIfNeeded(): Promise<void> {
@@ -492,65 +449,19 @@ export class BrowserAPI implements TabHost {
   }
 
   primeConnectOptions(options?: Partial<CDPConnectOptions>): void {
-    this._lastConnectOptions = options ? { ...options } : {};
+    this.connection.primeConnectOptions(options);
   }
 
   setCdpSupersededHandler(handler: (() => void) | null): void {
-    this.supersededHandler = handler;
+    this.connection.setSupersededHandler(handler);
   }
 
   setCdpBridgeRejectedHandler(handler: (() => void) | null): void {
-    this.bridgeRejectedHandler = handler;
+    this.connection.setBridgeRejectedHandler(handler);
   }
 
   setCdpConnectFailureClassifier(classifier: CdpConnectFailureClassifier): void {
-    this.classifyConnectFailure = classifier;
-  }
-
-  private throwIfReconnectPaused(): void {
-    if (this._bridgeRejection) {
-      this.notifyBridgeRejected();
-      throw new CdpBridgeRejectedError(this._bridgeRejection);
-    }
-    if (Date.now() < this._reconnectNotBefore) throw new CdpReconnectBackoffError();
-  }
-
-  private noteReconnectSuccess(): void {
-    this._reconnectAttempt = 0;
-    this._reconnectNotBefore = 0;
-
-    this.supersededNotified = false;
-  }
-
-  private async noteReconnectFailure(options?: Partial<CDPConnectOptions>): Promise<void> {
-    const kind = await this.classifyConnectFailure({
-      url: options?.url ?? '',
-      ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
-    });
-    if (kind === 'terminal') {
-      this._bridgeRejection = new CdpBridgeRejectedError().message;
-      this.notifyBridgeRejected();
-      return;
-    }
-    const delay = nextCdpReconnectDelayMs(this._reconnectAttempt);
-    this._reconnectAttempt += 1;
-    this._reconnectNotBefore = Date.now() + delay;
-  }
-
-  private notifyBridgeRejected(): void {
-    if (this.bridgeRejectedNotified) return;
-    this.bridgeRejectedNotified = true;
-    try {
-      this.bridgeRejectedHandler?.();
-    } catch {}
-  }
-
-  private notifySuperseded(): void {
-    if (this.supersededNotified) return;
-    this.supersededNotified = true;
-    try {
-      this.supersededHandler?.();
-    } catch {}
+    this.connection.setConnectFailureClassifier(classifier);
   }
 
   async createPage(url?: string): Promise<string> {
@@ -890,51 +801,26 @@ export class BrowserAPI implements TabHost {
   }
 
   private async ensureLocalConnected(): Promise<void> {
-    if (this.localClient.superseded === true) {
-      this.notifySuperseded();
-      return;
-    }
-    if (this.localClient.state === 'disconnected') {
-      this.throwIfReconnectPaused();
-      const opts = this._lastConnectOptions;
-      try {
-        await this.localClient.connect({
-          url: opts?.url ?? getDefaultCdpUrl(),
-          ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
-          ...(opts?.protocols !== undefined ? { protocols: opts.protocols } : {}),
-        });
-      } catch (err) {
-        await this.noteReconnectFailure(opts ?? undefined);
-        if (this._bridgeRejection) throw new CdpBridgeRejectedError(this._bridgeRejection);
-        throw err;
-      }
-      this.noteReconnectSuccess();
-    }
+    await this.connection.ensureLocalConnected(this.localClient);
   }
 
   private async ensureConnected(): Promise<void> {
-    if (this.client.superseded === true) {
-      this.notifySuperseded();
-      return;
-    }
-    if (this.client.state === 'disconnected') {
-      this.throwIfReconnectPaused();
-      const dropped = this.client;
+    await this.connection.ensureConnected({
+      client: this.client,
+      restoreLocalAfterRemoteDrop: () => {
+        if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
+          this.trayTargetProvider.removeRemoteTransport(
+            this.remoteTargetInfo.runtimeId,
+            this.remoteTargetInfo.localTargetId
+          );
+          this.setClient(this.localClient);
+          this.remoteTargetInfo = null;
+        }
+      },
 
-      if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
-        this.trayTargetProvider.removeRemoteTransport(
-          this.remoteTargetInfo.runtimeId,
-          this.remoteTargetInfo.localTargetId
-        );
-        this.setClient(this.localClient);
-        this.remoteTargetInfo = null;
-      }
-
-      this.clearSessionsForTransport(dropped);
-      if (this.client.state === 'disconnected') {
-        await this.connect(this._lastConnectOptions ?? undefined);
-      }
-    }
+      clearSessionsForTransport: (transport) => this.clearSessionsForTransport(transport),
+      getClient: () => this.client,
+    });
   }
 
   private transportForSession(sessionId: string): CDPTransport {
