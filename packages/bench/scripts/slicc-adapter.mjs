@@ -201,8 +201,8 @@ export function costTotals(costJson) {
   return totals;
 }
 
-async function spend(leader) {
-  const r = await leader.exec('cost --json --all');
+async function spend(leader, timeoutMs) {
+  const r = await leader.exec('cost --json --all', timeoutMs ? { timeoutMs } : undefined);
   return r.status === 0 ? costTotals(r.stdout) : null;
 }
 
@@ -591,6 +591,12 @@ export const COST_POLL_MS = 30_000;
 
 export const BUSY_PROBE_MS = 20_000;
 
+export const STOP_PROBE_INTERVALS = 6;
+
+export const STOP_PROBE_BUDGET_MS = 3 * 60 * 1000;
+
+export const STOP_PROBE_READ_TIMEOUT_MS = 15_000;
+
 export async function stillWorking(leader, reply, { probeMs = BUSY_PROBE_MS, sleep }) {
   if (reply.status !== 0 || reply.timedOut || reply.aborted) return false;
   if (String(reply.stdout ?? '').trim()) return false;
@@ -599,9 +605,48 @@ export async function stillWorking(leader, reply, { probeMs = BUSY_PROBE_MS, sle
   const second = await spend(leader);
   if (!first || !second) return false;
 
+  return spendRising(first, second);
+}
+
+function spendRising(before, after) {
   return (
-    second.cost > first.cost + 1e-9 || second.tokens > first.tokens || second.turns > first.turns
+    after.cost > before.cost + 1e-9 || after.tokens > before.tokens || after.turns > before.turns
   );
+}
+
+export async function awaitQuiescent(
+  leader,
+  {
+    probeMs = BUSY_PROBE_MS,
+    sleep,
+    maxIntervals = STOP_PROBE_INTERVALS,
+    budgetMs = STOP_PROBE_BUDGET_MS,
+    readTimeoutMs = STOP_PROBE_READ_TIMEOUT_MS,
+    now = Date.now,
+  } = {}
+) {
+  const deadline = now() + budgetMs;
+  let previous = null;
+  let latest = null;
+  let failures = 0;
+
+  for (let attempt = 0; attempt <= maxIntervals && now() < deadline; attempt += 1) {
+    const remaining = deadline - now();
+    const reading = await spend(leader, Math.min(readTimeoutMs, Math.max(1, remaining)));
+    if (!reading) failures += 1;
+    else {
+      latest = reading;
+      if (previous && !spendRising(previous, reading)) {
+        return { stopped: true, spend: reading, failures };
+      }
+      previous = reading;
+    }
+    if (attempt === maxIntervals) break;
+    const gap = deadline - now();
+    if (gap <= 0) break;
+    await sleep(Math.min(probeMs, gap));
+  }
+  return { stopped: false, spend: latest, failures };
 }
 
 export function watchSpend(leader, before, maxCost, abort, pollMs = COST_POLL_MS) {
@@ -639,6 +684,8 @@ export async function runTask({
   maxCost = 0,
   costPollMs = COST_POLL_MS,
   busyProbeMs = BUSY_PROBE_MS,
+  stopProbeIntervals = STOP_PROBE_INTERVALS,
+  stopProbeBudgetMs = STOP_PROBE_BUDGET_MS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   condition = null,
 }) {
@@ -674,8 +721,30 @@ export async function runTask({
     await watcher?.stop();
     const shots = await shooter.stop();
     if (reply.leaderDown) throw failure('slicc prompt', reply);
+    const interrupted = Boolean(reply.timedOut || reply.aborted || reply.status === 130);
 
-    if (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep })) {
+    let after = null;
+    if (interrupted) {
+      const quiet = await awaitQuiescent(leader, {
+        probeMs: busyProbeMs,
+        sleep,
+        maxIntervals: stopProbeIntervals,
+        budgetMs: stopProbeBudgetMs,
+        now,
+      });
+      if (!quiet.stopped) {
+        const err = new Error(
+          quiet.failures > 0 && !quiet.spend
+            ? `slicc prompt was interrupted after ${Math.round(durationMs / 1000)} s and the leader stopped answering cost`
+            : `slicc prompt was interrupted after ${Math.round(durationMs / 1000)} s but the agent kept working (its spend kept rising)`
+        );
+        err.stillWorking = true;
+
+        err.leaderDown = true;
+        throw err;
+      }
+      after = quiet.spend;
+    } else if (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep })) {
       const err = new Error(
         `slicc prompt returned after ${Math.round(durationMs / 1000)} s while the agent was still working (its spend kept rising)`
       );
@@ -686,10 +755,25 @@ export async function runTask({
 
     await closeTabs(leader).catch(() => {});
 
-    const after = await spend(leader);
+    if (!after) after = await spend(leader);
     const { doc: transcript, info: transcriptExport } = await exportTranscript(leader, dir, {
       now,
     });
+
+    if (!transcriptExport.ok && transcriptExport.reason === 'timeout') {
+      const tail = await awaitQuiescent(leader, {
+        probeMs: busyProbeMs,
+        sleep,
+        maxIntervals: 1,
+      });
+      if (!tail.stopped) {
+        const err = new Error(
+          'session export timed out while the agent was still working (its spend kept rising)'
+        );
+        err.stillWorking = true;
+        throw err;
+      }
+    }
     const { taken, images } = await readShots(leader, shots);
     health.after = await leaderHealth(leader, now);
     const done = now();

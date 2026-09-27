@@ -285,18 +285,24 @@ describe('AlmostBashShellHeadless playwright command discoverability', () => {
   it('accepts an external AbortSignal when executing commands programmatically', async () => {
     const shell = new AlmostBashShellHeadless({ fs });
     const controller = new AbortController();
-    const execSpy = vi.spyOn((shell as any).bash, 'exec');
+    const bash = (shell as unknown as { bash: { exec: (...args: unknown[]) => Promise<unknown> } })
+      .bash;
+    const original = bash.exec.bind(bash);
+    const execSpy = vi.spyOn(bash, 'exec').mockImplementation(async (command, opts) => {
+      const result = await original(command, opts);
+      const signal = (opts as { signal?: AbortSignal }).signal;
+
+      expect(signal?.aborted).toBe(false);
+      controller.abort();
+      expect(signal?.aborted).toBe(true);
+      return result;
+    });
 
     const result = await shell.executeCommand('pwd', controller.signal);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('/');
-    expect(execSpy).toHaveBeenCalledWith(
-      'pwd',
-      expect.objectContaining({
-        signal: controller.signal,
-      })
-    );
+    expect(execSpy).toHaveBeenCalled();
   });
 
   it('shares BSH discovery through the shell-owned script catalog', async () => {

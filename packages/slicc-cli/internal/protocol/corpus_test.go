@@ -74,6 +74,8 @@ func target(typ string) any {
 		return &ModelState{}
 	case TypeUserMessageAck:
 		return &UserMessageAck{}
+	case TypeAbortAck:
+		return &AbortAck{}
 	default:
 		return nil
 	}

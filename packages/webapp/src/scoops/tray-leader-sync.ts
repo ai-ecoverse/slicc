@@ -30,6 +30,7 @@ import type {
 } from '../sudo/types.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
+import type { FollowerAbortOutcome } from './follower-abort.js';
 import type { LickEvent } from './lick-manager.js';
 import { BiscottoReview } from './tray-leader/biscotto-review.js';
 import { BroadcastManager } from './tray-leader/broadcast.js';
@@ -134,7 +135,7 @@ export interface LeaderSyncManagerOptions {
     }
   ) => void | Promise<FollowerMessageOutcome>;
 
-  onFollowerAbort: (targetScoopJid?: string) => void;
+  onFollowerAbort: (targetScoopJid?: string) => void | Promise<FollowerAbortOutcome | void>;
 
   onFollowerNewSession?: (action: 'save' | 'skip' | 'erase', bootstrapId: string) => void;
 

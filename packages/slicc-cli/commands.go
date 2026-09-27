@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/computer"
@@ -54,6 +55,22 @@ func promptSettleWindow() time.Duration {
 		}
 	}
 	return promptSettleGrace
+}
+
+
+
+
+
+
+const abortConfirmBoundDefault = 12 * time.Second
+
+func abortConfirmBound() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("SLICC_ABORT_CONFIRM")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return abortConfirmBoundDefault
 }
 
 
@@ -490,7 +507,20 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		default:
 		}
 	}
+	
+	
+	
+	
+	var stopping atomic.Bool
+	acked := make(chan struct{}, 1)
 	handler := func(typ string, raw []byte) {
+		if typ == protocol.TypeAbortAck && stopping.Load() {
+			select {
+			case acked <- struct{}{}:
+			default:
+			}
+			return
+		}
 		if code, done := turn.ingest(messageID, typ, raw, time.Now()); done {
 			finish(code)
 			return
@@ -518,24 +548,77 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	}
 	defer conn.Close()
 
+	return waitPromptTurn(ctx, conn, turn, done, kick, acked, &stopping)
+}
+
+
+
+
+func waitPromptTurn(
+	ctx context.Context,
+	conn *tray.Conn,
+	turn *promptTurn,
+	done <-chan int,
+	kick <-chan struct{},
+	acked <-chan struct{},
+	stopping *atomic.Bool,
+) int {
 	grace := promptSettleWindow()
 	settle := time.NewTimer(time.Hour)
 	settle.Stop()
 	defer settle.Stop()
+	
+	
+	confirmTimer := time.NewTimer(time.Hour)
+	confirmTimer.Stop()
+	defer confirmTimer.Stop()
+	confirm := confirmTimer.C
+	
+	
+	select {
+	case <-confirm:
+	default:
+	}
+	confirm = nil
+	interrupt := ctx.Done()
 	for {
 		select {
 		case code := <-done:
+			if stopping.Load() {
+				continue
+			}
 			fmt.Println()
 			return code
 		case <-conn.Done():
+			if stopping.Load() {
+				errLine("prompt", "the leader did not confirm the turn stopped")
+				return 1
+			}
 			errLineAfterStream("connection closed before the turn completed")
 			return 1
-		case <-ctx.Done():
+		case <-interrupt:
 			
-			_ = conn.SendJSON(protocol.Abort{Type: "abort"})
+			
+			
+			interrupt = nil
+			stopping.Store(true)
+			if err := conn.SendJSON(protocol.Abort{Type: "abort"}); err != nil {
+				errLine("prompt", "could not tell the leader to stop: %s", err)
+				return 1
+			}
+			confirmTimer.Reset(abortConfirmBound())
+			confirm = confirmTimer.C
+		case <-acked:
+			fmt.Println()
 			return 130
+		case <-confirm:
+			errLine("prompt", "the leader did not confirm the turn stopped")
+			return 1
 		case <-kick:
 		case <-settle.C:
+		}
+		if stopping.Load() {
+			continue
 		}
 		if ok, wait := turn.settled(time.Now(), grace); ok {
 			fmt.Println()

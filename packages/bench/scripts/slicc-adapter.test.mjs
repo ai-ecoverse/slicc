@@ -1071,6 +1071,8 @@ describe('runTask', () => {
       model: 'm',
       timeoutSeconds: 30,
       capture: { pollMs: 5 },
+      busyProbeMs: 1,
+      sleep: async () => {},
     });
     expect(result).toMatchObject({ exitCode: 130, timedOut: true, finalText: 'partial' });
     expect(calls.find((c) => c.kind === 'cli' && c.args[0] === 'prompt').opts.timeoutMs).toBe(
@@ -1169,6 +1171,8 @@ describe('cost cap', () => {
       maxCost: 2,
       costPollMs: 5,
       capture: { pollMs: 5 },
+      sleep: async () => {},
+      busyProbeMs: 1,
     });
     expect(result).toMatchObject({ costCapped: true, timedOut: false, exitCode: 130 });
     const trace = traceFromResult(result);
@@ -1240,6 +1244,130 @@ describe('a prompt that returns while the agent still works', () => {
     expect(err.stillWorking).toBe(true);
     expect(sleep).toHaveBeenCalledWith(7);
     expect(calls.some((c) => /session export/.test(c.command ?? ''))).toBe(false);
+  });
+
+  it('keeps the spend from after an interrupt once the agent has stopped', async () => {
+    const readings = [costOf(1, 10, 1), costOf(10, 100, 4), costOf(14, 140, 8), costOf(14, 140, 8)];
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: { stdout: '', stderr: '', status: 130, timedOut: true },
+      },
+      commands: [[/^cost --json --all$/, () => readings.shift() ?? costOf(14, 140, 8)]],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'ri',
+      model: 'm',
+      busyProbeMs: 5,
+      stopProbeIntervals: 5,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    });
+    expect(result.costUsd).toBeCloseTo(13);
+    expect(result.tokens).toBe(130);
+    expect(result.turns).toBe(7);
+    const exportAt = calls.findIndex((c) => /session export/.test(c.command ?? ''));
+    const costsBeforeExport = calls
+      .slice(0, exportAt)
+      .filter((c) => /cost --json --all/.test(c.command ?? '')).length;
+
+    expect(costsBeforeExport).toBeGreaterThanOrEqual(4);
+    expect(calls.slice(0, exportAt).some((c) => /tab-close/.test(c.command ?? ''))).toBe(false);
+  });
+
+  it('does not collect a transcript when an interrupt leaves the agent working', async () => {
+    let total = 1;
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: { stdout: '', stderr: '', status: 130, timedOut: false, aborted: true },
+      },
+      commands: [[/^cost --json --all$/, () => costOf((total += 1), total, total)]],
+    });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'rb',
+      model: 'm',
+      busyProbeMs: 5,
+      stopProbeIntervals: 3,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.stillWorking).toBe(true);
+    expect(err.message).toMatch(/interrupted/);
+    expect(calls.some((c) => /session export/.test(c.command ?? ''))).toBe(false);
+    expect(calls.some((c) => /tab-close/.test(c.command ?? ''))).toBe(false);
+    expect(err.leaderDown).toBe(true);
+  });
+
+  it('gives up when cost keeps failing after an interrupt and marks the leader down', async () => {
+    const timeouts = [];
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: { stdout: '', stderr: '', status: 130, timedOut: true },
+      },
+      commands: [
+        [
+          /^cost --json --all$/,
+          (_command, opts) => {
+            timeouts.push(opts?.timeoutMs);
+            return { stdout: '', stderr: 'timed out', status: 1, timedOut: true };
+          },
+        ],
+      ],
+    });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'rf',
+      model: 'm',
+      busyProbeMs: 5,
+      stopProbeIntervals: 2,
+      stopProbeBudgetMs: 60_000,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.leaderDown).toBe(true);
+    expect(err.stillWorking).toBe(true);
+    expect(err.message).toMatch(/stopped answering cost/);
+    expect(calls.some((c) => /session export/.test(c.command ?? ''))).toBe(false);
+
+    expect(timeouts.filter((ms) => ms === 15_000).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does not score a transcript lost while the agent is still busy', async () => {
+    let n = 0;
+    const { leader } = fakeLeader({
+      verbs: { model: ok('m\n'), prompt: ok('FINAL ANSWER: done') },
+      commands: [
+        [
+          /^cost --json --all$/,
+          () => {
+            n += 1;
+            return costOf(n, n, n);
+          },
+        ],
+        [/^session export/, () => ({ stdout: '', stderr: 'timed out', status: 1, timedOut: true })],
+      ],
+    });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'rx',
+      model: 'm',
+      busyProbeMs: 5,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.stillWorking).toBe(true);
+    expect(err.message).toMatch(/session export timed out/);
   });
 
   it('collects as usual when spend has stopped', async () => {

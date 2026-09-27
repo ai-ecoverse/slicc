@@ -160,6 +160,7 @@ export type LeaderToFollowerMessage =
       state: 'accepted' | 'rejected';
       error?: string;
     }
+  | { type: 'abort_ack'; scoopJid: string; stopped: string[] }
   | { type: 'status'; scoopStatus: string; scoopJid: string }
   | { type: 'error'; error: string }
   | { type: 'scoops.list'; scoops: ScoopSummary[]; activeScoopJid: string }

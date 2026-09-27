@@ -176,6 +176,11 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     ios: 'decoded',
     message: { type: 'user_message_ack', messageId: 'm3', scoopJid: 'cone', state: 'accepted' },
   },
+
+  abort_ack: {
+    ios: 'unknown',
+    message: { type: 'abort_ack', scoopJid: 'cone', stopped: ['scoop_1', 'cone'] },
+  },
   status: {
     ios: 'decoded',
     message: { type: 'status', scoopStatus: 'processing', scoopJid: 'cone' },

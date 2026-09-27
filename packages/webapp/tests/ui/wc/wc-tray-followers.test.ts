@@ -556,6 +556,7 @@ describe('WC tray follower message routing (#2382)', () => {
         selectedScoopJid: leaderSelectedJid,
         getScoops: () => [],
         getMessagesForScoop: () => [],
+        isProcessing: () => false,
       },
       workUnits: {
         send: (id: string, input: { text: string; messageId?: string }) => {
@@ -566,6 +567,10 @@ describe('WC tray follower message routing (#2382)', () => {
           stops.push(id);
           return Promise.resolve();
         },
+        currentUnits: () => [
+          { id: 'cone_a', parentId: null },
+          { id: 'cone_b', parentId: null },
+        ],
         subscribeList: () => () => undefined,
       },
       agentHandle: { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() },
@@ -663,8 +668,7 @@ describe('WC tray follower message routing (#2382)', () => {
   it('aborts the unit the follower is reading, not the one on screen', async () => {
     const { options, stops } = makeLeaderOptions('cone_a');
 
-    options.onFollowerAbort('cone_b');
-    await Promise.resolve();
+    await options.onFollowerAbort('cone_b');
 
     expect(stops).toEqual(['cone_b']);
   });

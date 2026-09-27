@@ -9,6 +9,7 @@ import { FollowerRegistry } from '../../../src/scoops/tray-leader/follower-regis
 import type { TrayDataChannelLike } from '../../../src/scoops/tray-webrtc.js';
 
 const EXPECTED_RECEIVABLE = [
+  'abort_ack',
   'agent_event',
   'biscotto.message.state',
   'error',

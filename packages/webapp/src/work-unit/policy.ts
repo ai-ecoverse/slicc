@@ -189,6 +189,20 @@ export function childrenOf<T extends Pick<RegisteredScoop, 'parentJid'>>(
   return out;
 }
 
+export function stopOrder<T extends Pick<RegisteredScoop, 'jid' | 'parentJid'>>(
+  units: Iterable<T>,
+  root: WorkUnitId
+): string[] {
+  const roster = [...units];
+  const ids: string[] = [];
+  const visit = (id: WorkUnitId): void => {
+    for (const child of childrenOf(roster, id)) visit(child.jid);
+    ids.push(id);
+  };
+  visit(root);
+  return ids;
+}
+
 export function subtreeOf<T extends Pick<RegisteredScoop, 'jid' | 'parentJid'>>(
   units: readonly T[],
   rootId: WorkUnitId

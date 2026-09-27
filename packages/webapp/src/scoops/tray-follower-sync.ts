@@ -506,6 +506,8 @@ export class FollowerSyncManager implements AgentHandle {
       case 'biscotto.message.state':
         this.handleBiscottoMessageState(message.messageId, message.state);
         break;
+      case 'abort_ack':
+        break;
       case 'exec.request':
       case 'exec.chunk':
       case 'exec.response':

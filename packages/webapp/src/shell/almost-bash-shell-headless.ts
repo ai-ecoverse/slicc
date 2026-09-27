@@ -226,6 +226,25 @@ function stripRunPid(env: Record<string, string>): Record<string, string> {
   return rest;
 }
 
+function linkAbort(cuts: Array<AbortSignal | undefined>): {
+  signal: AbortSignal;
+  release(): void;
+} {
+  const linked = new AbortController();
+  const live = cuts.filter((cut): cut is AbortSignal => cut !== undefined);
+  const onCut = (): void => linked.abort();
+  for (const cut of live) {
+    if (cut.aborted) linked.abort();
+    else cut.addEventListener('abort', onCut, { once: true });
+  }
+  return {
+    signal: linked.signal,
+    release() {
+      for (const cut of live) cut.removeEventListener('abort', onCut);
+    },
+  };
+}
+
 export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected bash: Bash;
   protected vfsAdapter: VfsAdapter;
@@ -268,6 +287,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   private readonly progress: ProgressEmitter;
 
   private activeRunSignal: AbortSignal | undefined;
+
+  private commandAbort = new AbortController();
 
   private scriptRun: ScriptRun | null = null;
   private scriptRunsActive = 0;
@@ -529,6 +550,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return this.jshSyncInflight;
   }
 
+  cancelActiveCommand(): void {
+    this.commandAbort.abort();
+    this.commandAbort = new AbortController();
+  }
+
   async executeCommand(
     command: string,
     signal?: AbortSignal,
@@ -693,7 +719,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         : {}),
     };
     const pathBeforeExec = this.lastEnv.PATH;
-    this.activeRunSignal = signal;
+    const linked = linkAbort([signal, this.commandAbort.signal]);
+    execOptions.signal = linked.signal;
+    this.activeRunSignal = linked.signal;
     const scriptRun = this.beginScriptRun(command);
     let result: BashExecResult & { pipeStatus?: number[] };
     try {
@@ -702,7 +730,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         execOptions
       );
     } finally {
-      if (this.activeRunSignal === signal) this.activeRunSignal = undefined;
+      linked.release();
+      if (this.activeRunSignal === linked.signal) this.activeRunSignal = undefined;
       this.endScriptRun(scriptRun);
     }
 

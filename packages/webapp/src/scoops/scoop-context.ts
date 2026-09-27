@@ -72,6 +72,8 @@ export {
 export { buildScoopShellEnv, ownLickTargetFor } from './scoop-context/shell-env.js';
 export { resolveThinkingLevel } from './scoop-context/thinking-level.js';
 
+export const STOP_FORCE_RELEASE_MS = 2_000;
+
 export interface ClearSessionOptions {
   discardLiveSnapshot?: boolean;
 }
@@ -90,6 +92,8 @@ export class ScoopContext {
   private unsubscribe: (() => void) | null = null;
 
   private promptAbortController: AbortController | null = null;
+
+  private forceReleaseTimer: ReturnType<typeof setTimeout> | null = null;
 
   private turnEpoch = 0;
 
@@ -357,6 +361,7 @@ export class ScoopContext {
     if (lastError || abortSignal.aborted) {
       this.sessions.persistNow();
     }
+    this.disarmForceRelease();
     this.isProcessing = false;
 
     this.turnJournal?.end(this.scoop.jid);
@@ -513,9 +518,34 @@ export class ScoopContext {
     this.agent?.abort?.();
 
     this.idleCompaction?.cancel();
-    this.isProcessing = false;
 
-    if (this.status !== 'error') this.setStatus('ready');
+    this.armForceRelease();
+  }
+
+  private disarmForceRelease(): void {
+    if (this.forceReleaseTimer === null) return;
+    clearTimeout(this.forceReleaseTimer);
+    this.forceReleaseTimer = null;
+  }
+
+  private armForceRelease(): void {
+    this.disarmForceRelease();
+    const epoch = this.turnEpoch;
+    const proc = this.currentTurnProcess;
+    this.forceReleaseTimer = setTimeout(() => {
+      this.forceReleaseTimer = null;
+      if (this.disposed || this.turnEpoch !== epoch || !this.isProcessing) return;
+      if (proc && this.processManager) {
+        this.processManager.signal(proc.pid, 'SIGKILL');
+        this.processManager.exit(proc.pid, null);
+      }
+      this.bashJobs.reapAll();
+      this.shell?.cancelActiveCommand();
+      this.agent?.abort?.();
+      if (this.turnEpoch !== epoch || !this.isProcessing) return;
+      this.isProcessing = false;
+      if (this.status === 'processing') this.setStatus('ready');
+    }, STOP_FORCE_RELEASE_MS);
   }
 
   clearMessages(): void {
@@ -693,6 +723,7 @@ export class ScoopContext {
 
     this.turnJournal?.end(this.scoop.jid);
     this.disposed = true;
+    this.disarmForceRelease();
     this.idleCompaction?.cancel();
 
     this.runBounds.disarm();

@@ -7,6 +7,7 @@ import {
   connectionLost,
   createLeader,
   DEFAULT_CALL_TIMEOUT_MS,
+  KILL_GRACE_MS,
   runProcess,
   unreachable,
 } from './executors.mjs';
@@ -170,6 +171,10 @@ function fakeCli(script) {
 }
 
 describe('runProcess', () => {
+  it('leaves the CLI long enough to hear whether the leader stopped the turn', () => {
+    expect(KILL_GRACE_MS).toBeGreaterThanOrEqual(15_000);
+  });
+
   it('survives a CLI that exits without reading its stdin', async () => {
     const cli = fakeCli('echo early; exit 1');
     const r = await runProcess(cli, [], { stdin: 'x'.repeat(4 * 1024 * 1024) });

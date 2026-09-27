@@ -47,7 +47,7 @@ import {
 } from '../work-unit/descriptor.js';
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
-import { capableApproverOf, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
+import { capableApproverOf, rootOwnerOf, rootsOf, stopOrder } from '../work-unit/policy.js';
 import {
   legacyRecordIsCone,
   modelFor,
@@ -1103,7 +1103,15 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   stopScoop(jid: string): void {
-    this.lifecycle.getContext(jid)?.stop();
+    for (const id of stopOrder(this.scoops.values(), jid)) {
+      this.lifecycle.getContext(id)?.stop();
+      void this.clearQueuedMessages(id).catch((err) => {
+        log.warn('Failed to clear queued messages on stop', {
+          jid: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   }
 
   getSessionCosts(

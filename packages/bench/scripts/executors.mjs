@@ -22,7 +22,7 @@ export function connectionLost(status, stderr) {
   return status !== 0 && CONNECTION_LOST_RE.test(String(stderr));
 }
 
-const KILL_GRACE_MS = 10_000;
+export const KILL_GRACE_MS = 20_000;
 
 export const DEFAULT_CALL_TIMEOUT_MS = 180_000;
 

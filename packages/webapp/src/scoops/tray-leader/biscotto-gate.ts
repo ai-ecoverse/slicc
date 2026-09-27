@@ -122,6 +122,8 @@ export const BISCOTTO_RECEIVABLE: Record<LeaderToFollowerMessage['type'], boolea
   user_message_echo: true,
 
   user_message_ack: true,
+
+  abort_ack: true,
   status: true,
   error: true,
   'biscotto.message.state': true,

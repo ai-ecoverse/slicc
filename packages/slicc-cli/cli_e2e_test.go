@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -293,6 +294,125 @@ func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "PROMPT-E2E-OK") {
 		t.Fatalf("prompt stdout = %q, want to contain PROMPT-E2E-OK", stdout.String())
+	}
+}
+
+
+
+
+
+func holdPrompt(t *testing.T, confirm string, ackAfter time.Duration) (cmd *exec.Cmd, stderr *bytes.Buffer, acked <-chan time.Time) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGINT delivery is not the Unix path under test")
+	}
+	bin := sliccBinary(t)
+	leader := newBridgedLeader(t)
+	started := make(chan struct{})
+	var once sync.Once
+	ackCh := make(chan time.Time, 1)
+	acked = ackCh
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var env protocol.Envelope
+		if json.Unmarshal(msg.Data, &env) != nil {
+			return
+		}
+		switch env.Type {
+		case "user_message":
+			_ = sendJSON(leader.dc, protocol.Status{Type: protocol.TypeStatus, ScoopStatus: "processing"})
+			_ = sendJSON(leader.dc, protocol.AgentEventEnvelope{
+				Type: protocol.TypeAgentEvent,
+				Event: protocol.AgentEvent{
+					Type: protocol.AgentContentDelta, MessageID: "m1", Text: "HOLD",
+				},
+			})
+			once.Do(func() { close(started) })
+		case "abort":
+			if ackAfter <= 0 {
+				return
+			}
+			time.Sleep(ackAfter)
+			ackCh <- time.Now()
+			_ = sendJSON(leader.dc, protocol.AbortAck{
+				Type: protocol.TypeAbortAck, ScoopJid: "cone", Stopped: []string{"cone"},
+			})
+		}
+	})
+	cmd = exec.Command(bin, leader.joinURL, "prompt", "hi there")
+	cmd.Env = append(os.Environ(), "SLICC_ABORT_CONFIRM="+confirm, "SLICC_PROMPT_SETTLE=30s")
+	stderr = &bytes.Buffer{}
+	cmd.Stdout = &bytes.Buffer{}
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start prompt: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+	select {
+	case <-started:
+	case <-time.After(20 * time.Second):
+		t.Fatal("prompt never reached the leader")
+	}
+	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("signal: %v", err)
+	}
+	return cmd, stderr, acked
+}
+
+func waitCmd(t *testing.T, cmd *exec.Cmd, bound time.Duration) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(bound):
+		_ = cmd.Process.Kill()
+		t.Fatalf("prompt did not exit within %s", bound)
+		return nil
+	}
+}
+
+
+
+
+func TestCLIPromptInterruptWaitsForAbortAck(t *testing.T) {
+	cmd, stderr, acked := holdPrompt(t, "3s", 400*time.Millisecond)
+	err := waitCmd(t, cmd, 8*time.Second)
+	exited := time.Now()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 130 {
+		t.Fatalf("exit %v, want 130; stderr:\n%s", err, stderr.String())
+	}
+	select {
+	case at := <-acked:
+		if exited.Before(at) {
+			t.Fatalf("exited at %s, ack sent at %s — prompt left before the leader confirmed", exited, at)
+		}
+	default:
+		t.Fatal("leader never sent abort_ack")
+	}
+}
+
+
+
+
+func TestCLIPromptInterruptReportsUnconfirmedStop(t *testing.T) {
+	cmd, stderr, _ := holdPrompt(t, "400ms", 0)
+	started := time.Now()
+	err := waitCmd(t, cmd, 5*time.Second)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("exit %v, want 1; stderr:\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "the leader did not confirm the turn stopped") {
+		t.Fatalf("stderr = %q, want the unconfirmed-stop line", stderr.String())
+	}
+	if time.Since(started) < 300*time.Millisecond {
+		t.Fatal("exited before the confirm bound")
 	}
 }
 

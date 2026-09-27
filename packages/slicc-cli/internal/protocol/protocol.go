@@ -130,6 +130,15 @@ type Abort struct {
 }
 
 
+
+
+type AbortAck struct {
+	Type     string   `json:"type"` 
+	ScoopJid string   `json:"scoopJid"`
+	Stopped  []string `json:"stopped"`
+}
+
+
 type Ping struct {
 	Type string `json:"type"` 
 }
@@ -294,6 +303,7 @@ const (
 	TypeAgentEvent      = "agent_event"
 	TypeUserMessageEcho = "user_message_echo"
 	TypeUserMessageAck  = "user_message_ack"
+	TypeAbortAck        = "abort_ack"
 	TypeStatus          = "status"
 	TypeNewSession      = "new_session"
 	TypeRequestSnapshot = "request_snapshot"
