@@ -170,11 +170,21 @@ export function createLock() {
   };
 }
 
-/** A lane's own leader home and port, so the leaders on one runner do not collide. */
+/**
+ * A lane's own leader home, port, and join file, so the leaders on one runner
+ * do not collide. `SLICC_GW_JOIN_FILE` is this lane's file even when the parent
+ * environment names another path: start-leader polls it and passes it to
+ * node-server as `SLICC_JOIN_FILE`.
+ */
 export function laneEnv(i, env = process.env) {
   const base = env.SLICC_GW_HOME || join(env.RUNNER_TEMP || tmpdir(), 'slicc-gw');
+  const home = `${base}-lane${i}`;
   const port = (Number.parseInt(env.BENCH_LEADER_BASE_PORT, 10) || 5710) + i;
-  return { SLICC_GW_HOME: `${base}-lane${i}`, INPUT_PORT: String(port) };
+  return {
+    SLICC_GW_HOME: home,
+    INPUT_PORT: String(port),
+    SLICC_GW_JOIN_FILE: join(home, 'join.json'),
+  };
 }
 
 /** Stop the leader a lane env points at, with the stop-leader script. */
@@ -212,9 +222,9 @@ export async function bootLane(
   const home = laneVars.SLICC_GW_HOME;
   const readLane = read ?? (() => readState(home));
   const recycleOnce = createRecycler({ scriptsDir, env: laneVars, run, read: readLane });
-  // Every node-server writes its join URL to the same /tmp/slicc-join.json, so a leader that
-  // re-posts its status while this lane boots can hand this lane its URL. Two lanes on one
-  // leader would share a cone: restart until the URL is this lane's own.
+  // Each lane polls its own `<home>/join.json`. A URL another lane already holds means this
+  // file was crossed with that lane. Restart until the URL is this lane's own. With separate
+  // files that collision should not happen; the check stays as a safety net.
   const recycle = () =>
     lock(async () => {
       for (let attempt = 1; ; attempt += 1) {

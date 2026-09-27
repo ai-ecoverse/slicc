@@ -36,8 +36,26 @@ export const PRODUCTION_TRAY_ORIGIN = 'https://www.sliccy.ai';
  */
 export const PINNED_UI_PORT_OFFSET = 1000;
 
-/** Hard-coded by node-server's hosted mode (`cloud-status.ts`). */
+/**
+ * node-server's join file when `SLICC_JOIN_FILE` is unset (`cloud-status.ts`).
+ * e2b polls this path inside one sandbox. A published runner package still
+ * writes only this path. A build that honors `SLICC_JOIN_FILE` writes the
+ * per-leader file instead (`gh-io.mjs` `joinFilePath`).
+ */
 export const JOIN_FILE_PATH = '/tmp/slicc-join.json';
+
+/** Env var a node-server build must mention before start-leader trusts a per-leader join file. */
+export const JOIN_FILE_ENV = 'SLICC_JOIN_FILE';
+
+/**
+ * True when this source mentions {@link JOIN_FILE_ENV}. A version compare
+ * cannot separate this branch from the published package that shares its
+ * version and still writes only {@link JOIN_FILE_PATH}.
+ * @param {string | null | undefined} text
+ */
+export function sourceHonorsJoinFile(text) {
+  return typeof text === 'string' && text.includes(JOIN_FILE_ENV);
+}
 
 /** Hard-coded by node-server's hosted bootstrap (`hosted-bootstrap.ts`). */
 export const CONE_CONFIG_PATH = '/slicc/cone-config.json';
@@ -193,6 +211,7 @@ export function buildLeaderArgs(options = {}) {
  *   trayWorkerBaseUrl?: string;
  *   bridgeDevAllowedOrigins?: string;
  *   cdpLaunchTimeoutMs?: number;
+ *   joinFile?: string;
  * }} options
  * @returns {Record<string, string>}
  */
@@ -208,6 +227,11 @@ export function buildLeaderEnv(options) {
   env.SLICC_SECRETS_FILE = options.secretsFile;
   env.CHROME_USER_DATA_DIR = options.profileDir;
   env.SLICC_CDP_LAUNCH_TIMEOUT_MS = String(options.cdpLaunchTimeoutMs ?? 60_000);
+  // One file per leader. Drop a path inherited from the parent so a second
+  // leader on this host cannot be told to write the first leader's file.
+  const joinFile = options.joinFile?.trim();
+  if (joinFile) env[JOIN_FILE_ENV] = joinFile;
+  else delete env[JOIN_FILE_ENV];
   if (options.uiOrigin) env.WORKER_BASE_URL = options.uiOrigin.replace(/\/+$/, '');
   else delete env.WORKER_BASE_URL;
   if (options.trayWorkerBaseUrl) {

@@ -28,6 +28,7 @@ import {
   isMain,
   joinFilePath,
   joinUrl,
+  legacyJoinFilePath,
   logTail,
   notice,
   readState,
@@ -163,11 +164,20 @@ describe('gh-io process + leader helpers', () => {
     expect(isMain('file:///nowhere.mjs')).toBe(false);
   });
 
-  it('path seams fall back to the node-server constants', () => {
+  it('path seams fall back to a per-home join file and the cone-config constant', () => {
+    process.env.SLICC_GW_JOIN_FILE = '/custom/join.json';
+    expect(joinFilePath('/other')).toBe('/custom/join.json');
+    process.env.SLICC_GW_JOIN_FILE = '   ';
+    expect(joinFilePath('/leaders/lane1')).toBe('/leaders/lane1/join.json');
     delete process.env.SLICC_GW_JOIN_FILE;
     delete process.env.SLICC_GW_CONE_CONFIG_PATH;
-    expect(joinFilePath()).toBe('/tmp/slicc-join.json');
+    expect(joinFilePath()).toBe(join(process.env.SLICC_GW_HOME, 'join.json'));
+    expect(joinFilePath('/leaders/lane1')).toBe('/leaders/lane1/join.json');
     expect(coneConfigPath()).toBe('/slicc/cone-config.json');
+    process.env.SLICC_GW_LEGACY_JOIN_FILE = '/leaders/legacy.json';
+    expect(legacyJoinFilePath()).toBe('/leaders/legacy.json');
+    process.env.SLICC_GW_LEGACY_JOIN_FILE = '   ';
+    expect(legacyJoinFilePath()).toBe('/tmp/slicc-join.json');
   });
 
   it('terminate escalates from SIGTERM to SIGKILL and tolerates gone pids', async () => {

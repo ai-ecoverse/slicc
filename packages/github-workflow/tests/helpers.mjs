@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 export const FAKE_SLICC = resolve(here, 'fixtures', 'fake-slicc.mjs');
 export const FAKE_NODE_SERVER = resolve(here, 'fixtures', 'fake-node-server.mjs');
+export const FAKE_LEGACY_NODE_SERVER = resolve(here, 'fixtures', 'fake-legacy-node-server.mjs');
 
 export function setup() {
   const saved = { ...process.env };

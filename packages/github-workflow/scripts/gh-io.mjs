@@ -30,9 +30,24 @@ export function isMain(metaUrl) {
   return Boolean(entry) && metaUrl === pathToFileURL(entry).href;
 }
 
-/** `/tmp/slicc-join.json` unless overridden (test seam — node-server itself always writes the default). */
-export function joinFilePath() {
-  return process.env.SLICC_GW_JOIN_FILE?.trim() || JOIN_FILE_PATH;
+/**
+ * Join file this leader polls and passes to node-server as `SLICC_JOIN_FILE`.
+ * `SLICC_GW_JOIN_FILE` overrides; otherwise `<home>/join.json`, so two leaders
+ * on one host do not share a file. node-server still defaults to
+ * `/tmp/slicc-join.json` when `SLICC_JOIN_FILE` is unset (one e2b sandbox).
+ */
+export function joinFilePath(home = homeDir()) {
+  const override = process.env.SLICC_GW_JOIN_FILE?.trim();
+  if (override) return override;
+  return join(home, 'join.json');
+}
+
+/**
+ * Join file a published node-server writes. `SLICC_GW_LEGACY_JOIN_FILE` is the
+ * test seam; production stays {@link JOIN_FILE_PATH}.
+ */
+export function legacyJoinFilePath() {
+  return process.env.SLICC_GW_LEGACY_JOIN_FILE?.trim() || JOIN_FILE_PATH;
 }
 
 /** `/slicc/cone-config.json` unless overridden (test seam — node-server itself always reads the default). */

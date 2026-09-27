@@ -68,7 +68,7 @@ import { runPause } from './cloud/pause.js';
 import { FileRegistry } from './cloud/registry-file.js';
 import { runResume } from './cloud/resume.js';
 import { runStart } from './cloud/start.js';
-import { registerCloudStatusEndpoint } from './cloud-status.js';
+import { registerCloudStatusEndpoint, resolveJoinFilePath } from './cloud-status.js';
 import {
   ComputerDemoState,
   createComputerDemoFrameServer,
@@ -1527,12 +1527,12 @@ async function main() {
   // plus the S3 / DA sign-and-forward and masked-secret endpoints.
   registerSecretRoutes(app, { secretStore, secretProxy, oauthStore, devMode: false });
 
-  // Cloud status endpoint (hosted-only) — writes join info to /tmp/slicc-join.json
+  // Cloud status (hosted-only). Writes SLICC_JOIN_FILE, else /tmp/slicc-join.json.
   // Register BEFORE Chromium launches. The webapp's first action after
   // ?runtime=hosted-leader boot is to mint a tray and POST /api/cloud-status.
   // If the route doesn't exist yet, the post 404s and the CLI poll times out.
   if (RUNTIME_FLAGS.hosted) {
-    registerCloudStatusEndpoint(app, { joinFilePath: '/tmp/slicc-join.json' });
+    registerCloudStatusEndpoint(app, { joinFilePath: resolveJoinFilePath() });
     registerHostedBootstrapEndpoint(app, { secretStore });
     registerSecretsReloadEndpoint(app, { secretProxy, secretStore, oauthStore });
   }
