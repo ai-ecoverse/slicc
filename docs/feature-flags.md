@@ -21,3 +21,16 @@ A flag parked on purpose gets `// unused-flag-ok: <reason>` (or `// unused-dep-o
 **Retire.** The owner is whoever last set that flag's default — the author of the graduation, or of the original PR if it never graduated. The trigger is either the dead-flag lint, or ninety days at a constant default on every float, which the same gate reports as `stale-flag`. Delete the id, the losing branch, wrangler keys, Cherry examples, and tests that existed only to toggle it. Do not leave an always-true `isFeatureEnabled` call behind.
 
 `experimental-settings` is a control flag for the dialog itself, not a feature in flight; it stays.
+
+## `no-default-skills`
+
+Off by default. While it is on, bundled skills are not written into `/workspace/skills`: not from unit init, not from a filesystem reset, and not from `upgrade apply`. Skills already on disk stay. `/shared`, `/etc`, and `/workspace/scripts` still seed. The cone's skill index is whatever `loadSkills` finds on disk.
+
+A person turns it with the shell, and the next `new-session` is the one that honors it:
+
+```bash
+flags set no-default-skills on
+flags get no-default-skills
+```
+
+The override is stored in the page's localStorage (`slicc_feature_flags`). From the kernel worker, `flags set` writes it through the page and mirrors it back, so the worker that seeds the next cone sees it immediately. The benchmark's `none` condition is this flag. See `packages/bench/CLAUDE.md`.

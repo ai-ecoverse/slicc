@@ -4,14 +4,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assertStagedSkills,
   buildPrompt,
   costTotals,
   decodeTranscriptPart,
+  expectedSkillNames,
   exportTranscript,
   exportTranscriptCommand,
   FINAL_INSTRUCTION,
+  FLAGS_PROBE,
   leaderHealth,
+  NO_DEFAULT_SKILLS_MISSING,
   parseExportListing,
+  parseSkillNames,
   parseSkillsCondition,
   parseTabList,
   quote,
@@ -19,6 +24,8 @@ import {
   restoreSkills,
   restoreSkillsCommand,
   runTask,
+  skillsFlagCommand,
+  skillsMismatch,
   spendDelta,
   stageSkills,
   stageSkillsCommand,
@@ -239,9 +246,18 @@ describe('skills conditions', () => {
     expect(cmd).toContain('if [ ! -d /workspace/.bench-skills-builtin ]');
     expect(cmd).toContain('cp -r /workspace/.bench-skills-builtin/. /workspace/skills/');
     expect(cmd).toContain('cp -r /workspace/bench-skills/ecoverse/. /workspace/skills/');
+    expect(skillsFlagCommand(parseSkillsCondition('none'))).toBe('flags set no-default-skills on');
+    expect(skillsFlagCommand(parseSkillsCondition('builtin'))).toBe(
+      'flags set no-default-skills off'
+    );
+    expect(skillsFlagCommand(parseSkillsCondition('none+ecoverse'))).toBe(
+      'flags set no-default-skills on'
+    );
+    expect(stageSkillsCommand(parseSkillsCondition('none'))).not.toContain('flags set');
     expect(stageSkillsCommand(parseSkillsCondition('none'))).not.toContain(
       'cp -r /workspace/.bench-skills-builtin/. /workspace/skills/'
     );
+    expect(restoreSkillsCommand()).not.toContain('flags set');
     expect(restoreSkillsCommand()).toContain(
       'cp -r /workspace/.bench-skills-builtin/. /workspace/skills/'
     );
@@ -253,12 +269,106 @@ describe('skills conditions', () => {
     });
     expect(await stageSkills(leader, parseSkillsCondition('builtin'))).toBe(29);
     await restoreSkills(leader);
-    const broken = fakeLeader({ commands: [[/./, fail('cp: no such file')]] });
+    const broken = fakeLeader({
+      commands: [
+        [/^command -v flags$/, ok()],
+        [/^flags set /, ok()],
+        [/./, fail('cp: no such file')],
+      ],
+    });
     await expect(stageSkills(broken.leader, parseSkillsCondition('none'))).rejects.toThrow(
       /exited 1: cp: no such file/
     );
     const odd = fakeLeader({ commands: [[/./, ok('n/a')]] });
     expect(await stageSkills(odd.leader, parseSkillsCondition('none'))).toBe(0);
+  });
+
+  it('skips a missing flags verb for builtin and refuses none', async () => {
+    const withoutFlags = (extra = []) =>
+      fakeLeader({
+        commands: [
+          [new RegExp(`^${FLAGS_PROBE}$`), fail('', 127)],
+          [/^flags /, fail('bash: flags: command not found', 127)],
+          ...extra,
+        ],
+      });
+
+    const builtin = withoutFlags([[/ls \/workspace\/skills \| wc -l$/, ok('29\n')]]);
+    expect(await stageSkills(builtin.leader, parseSkillsCondition('builtin'))).toBe(29);
+    expect(builtin.calls.map((c) => c.command)).toEqual([
+      FLAGS_PROBE,
+      stageSkillsCommand(parseSkillsCondition('builtin')),
+    ]);
+
+    await restoreSkills(builtin.leader);
+    expect(builtin.calls.map((c) => c.command).slice(-2)).toEqual([
+      restoreSkillsCommand(),
+      FLAGS_PROBE,
+    ]);
+
+    const none = withoutFlags();
+    await expect(stageSkills(none.leader, parseSkillsCondition('none'))).rejects.toThrow(
+      NO_DEFAULT_SKILLS_MISSING
+    );
+    await expect(stageSkills(none.leader, parseSkillsCondition('none+ecoverse'))).rejects.toThrow(
+      /pin-webapp/
+    );
+    expect(none.calls.map((c) => c.command)).toEqual([FLAGS_PROBE, FLAGS_PROBE]);
+
+    const setFails = fakeLeader({
+      commands: [
+        [new RegExp(`^${FLAGS_PROBE}$`), ok()],
+        [/^flags set /, fail('unknown flag', 2)],
+      ],
+    });
+    await expect(stageSkills(setFails.leader, parseSkillsCondition('builtin'))).rejects.toThrow(
+      /exited 2: unknown flag/
+    );
+  });
+
+  it('compares the directory after new-session with the condition', () => {
+    const none = parseSkillsCondition('none');
+    const builtin = parseSkillsCondition('builtin');
+    const mixed = parseSkillsCondition('none+ecoverse');
+    expect(parseSkillNames('playwright-cli\n\nwiki')).toEqual(['playwright-cli', 'wiki']);
+    expect(expectedSkillNames(none)).toEqual([]);
+    expect(expectedSkillNames(builtin, { builtin: ['wiki', 'playwright-cli'] })).toEqual([
+      'playwright-cli',
+      'wiki',
+    ]);
+    expect(expectedSkillNames(mixed, { builtin: ['wiki'], extras: [['ecoverse-skill']] })).toEqual([
+      'ecoverse-skill',
+    ]);
+    expect(skillsMismatch(none, [], [])).toBeNull();
+    expect(skillsMismatch(none, ['playwright-cli'], [])).toMatch(/re-seeded/);
+    expect(skillsMismatch(none, ['playwright-cli'], [])).toContain('(empty)');
+  });
+
+  it('fails the run when new-session left bundled skills in place', async () => {
+    const none = parseSkillsCondition('none');
+    const empty = fakeLeader({
+      commands: [[/ls '\/workspace\/skills'/, ok('')]],
+    });
+    await expect(assertStagedSkills(empty.leader, none)).resolves.toBeUndefined();
+
+    const reseeded = fakeLeader({
+      commands: [
+        [new RegExp(`^${FLAGS_PROBE}$`), fail('', 127)],
+        [/^flags /, fail('bash: flags: command not found', 127)],
+        [/ls '\/workspace\/skills'/, ok('playwright-cli\nwiki\n')],
+      ],
+    });
+    await expect(assertStagedSkills(reseeded.leader, none)).rejects.toThrow(/playwright-cli/);
+
+    const builtin = parseSkillsCondition('builtin+ecoverse');
+    const matched = fakeLeader({
+      commands: [
+        [/ls '\/workspace\/skills'/, ok('ecoverse-skill\nplaywright-cli\n')],
+        [/ls '\/workspace\/.bench-skills-builtin'/, ok('playwright-cli\n')],
+        [/ls '\/workspace\/bench-skills\/ecoverse'/, ok('ecoverse-skill\n')],
+      ],
+    });
+    await expect(assertStagedSkills(matched.leader, builtin)).resolves.toBeUndefined();
   });
 });
 
@@ -853,6 +963,23 @@ describe('runTask', () => {
     const exportAt = calls.findIndex((c) => c.command?.startsWith('session export'));
     expect(closeAt).toBeGreaterThan(promptAt);
     expect(closeAt).toBeLessThan(exportAt);
+  });
+
+  it('stops before the prompt when new-session re-seeded bundled skills', async () => {
+    const { leader } = fakeLeader({
+      verbs: { 'new-session': ok('new session (erase)') },
+      commands: [[/ls '\/workspace\/skills'/, ok('playwright-cli\n')]],
+    });
+    await expect(
+      runTask({
+        leader,
+        task: { task: 'x' },
+        runId: 'r-none',
+        model: 'm',
+        condition: parseSkillsCondition('none'),
+      })
+    ).rejects.toThrow(/playwright-cli/);
+    expect(leader.cli.mock.calls.some((call) => call[0][0] === 'prompt')).toBe(false);
   });
 
   it('turns a prompt that never reached the leader into a leader-down error', async () => {

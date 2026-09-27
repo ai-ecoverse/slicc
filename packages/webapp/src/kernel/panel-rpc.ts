@@ -462,6 +462,15 @@ export type PanelRpcRequest =
       op: 'save-oauth-accounts';
       payload: { accountsJson: string };
     }
+  | {
+      // Persist one local feature-flag override into the page's
+      // localStorage. The kernel-worker shim is page→worker only, so
+      // `flags set` in the worker would otherwise vanish on the next
+      // worker start. The response is the stored overrides JSON; the
+      // command mirrors it into the shim before it returns.
+      op: 'feature-flag-set';
+      payload: { id: string; value: 'on' | 'off' };
+    }
   // ── WebUSB bridge ─────────────────────────────────────────────────
   // The kernel worker has no `navigator.usb`. These ops let the worker-
   // side `usb` command drive WebUSB through the page-side device-handle
@@ -932,6 +941,7 @@ export interface PanelRpcResults {
   'slicc-cancel': { ok: true };
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
+  'feature-flag-set': { overridesJson: string };
   'usb-list': { devices: UsbDeviceInfo[] };
   'usb-request': { device: UsbDeviceInfo };
   'usb-device-info': { device: UsbDeviceInfo };

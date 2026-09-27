@@ -121,6 +121,7 @@ only here.
 - **Agent-avatar expressions** (`ui/wc/wc-live-*.ts`; channels in `docs/webcomponents-details.md`):
   activity from descriptors; transients via `refs.switcher` host calls.
 - **Model IDs**: pi-ai aliases like `claude-opus-4-6`, not dated snapshots.
+- **`no-default-skills`** (off; `docs/feature-flags.md`): when on, unit init, filesystem reset, and `upgrade apply` do not seed bundled `/workspace/skills`. `flags set no-default-skills on|off` persists the override for the next `new-session`. `/shared` and `/etc` still seed. The prompt index is `loadSkills` of whatever is on disk.
 - **Per-cone model** (`docs/work-unit.md`): the model lives on the work-unit record, not page
   localStorage — read/write via `work-unit/record.ts` (`modelFor`/`setUnitModel`). The picker changes
   ONLY the selected cone; global `selected-model` is a first-boot seed.

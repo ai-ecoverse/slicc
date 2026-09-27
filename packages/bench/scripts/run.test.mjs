@@ -7,6 +7,7 @@ import { taskDigests, withDigests } from './format.mjs';
 import {
   ageSeconds,
   DEFAULT_MODELS,
+  defaultSkillsMatch,
   guardrails,
   loadSet,
   main,
@@ -16,10 +17,40 @@ import {
   readTrace,
   recordPath,
   resumeAction,
+  runConfig,
   selectTasks,
   shardRuns,
   tracePath,
 } from './run.mjs';
+
+describe('runConfig', () => {
+  it('records whether the condition seeds bundled skills', () => {
+    expect(runConfig('sliccy@1', 'm', { name: 'none', builtin: false })).toEqual({
+      harness: 'sliccy@1',
+      model: 'm',
+      skills: 'none',
+      default_skills: false,
+    });
+    expect(
+      runConfig('sliccy@1', 'm', { name: 'none+ecoverse', builtin: false }).default_skills
+    ).toBe(false);
+    expect(runConfig('sliccy@1', 'm', { name: 'builtin', builtin: true }).default_skills).toBe(
+      true
+    );
+  });
+});
+
+describe('defaultSkillsMatch', () => {
+  it('treats a missing marker as bundled skills, not as real none', () => {
+    expect(defaultSkillsMatch(undefined, undefined)).toBe(true);
+    expect(defaultSkillsMatch(undefined, true)).toBe(true);
+    expect(defaultSkillsMatch(undefined, false)).toBe(false);
+    expect(defaultSkillsMatch(false, false)).toBe(true);
+    expect(defaultSkillsMatch(true, true)).toBe(true);
+    expect(defaultSkillsMatch(false, true)).toBe(false);
+    expect(defaultSkillsMatch(true, false)).toBe(false);
+  });
+});
 
 const TASK = withDigests({
   id: 'own-1',
@@ -364,7 +395,10 @@ describe('main', () => {
     expect(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1]))).toBe(true);
     expect(commands.findIndex((c) => c.startsWith('session export'))).toBeGreaterThan(order[4]);
     expect(commands.filter((c) => c.includes('ls /workspace/skills | wc -l'))).toHaveLength(2);
-    expect(commands.at(-1)).toContain('.bench-skills-builtin/. /workspace/skills/');
+    expect(commands.some((c) => c.includes('.bench-skills-builtin/. /workspace/skills/'))).toBe(
+      true
+    );
+    expect(commands.at(-1)).toBe('flags set no-default-skills off');
     const record = JSON.parse(
       readFileSync(recordPath(outDir, 'Own', 'none', 'claude-sonnet-5', 'own-2', 1), 'utf8')
     );
@@ -584,15 +618,27 @@ describe('resumeAction', () => {
     digests: taskDigests(TASK),
     score: 1,
     judge: { model: 'j1' },
+    config: { default_skills: true },
     ...extra,
   });
-  const ctx = { judge: true, judgeModel: 'j1', traceExists: true };
+  const ctx = { judge: true, judgeModel: 'j1', traceExists: true, defaultSkills: true };
 
   it('runs what never ran, what the agent failed, and what a changed task invalidated', () => {
     expect(resumeAction(null, TASK, ctx)).toBe('run');
     expect(resumeAction(done({ error: 'x', error_stage: 'run' }), TASK, ctx)).toBe('run');
     expect(resumeAction(done({ digests: undefined }), TASK, ctx)).toBe('run');
     expect(resumeAction(done(), { ...TASK, task: 'Something else.' }, ctx)).toBe('run');
+  });
+
+  it('re-runs pre-flag none records that lack config.default_skills', () => {
+    const noneCtx = { ...ctx, defaultSkills: false };
+    const preflag = done({ config: { skills: 'none' } });
+    expect(resumeAction(preflag, TASK, noneCtx)).toBe('run');
+    expect(resumeAction(done({ config: undefined }), TASK, noneCtx)).toBe('run');
+    expect(resumeAction(done({ config: { default_skills: false } }), TASK, noneCtx)).toBe('done');
+    // Pre-flag builtin (missing marker) still matches expected true.
+    expect(resumeAction(done({ config: { skills: 'builtin' } }), TASK, ctx)).toBe('done');
+    expect(resumeAction(done({ config: { default_skills: false } }), TASK, ctx)).toBe('run');
   });
 
   it('keeps a run the fallback judge scored for this judge', () => {

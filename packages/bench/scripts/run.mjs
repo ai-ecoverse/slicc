@@ -378,9 +378,19 @@ function failInto(record, stage, err) {
  * Run one task on the leader and judge it. Returns `{ record, result }`; never throws. A judge
  * failure keeps the result, so the next invocation re-judges it instead of re-running the agent.
  */
+/** Record `config`, including whether this condition seeded bundled skills. */
+export function runConfig(harness, model, condition) {
+  return {
+    harness,
+    model,
+    skills: condition.name,
+    default_skills: Boolean(condition.builtin),
+  };
+}
+
 async function runOne(r, ctx) {
   const { leader, opts, judge } = ctx;
-  const config = { harness: opts.harness, model: r.model, skills: r.condition.name };
+  const config = runConfig(opts.harness, r.model, r.condition);
   const runId = `${safe(r.task.id).slice(0, 40)}-${safe(r.model)}-${safe(config.skills)}-r${r.repeat}-${Date.now().toString(36)}`;
   const record = {
     benchmark: r.set.benchmark,
@@ -400,6 +410,7 @@ async function runOne(r, ctx) {
       runId,
       model: r.model,
       timeoutSeconds: opts.timeout,
+      condition: r.condition,
       ...(opts.maxTaskCost ? { maxCost: opts.maxTaskCost } : {}),
       ...(ctx.capture ? { capture: ctx.capture } : {}),
       ...(ctx.now ? { now: ctx.now } : {}),
@@ -431,18 +442,30 @@ async function runOne(r, ctx) {
 }
 
 /**
+ * Whether a saved record's `config.default_skills` matches the planned condition.
+ * Pre-flag records omit the field: that matches expected `true` (bundled skills seeded) but not
+ * expected `false` (real `none`), so a resume re-runs contaminated `none` artifacts.
+ */
+export function defaultSkillsMatch(recorded, expected) {
+  if (expected === undefined) return true;
+  if (recorded === expected) return true;
+  return recorded === undefined && expected === true;
+}
+
+/**
  * What a resume does with a planned run, given its earlier record:
- * - `run`: no record, the agent failed, or the task text changed since (the old trace answers a
- *   different question);
+ * - `run`: no record, the agent failed, the task text changed since (the old trace answers a
+ *   different question), or `config.default_skills` is missing/mismatched for the condition;
  * - `rejudge`: the agent's run still stands but its judgement does not — judging failed or was
  *   skipped, another judge model is asked for, or the rubric or weights changed;
  * - `done`: nothing changed.
  * A rejudge needs the saved trace; without it the run starts over.
  */
-export function resumeAction(record, task, { judge, judgeModel, traceExists }) {
+export function resumeAction(record, task, { judge, judgeModel, traceExists, defaultSkills }) {
   if (!record) return 'run';
   const d = taskDigests(task);
   if (!record.digests || record.digests.task_sha !== d.task_sha) return 'run';
+  if (!defaultSkillsMatch(record.config?.default_skills, defaultSkills)) return 'run';
   if (record.error && record.error_stage !== 'judge') return 'run';
   if (!judge) return 'done';
   const stale =
@@ -730,6 +753,7 @@ async function processRun(i, r, runs, ctx, say) {
     judge: Boolean(ctx.judge),
     judgeModel: opts.judgeModel,
     traceExists: before.traceExists,
+    defaultSkills: Boolean(r.condition.builtin),
   });
   if (action === 'done') {
     say(

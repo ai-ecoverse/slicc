@@ -125,6 +125,7 @@ const DISPATCHERS: readonly Dispatcher[] = [
     ],
   },
   { command: 'diskutil', source: 'df-command.ts', verbs: 'source' },
+  { command: 'flags', source: 'flags-command.ts', verbs: 'source' },
   { command: 'esptool', source: 'esptool-command.ts', verbs: 'source' },
   { command: 'hid', source: 'hid-command.ts', verbs: 'source' },
   { command: 'host', source: 'host-command.ts', verbs: 'source' },
