@@ -160,13 +160,18 @@ export const EVAL_BLOCKED =
   "the wasm realm evaluates the program's Emscripten glue, and this page's CSP forbids eval " +
   "(no 'unsafe-eval')";
 
-/** The program's signal dispositions, or null when it was linked without signal support. */
-function signalMasks(
-  m: RunningModule
+/**
+ * The program's signal dispositions, or null when it was linked without
+ * signal support. A mask is 32 bits as a signed int: signal 31 (SIGSYS, which
+ * bash catches) makes it negative, so only -1 — every bit, impossible since
+ * bit 0 is no signal — means "none".
+ */
+export function signalMasks(
+  m: Pick<RunningModule, 'sliccSigMask'>
 ): { caught: number; ignored: number; restart: number } | null {
   const mask = m.sliccSigMask;
   const caught = mask?.(0) ?? -1;
-  if (!mask || caught < 0) return null;
+  if (!mask || caught === -1) return null;
   return { caught, ignored: mask(1), restart: mask(2) };
 }
 
