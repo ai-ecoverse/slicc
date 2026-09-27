@@ -36,7 +36,11 @@ export const PRODUCTION_TRAY_ORIGIN = 'https://www.sliccy.ai';
  */
 export const PINNED_UI_PORT_OFFSET = 1000;
 
-/** Hard-coded by node-server's hosted mode (`cloud-status.ts`). */
+/**
+ * node-server's join file when `SLICC_JOIN_FILE` is unset (`cloud-status.ts`).
+ * e2b polls this path inside one sandbox. A runner leader sets `SLICC_JOIN_FILE`
+ * to its own file (`gh-io.mjs` `joinFilePath`) instead of sharing this one.
+ */
 export const JOIN_FILE_PATH = '/tmp/slicc-join.json';
 
 /** Hard-coded by node-server's hosted bootstrap (`hosted-bootstrap.ts`). */
@@ -193,6 +197,7 @@ export function buildLeaderArgs(options = {}) {
  *   trayWorkerBaseUrl?: string;
  *   bridgeDevAllowedOrigins?: string;
  *   cdpLaunchTimeoutMs?: number;
+ *   joinFile?: string;
  * }} options
  * @returns {Record<string, string>}
  */
@@ -208,6 +213,11 @@ export function buildLeaderEnv(options) {
   env.SLICC_SECRETS_FILE = options.secretsFile;
   env.CHROME_USER_DATA_DIR = options.profileDir;
   env.SLICC_CDP_LAUNCH_TIMEOUT_MS = String(options.cdpLaunchTimeoutMs ?? 60_000);
+  // One file per leader. Drop a path inherited from the parent so a second
+  // leader on this host cannot be told to write the first leader's file.
+  const joinFile = options.joinFile?.trim();
+  if (joinFile) env.SLICC_JOIN_FILE = joinFile;
+  else delete env.SLICC_JOIN_FILE;
   if (options.uiOrigin) env.WORKER_BASE_URL = options.uiOrigin.replace(/\/+$/, '');
   else delete env.WORKER_BASE_URL;
   if (options.trayWorkerBaseUrl) {

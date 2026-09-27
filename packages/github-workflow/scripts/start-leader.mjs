@@ -5,9 +5,11 @@
  * Runs `node-server --hosted` (the same mode the e2b cloud template boots)
  * with headless Chrome against the hosted UI origin, seeds credentials the
  * way cloud-core does — `/slicc/cone-config.json` for provider accounts and
- * `secrets.env` for domain-scoped secrets — and polls `/tmp/slicc-join.json`
- * until the leader has minted a tray. Records pid, log, and deadline in the
- * job state file for `wait-for-deadline.mjs` / `stop-leader.mjs`.
+ * `secrets.env` for domain-scoped secrets — and polls this leader's join file
+ * (`$SLICC_GW_HOME/join.json`, or `SLICC_GW_JOIN_FILE`) until it has minted a
+ * tray. node-server is told to write that same file via `SLICC_JOIN_FILE`.
+ * Records pid, log, and deadline in the job state file for
+ * `wait-for-deadline.mjs` / `stop-leader.mjs`.
  *
  * Inputs (env, mapped from action.yml): INPUT_SLICC_VERSION, INPUT_NODE_SERVER,
  * INPUT_PORT, INPUT_DURATION, INPUT_MOUNTS, INPUT_CONE_CONFIG,
@@ -92,11 +94,13 @@ export function resolveNodeServer(home, exec = execFileSync) {
  * Remove the on-disk credential files. Called on a failed boot (before the
  * state file exists) and by `stop-leader.mjs` at teardown: on a persistent or
  * self-hosted runner, `/slicc/cone-config.json` would otherwise stay readable
- * by later jobs running as the same user.
+ * by later jobs running as the same user. Also removes this leader's join
+ * file: it holds the join URL.
  */
-export function removeCredentialFiles(secretsFile) {
+export function removeCredentialFiles(secretsFile, joinFile = joinFilePath()) {
   rmSync(coneConfigPath(), { force: true });
   if (secretsFile) rmSync(secretsFile, { force: true });
+  if (joinFile) rmSync(joinFile, { force: true });
 }
 
 export function writeCredentialFiles(home) {
@@ -138,13 +142,19 @@ export function writeCredentialFiles(home) {
  * Poll the join file until node-server has minted a tray. Fails fast if the
  * child exits first; kills it if the boot timeout elapses.
  */
-export async function pollJoinFile({ child, logPath, startedAt, timeoutMs, pollMs = 1000 }) {
+export async function pollJoinFile({
+  child,
+  logPath,
+  startedAt,
+  timeoutMs,
+  pollMs = 1000,
+  file = joinFilePath(),
+}) {
   const deadline = Date.now() + timeoutMs;
   let exited = null;
   child.on('exit', (code, signal) => {
     exited = { code, signal };
   });
-  const file = joinFilePath();
   while (Date.now() < deadline) {
     if (exited) {
       group('leader log (tail)', logTail(logPath, 80));
@@ -275,7 +285,8 @@ export async function bootLeader(opts) {
   const { secretsFile, coneConfigWritten } = writeCredentialFiles(home);
   const profileDir = ensureDir(join(home, 'profile'));
   const logPath = join(home, 'leader.log');
-  rmSync(joinFilePath(), { force: true });
+  const file = joinFilePath(home);
+  rmSync(file, { force: true });
 
   const env = buildLeaderEnv({
     base: process.env,
@@ -286,6 +297,7 @@ export async function bootLeader(opts) {
     trayWorkerBaseUrl: trayWorkerBaseUrl ?? input('tray-worker-base-url'),
     bridgeDevAllowedOrigins,
     cdpLaunchTimeoutMs,
+    joinFile: file,
   });
   const args = [entry, ...buildLeaderArgs({ mounts })];
   for (const m of mounts) console.log(`[start-leader] mount ${m.hostPath} → ${m.path}`);
@@ -306,6 +318,7 @@ export async function bootLeader(opts) {
     startedAt: startedAt - 1000,
     timeoutMs: bootTimeoutMs,
     pollMs: opts.pollMs,
+    file,
   });
   if (maskJoinUrl) addMask(joinInfo.joinUrl);
 
@@ -319,6 +332,7 @@ export async function bootLeader(opts) {
       profileDir,
       secretsFile,
       coneConfigPath: coneConfigWritten ? coneConfigPath() : null,
+      joinFile: file,
       joinUrl: joinInfo.joinUrl,
       trayId: joinInfo.trayId,
       sliccVersion: joinInfo.sliccVersion,

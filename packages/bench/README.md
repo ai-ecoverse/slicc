@@ -66,7 +66,7 @@ Each task starts a fresh chat with erased memories, selects the model and sends 
 - `diagnostics/`: the CLI's `SLICC_DEBUG` output from dials that failed.
 - `leader-infra-slicc-gw-lane<i>.log` (CI): each leader's tray, signaling and WebRTC log lines, interleaved with `[bench-event]` markers from the runner.
 
-**Several leaders.** `--leaders N` (up to 8) boots N leaders, each with its own home (`$SLICC_GW_HOME-lane<i>`) and port (`BENCH_LEADER_BASE_PORT` + i, default 5710), and runs the queue on all of them. Boots, restarts and stops take turns, because every leader shares `/slicc/cone-config.json` and `/tmp/slicc-join.json`; a lane handed another lane's join URL restarts. A lane that keeps failing to reach its leader stops, and the others carry on. `--shard K/N` runs only shard K's tasks. `--deadline-minutes`, `--max-task-cost` and `--max-cost` are the guardrails above.
+**Several leaders.** `--leaders N` (up to 8) boots N leaders, each with its own home (`$SLICC_GW_HOME-lane<i>`), port (`BENCH_LEADER_BASE_PORT` + i, default 5710), and join file (`<home>/join.json`), and runs the queue on all of them. Boots, restarts and stops take turns, because every leader shares `/slicc/cone-config.json`. A lane handed another lane's join URL is refused and retried. A lane that keeps failing to reach its leader stops, and the others carry on. `--shard K/N` runs only shard K's tasks. `--deadline-minutes`, `--max-task-cost` and `--max-cost` are the guardrails above.
 
 The command exits 1 when any run ended in an error, so a CI job cannot pass on runs that never happened. The report is written either way. Result files and the report name the judge that actually produced each score, taken from the records.
 

@@ -2,6 +2,18 @@ import { promises as fs } from 'node:fs';
 import { isLoopbackHostname } from '@slicc/shared-ts';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 
+/** e2b sandboxes poll this path. A host with several leaders sets `SLICC_JOIN_FILE`. */
+export const DEFAULT_JOIN_FILE_PATH = '/tmp/slicc-join.json';
+
+/**
+ * Join file for `POST /api/cloud-status`. `SLICC_JOIN_FILE` wins so each
+ * leader on one host writes its own file; unset keeps the sandbox default.
+ */
+export function resolveJoinFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.SLICC_JOIN_FILE?.trim();
+  return configured || DEFAULT_JOIN_FILE_PATH;
+}
+
 export interface CloudStatusEndpointOptions {
   joinFilePath: string;
 }

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setup, sleep } from '../tests/helpers.mjs';
@@ -71,6 +71,26 @@ describe('stop-leader', () => {
     await main({ graceMs: 2000, exec: () => '' });
     expect(isAlive(ui.pid)).toBe(false);
     expect(console.log).toHaveBeenCalledWith(`[stop-leader] stopping pinned webapp pid=${ui.pid}`);
+  });
+
+  it('removes the join file recorded for this leader', async () => {
+    const recorded = join(t.root, 'lane', 'join.json');
+    mkdirSync(join(t.root, 'lane'), { recursive: true });
+    writeFileSync(recorded, '{}\n');
+    writeFileSync(t.joinFile, '{}\n');
+    writeState({ leader: 999999, followers: [], joinFile: recorded }, t.home);
+    await main({ exec: () => '' });
+    expect(existsSync(recorded)).toBe(false);
+    expect(existsSync(t.joinFile)).toBe(true);
+  });
+
+  it('removes the per-home join file when state does not name one', async () => {
+    delete process.env.SLICC_GW_JOIN_FILE;
+    const file = join(t.home, 'join.json');
+    writeFileSync(file, '{}\n');
+    writeState({ leader: 999999, followers: [] }, t.home);
+    await main({ exec: () => '' });
+    expect(existsSync(file)).toBe(false);
   });
 
   it('reports an already-exited leader', async () => {

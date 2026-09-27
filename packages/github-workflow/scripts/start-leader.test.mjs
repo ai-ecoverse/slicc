@@ -74,6 +74,27 @@ describe('start-leader', () => {
     expect(log).toContain(`SECRETS=${state.secretsFile}`);
     expect(log).toContain('INPUTS=0');
     expect(log).toContain('WORKER= TRAY= BRIDGE_ORIGINS= ');
+    expect(log).toContain(`JOIN=${t.joinFile}`);
+    expect(state.joinFile).toBe(t.joinFile);
+  });
+
+  it('writes the join file under the leader home when no override is set', async () => {
+    delete process.env.SLICC_GW_JOIN_FILE;
+    t.inputs({
+      'node-server': FAKE_NODE_SERVER,
+      duration: '1m',
+      'boot-timeout': '10s',
+      'mask-join-url': 'false',
+    });
+    const result = await main({ pollMs: 50 });
+    const file = join(t.home, 'join.json');
+    expect(result.trayId).toBe('fake-tray');
+    expect(existsSync(file)).toBe(true);
+    const state = readState(t.home);
+    expect(state.joinFile).toBe(file);
+    expect(readFileSync(state.logPath, 'utf8')).toContain(`JOIN=${file}`);
+    removeCredentialFiles(state.secretsFile, state.joinFile);
+    expect(existsSync(file)).toBe(false);
   });
 
   it('masks the join url by default', async () => {

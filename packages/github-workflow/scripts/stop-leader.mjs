@@ -5,8 +5,8 @@
  * holding our profile directory. Always exits 0 — this runs under
  * `if: always()` and must never mask the real failure of a job. Prints the
  * leader log tail so a failed run is diagnosable from the job page, and
- * deletes the credential files so nothing outlives the job on a persistent
- * runner.
+ * deletes the credential files and this leader's join file so nothing
+ * outlives the job on a persistent runner.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -15,6 +15,7 @@ import {
   homeDir,
   isAlive,
   isMain,
+  joinFilePath,
   logTail,
   readState,
   setOutput,
@@ -68,7 +69,8 @@ export async function main(options = {}) {
       console.log(`[stop-leader] pinned webapp pid=${state.uiServer} already exited`);
     }
   }
-  removeCredentialFiles(state.secretsFile);
+  const recorded = typeof state.joinFile === 'string' ? state.joinFile.trim() : '';
+  removeCredentialFiles(state.secretsFile, recorded || joinFilePath());
   console.log('[stop-leader] credential files removed');
   for (const pid of chromePidsForProfile(state.profileDir, options.exec)) {
     console.log(`[stop-leader] stopping leftover chrome pid=${pid}`);
