@@ -25,7 +25,7 @@ import {
 import type { FdTable, OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
-import { SIG, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
+import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
 import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
@@ -37,9 +37,6 @@ const modules = new Map<string, Promise<WebAssembly.Module>>();
 const SIGNAL_NAME = new Map(
   Object.entries(SIGNAL_BY_NAME).map(([name, sig]) => [sig, name as keyof typeof SIGNAL_BY_NAME])
 );
-
-/** The signals that end a shell child (which has no handlers of its own to run). */
-const ENDS_SHELL_CHILD: ReadonlySet<number> = new Set([SIG.HUP, SIG.INT, SIG.KILL, SIG.TERM]);
 
 /** A path into the shell's command registry: `/usr/bin/<name>` or its alias `/bin/<name>`. */
 const REGISTRY_PATH = /^\/(?:usr\/)?bin\/([^/]+)$/;
@@ -232,7 +229,8 @@ export class WasmSession {
     }
     const shell = this.shellByPid.get(pid);
     if (shell) {
-      if (ENDS_SHELL_CHILD.has(sig)) shell.abort();
+      // It has no handlers of its own: every signal whose default action ends a process ends it.
+      if (sig !== 0 && defaultAction(sig) === 'terminate') shell.abort();
       return true;
     }
     const pm = this.processConfig?.processManager;

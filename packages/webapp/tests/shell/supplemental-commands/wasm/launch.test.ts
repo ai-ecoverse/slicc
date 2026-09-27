@@ -264,6 +264,35 @@ describe('WasmSession', () => {
     expect(await second.exited).toBe(130);
   });
 
+  it('kill(2) of a shell child ends it for every signal whose default action terminates', async () => {
+    fakeProcesses();
+    const exec = vi.fn(
+      (_cmd: string, opts: { signal: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          opts.signal.addEventListener('abort', () =>
+            resolve({ stdout: '', stderr: '', exitCode: 130 })
+          );
+        })
+    ) as unknown as CommandContext['exec'];
+    const { config } = processConfig();
+    const session = new WasmSession(ctx(installed, exec), config, () => {});
+    const spawner = await parentSpawner(session);
+    const kill = spawn.mock.calls.at(-1)![0].kill as (pid: number, sig: number) => boolean;
+    const child = await spawner(
+      { file: 'sleep', argv: ['sleep', '9'], env: {}, cwd: '/w' },
+      stdio()
+    );
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    let ended = false;
+    void child.exited.then(() => (ended = true));
+    expect(kill(child.pid, 17)).toBe(true); // SIGCHLD: ignored by default
+    expect(kill(child.pid, 0)).toBe(true); // a probe
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ended).toBe(false);
+    expect(kill(child.pid, 10)).toBe(true); // SIGUSR1: terminates
+    expect(await child.exited).toBe(130);
+  });
+
   it('forks a process into the same program, resumed from the parent state', async () => {
     fakeProcesses();
     const { pm, config } = processConfig();

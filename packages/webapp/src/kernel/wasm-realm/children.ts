@@ -73,13 +73,18 @@ interface Child {
 }
 
 /** Rejects with EINTR when `signal` aborts (a caught signal interrupts a wait); never resolves. */
-function interrupted(signal: AbortSignal | undefined): Promise<never> {
-  return new Promise((_, reject) => {
-    if (!signal) return;
-    const fail = (): void => reject(new KernelError('EINTR'));
-    if (signal.aborted) fail();
-    else signal.addEventListener('abort', fail, { once: true });
+function interrupted(signal: AbortSignal | undefined): {
+  promise: Promise<never>;
+  /** Detach from `signal`: the wait is over (it outlives many waits). */
+  done(): void;
+} {
+  let fail = (): void => {};
+  const promise = new Promise<never>((_, reject) => {
+    fail = () => reject(new KernelError('EINTR'));
+    if (signal?.aborted) fail();
+    else signal?.addEventListener('abort', fail, { once: true });
   });
+  return { promise, done: () => signal?.removeEventListener('abort', fail) };
 }
 
 /** Encode an exit code as a wait status (`WEXITSTATUS`). */
@@ -174,11 +179,16 @@ export class ChildTable {
     const done = candidates.find(([, child]) => child.code !== undefined);
     if (done) return this.reap(done[0], done[1].code as number);
     if (nohang) return [0, 0];
-    const [reaped, code] = await Promise.race([
-      ...candidates.map(([p, child]) => child.exited.then((c) => [p, c] as const)),
-      interrupted(signal),
-    ]);
-    return this.reap(reaped, code);
+    const interrupt = interrupted(signal);
+    try {
+      const [reaped, code] = await Promise.race([
+        ...candidates.map(([p, child]) => child.exited.then((c) => [p, c] as const)),
+        interrupt.promise,
+      ]);
+      return this.reap(reaped, code);
+    } finally {
+      interrupt.done();
+    }
   }
 
   private reap(pid: number, code: number): [number, number] {
