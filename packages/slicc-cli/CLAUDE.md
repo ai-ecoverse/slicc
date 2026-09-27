@@ -24,7 +24,7 @@ slicc <verb>-cloud [--index N|--session <id>]   Resolve join URL from iCloud, ru
   `tool_use_start`. A tool-using turn flips `ready` **twice** — exiting on the
   first gives an empty reply. A v10 leader's `user_message_ack` `rejected` exits 1;
   leaders < 10 send none. [Exit codes](../../docs/slicc-cli-details.md#prompt-exit-codes).
-- SIGINT: `prompt` sends `abort`, waits for `abort_ack` (cone + scoops stopped), exits 130; no ack in `SLICC_ABORT_CONFIRM` (12s) → exit 1 (closing on signal used to drop the abort).
+- SIGINT: `prompt` sends `abort`, waits for `abort_ack`, exits 130; no ack in `SLICC_ABORT_CONFIRM` (12s) → exit 1.
 - `new-session`/`model` (`session.go`) send the same follower control messages
   browser/iOS use: `new-session` polls `request_snapshot` until the transcript has
   no user message (no ack); `model` resolves an exact catalogue id, awaits `model.state`.
@@ -141,7 +141,7 @@ tag**. `SLICC_NO_UPDATE_CHECK=1` disables the ≤24 h notice.
 checkpoints. **The `error` `source` and `enter` subcommand always come from a fixed
 allowlist (`dial`/`watch`/`follow`/`update`, `classifySubcommand`) — never user
 input.** `SLICC_NO_TELEMETRY=1` opts out; a `dev` build configures no client.
-`Sanitize()` is **mandatory** — error strings can embed a bearer-token join URL.
+`Sanitize()` is **mandatory** (errors can embed a bearer-token join URL).
 [Rationale](../../docs/slicc-cli-details.md#telemetry-design-rationale),
 `docs/operational-telemetry.md`.
 
