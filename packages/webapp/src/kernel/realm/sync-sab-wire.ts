@@ -1,3 +1,4 @@
+import type { WasmSyscall } from '../wasm-realm/process.js';
 import type { SyncExecRequest } from './sync-exec-dispatch.js';
 import type { SyncFsRequest, SyncFsResult } from './sync-fs-dispatch.js';
 
@@ -28,7 +29,10 @@ export const SYNC_SAB_REQ_MSG = 'sync-sab-req';
 
 export const SYNC_SAB_NEXT_MSG = 'sync-sab-next';
 
-export type SyncSabRequestBody = Omit<SyncFsRequest, 'token'> | Omit<SyncExecRequest, 'token'>;
+export type SyncSabRequestBody =
+  | Omit<SyncFsRequest, 'token'>
+  | Omit<SyncExecRequest, 'token'>
+  | WasmSyscall;
 
 export interface SyncSabReqMsg {
   type: typeof SYNC_SAB_REQ_MSG;

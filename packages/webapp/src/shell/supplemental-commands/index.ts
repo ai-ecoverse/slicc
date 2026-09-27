@@ -97,6 +97,7 @@ import { createUpgradeCommand } from './upgrade-command.js';
 import { createUptimeCommand } from './uptime-command.js';
 import { createUsbCommand } from './usb-command.js';
 import { createV86Command } from './v86-command.js';
+import { createWasmCommand } from './wasm-command.js';
 import { createWebhookCommand, type WebhookCommandOptions } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWfProgressCommand } from './wf-progress-command.js';
@@ -203,6 +204,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createRmdirCommand(),
     createStatCommand(),
     createCmpCommand(),
+    createWasmCommand({ buildProcessConfig: options.buildProcessConfig }),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),

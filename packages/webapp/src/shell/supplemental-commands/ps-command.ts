@@ -286,7 +286,7 @@ Flags:
 
 Columns (default: pid,ppid,stat,start,scoop,command):
   PID/PPID      process / parent pid
-  KIND          scoop-turn | tool | shell | jsh | py | net
+  KIND          scoop-turn | tool | shell | jsh | py | net | computer | wasm
   STAT          R running, S pending, Z exited, K killed
   START         hh:mm:ss when the process spawned
   SCOOP         cone | system | jshd | scoop jid. The default

@@ -1,3 +1,4 @@
+import type { WasmSyscall } from '../wasm-realm/process.js';
 import { dispatchSyncExec, isSyncExecRequest, type SyncExecRequest } from './sync-exec-dispatch.js';
 import { dispatchSyncFs, type SyncFsRequest, type SyncFsResult } from './sync-fs-dispatch.js';
 import { SYNC_EXEC_MAX_TIMEOUT_MS, SYNC_FS_REQUEST_TIMEOUT_MS } from './sync-fs-wire.js';
@@ -35,8 +36,13 @@ interface PendingPayload {
 
 const PENDING_TTL_MS = Math.max(SYNC_FS_REQUEST_TIMEOUT_MS, SYNC_EXEC_MAX_TIMEOUT_MS) + 5_000;
 
+export type SyncSabDispatchRequest =
+  | SyncFsRequest
+  | SyncExecRequest
+  | (WasmSyscall & { token: string });
+
 export interface SyncSabResponderOptions {
-  dispatch?: (req: SyncFsRequest | SyncExecRequest) => Promise<SyncFsResult>;
+  dispatch?: (req: SyncSabDispatchRequest) => Promise<SyncFsResult>;
 }
 
 export function attachSyncSabResponder(
@@ -52,10 +58,18 @@ export function attachSyncSabResponder(
 
   const dispatch =
     opts.dispatch ??
-    ((req: SyncFsRequest | SyncExecRequest) =>
-      isSyncExecRequest(req)
-        ? dispatchSyncExec(req, { allowNoDeadline: true })
-        : dispatchSyncFs(req));
+    ((req: SyncSabDispatchRequest): Promise<SyncFsResult> => {
+      const realmReq = req as SyncFsRequest | SyncExecRequest;
+      if (isSyncExecRequest(realmReq)) {
+        return dispatchSyncExec(realmReq, { allowNoDeadline: true });
+      }
+      if ('path' in realmReq) return dispatchSyncFs(realmReq);
+      return Promise.resolve({
+        ok: false,
+        errno: 'ENOSYS',
+        message: 'sync-sab: unsupported request',
+      });
+    });
 
   function drop(id: number): void {
     const entry = pending.get(id);
@@ -117,7 +131,7 @@ export function attachSyncSabResponder(
     const id = data.id;
 
     const body = (data as SyncSabReqMsg).req;
-    const req = { ...body, token } as SyncFsRequest | SyncExecRequest;
+    const req = { ...body, token } as SyncSabDispatchRequest;
     let dispatched: Promise<SyncFsResult>;
     try {
       dispatched = dispatch(req);
