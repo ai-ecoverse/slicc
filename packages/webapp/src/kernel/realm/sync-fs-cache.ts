@@ -390,6 +390,19 @@ export class SyncFsCache {
   isPartial(path: string): boolean {
     return this.tree.get(normalizePath(path))?.partial === true;
   }
+  /**
+   * True when `path` or any cached directory below it is {@link isPartial}:
+   * the cache knows only part of that subtree, so an operation on the whole of
+   * it (a recursive remove, a rename) must not be answered from the cache.
+   */
+  hasPartialWithin(path: string): boolean {
+    const normalized = normalizePath(path);
+    const prefix = normalized === '/' ? '/' : `${normalized}/`;
+    for (const [p, entry] of this.tree) {
+      if (entry.partial && (p === normalized || p.startsWith(prefix))) return true;
+    }
+    return false;
+  }
 
   /**
    * Commit a bridge write into the cache: set the entry (so `exists` / `stat` /

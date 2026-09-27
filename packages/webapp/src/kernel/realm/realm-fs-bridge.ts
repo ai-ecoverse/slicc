@@ -8,6 +8,7 @@ import { acceptPathLikeArgs, type PathArgLayout } from './fs-path-arg.js';
 import { acceptNodeCallbacks, nodeFsPromises } from './realm-fs-node-callbacks.js';
 import { createNoFdOps, createStdioFdOps, type StdioFdOps } from './realm-fs-stdio-fd.js';
 import type { RealmRpcClient } from './realm-rpc.js';
+import { flushBeforeSyncExec } from './sync-exec-xhr-bridge.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
 import type {
   SyncFsPosixBridge,
@@ -483,6 +484,38 @@ function removeWithBridgeFallback(
   return true;
 }
 
+/**
+ * The live bridge for a destructive op on `resolved` whose cached subtree is
+ * incomplete (a `partial` directory: the boot walk stopped short of it, or a
+ * write synthesized it). The cache would remove or move only the part it
+ * knows, so the op must run live. `undefined` → the cache is authoritative.
+ */
+function liveSubtreeBridge(
+  syncFs: SyncFsCache,
+  bridge: SyncFsXhrBridge | undefined,
+  resolved: string
+): SyncFsPosixBridge | undefined {
+  const live = bridge as Partial<SyncFsPosixBridge> | undefined;
+  if (!live?.rename || !live.rmdir || !live.rm || !syncFs.hasPartialWithin(resolved)) {
+    return undefined;
+  }
+  return live as SyncFsPosixBridge;
+}
+
+/**
+ * Run a destructive op live: pending cache writes reach the VFS first (a file
+ * written into the directory must move or go with it), and the cache, which
+ * no longer matches, is dropped after (reads fall through to the bridge).
+ */
+function runLive(syncFs: SyncFsCache, live: SyncFsPosixBridge, op: () => void): void {
+  flushBeforeSyncExec(syncFs, live);
+  try {
+    op();
+  } finally {
+    syncFs.invalidate();
+  }
+}
+
 /** The `createSyncFsBridge` internals the removal ops need. See {@link createRemovalOps}. */
 interface RemovalDeps {
   syncFs: SyncFsCache;
@@ -523,8 +556,14 @@ function createRemovalOps(deps: RemovalDeps) {
     writeThrough,
     persistDelete,
   } = deps;
-  const remove = (resolved: string, opts?: { recursive?: boolean; requireFile?: boolean }) =>
-    removeWithBridgeFallback(syncFs, bridge, resolved, opts, persistDelete);
+  const remove = (resolved: string, opts?: { recursive?: boolean; requireFile?: boolean }) => {
+    // A directory the cache knows only part of goes live: `rm -r` removes it
+    // whole, `rmdir` / a plain `rm` refuse it when the LIVE listing is not empty.
+    const live = opts?.requireFile ? undefined : liveSubtreeBridge(syncFs, bridge, resolved);
+    if (!live) return removeWithBridgeFallback(syncFs, bridge, resolved, opts, persistDelete);
+    runLive(syncFs, live, () => (opts?.recursive ? live.rm(resolved) : live.rmdir(resolved)));
+    return true;
+  };
   return {
     rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
       const resolved = resolve(path);
@@ -553,6 +592,12 @@ function createRemovalOps(deps: RemovalDeps) {
     renameSync(oldPath: string, newPath: string): void {
       const src = resolve(oldPath);
       const dest = resolve(newPath);
+      // Moving a subtree the cache knows only part of would recreate that part.
+      const live = liveSubtreeBridge(syncFs, bridge, src);
+      if (live) {
+        runLive(syncFs, live, () => live.rename(src, dest));
+        return;
+      }
       try {
         syncFs.rename(src, dest);
         return;
