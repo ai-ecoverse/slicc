@@ -88,9 +88,26 @@ describe('evaluateGlue', () => {
     evaluateGlue(glue, module);
     expect(module.FS).toEqual({ own: true });
     expect(module.callMain?.(['x', 'y'])).toBe(2);
-    const scoped = module as { sliccRunMain?: (a: string[]) => number; PIPEFS?: object };
+    const scoped = module as {
+      sliccRunMain?: (a: string[]) => number;
+      PIPEFS?: object;
+      sliccSigpipe?: () => number;
+    };
     expect(scoped.sliccRunMain?.(['x'])).toBe(-1);
     expect(scoped.PIPEFS).toHaveProperty('createPipe');
+    expect(scoped.sliccSigpipe?.()).toBe(-1); // no disposition query linked in
+  });
+
+  it("asks the program's SIGPIPE disposition once it is instantiated", () => {
+    const module: { sliccEnv: object; sliccSigpipe?: () => number } = { sliccEnv: {} };
+    // Emscripten assigns the export after instantiation, i.e. after the glue body ran.
+    evaluateGlue(
+      'var ENV = {}; var _slicc_sigpipe; Module.late = () => { _slicc_sigpipe = () => 1; };',
+      module
+    );
+    expect(module.sliccSigpipe?.()).toBe(-1);
+    (module as unknown as { late: () => void }).late();
+    expect(module.sliccSigpipe?.()).toBe(1);
   });
 
   it('keeps what the glue exports itself', () => {

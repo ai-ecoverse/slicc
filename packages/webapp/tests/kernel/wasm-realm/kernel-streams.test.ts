@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   KernelStreams,
+  ProcessExit,
   type ProcessFs,
   type ProcessStream,
   type ProcessSys,
@@ -64,20 +65,20 @@ describe('KernelStreams', () => {
     expect(streams.map((s) => s.sliccKernelFd)).toEqual([0, 1, 2]);
   });
 
-  it('raises a kernel error as the matching Emscripten errno (EPIPE = 64)', () => {
+  it('raises a kernel error as the matching Emscripten errno (EIO = 29)', () => {
     const sys = fakeSys({
       read: () => {
         throw new SyscallError('EBADF');
       },
       write: () => {
-        throw new SyscallError('EPIPE');
+        throw new SyscallError('EIO');
       },
     });
     const { fs, streams } = fakeFs();
     wireKernelStdio(fs, new KernelStreams(fs, sys));
     const [s0, s1] = streams;
     expect(() => s1!.stream_ops.write!(s1!, bytes('y'), 0, 1)).toThrow(
-      expect.objectContaining({ errno: 64 })
+      expect.objectContaining({ errno: 29 })
     );
     expect(() => s0!.stream_ops.read!(s0!, new Uint8Array(1), 0, 1)).toThrow(
       expect.objectContaining({ errno: 8 })
@@ -136,5 +137,42 @@ describe('KernelStreams', () => {
     const pipefs = { createPipe: () => ({ readable_fd: 1, writable_fd: 2 }) };
     new KernelStreams(fs, sys).usePipes(pipefs);
     expect(() => pipefs.createPipe()).toThrow(expect.objectContaining({ errno: 33 }));
+  });
+
+  it("ends the program on a write to a pipe with no reader (SIGPIPE's default)", () => {
+    const epipe = () => {
+      throw new SyscallError('EPIPE');
+    };
+    const { fs, streams } = fakeFs(1);
+    new KernelStreams(fs, fakeSys({ write: epipe })).attach(streams[0]!, 4);
+    const write = () => streams[0]!.stream_ops.write!(streams[0]!, bytes('y'), 0, 1);
+    expect(write).toThrow(ProcessExit);
+    expect(write).toThrow(expect.objectContaining({ status: 141 }));
+  });
+
+  it('fails the write with EPIPE when the program ignores or handles SIGPIPE', () => {
+    const epipe = () => {
+      throw new SyscallError('EPIPE');
+    };
+    const { fs, streams } = fakeFs(1);
+    const handled = vi.fn(() => true);
+    new KernelStreams(fs, fakeSys({ write: epipe }), handled).attach(streams[0]!, 4);
+    expect(() => streams[0]!.stream_ops.write!(streams[0]!, bytes('y'), 0, 1)).toThrow(
+      expect.objectContaining({ errno: 64 })
+    );
+    expect(handled).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives the kernel's pipe ends back when Emscripten cannot make its own pipe", () => {
+    const sys = fakeSys({ pipe: () => [5, 6] });
+    const { fs } = fakeFs();
+    const pipefs = {
+      createPipe: () => {
+        throw new ErrnoError(33); // EMFILE
+      },
+    };
+    new KernelStreams(fs, sys).usePipes(pipefs);
+    expect(() => pipefs.createPipe()).toThrow(expect.objectContaining({ errno: 33 }));
+    expect(sys.closed).toEqual([5, 6]);
   });
 });

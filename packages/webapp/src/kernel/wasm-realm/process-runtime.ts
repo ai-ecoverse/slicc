@@ -82,6 +82,8 @@ interface RunningModule {
   callMain(args: string[]): number | undefined;
   sliccRunMain?: (args: string[]) => number | undefined;
   PIPEFS?: ProcessPipeFs;
+  /** 1 when the program ignores or handles SIGPIPE (the toolchain's `slicc_sigpipe`). */
+  sliccSigpipe?: () => number;
   /** posix_spawn / waitpid for the toolchain's libc shims. */
   sliccKernel?: ProcessKernel;
 }
@@ -106,6 +108,8 @@ const GLUE_TRAILER = [
   "if (typeof callMain === 'function') Module.callMain ??= callMain;",
   "if (typeof sliccRunMain === 'function') Module.sliccRunMain ??= sliccRunMain;",
   "if (typeof PIPEFS !== 'undefined') Module.PIPEFS ??= PIPEFS;",
+  // The toolchain's SIGPIPE disposition query (exported once instantiated).
+  "Module.sliccSigpipe ??= () => (typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
 ].join('\n');
 
 export const evaluateGlue: GlueEvaluator = (glue, module) => {
@@ -183,7 +187,7 @@ export async function runWasmProcess(
     },
     { cwd: init.cwd }
   );
-  const streams = new KernelStreams(running.FS, sys);
+  const streams = new KernelStreams(running.FS, sys, () => running.sliccSigpipe?.() === 1);
   wireKernelStdio(running.FS, streams);
   if (running.PIPEFS) streams.usePipes(running.PIPEFS);
   running.sliccKernel = createProcessKernel({

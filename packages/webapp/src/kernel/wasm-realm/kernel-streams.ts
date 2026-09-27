@@ -23,6 +23,19 @@ const POLLHUP = 0x010;
 const POLLRDNORM = 0x040;
 const POLLWRNORM = 0x100;
 
+/** SIGPIPE's default action: a write to a pipe with no reader ends the writer. */
+const KILLED_BY_SIGPIPE = 128 + 13;
+
+/**
+ * Ends the program from inside a syscall with an exit status, as a signal's
+ * default action does; the runtime reports `status` like an `exit()`.
+ */
+export class ProcessExit extends Error {
+  constructor(readonly status: number) {
+    super(`exit ${status}`);
+  }
+}
+
 /** A kernel error from a syscall, carrying its errno name. */
 export class SyscallError extends Error {
   constructor(readonly code: string) {
@@ -75,9 +88,15 @@ export class KernelStreams {
   /** Emscripten streams per kernel descriptor (dups and fork clones included). */
   private readonly refs = new Map<number, number>();
 
+  /**
+   * @param sigpipe Whether the program ignores or handles SIGPIPE (its
+   *   handler has then run): the toolchain's `slicc_sigpipe()`. Absent, or
+   *   false, is SIGPIPE's default action.
+   */
   constructor(
     private readonly Fs: ProcessFs,
-    private readonly sys: ProcessSys
+    private readonly sys: ProcessSys,
+    private readonly sigpipe?: () => boolean
   ) {}
 
   /** Back `stream` by kernel descriptor `kfd`. */
@@ -95,7 +114,20 @@ export class KernelStreams {
     pipefs.createPipe = () => {
       const [read, write] = this.call(() => this.sys.pipe());
       // Emscripten's own pipe supplies the nodes (fstat, S_ISFIFO); its buffer stays unused.
-      const fds = createPipe();
+      let fds: ReturnType<ProcessPipeFs['createPipe']>;
+      try {
+        fds = createPipe();
+      } catch (e) {
+        // Its fd table is full (EMFILE): give the kernel its two ends back.
+        for (const kfd of [read, write]) {
+          try {
+            this.sys.close(kfd);
+          } catch {
+            /* already gone */
+          }
+        }
+        throw e;
+      }
       this.attach(this.Fs.getStream(fds.readable_fd) as ProcessStream, read);
       this.attach(this.Fs.getStream(fds.writable_fd) as ProcessStream, write);
       return fds;
@@ -120,8 +152,20 @@ export class KernelStreams {
           buffer.set(bytes, offset);
           return bytes.length;
         }),
-      write: (_s, buffer, offset, length) =>
-        this.call(() => this.sys.write(kfd, buffer.slice(offset, offset + length))),
+      write: (_s, buffer, offset, length) => {
+        try {
+          return this.sys.write(kfd, buffer.slice(offset, offset + length));
+        } catch (e) {
+          // A pipe with no reader: SIGPIPE ends the program unless it ignores
+          // or handles the signal; then the write fails with EPIPE.
+          if (e instanceof SyscallError && e.code === 'EPIPE' && !this.sigpipe?.()) {
+            throw new ProcessExit(KILLED_BY_SIGPIPE);
+          }
+          return this.call(() => {
+            throw e;
+          });
+        }
+      },
       fsync: () => 0,
       poll: () => {
         const state = this.call(() => this.sys.poll(kfd));
