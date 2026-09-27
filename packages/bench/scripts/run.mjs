@@ -378,9 +378,19 @@ function failInto(record, stage, err) {
  * Run one task on the leader and judge it. Returns `{ record, result }`; never throws. A judge
  * failure keeps the result, so the next invocation re-judges it instead of re-running the agent.
  */
+/** Record `config`, including whether this condition seeded bundled skills. */
+export function runConfig(harness, model, condition) {
+  return {
+    harness,
+    model,
+    skills: condition.name,
+    default_skills: Boolean(condition.builtin),
+  };
+}
+
 async function runOne(r, ctx) {
   const { leader, opts, judge } = ctx;
-  const config = { harness: opts.harness, model: r.model, skills: r.condition.name };
+  const config = runConfig(opts.harness, r.model, r.condition);
   const runId = `${safe(r.task.id).slice(0, 40)}-${safe(r.model)}-${safe(config.skills)}-r${r.repeat}-${Date.now().toString(36)}`;
   const record = {
     benchmark: r.set.benchmark,
@@ -400,6 +410,7 @@ async function runOne(r, ctx) {
       runId,
       model: r.model,
       timeoutSeconds: opts.timeout,
+      condition: r.condition,
       ...(opts.maxTaskCost ? { maxCost: opts.maxTaskCost } : {}),
       ...(ctx.capture ? { capture: ctx.capture } : {}),
       ...(ctx.now ? { now: ctx.now } : {}),

@@ -937,6 +937,17 @@ videos use the existing media preview. The worker needs no browser DOM APIs.
 
 ---
 
+## flags
+
+Read or set a local feature-flag override. `flags set <id> on|off` persists it for the next session; `flags get <id>` prints the resolved value. Unknown ids and flags that are not user-toggleable on this float exit 1.
+
+`no-default-skills` (off by default) stops bundled skills from being seeded into `/workspace/skills`. See [feature flags](feature-flags.md).
+
+```bash
+flags set no-default-skills on
+flags get no-default-skills
+```
+
 ## workflow
 
 Run Claude Code dynamic workflows natively. A workflow is a plain-JavaScript orchestration script that fans out work to many parallel subagents while keeping intermediate results in script variables rather than stuffing them into the model's context window.

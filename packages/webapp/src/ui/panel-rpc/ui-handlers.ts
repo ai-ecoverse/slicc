@@ -1,7 +1,34 @@
 /**
  * Theme, layout, and computer-tab panel-RPC handlers.
  */
+import {
+  FEATURE_FLAG_STORAGE_KEY,
+  type FeatureFlagId,
+  readFeatureFlagOverrides,
+  setFeatureFlagOverride,
+} from '../../core/feature-flags.js';
+import { knownFeatureFlagId } from '../../kernel/feature-flag-local.js';
 import type { PanelRpcHandlers } from '../../kernel/panel-rpc.js';
+
+/**
+ * Page-side write for `flags set`. Returns the stored overrides JSON so the
+ * worker can mirror it before the storage-sync forward arrives.
+ */
+export function buildFeatureFlagHandler() {
+  return {
+    'feature-flag-set': ({ id, value }: { id: string; value: 'on' | 'off' }) => {
+      const flagId: FeatureFlagId | null = knownFeatureFlagId(id);
+      if (!flagId) throw new Error(`unknown flag ${id}`);
+      setFeatureFlagOverride(flagId, value);
+      if (readFeatureFlagOverrides()[flagId] !== value) {
+        throw new Error(`flag ${id} cannot be overridden on this float`);
+      }
+      return {
+        overridesJson: localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}',
+      };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
 
 export function buildThemeHandler() {
   return {

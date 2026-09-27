@@ -18,7 +18,8 @@
  * because that is what the skills axis measures.
  *
  * Skills are staged per condition by rewriting /workspace/skills over `exec`; the leader's own
- * skills are stashed once and restored at the end.
+ * skills are stashed once and restored at the end. `none` also turns on `no-default-skills`
+ * before `new-session`, because unit init re-seeds any bundled skill file that is missing.
  */
 
 import { createHash } from 'node:crypto';
@@ -91,9 +92,60 @@ export function parseSkillsCondition(text) {
   return { name: String(text).trim(), builtin: base === 'builtin', extras: parts };
 }
 
+/**
+ * `none` suppresses bundled seeding; every other base turns it back on.
+ * The flag is set before the directory is rebuilt, and it has to survive
+ * until the next `new-session` (unit init is what re-seeds missing files).
+ */
+export function skillsFlagCommand(condition) {
+  return `flags set no-default-skills ${condition.builtin ? 'off' : 'on'}`;
+}
+
+/** One name per line. A missing directory prints nothing and exits 0. */
+export function listSkillNamesCommand(dir) {
+  return `ls ${quote(dir)} || true`;
+}
+
+/** `ls` output → sorted unique names. Skill names have no whitespace. */
+export function parseSkillNames(text) {
+  return [...new Set(String(text ?? '').split(/\s+/).filter(Boolean))].sort();
+}
+
+/**
+ * Top-level names `/workspace/skills` should have after `new-session`:
+ * the stashed builtin set when the condition includes it, plus each extra
+ * set, and nothing else. `none` with no extras is empty.
+ */
+export function expectedSkillNames(condition, { builtin = [], extras = [] } = {}) {
+  const names = new Set(condition.builtin ? builtin : []);
+  for (const list of extras) for (const name of list) names.add(name);
+  return [...names].sort();
+}
+
+function showNames(names) {
+  if (names.length === 0) return '(empty)';
+  if (names.length > 40) return `${names.slice(0, 40).join(', ')}, … (${names.length})`;
+  return names.join(', ');
+}
+
+/**
+ * Null when the directory matches. Otherwise a sentence a failed run can
+ * store: bundled skills came back, or the staged set did not stick.
+ */
+export function skillsMismatch(condition, actual, expected) {
+  const a = [...actual].sort();
+  const e = [...expected].sort();
+  if (a.length === e.length && a.every((name, i) => name === e[i])) return null;
+  return (
+    `skills condition ${condition.name}: /workspace/skills has ${showNames(a)} after new-session; ` +
+    `expected ${showNames(e)}. Bundled skills were re-seeded, or the staged set did not stick.`
+  );
+}
+
 /** The shell command that makes /workspace/skills match a condition. */
 export function stageSkillsCommand(condition) {
   const steps = [
+    skillsFlagCommand(condition),
     `if [ ! -d ${SKILLS_STASH} ]; then mkdir -p ${SKILLS_STASH} && cp -r ${SKILLS_DIR}/. ${SKILLS_STASH}/; fi`,
     `rm -rf ${SKILLS_DIR}`,
     `mkdir -p ${SKILLS_DIR}`,
@@ -106,7 +158,10 @@ export function stageSkillsCommand(condition) {
 }
 
 export function restoreSkillsCommand() {
-  return `if [ -d ${SKILLS_STASH} ]; then rm -rf ${SKILLS_DIR} && mkdir -p ${SKILLS_DIR} && cp -r ${SKILLS_STASH}/. ${SKILLS_DIR}/; fi`;
+  // Leave the leader seeding again. A reused leader's last task may have been
+  // `none`, and the restored files are the bundled set. The flag runs after
+  // the copy so a missing stash still clears it.
+  return `if [ -d ${SKILLS_STASH} ]; then rm -rf ${SKILLS_DIR} && mkdir -p ${SKILLS_DIR} && cp -r ${SKILLS_STASH}/. ${SKILLS_DIR}/; fi; flags set no-default-skills off`;
 }
 
 export async function stageSkills(leader, condition) {
@@ -116,6 +171,30 @@ export async function stageSkills(leader, condition) {
 
 export async function restoreSkills(leader) {
   await must(leader, restoreSkillsCommand());
+}
+
+async function skillNames(leader, dir) {
+  const r = await must(leader, listSkillNamesCommand(dir));
+  return parseSkillNames(r.stdout);
+}
+
+/**
+ * After `new-session`, `/workspace/skills` must be exactly the condition.
+ * A mismatch throws, so a re-seed cannot pass as a `none` run.
+ */
+export async function assertStagedSkills(leader, condition) {
+  const actual = await skillNames(leader, SKILLS_DIR);
+  const builtin = condition.builtin ? await skillNames(leader, SKILLS_STASH) : [];
+  const extras = [];
+  for (const extra of condition.extras) {
+    extras.push(await skillNames(leader, `${EXTRA_SKILLS_ROOT}/${extra}`));
+  }
+  const mismatch = skillsMismatch(
+    condition,
+    actual,
+    expectedSkillNames(condition, { builtin, extras })
+  );
+  if (mismatch) throw new Error(mismatch);
 }
 
 /** `playwright-cli tab-list` → `[{ id, url }]` (`[<targetId>] <url> "<title>"` lines). */
@@ -684,6 +763,7 @@ export async function runTask({
   costPollMs = COST_POLL_MS,
   busyProbeMs = BUSY_PROBE_MS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  condition = null,
 }) {
   if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error(`bad run id ${runId}`);
   const dir = `/tmp/bench/${runId}`;
@@ -699,6 +779,7 @@ export async function runTask({
     }
     await closeTabs(leader);
     await mustCli(leader, ['new-session', '--erase']);
+    if (condition) await assertStagedSkills(leader, condition);
     const modelId = (await mustCli(leader, ['model', model])).stdout.trim();
     const before = await spend(leader);
 

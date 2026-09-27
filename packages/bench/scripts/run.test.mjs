@@ -16,10 +16,26 @@ import {
   readTrace,
   recordPath,
   resumeAction,
+  runConfig,
   selectTasks,
   shardRuns,
   tracePath,
 } from './run.mjs';
+
+describe('runConfig', () => {
+  it('records whether the condition seeds bundled skills', () => {
+    expect(runConfig('sliccy@1', 'm', { name: 'none', builtin: false })).toEqual({
+      harness: 'sliccy@1',
+      model: 'm',
+      skills: 'none',
+      default_skills: false,
+    });
+    expect(runConfig('sliccy@1', 'm', { name: 'none+ecoverse', builtin: false }).default_skills).toBe(
+      false
+    );
+    expect(runConfig('sliccy@1', 'm', { name: 'builtin', builtin: true }).default_skills).toBe(true);
+  });
+});
 
 const TASK = withDigests({
   id: 'own-1',

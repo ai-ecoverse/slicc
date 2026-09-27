@@ -30,6 +30,7 @@ import { createEsbuildCommand } from './esbuild-command.js';
 import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFfprobeCommand } from './ffprobe-command.js';
+import { createFlagsCommand } from './flags-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createGelatiereCommand } from './gelatiere-command.js';
 import { createHearCommand } from './hear-command.js';
@@ -282,6 +283,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       : []),
     createFfmpegCommand(),
     createFfprobeCommand(),
+    createFlagsCommand(),
     createWebhookCommand(options.webhook),
     createWebsocatCommand(),
     createCrontaskCommand(options.crontask),

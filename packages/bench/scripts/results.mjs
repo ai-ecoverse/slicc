@@ -1,7 +1,7 @@
 /**
  * Run records → result files and a report. Pure.
  *
- * A run record is `{ benchmark, task_id, repeat, config: { harness, model, skills }, score,
+ * A run record is `{ benchmark, task_id, repeat, config: { harness, model, skills, default_skills }, score,
  * verdict, outcome, metrics: { steps, duration, cost, tokens }, error? }`. Three kinds:
  * - errored (`error`): never finished running; reported, never counted as a failure, because
  *   #3180's matrix is sparse and an absent cell must not read as a fail;

@@ -11,6 +11,7 @@
 
 import { getPreset } from '../base/dock-tree-spec.js';
 import { createLogger } from '../base/logger.js';
+import { noBundledSkillSeed } from '../core/feature-flags.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { SkillDiscoverySource } from '../skills/index.js';
 import { discoverSkills } from '../skills/index.js';
@@ -382,12 +383,20 @@ export function createDefaultSkills(
   fs: VirtualFS,
   skillsDir: string = '/workspace/skills'
 ): Promise<void> {
-  return shareOnFs(defaultSkillsInflight, fs, skillsDir, () =>
-    createDefaultSkillsOnce(fs, skillsDir)
+  // The flag is part of the share key: a seed started while it was off must
+  // not be what a later `none` session waits on, or the other way around.
+  const skipBundledSkills = noBundledSkillSeed();
+  const key = `${skillsDir}\0${skipBundledSkills ? 'skip-skills' : 'seed-skills'}`;
+  return shareOnFs(defaultSkillsInflight, fs, key, () =>
+    createDefaultSkillsOnce(fs, skillsDir, skipBundledSkills)
   );
 }
 
-async function createDefaultSkillsOnce(fs: VirtualFS, skillsDir: string): Promise<void> {
+async function createDefaultSkillsOnce(
+  fs: VirtualFS,
+  skillsDir: string,
+  skipBundledSkills: boolean
+): Promise<void> {
   const prefix = '/packages/vfs-root';
   const defaultFiles = getDefaultFileLoaders();
 
@@ -400,6 +409,9 @@ async function createDefaultSkillsOnce(fs: VirtualFS, skillsDir: string): Promis
     const isSkill = vfsPath.startsWith('/workspace/skills');
     const isScript = vfsPath.startsWith('/workspace/scripts');
     if (!isSkill && !isScript) continue;
+    // `no-default-skills`: leave /workspace/skills untouched (missing bundled
+    // files stay missing). /workspace/scripts and /shared still seed.
+    if (isSkill && skipBundledSkills) continue;
 
     // Adjust path if skillsDir is different (e.g., for scoops)
     let targetPath = vfsPath;

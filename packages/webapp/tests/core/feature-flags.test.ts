@@ -93,6 +93,12 @@ describe('feature flag registry', () => {
         defaultValue: 'on',
         userToggleable: false,
       }),
+      expect.objectContaining({
+        id: 'no-default-skills',
+        label: 'No default skills',
+        defaultValue: 'off',
+        userToggleable: true,
+      }),
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
     expect(listFlags()[2]).not.toHaveProperty('floatDefaults');
@@ -254,6 +260,7 @@ describe('feature flag registry', () => {
       'compact-on-idle': 'on',
       'memory-v2': 'off',
       'live-model-catalog': 'on',
+      'no-default-skills': 'off',
     });
     expect(
       resolveFlags(
@@ -269,6 +276,7 @@ describe('feature flag registry', () => {
       'compact-on-idle': 'on',
       'memory-v2': 'off',
       'live-model-catalog': 'on',
+      'no-default-skills': 'off',
     });
   });
 

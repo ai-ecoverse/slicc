@@ -15,7 +15,8 @@ export type FeatureFlagId =
   | 'multiple-cones'
   | 'compact-on-idle'
   | 'memory-v2'
-  | 'live-model-catalog';
+  | 'live-model-catalog'
+  | 'no-default-skills';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -127,6 +128,19 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'on',
     userToggleable: false,
     since: '2026-09-22',
+  }),
+  Object.freeze({
+    id: 'no-default-skills',
+    label: 'No default skills',
+    description:
+      'Do not seed bundled skills into /workspace/skills. Skills already on disk stay, and the cone only sees those. Shared files and /etc still seed.',
+    // Off: a normal cone still receives the bundled library. On is the
+    // benchmark's `none` condition (and anyone who wants a cone with no
+    // shipped skills). Local override, so a shell command can flip it for
+    // the next new-session without a worker release.
+    defaultValue: 'off',
+    userToggleable: true,
+    since: '2026-09-27',
   }),
 ]);
 
@@ -307,6 +321,14 @@ export function coerceFeatureFlagValue(value: string | undefined): boolean {
 
 export function isFeatureEnabled(id: FeatureFlagId): boolean {
   return coerceFeatureFlagValue(getFeatureValue(id));
+}
+
+/**
+ * Bundled `/workspace/skills` files are not written when this is on.
+ * Callers that seed other trees (`/shared`, `/etc`) stay on their own path.
+ */
+export function noBundledSkillSeed(): boolean {
+  return isFeatureEnabled('no-default-skills');
 }
 
 function getBundledDefault(definition: FeatureFlagDefinition, float: FeatureFlagFloat): string {
