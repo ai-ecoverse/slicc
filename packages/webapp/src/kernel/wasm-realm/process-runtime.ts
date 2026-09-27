@@ -122,10 +122,15 @@ interface RunningModule {
 /** Evaluate the glue with `Module` (overridable in tests). */
 export type GlueEvaluator = (glue: string, module: object) => void;
 
+/** The glue without the `#!/usr/bin/env node` line of an extensionless Emscripten output. */
+export function glueBody(glue: string): string {
+  return glue.startsWith('#!') ? glue.slice(glue.indexOf('\n') + 1) : glue;
+}
+
 const evaluateGlue: GlueEvaluator = (glue, module) => {
   // ENV is the glue's own variable: filled right after the glue body runs,
   // before the (asynchronous) instantiation reads it.
-  new Function('Module', `${glue}\n;Object.assign(ENV, Module.sliccEnv);`)(module);
+  new Function('Module', `${glueBody(glue)}\n;Object.assign(ENV, Module.sliccEnv);`)(module);
 };
 
 /** Run the program of `init` to completion; resolves to its exit code. */

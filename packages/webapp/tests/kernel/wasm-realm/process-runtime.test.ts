@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SyncFsResult } from '../../../src/kernel/realm/sync-fs-dispatch.js';
 import type { SyncSabTransport } from '../../../src/kernel/realm/sync-sab-bridge.js';
 import {
+  glueBody,
   kernelSys,
   type ProcessFs,
   type ProcessSys,
@@ -100,5 +101,12 @@ describe('wireKernelStdio', () => {
     expect(() => streams[0].stream_ops.read(null, new Uint8Array(1), 0, 1)).toThrow(
       expect.objectContaining({ errno: 8 })
     );
+  });
+});
+
+describe('glueBody', () => {
+  it("drops an extensionless output's shebang line and keeps other glue as is", () => {
+    expect(glueBody('#!/usr/bin/env node\nvar Module = 1;\n')).toBe('var Module = 1;\n');
+    expect(glueBody('var Module = 1;')).toBe('var Module = 1;');
   });
 });
