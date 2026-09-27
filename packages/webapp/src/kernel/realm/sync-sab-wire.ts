@@ -29,6 +29,7 @@
  *   i32[OFFSET]  payload offset this chunk starts at (echo of the request)
  */
 
+import type { WasmSyscall } from '../wasm-realm/process.js';
 import type { SyncExecRequest } from './sync-exec-dispatch.js';
 import type { SyncFsRequest, SyncFsResult } from './sync-fs-dispatch.js';
 
@@ -71,7 +72,10 @@ export const SYNC_SAB_NEXT_MSG = 'sync-sab-next';
  * realm, so the responder binds the host-minted token itself and never trusts
  * a token the realm supplies — a realm cannot name another realm's scope.
  */
-export type SyncSabRequestBody = Omit<SyncFsRequest, 'token'> | Omit<SyncExecRequest, 'token'>;
+export type SyncSabRequestBody =
+  | Omit<SyncFsRequest, 'token'>
+  | Omit<SyncExecRequest, 'token'>
+  | WasmSyscall;
 
 export interface SyncSabReqMsg {
   type: typeof SYNC_SAB_REQ_MSG;

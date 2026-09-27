@@ -21,6 +21,7 @@
  * realm that timed out mid-drain never sends `sync-sab-next`).
  */
 
+import type { WasmSyscall } from '../wasm-realm/process.js';
 import { dispatchSyncExec, isSyncExecRequest, type SyncExecRequest } from './sync-exec-dispatch.js';
 import { dispatchSyncFs, type SyncFsRequest, type SyncFsResult } from './sync-fs-dispatch.js';
 import { SYNC_EXEC_MAX_TIMEOUT_MS, SYNC_FS_REQUEST_TIMEOUT_MS } from './sync-fs-wire.js';
@@ -61,9 +62,18 @@ interface PendingPayload {
 /** Retain an undrained payload at least as long as any realm-side wait can last. */
 const PENDING_TTL_MS = Math.max(SYNC_FS_REQUEST_TIMEOUT_MS, SYNC_EXEC_MAX_TIMEOUT_MS) + 5_000;
 
+/** A request as dispatched: the body with the host's token bound. */
+export type SyncSabDispatchRequest =
+  | SyncFsRequest
+  | SyncExecRequest
+  | (WasmSyscall & { token: string });
+
 export interface SyncSabResponderOptions {
-  /** Override the dispatchers (tests). Production uses the token-scoped ones. */
-  dispatch?: (req: SyncFsRequest | SyncExecRequest) => Promise<SyncFsResult>;
+  /**
+   * Override the dispatchers: tests, and the wasm realm (#3530), whose
+   * processes also send syscalls. Production realms use the token-scoped ones.
+   */
+  dispatch?: (req: SyncSabDispatchRequest) => Promise<SyncFsResult>;
 }
 
 /**
@@ -82,10 +92,20 @@ export function attachSyncSabResponder(
 
   const dispatch =
     opts.dispatch ??
-    ((req: SyncFsRequest | SyncExecRequest) =>
-      isSyncExecRequest(req)
-        ? dispatchSyncExec(req, { allowNoDeadline: true })
-        : dispatchSyncFs(req));
+    ((req: SyncSabDispatchRequest): Promise<SyncFsResult> => {
+      // A realm speaks fs and exec. Anything else (a wasm-realm syscall, which
+      // only the wasm realm's own dispatcher serves) is not implemented here.
+      const realmReq = req as SyncFsRequest | SyncExecRequest;
+      if (isSyncExecRequest(realmReq)) {
+        return dispatchSyncExec(realmReq, { allowNoDeadline: true });
+      }
+      if ('path' in realmReq) return dispatchSyncFs(realmReq);
+      return Promise.resolve({
+        ok: false,
+        errno: 'ENOSYS',
+        message: 'sync-sab: unsupported request',
+      });
+    });
 
   function drop(id: number): void {
     const entry = pending.get(id);
@@ -152,7 +172,7 @@ export function attachSyncSabResponder(
     // Bind the HOST's token — whatever the realm may have put in the body is
     // discarded by the spread order below.
     const body = (data as SyncSabReqMsg).req;
-    const req = { ...body, token } as SyncFsRequest | SyncExecRequest;
+    const req = { ...body, token } as SyncSabDispatchRequest;
     let dispatched: Promise<SyncFsResult>;
     try {
       dispatched = dispatch(req);
