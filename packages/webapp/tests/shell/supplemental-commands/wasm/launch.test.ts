@@ -9,6 +9,7 @@ vi.mock('../../../../src/kernel/realm/wasm-compiler.js', () => ({
 
 import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
 import { bytesSource, FdTable, sinkFile } from '../../../../src/kernel/wasm-realm/fd-table.js';
+import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
 import { WasmSession } from '../../../../src/shell/supplemental-commands/wasm/launch.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
@@ -235,6 +236,28 @@ describe('WasmSession', () => {
     expect(pm.signal).toHaveBeenCalledWith(900, 'SIGTERM');
     expect(kill(900, 10)).toBe(false); // the table has no SIGUSR1
     expect(kill(901, 0)).toBe(false);
+  });
+
+  it('runs a shell child on a terminal stdin at once, with no stdin (it never ends)', async () => {
+    fakeProcesses();
+    const exec = vi.fn(async () => ({ stdout: 'ok\n', stderr: '', exitCode: 0 }));
+    const { config } = processConfig();
+    const session = new WasmSession(
+      ctx(installed, exec as unknown as CommandContext['exec']),
+      config,
+      () => {}
+    );
+    const spawner = await parentSpawner(session);
+    const out: Uint8Array[] = [];
+    const fds = new FdTable();
+    const tty = new KernelTty({ write: () => {} }, () => {});
+    fds.install(tty.file());
+    fds.install(sinkFile((b) => out.push(b)));
+    fds.install(sinkFile(() => {}));
+    const child = await spawner({ file: 'which', argv: ['which', 'ls'], env: {}, cwd: '/w' }, fds);
+    expect(await child.exited).toBe(0);
+    expect(exec).toHaveBeenCalledWith('which', expect.objectContaining({ stdin: '' }));
+    expect(new TextDecoder().decode(out[0])).toBe('ok\n');
   });
 
   it('ends a shell child on its own process signal, and on killAll', async () => {

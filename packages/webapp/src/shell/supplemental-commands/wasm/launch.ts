@@ -344,7 +344,10 @@ export class WasmSession {
     this.shellByPid.set(pid, controller);
     const exited = (async () => {
       try {
-        const stdin = fds.has(0) ? await readAll(fds.get(0)) : new Uint8Array(0);
+        // A shell command takes its stdin whole, read to the end first; a
+        // terminal never ends (until ^D), so on one it gets none.
+        const onTerminal = fds.has(0) && fds.get(0).file.tty !== undefined;
+        const stdin = fds.has(0) && !onTerminal ? await readAll(fds.get(0)) : new Uint8Array(0);
         const r = await exec(req.file, {
           args: req.argv.slice(1),
           cwd: req.cwd,
