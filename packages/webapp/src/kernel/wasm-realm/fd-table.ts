@@ -14,7 +14,15 @@
 import { KernelPipe, PipeError } from './pipe.js';
 
 /** POSIX errno names the kernel reports to a process. */
-export type KernelErrno = 'EBADF' | 'EPIPE' | 'EMFILE' | 'EINVAL' | 'ENOENT' | 'ECHILD' | 'ENOSYS';
+export type KernelErrno =
+  | 'EBADF'
+  | 'EPIPE'
+  | 'EMFILE'
+  | 'EINVAL'
+  | 'ENOENT'
+  | 'ECHILD'
+  | 'ENOSYS'
+  | 'ESPIPE';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {
@@ -42,6 +50,10 @@ export interface KernelFile {
   close(): void;
   /** Readiness; absent means never waits (a byte source, a sink). */
   poll?(): PollState;
+  /** lseek(2) on the shared offset; absent: not seekable (ESPIPE). */
+  seek?(offset: number, whence: number): Promise<number>;
+  /** Write back buffered content (a VFS file). */
+  flush?(): Promise<void>;
 }
 
 /** A description's readiness: its own answer, or ready in whatever direction it serves. */

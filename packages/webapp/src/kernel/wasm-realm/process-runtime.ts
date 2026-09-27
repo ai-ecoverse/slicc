@@ -13,6 +13,7 @@
  *   this worker in `Atomics.wait` until a writer (another process) delivers.
  */
 import { mountVfsIntoEmscripten } from '../realm/emscripten-vfs-hook.js';
+import { type LiveFsNode, liveNodePath } from '../realm/live-vfs-fs.js';
 import { SyncFsCache } from '../realm/sync-fs-cache.js';
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import {
@@ -31,7 +32,8 @@ import {
   SyscallError,
 } from './kernel-streams.js';
 import { createProcessKernel, type ProcessKernel } from './process-children.js';
-import type { WasmProcessInitMsg } from './protocol.js';
+import { describeForFork, restoreForkedStreams } from './process-fork.js';
+import type { ForkState, WasmProcessInitMsg } from './protocol.js';
 
 export {
   type ProcessFs,
@@ -65,6 +67,14 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
     poll(fd) {
       return json(call({ op: 'fd-poll', fd }, `fd-poll ${fd}`)) as PollState;
     },
+    openVfs(path, flags, position) {
+      return json(
+        call({ op: 'fd-open-vfs', path, flags, position }, `fd-open-vfs ${path}`)
+      ) as number;
+    },
+    seek(fd, offset, whence) {
+      return json(call({ op: 'fd-seek', fd, offset, whence }, `fd-seek ${fd}`)) as number;
+    },
   };
 }
 
@@ -81,6 +91,7 @@ interface RunningModule {
   FS: ProcessFs;
   callMain(args: string[]): number | undefined;
   sliccRunMain?: (args: string[]) => number | undefined;
+  sliccForkChild?: (state: ForkState & { pid: number }) => number | undefined;
   PIPEFS?: ProcessPipeFs;
   /** 1 when the program ignores or handles SIGPIPE (the toolchain's `slicc_sigpipe`). */
   sliccSigpipe?: () => number;
@@ -107,6 +118,7 @@ const GLUE_TRAILER = [
   "if (typeof FS !== 'undefined') Module.FS ??= FS;",
   "if (typeof callMain === 'function') Module.callMain ??= callMain;",
   "if (typeof sliccRunMain === 'function') Module.sliccRunMain ??= sliccRunMain;",
+  "if (typeof sliccForkChild === 'function') Module.sliccForkChild ??= sliccForkChild;",
   "if (typeof PIPEFS !== 'undefined') Module.PIPEFS ??= PIPEFS;",
   // The toolchain's SIGPIPE disposition query (exported once instantiated).
   "Module.sliccSigpipe ??= () => (typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
@@ -146,6 +158,7 @@ export async function runWasmProcess(
   const module = {
     noInitialRun: true,
     thisProgram: init.argv0,
+    sliccPid: init.pid,
     sliccEnv: init.env,
     print: say(1),
     printErr: say(2),
@@ -188,7 +201,8 @@ export async function runWasmProcess(
     { cwd: init.cwd }
   );
   const streams = new KernelStreams(running.FS, sys, () => running.sliccSigpipe?.() === 1);
-  wireKernelStdio(running.FS, streams);
+  if (init.fork) restoreForkedStreams(running.FS, streams, init.fork.streams ?? []);
+  else wireKernelStdio(running.FS, streams);
   if (running.PIPEFS) streams.usePipes(running.PIPEFS);
   running.sliccKernel = createProcessKernel({
     transport,
@@ -196,8 +210,17 @@ export async function runWasmProcess(
     env: init.env,
     beforeSpawn: () => vfs.flush(),
     afterChild: () => vfs.invalidate(),
+    describeFork: () =>
+      describeForFork(running.FS, sys, streams, (s) =>
+        liveNodePath(s.node as unknown as LiveFsNode)
+      ),
   });
   try {
+    if (init.fork) {
+      // A forked child: become the parent's copy and go on from fork() returning 0.
+      if (!running.sliccForkChild) throw new Error(`${init.argv0} cannot resume a fork`);
+      return running.sliccForkChild({ ...init.fork, pid: init.pid }) ?? 0;
+    }
     // A program with the fork emulation (slicc-fork.js) drives its forks from sliccRunMain.
     return (running.sliccRunMain ?? running.callMain)(init.args) ?? 0;
   } catch (e) {

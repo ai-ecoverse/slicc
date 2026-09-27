@@ -16,6 +16,7 @@
 import type { CommandContext } from 'just-bash';
 import { compileWasmFromVfs } from '../../../kernel/realm/wasm-compiler.js';
 import {
+  type ChildForker,
   type ChildHandle,
   type ChildSpawner,
   type ChildSpawnRequest,
@@ -23,6 +24,7 @@ import {
 } from '../../../kernel/wasm-realm/children.js';
 import type { FdTable, OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
+import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
 import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
@@ -60,6 +62,11 @@ export interface LaunchRequest extends WasmTarget {
   ppid?: number;
   /** Canceled while the program was read or compiled: it never starts. */
   signal?: AbortSignal;
+}
+
+interface StartRequest extends LaunchRequest {
+  program: WasmProgram;
+  fork?: ForkState;
 }
 
 /** The glue's module: `x.js` → `x.wasm`, `x` → `x.wasm`. */
@@ -170,11 +177,16 @@ export class WasmSession {
       req.fds.closeAll();
       throw e;
     }
+    return this.start({ ...req, program: { glue, module } });
+  }
+
+  /** Start a loaded program: a new process, or (with `fork`) a forked copy of its parent. */
+  private start(req: StartRequest): WasmProcessHandle {
     const pm = this.processConfig?.processManager;
     const { pid } = this.register('wasm', [req.argv0, ...req.args], req.cwd, req.env, req.ppid);
     const handle = spawnWasmProcess({
       pid,
-      program: { glue, module },
+      program: req.program,
       argv0: req.argv0,
       args: req.args,
       env: req.env,
@@ -183,6 +195,8 @@ export class WasmSession {
       fs: this.ctx.fs,
       onError: this.onError,
       spawner: this.spawner(pid),
+      forker: this.forker(pid, req),
+      ...(req.fork ? { fork: req.fork } : {}),
     });
     this.live.add(handle);
     // `kill` / `ps`: a terminating signal to the pid ends the worker at once.
@@ -219,6 +233,20 @@ export class WasmSession {
     const module = modulePath(glue);
     if (!(await this.ctx.fs.exists(glue)) || !(await this.ctx.fs.exists(module))) return undefined;
     return { glue, module, argv0: baseName(argv0 || file) };
+  }
+
+  /** fork(2) of process `ppid`: the same program, resumed from the parent's state. */
+  private forker(ppid: number, parent: StartRequest): ChildForker {
+    return async (state, fds) => {
+      const handle = this.start({
+        ...parent,
+        cwd: state.cwd ?? parent.cwd,
+        fds,
+        ppid,
+        fork: state,
+      });
+      return { pid: handle.pid, exited: handle.exited };
+    };
   }
 
   private spawner(ppid: number): ChildSpawner {

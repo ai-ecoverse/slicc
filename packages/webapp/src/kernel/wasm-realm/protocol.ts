@@ -21,6 +21,35 @@ export interface WasmProgram {
   module: WebAssembly.Module;
 }
 
+/**
+ * The parent's state at a fork(2) (`slicc-fork.js` in the toolchain): the
+ * child's worker restores it and resumes from fork() returning 0.
+ */
+export interface ForkState {
+  /** The parent's linear memory. */
+  memory: Uint8Array;
+  /** Asyncify's saved call stack, and the stack pointer at the fork() call. */
+  currData: number;
+  forkSp: number;
+  /** Asyncify's call-stack ids as export names (`[id, name]`). */
+  callStackNames: Array<[number, string]>;
+  /** The parent's getpid(), the child's getppid(). */
+  ppid: number;
+  /** The parent's fd table, as the child rebuilds it (filled in by the runtime). */
+  streams?: ForkStream[];
+  /** The parent's working directory (filled in by the runtime). */
+  cwd?: string;
+}
+
+/**
+ * One descriptor of a forked parent: backed by a kernel descriptor of the same
+ * number in the child's table (the fork copied it), or a device the child
+ * reopens by path.
+ */
+export type ForkStream =
+  | { fd: number; kernel: number; kind: 'tty' | 'stream' | 'file' }
+  | { fd: number; path: string; flags: number };
+
 export interface WasmProcessInitMsg {
   type: typeof WASM_PROCESS_INIT;
   pid: number;
@@ -32,6 +61,8 @@ export interface WasmProcessInitMsg {
   cwd: string;
   /** The Atomics/SAB bridge for syscalls and the live VFS. */
   sab: SharedArrayBuffer;
+  /** A forked child: the parent's state to resume from, instead of running main. */
+  fork?: ForkState;
 }
 
 export interface WasmProcessExitMsg {

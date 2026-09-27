@@ -11,8 +11,16 @@
  * start and reap children (`children.ts`); a wait parks the worker the same way.
  */
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
-import { type ChildSpawner, type ChildStdio, ChildTable, SpawnError } from './children.js';
+import {
+  type ChildForker,
+  type ChildSpawner,
+  type ChildStdio,
+  ChildTable,
+  SpawnError,
+} from './children.js';
 import { type FdTable, KernelError, openPipe, pollFile } from './fd-table.js';
+import type { ForkState } from './protocol.js';
+import { type VfsFileFs, vfsFile } from './vfs-file.js';
 
 /** The syscalls of a wasm-realm process (the request bodies on the SAB wire). */
 export type WasmSyscall =
@@ -21,6 +29,8 @@ export type WasmSyscall =
   | { op: 'fd-close'; fd: number }
   | { op: 'fd-pipe' }
   | { op: 'fd-poll'; fd: number }
+  | { op: 'fd-open-vfs'; path: string; flags: number; position: number }
+  | { op: 'fd-seek'; fd: number; offset: number; whence: number }
   | {
       op: 'proc-spawn';
       file: string;
@@ -30,7 +40,8 @@ export type WasmSyscall =
       stdio: ChildStdio[];
     }
   | { op: 'proc-wait'; pid: number; nohang: boolean }
-  | { op: 'proc-captured'; pid: number; slot: number };
+  | { op: 'proc-captured'; pid: number; slot: number }
+  | { op: 'proc-fork'; state: ForkState };
 
 const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-read',
@@ -38,9 +49,12 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-close',
   'fd-pipe',
   'fd-poll',
+  'fd-open-vfs',
+  'fd-seek',
   'proc-spawn',
   'proc-wait',
   'proc-captured',
+  'proc-fork',
 ]);
 
 /** Whether a SAB request is a process syscall (else it is a sync-fs / exec op). */
@@ -52,6 +66,15 @@ export function isWasmSyscall(req: object): req is WasmSyscall {
 /** Largest read one syscall serves: the SAB bridge drains bigger payloads in rounds anyway. */
 const MAX_READ = 1024 * 1024;
 
+export interface WasmProcessOptions {
+  /** Starts the children it spawns. */
+  spawner?: ChildSpawner;
+  /** Starts the children it forks. */
+  forker?: ChildForker;
+  /** The filesystem its VFS file descriptions read and write. */
+  fs?: VfsFileFs;
+}
+
 export class WasmProcess {
   private exited = false;
   private readonly children: ChildTable;
@@ -59,9 +82,9 @@ export class WasmProcess {
   constructor(
     readonly pid: number,
     readonly fds: FdTable,
-    spawner?: ChildSpawner
+    private readonly options: WasmProcessOptions = {}
   ) {
-    this.children = new ChildTable(fds, spawner);
+    this.children = new ChildTable(fds, options.spawner, options.forker);
   }
 
   async syscall(req: WasmSyscall): Promise<SyncFsResult> {
@@ -95,6 +118,18 @@ export class WasmProcess {
         }
         case 'fd-poll':
           return { ok: true, kind: 'json', json: pollFile(this.fds.get(req.fd).file) };
+        case 'fd-open-vfs': {
+          if (!this.options.fs) throw new SpawnError('ENOSYS');
+          const file = vfsFile(this.options.fs, req);
+          return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
+        }
+        case 'fd-seek': {
+          const file = this.fds.get(req.fd).file;
+          if (!file.seek) throw new KernelError('ESPIPE');
+          return { ok: true, kind: 'json', json: await file.seek(req.offset, req.whence) };
+        }
+        case 'proc-fork':
+          return { ok: true, kind: 'json', json: await this.children.fork(req.state) };
         case 'proc-spawn': {
           const { file, argv, env, cwd, stdio } = req;
           const pid = await this.children.spawn({ file, argv, env, cwd }, stdio);

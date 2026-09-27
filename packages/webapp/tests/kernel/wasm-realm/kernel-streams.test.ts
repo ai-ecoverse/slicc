@@ -20,9 +20,10 @@ class ErrnoError extends Error {
 
 function fakeFs(count = 3) {
   const unset = () => -1;
-  const streams: ProcessStream[] = Array.from({ length: count }, () => ({
-    stream_ops: { read: unset, write: unset },
-  }));
+  const streams = Array.from(
+    { length: count },
+    (_, fd) => ({ fd, stream_ops: { read: unset, write: unset } }) as unknown as ProcessStream
+  );
   const fs = { getStream: (fd: number) => streams[fd] ?? null, ErrnoError } as unknown as ProcessFs;
   return { fs, streams };
 }
@@ -38,6 +39,8 @@ function fakeSys(overrides: Partial<ProcessSys> = {}): ProcessSys & { closed: nu
     },
     pipe: () => [3, 4],
     poll: () => ({ readable: true, writable: true, hangup: false }),
+    openVfs: () => 9,
+    seek: (_fd, offset) => offset,
     ...overrides,
   };
 }
