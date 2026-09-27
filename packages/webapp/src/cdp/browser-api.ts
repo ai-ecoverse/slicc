@@ -17,6 +17,7 @@ import {
 } from './cdp-reconnect-policy.js';
 import { raceAbort, throwIfAborted } from './command-abort.js';
 import { HarRecorder } from './har-recorder.js';
+import { MAX_TAB_SESSIONS, SessionCache, type TabSession } from './session-cache.js';
 import type {
   CdpPayload,
   ExecutionWorld,
@@ -53,18 +54,6 @@ export interface TrayTargetProvider {
 
 const FALLBACK_CDP_URL = 'ws://localhost:5710/cdp';
 const log = createLogger('browser-api');
-
-/**
- * How many per-tab CDP sessions the registry keeps alive at once.
- *
- * Every live session costs Chrome one fan-out of every enabled domain's
- * events over the single `/cdp` socket, so an unbounded registry recreates
- * the leak it replaces (a long session drifts toward the Swift proxy's
- * inbound-queue ceiling). Evicting the least-recently-used entry — and
- * telling Chrome about it with `Target.detachFromTarget` — keeps the fan-out
- * bounded; an evicted tab simply re-attaches on next use.
- */
-const MAX_TAB_SESSIONS = 32;
 
 /**
  * Error texts that mean "this CDP session is gone" rather than "the command
@@ -104,19 +93,6 @@ function statsOf(counters: TabLockCounters | undefined): TabLockStats {
     bridgeWaitMs: c.bridgeWaitMs,
     acquisitions: c.acquisitions,
   };
-}
-
-/**
- * One attached tab. `transport` is the channel the session lives on — the
- * local `/cdp` client, or the per-runtime remote transport for a tray target
- * ("{runtimeId}:{localTargetId}") — so a registry entry stays usable after the
- * bridge's active client swapped to another tab's transport.
- */
-interface TabSession {
-  sessionId: string;
-  transport: CDPTransport;
-  /** Set only for remote (tray) targets; drives remote-transport teardown. */
-  remote?: { runtimeId: string; localTargetId: string };
 }
 
 /**
@@ -271,30 +247,17 @@ export class BrowserAPI implements TabHost {
    */
   private _frameContexts = new Map<string, Map<string, number>>();
   /**
-   * One live CDP session per attached target, in least-recently-used order
-   * (`Map` iterates in insertion order and {@link activateSession} re-inserts
-   * on use). Replaces the single `sessionId` slot that made every tab switch
-   * mint — and leak — a session.
+   * One live CDP session per attached target, in least-recently-used order.
+   * Owns the maps + pin/eviction policy; wire detach stays on this class.
    */
-  private _sessions = new Map<string, TabSession>();
+  private readonly sessions = new SessionCache(MAX_TAB_SESSIONS, (targetId, entry) => {
+    log.debug('Evicting least-recently-used CDP session', { targetId });
+    void this.detachSession(targetId, entry);
+  });
   /** Transports already subscribed to the bridge's own CDP event listeners. */
   private _listenedTransports = new Set<CDPTransport>();
   /** Per-target session-replaced subscribers (console/network/routing capture). */
   private _sessionReplacedSubs = new Map<string, Set<SessionChangeCallback>>();
-  /**
-   * Successful session-scoped CDP round trips, per session id — the
-   * "has this command already changed the page?" signal behind
-   * {@link runOnTab}'s replay gate. Keyed by session rather than kept as one
-   * bridge-wide counter so a sibling tab's traffic (which runs while a page
-   * wait has handed the bridge lock away) cannot be mistaken for our own.
-   */
-  private _appliedSends = new Map<string, number>();
-  /**
-   * Tabs with work in flight, by pin count — skipped by LRU eviction so a
-   * `withTab` body (or a page wait that released the bridge lock) cannot have
-   * the session it is using detached underneath it.
-   */
-  private _pinnedTargets = new Map<string, number>();
   /** Per-target lock chains — commands on different tabs no longer queue behind each other. */
   private _tabLocks = new Map<string, Promise<void>>();
   /** Bridge-wide lock chain; see {@link acquireBridgeLock}. */
@@ -417,23 +380,16 @@ export class BrowserAPI implements TabHost {
   private readonly handleDetachedFromTarget = (params: CdpPayload): void => {
     const sessionId = params['sessionId'];
     if (typeof sessionId !== 'string') return;
-    for (const [targetId, entry] of this._sessions) {
-      if (entry.sessionId === sessionId) {
-        this.forgetSession(targetId, entry);
-        return;
-      }
-    }
+    const hit = this.sessions.findBySessionId(sessionId);
+    if (hit) this.forgetSession(hit[0], hit[1]);
   };
   /** The tab itself went away — its session cannot be revived, so drop it. */
   private readonly handleTargetDestroyed = (params: CdpPayload): void => {
     const targetId = params['targetId'];
     if (typeof targetId !== 'string') return;
-    for (const [key, entry] of this._sessions) {
-      if (key === targetId || entry.remote?.localTargetId === targetId) {
-        this.forgetSession(key, entry);
-        return;
-      }
-    }
+    // Match the previous loop: drop the first registry hit only.
+    const hit = this.sessions.findByTargetOrLocalId(targetId)[0];
+    if (hit) this.forgetSession(hit[0], hit[1]);
   };
 
   constructor(client?: CDPTransport) {
@@ -476,7 +432,7 @@ export class BrowserAPI implements TabHost {
 
   /** Credit one successful session-scoped round trip to the replay guard. */
   private noteApplied(sessionId: string): void {
-    this._appliedSends.set(sessionId, (this._appliedSends.get(sessionId) ?? 0) + 1);
+    this.sessions.noteApplied(sessionId);
   }
 
   /**
@@ -596,7 +552,7 @@ export class BrowserAPI implements TabHost {
     // Pinned for the whole body: a body that waits on the page (a navigate
     // waiting for load) would otherwise age into the eviction candidate and
     // lose the session its wait is bound to.
-    const unpin = this.pinTarget(targetId);
+    const unpin = this.sessions.pin(targetId);
     try {
       counters.acquisitions += 1;
       return await this.runOnTab(targetId, fn, signal);
@@ -658,12 +614,12 @@ export class BrowserAPI implements TabHost {
     // abort that landed anywhere in there stops before the body starts.
     throwIfAborted(signal, `about to run a command on tab ${targetId}`);
     const sessionId = tab.sessionId;
-    const before = this._appliedSends.get(sessionId) ?? 0;
+    const before = this.sessions.appliedCount(sessionId);
     try {
       return await fn(tab);
     } catch (err) {
       if (!isStaleSessionError(err)) throw err;
-      const applied = (this._appliedSends.get(sessionId) ?? 0) - before;
+      const applied = this.sessions.appliedCount(sessionId) - before;
       if (applied === 0) throw err; // nothing landed — safe to replay
       this.invalidateSession(targetId);
       const reason = err instanceof Error ? err.message : String(err);
@@ -689,7 +645,7 @@ export class BrowserAPI implements TabHost {
     signal?: AbortSignal
   ): Promise<TabHandle> {
     const sessionId = await this.attachToPageOwned(targetId, owner, signal);
-    const entry = this._sessions.get(targetId);
+    const entry = this.sessions.get(targetId);
     return new TabHandle(
       this,
       targetId,
@@ -1401,7 +1357,7 @@ export class BrowserAPI implements TabHost {
 
       // One session per tab: reuse the live one. Re-attaching on every tab
       // switch is what leaked a session (and its event fan-out) per switch.
-      const existing = this._sessions.get(targetId);
+      const existing = this.sessions.get(targetId);
       if (existing) {
         this.activateSession(targetId, existing);
         return existing.sessionId;
@@ -1669,10 +1625,7 @@ export class BrowserAPI implements TabHost {
 
   /** The transport a live session lives on; the current client if unknown. */
   private transportForSession(sessionId: string): CDPTransport {
-    for (const entry of this._sessions.values()) {
-      if (entry.sessionId === sessionId) return entry.transport;
-    }
-    return this.client;
+    return this.sessions.findBySessionId(sessionId)?.[1].transport ?? this.client;
   }
 
   /**
@@ -1711,7 +1664,7 @@ export class BrowserAPI implements TabHost {
   private releaseLifecycleTransport(transport: CDPTransport): void {
     if (transport === this.localClient) return;
     if (!this._listenedTransports.has(transport)) return;
-    for (const entry of this._sessions.values()) if (entry.transport === transport) return;
+    if (this.sessions.anyOnTransport(transport)) return;
     this._listenedTransports.delete(transport);
     transport.off('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
     transport.off('Runtime.executionContextCreated', this.handleExecutionContextCreated);
@@ -1735,86 +1688,15 @@ export class BrowserAPI implements TabHost {
     this.remoteTargetInfo = null;
     this.setClient(this.localClient);
     if (!remote) return;
-    const stillUsed = [...this._sessions.values()].some(
-      (e) =>
-        e.remote?.runtimeId === remote.runtimeId && e.remote.localTargetId === remote.localTargetId
-    );
-    if (!stillUsed) {
+    if (!this.sessions.anyMatchingRemote(remote.runtimeId, remote.localTargetId)) {
       this.trayTargetProvider?.removeRemoteTransport?.(remote.runtimeId, remote.localTargetId);
-    }
-  }
-
-  /**
-   * Forget applied-send counters for sessions that left the registry.
-   *
-   * Deliberately not done on detach: {@link runOnTab} reads the counter of a
-   * session that has just been dropped — that IS the stale case — so an entry
-   * has to outlive its session. Sweeping on a size cap keeps the map bounded
-   * without racing the reader.
-   */
-  private pruneAppliedSends(): void {
-    if (this._appliedSends.size <= MAX_TAB_SESSIONS * 4) return;
-    const live = new Set([...this._sessions.values()].map((e) => e.sessionId));
-    for (const sessionId of [...this._appliedSends.keys()]) {
-      if (!live.has(sessionId)) this._appliedSends.delete(sessionId);
     }
   }
 
   /** Insert a fresh session and evict the least-recently-used one over the cap. */
   private rememberSession(targetId: string, entry: TabSession): void {
     this.addTransportListeners(entry.transport);
-    this.pruneAppliedSends();
-    this._sessions.set(targetId, entry);
-    this.enforceSessionCap(targetId);
-  }
-
-  /**
-   * Detach least-recently-used sessions until the registry is back under the
-   * cap, skipping tabs with work in flight.
-   *
-   * `protect` is the entry just inserted. Pinned entries are skipped because
-   * detaching a tab whose `withTab` body is still running kills the session
-   * its session-scoped waits are subscribed to: a `navigate` releases the
-   * bridge lock while waiting for load, so touching 32 other tabs used to make
-   * the navigating tab the oldest and cost it the load event it was waiting
-   * for — a 30 s timeout with no explanation. When every candidate is pinned
-   * the cap is exceeded until the next release, which calls back in here.
-   */
-  private enforceSessionCap(protect?: string): void {
-    while (this._sessions.size > MAX_TAB_SESSIONS) {
-      let victim: string | undefined;
-      for (const targetId of this._sessions.keys()) {
-        if (targetId === protect || this._pinnedTargets.has(targetId)) continue;
-        victim = targetId;
-        break;
-      }
-      if (victim === undefined) return; // everything is busy; retry on release
-      const evicted = this._sessions.get(victim);
-      this._sessions.delete(victim);
-      if (evicted) {
-        log.debug('Evicting least-recently-used CDP session', { targetId: victim });
-        void this.detachSession(victim, evicted);
-      }
-    }
-  }
-
-  /**
-   * Pin a tab's registry entry for the length of an operation, so LRU eviction
-   * cannot detach a session that is still being used. Returns the release.
-   * Nested pins (a `withTab` body whose navigate also pins) just count.
-   */
-  private pinTarget(targetId: string): () => void {
-    this._pinnedTargets.set(targetId, (this._pinnedTargets.get(targetId) ?? 0) + 1);
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      const left = (this._pinnedTargets.get(targetId) ?? 1) - 1;
-      if (left > 0) this._pinnedTargets.set(targetId, left);
-      else this._pinnedTargets.delete(targetId);
-      // An overflow that had nothing evictable is waiting for exactly this.
-      this.enforceSessionCap();
-    };
+    this.sessions.remember(targetId, entry);
   }
 
   /**
@@ -1835,9 +1717,7 @@ export class BrowserAPI implements TabHost {
     }
     this.sessionId = entry.sessionId;
     this.attachedTargetId = targetId;
-    // Re-insert so Map iteration order stays least-recently-used first.
-    this._sessions.delete(targetId);
-    this._sessions.set(targetId, entry);
+    this.sessions.touch(targetId, entry);
   }
 
   private notifySessionChange(targetId: string, entry: TabSession): void {
@@ -1867,9 +1747,9 @@ export class BrowserAPI implements TabHost {
 
   /** Remove the registry entry and clear the cursor if it pointed here (synchronous). */
   private unregisterSession(targetId: string): void {
-    const entry = this._sessions.get(targetId);
+    const entry = this.sessions.get(targetId);
     if (entry) this.dropFrameContexts(entry.sessionId);
-    this._sessions.delete(targetId);
+    this.sessions.delete(targetId);
     if (this.attachedTargetId === targetId) {
       this.sessionId = null;
       this.attachedTargetId = null;
@@ -1884,12 +1764,7 @@ export class BrowserAPI implements TabHost {
   private disposeSessionTransport(entry: TabSession): void {
     this.releaseLifecycleTransport(entry.transport);
     if (entry.remote) {
-      const stillUsed = [...this._sessions.values()].some(
-        (e) =>
-          e.remote?.runtimeId === entry.remote?.runtimeId &&
-          e.remote?.localTargetId === entry.remote?.localTargetId
-      );
-      if (!stillUsed) {
+      if (!this.sessions.anyMatchingRemote(entry.remote.runtimeId, entry.remote.localTargetId)) {
         this.trayTargetProvider?.removeRemoteTransport?.(
           entry.remote.runtimeId,
           entry.remote.localTargetId
@@ -1917,7 +1792,7 @@ export class BrowserAPI implements TabHost {
 
   /** Public-path detach for one target; no-op when the tab was never attached. */
   private async dropSession(targetId: string): Promise<void> {
-    const entry = this._sessions.get(targetId);
+    const entry = this.sessions.get(targetId);
     if (!entry) {
       if (this.attachedTargetId === targetId) {
         this.sessionId = null;
@@ -1933,7 +1808,7 @@ export class BrowserAPI implements TabHost {
    * browser has told us (by rejecting a command) that it is already gone.
    */
   private invalidateSession(targetId: string): void {
-    const entry = this._sessions.get(targetId);
+    const entry = this.sessions.get(targetId);
     if (entry) this.forgetSession(targetId, entry);
   }
 
@@ -1943,7 +1818,7 @@ export class BrowserAPI implements TabHost {
    * Entries on other transports are healthy and stay.
    */
   private clearSessionsForTransport(transport: CDPTransport): void {
-    for (const [targetId, entry] of [...this._sessions]) {
+    for (const [targetId, entry] of this.sessions.snapshot()) {
       if (entry.transport === transport) this.forgetSession(targetId, entry);
     }
     // The cursor may have pointed at a survivor's tab; `forgetSession` already
@@ -1952,8 +1827,8 @@ export class BrowserAPI implements TabHost {
 
   /** Drop every session: the bridge itself is going away. */
   private clearSessions(): void {
-    for (const [targetId, entry] of [...this._sessions]) this.forgetSession(targetId, entry);
-    this._sessions.clear();
+    for (const [targetId, entry] of this.sessions.snapshot()) this.forgetSession(targetId, entry);
+    this.sessions.clear();
     this.sessionId = null;
     this.attachedTargetId = null;
   }
