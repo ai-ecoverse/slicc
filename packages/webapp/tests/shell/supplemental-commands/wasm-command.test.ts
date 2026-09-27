@@ -166,4 +166,28 @@ describe('wasm command', () => {
     expect(r.stdout.length).toBeLessThanOrEqual(20);
     expect(r.stderr).toMatch(/output exceeded 20 bytes/);
   });
+
+  it('never starts a program canceled while it was read or compiled', async () => {
+    const controller = new AbortController();
+    compile.mockImplementation(async () => {
+      controller.abort(); // e.g. `timeout` fired during the compile
+      return {};
+    });
+    const c = { ...ctx({ '/w/p.js': 'G', '/w/p.wasm': 'W' }), signal: controller.signal };
+    const r = await runWasmCommand(['p.js'], c as unknown as CommandContext);
+    expect(r.exitCode).toBe(130);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('explains a page without SharedArrayBuffer (not cross-origin isolated)', async () => {
+    vi.stubGlobal('SharedArrayBuffer', undefined);
+    try {
+      const r = await runWasmCommand(['p.js'], ctx({ '/w/p.js': 'G', '/w/p.wasm': 'W' }));
+      expect(r.exitCode).toBe(126);
+      expect(r.stderr).toMatch(/needs SharedArrayBuffer/);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

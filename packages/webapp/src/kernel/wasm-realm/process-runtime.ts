@@ -141,13 +141,10 @@ const evaluateGlue: GlueEvaluator = (glue, module) => {
   run(module);
 };
 
-/**
- * The extension float's workers inherit a CSP without `unsafe-eval`, which the
- * Emscripten glue needs here (the JS realm uses a sandbox iframe instead).
- */
+/** The page's CSP forbids eval, which evaluating the Emscripten glue needs. */
 export const EVAL_BLOCKED =
-  "the wasm realm evaluates the program's Emscripten glue, and this float's CSP forbids eval " +
-  '(the extension); run it in the CLI or cloud float';
+  "the wasm realm evaluates the program's Emscripten glue, and this page's CSP forbids eval " +
+  "(no 'unsafe-eval')";
 
 /** Run the program of `init` to completion; resolves to its exit code. */
 export async function runWasmProcess(
@@ -160,7 +157,11 @@ export async function runWasmProcess(
   const encoder = new TextEncoder();
   const say = (fd: number) => (text: string) => sys.write(fd, encoder.encode(`${text}\n`));
   let ready!: () => void;
-  const initialized = new Promise<void>((resolve) => (ready = resolve));
+  let failed!: (error: unknown) => void;
+  const initialized = new Promise<void>((resolve, reject) => {
+    ready = resolve;
+    failed = reject;
+  });
   const module = {
     noInitialRun: true,
     thisProgram: init.argv0,
@@ -171,8 +172,11 @@ export async function runWasmProcess(
       imports: WebAssembly.Imports,
       done: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void
     ): object {
-      void WebAssembly.instantiate(init.program.module, imports).then((instance) =>
-        done(instance, init.program.module)
+      // A module that cannot satisfy the glue's imports (a mismatched .js and
+      // .wasm) fails the process instead of leaving it waiting forever.
+      WebAssembly.instantiate(init.program.module, imports).then(
+        (instance) => done(instance, init.program.module),
+        failed
       );
       return {};
     },
@@ -203,15 +207,16 @@ export async function runWasmProcess(
     { cwd: init.cwd }
   );
   wireKernelStdio(running.FS, sys);
-  let code: number;
   try {
-    code = running.callMain(init.args) ?? 0;
+    return running.callMain(init.args) ?? 0;
   } catch (e) {
     // Emscripten signals exit() with an ExitStatus throw.
     const status = (e as { status?: unknown })?.status;
     if (typeof status !== 'number') throw e;
-    code = status;
+    return status;
+  } finally {
+    // Even when the program traps: what it wrote to open files must not be
+    // lost with the worker.
+    vfs.flush();
   }
-  vfs.flush();
-  return code;
 }

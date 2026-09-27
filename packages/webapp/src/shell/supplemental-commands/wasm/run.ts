@@ -26,6 +26,9 @@ type Result = {
 
 const USAGE = 'usage: wasm [--argv0 NAME] PROGRAM [ARGS...]\n';
 
+const NO_SAB =
+  'the wasm realm needs SharedArrayBuffer, which this page lacks (it is not cross-origin isolated)';
+
 /** Compiled modules, keyed by path, size and mtime: a rebuilt program recompiles. */
 const modules = new Map<string, Promise<WebAssembly.Module>>();
 
@@ -101,6 +104,10 @@ export async function runWasmCommand(
   if (args[0] === '--help' || args[0] === '-h') return { stdout: USAGE, stderr: '', exitCode: 0 };
   const call = parse(args);
   if (!call) return { stdout: '', stderr: USAGE, exitCode: 2 };
+  if (typeof SharedArrayBuffer !== 'function') {
+    // Syscalls block in Atomics.wait on a shared buffer.
+    return { stdout: '', stderr: `wasm: ${NO_SAB}\n`, exitCode: 126 };
+  }
   const gluePath = ctx.fs.resolvePath(ctx.cwd, call.program);
   let glue: string;
   let module: WebAssembly.Module;
@@ -111,6 +118,9 @@ export async function runWasmCommand(
     const message = err instanceof Error ? err.message : String(err);
     return { stdout: '', stderr: `wasm: ${call.program}: ${message}\n`, exitCode: 127 };
   }
+
+  // Canceled while the program was read or compiled: never start it.
+  if (ctx.signal?.aborted) return { stdout: '', stderr: '', exitCode: 130 };
 
   const out: Uint8Array[] = [];
   const err: Uint8Array[] = [];
@@ -154,6 +164,7 @@ export async function runWasmCommand(
   });
   const abort = () => handle.kill(130);
   ctx.signal?.addEventListener('abort', abort, { once: true });
+  if (ctx.signal?.aborted) abort(); // canceled between the check above and here
   try {
     const exitCode = await handle.exited;
     if (proc) pm?.exit(proc.pid, exitCode);

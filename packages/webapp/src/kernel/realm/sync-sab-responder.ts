@@ -21,7 +21,7 @@
  * realm that timed out mid-drain never sends `sync-sab-next`).
  */
 
-import { isWasmSyscall, type WasmSyscall } from '../wasm-realm/process.js';
+import type { WasmSyscall } from '../wasm-realm/process.js';
 import { dispatchSyncExec, isSyncExecRequest, type SyncExecRequest } from './sync-exec-dispatch.js';
 import { dispatchSyncFs, type SyncFsRequest, type SyncFsResult } from './sync-fs-dispatch.js';
 import { SYNC_EXEC_MAX_TIMEOUT_MS, SYNC_FS_REQUEST_TIMEOUT_MS } from './sync-fs-wire.js';
@@ -93,13 +93,18 @@ export function attachSyncSabResponder(
   const dispatch =
     opts.dispatch ??
     ((req: SyncSabDispatchRequest): Promise<SyncFsResult> => {
-      // Process syscalls belong to the wasm realm's own dispatcher.
-      if (isWasmSyscall(req)) {
-        return Promise.resolve({ ok: false, errno: 'ENOSYS', message: `sync-sab: ${req.op}` });
+      // A realm speaks fs and exec. Anything else (a wasm-realm syscall, which
+      // only the wasm realm's own dispatcher serves) is not implemented here.
+      const realmReq = req as SyncFsRequest | SyncExecRequest;
+      if (isSyncExecRequest(realmReq)) {
+        return dispatchSyncExec(realmReq, { allowNoDeadline: true });
       }
-      return isSyncExecRequest(req)
-        ? dispatchSyncExec(req, { allowNoDeadline: true })
-        : dispatchSyncFs(req);
+      if ('path' in realmReq) return dispatchSyncFs(realmReq);
+      return Promise.resolve({
+        ok: false,
+        errno: 'ENOSYS',
+        message: 'sync-sab: unsupported request',
+      });
     });
 
   function drop(id: number): void {

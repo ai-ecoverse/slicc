@@ -259,4 +259,17 @@ describe('attachSyncSabResponder', () => {
     handle.dispose();
     revokeSyncFsToken(token);
   });
+
+  it('answers ENOSYS to a request that is neither fs nor exec (a wasm-realm syscall)', async () => {
+    const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + WINDOW);
+    const { header } = sabViews(sab);
+    const port = fakePort();
+    const handle = attachSyncSabResponder(port, sab, 'host-token');
+    Atomics.store(header, SAB_I_STATE, SAB_STATE_PENDING);
+    port.emit({ type: SYNC_SAB_REQ_MSG, id: 9, req: { op: 'fd-read', fd: 0, max: 1 } });
+    await untilReady(header);
+    const w = readWindow(sab);
+    expect(decodeSabResult(w.status, w.bytes)).toMatchObject({ ok: false, errno: 'ENOSYS' });
+    handle.dispose();
+  });
 });
