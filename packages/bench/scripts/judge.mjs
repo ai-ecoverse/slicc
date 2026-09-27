@@ -1,4 +1,6 @@
 export const DEFAULT_JUDGE_MODEL = 'global.openai.gpt-5.6-luna';
+
+export const DEFAULT_JUDGE_FALLBACK_MODEL = 'global.openai.gpt-5.6-sol';
 const TOOL_NAME = 'report_findings';
 const STATUSES = ['met', 'violated', 'not_assessable'];
 
@@ -361,5 +363,18 @@ export async function judgeRun({
     usage,
     imagesSent,
     repairs,
+    model,
   };
+}
+
+export async function judgeWithFallback({ fallbackModel, ...args }) {
+  const model = args.model ?? DEFAULT_JUDGE_MODEL;
+  try {
+    return await judgeRun({ ...args, model });
+  } catch (err) {
+    const invalid = /^judge output is invalid/.test(String(err?.message));
+    if (!invalid || !fallbackModel || fallbackModel === model) throw err;
+    const j = await judgeRun({ ...args, model: fallbackModel });
+    return { ...j, fallbackFrom: model, fallbackReason: String(err.message).slice(0, 300) };
+  }
 }

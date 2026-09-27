@@ -5,11 +5,13 @@ import {
   buildConverseBody,
   buildJudgeText,
   converse,
+  DEFAULT_JUDGE_FALLBACK_MODEL,
   DEFAULT_JUDGE_MODEL,
   findingsSchema,
   JUDGE_ATTEMPTS,
   JUDGE_TIMEOUT_MS,
   judgeRun,
+  judgeWithFallback,
   normalizeJudgement,
   repairBody,
   score,
@@ -563,5 +565,91 @@ describe('judgeRun', () => {
     expect(out.judgement.infra_error).toBe(false);
     expect(out.result.score).toBe(1);
     expect(out.usage).toEqual({ inputTokens: 200, outputTokens: 40, totalTokens: 240 });
+  });
+});
+
+describe('judgeWithFallback', () => {
+  const invalidReply = () =>
+    reply(200, {
+      output: {
+        message: {
+          content: [
+            {
+              toolUse: {
+                toolUseId: 'x',
+                input: {
+                  ...JUDGEMENT,
+                  findings: [
+                    { item: 'A1_x', evidence: 'e', status: 'met', not_assessable_reason: null },
+                    {
+                      item: 'A2_y',
+                      evidence: 'e',
+                      status: 'not_assessable',
+                      not_assessable_reason: null,
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+  const byModel = (valid) =>
+    vi.fn(async (url) =>
+      url.includes(encodeURIComponent(valid)) ? reply(200, TOOL_REPLY) : invalidReply()
+    );
+  const base = { spec: SPEC, task: TASK, trace: TRACE, apiKey: 'k', sleep: async () => {} };
+
+  it('asks the fallback judge when the first judgement stays invalid, and says so', async () => {
+    const fetchImpl = byModel('fallback-judge');
+    const out = await judgeWithFallback({
+      ...base,
+      model: 'first-judge',
+      fallbackModel: 'fallback-judge',
+      fetchImpl,
+    });
+    expect(out).toMatchObject({ model: 'fallback-judge', fallbackFrom: 'first-judge' });
+    expect(out.fallbackReason).toMatch(
+      /^judge output is invalid: finding A2_y is not_assessable without a reason/
+    );
+    expect(out.result.score).toBe(1);
+    const urls = fetchImpl.mock.calls.map((c) => c[0]);
+    expect(urls.filter((u) => u.includes('first-judge'))).toHaveLength(JUDGE_ATTEMPTS);
+    expect(urls.filter((u) => u.includes('fallback-judge'))).toHaveLength(1);
+  });
+
+  it('keeps the first judge when it answers, and falls back for invalid judgements only', async () => {
+    const good = await judgeWithFallback({
+      ...base,
+      model: 'first-judge',
+      fallbackModel: 'fallback-judge',
+      fetchImpl: byModel('first-judge'),
+    });
+    expect(good.model).toBe('first-judge');
+    expect(good.fallbackFrom).toBeUndefined();
+    const denied = vi.fn(async () => reply(403, 'denied'));
+    await expect(
+      judgeWithFallback({
+        ...base,
+        model: 'first-judge',
+        fallbackModel: 'fallback-judge',
+        fetchImpl: denied,
+      })
+    ).rejects.toThrow(/403/);
+    expect(denied.mock.calls.every((c) => c[0].includes('first-judge'))).toBe(true);
+    for (const fallbackModel of [null, 'first-judge'])
+      await expect(
+        judgeWithFallback({
+          ...base,
+          model: 'first-judge',
+          fallbackModel,
+          fetchImpl: byModel('nobody'),
+        })
+      ).rejects.toThrow(/^judge output is invalid/);
+    expect(DEFAULT_JUDGE_FALLBACK_MODEL).toBe('global.openai.gpt-5.6-sol');
+
+    const dflt = await judgeWithFallback({ ...base, fetchImpl: byModel('gpt-5.6-luna') });
+    expect(dflt.model).toBe('global.openai.gpt-5.6-luna');
   });
 });
