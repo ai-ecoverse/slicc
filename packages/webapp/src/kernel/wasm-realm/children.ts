@@ -72,6 +72,16 @@ interface Child {
   captured: Map<number, Uint8Array[]>;
 }
 
+/** Rejects with EINTR when `signal` aborts (a caught signal interrupts a wait); never resolves. */
+function interrupted(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise((_, reject) => {
+    if (!signal) return;
+    const fail = (): void => reject(new KernelError('EINTR'));
+    if (signal.aborted) fail();
+    else signal.addEventListener('abort', fail, { once: true });
+  });
+}
+
 /** Encode an exit code as a wait status (`WEXITSTATUS`). */
 export function waitStatus(code: number): number {
   return (code & 0xff) << 8;
@@ -91,6 +101,9 @@ export class ChildTable {
   private readonly children = new Map<number, Child>();
   /** Captured output of children already waited for, by pid. */
   private readonly leftovers = new Map<number, Map<number, Uint8Array[]>>();
+
+  /** Called when a child exits (the parent's SIGCHLD). */
+  onChildExit?: () => void;
 
   constructor(
     private readonly parentFds: FdTable,
@@ -133,6 +146,7 @@ export class ChildTable {
     const child: Child = { exited: handle.exited, captured };
     void handle.exited.then((code) => {
       child.code = code;
+      this.onChildExit?.();
     });
     this.children.set(handle.pid, child);
     return handle.pid;
@@ -154,15 +168,16 @@ export class ChildTable {
    * `[pid, status]`; `[0, 0]` when `nohang` and none has exited. ECHILD when
    * there is no such child.
    */
-  async wait(pid: number, nohang: boolean): Promise<[number, number]> {
+  async wait(pid: number, nohang: boolean, signal?: AbortSignal): Promise<[number, number]> {
     const candidates = pid > 0 ? [...this.children].filter(([p]) => p === pid) : [...this.children];
     if (candidates.length === 0) throw new KernelError('ECHILD');
     const done = candidates.find(([, child]) => child.code !== undefined);
     if (done) return this.reap(done[0], done[1].code as number);
     if (nohang) return [0, 0];
-    const [reaped, code] = await Promise.race(
-      candidates.map(([p, child]) => child.exited.then((c) => [p, c] as const))
-    );
+    const [reaped, code] = await Promise.race([
+      ...candidates.map(([p, child]) => child.exited.then((c) => [p, c] as const)),
+      interrupted(signal),
+    ]);
     return this.reap(reaped, code);
   }
 

@@ -72,6 +72,8 @@ function processConfig() {
     spawn: vi.fn(() => ({ pid: next++, abort: new AbortController() })),
     exit: vi.fn(),
     onSignal: vi.fn(() => () => {}),
+    get: vi.fn((_pid: number): object | null => null),
+    signal: vi.fn((_pid: number, _sig: string) => false),
   };
   const config = { processManager: pm, owner: { kind: 'cone' }, getParentPid: () => 42 };
   return { pm, config: config as unknown as ConstructorParameters<typeof WasmSession>[1] };
@@ -207,6 +209,32 @@ describe('WasmSession', () => {
         signal: controller.signal,
       })
     ).rejects.toBeDefined();
+  });
+
+  it('routes kill(2) from a program to session processes and the process table', async () => {
+    const ends = fakeProcesses();
+    spawn.mockImplementation((opts) => {
+      let end!: (code: number) => void;
+      const exited = new Promise<number>((resolve) => (end = resolve));
+      ends.set(opts.pid, end);
+      return { pid: opts.pid, exited, kill: vi.fn(), signal: vi.fn() };
+    });
+    const { pm, config } = processConfig();
+    pm.get.mockImplementation((pid) => (pid === 900 ? {} : null));
+    pm.signal.mockReturnValue(true);
+    const session = new WasmSession(ctx(installed), config, () => {});
+    await parentSpawner(session);
+    const first = spawn.mock.calls.at(-1)![0];
+    await first.spawner({ file: 'tac', argv: ['tac'], env: {}, cwd: '/w' }, stdio());
+    const child = spawn.mock.results.at(-1)!.value;
+    const kill = first.kill as (pid: number, sig: number) => boolean;
+    expect(kill(child.pid, 10)).toBe(true);
+    expect(child.signal).toHaveBeenCalledWith(10);
+    expect(kill(900, 0)).toBe(true); // exists in the process table
+    expect(kill(900, 15)).toBe(true);
+    expect(pm.signal).toHaveBeenCalledWith(900, 'SIGTERM');
+    expect(kill(900, 10)).toBe(false); // the table has no SIGUSR1
+    expect(kill(901, 0)).toBe(false);
   });
 
   it('ends a shell child on its own process signal, and on killAll', async () => {
