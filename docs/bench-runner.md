@@ -110,11 +110,12 @@ defends against it and records what the next occurrence needs:
   leader's log, and `bench.yml` keeps its infrastructure lines as
   `leader-infra.log`. All redacted of join tokens; none holds task text.
 - **Lanes** (`--leaders N`, `bootLane` in lifecycle.mjs): one home and port per
-  leader, one shared queue. Every leader writes the same
-  `/slicc/cone-config.json` (stop-leader deletes it) and node-server posts its
-  join URL to the fixed `/tmp/slicc-join.json`, so boots, restarts and stops
-  share one lock (`createLock`), and `claims` rejects a join URL another lane
-  holds. A lane stops after `--leader-down-limit`; the others go on.
+  leader, one shared queue. Each lane uses its own join file
+  (`<home>/join.json` when node-server supports `SLICC_JOIN_FILE`); leaders
+  still share `/slicc/cone-config.json` (stop-leader deletes it), so boots,
+  restarts and stops share one lock (`createLock`). A published node-server
+  still writes the shared `/tmp/slicc-join.json`. `claims` rejects a crossed
+  URL. A lane stops after `--leader-down-limit`; the others go on.
 - **The harness drifts; the records say so.** A hosted leader loads its webapp
   (the agent) from production, so it runs the release that is live when it boots;
   the `sliccy` version `bench.yml` pins covers node-server only, and
