@@ -15,7 +15,8 @@ import {
   CdpReconnectBackoffError,
   nextCdpReconnectDelayMs,
 } from './cdp-reconnect-policy.js';
-import { raceAbort, throwIfAborted } from './command-abort.js';
+import { throwIfAborted } from './command-abort.js';
+import { FrameContextRegistry } from './frame-context-registry.js';
 import { HarRecorder } from './har-recorder.js';
 import { MAX_TAB_SESSIONS, SessionCache, type TabSession } from './session-cache.js';
 import type {
@@ -26,6 +27,7 @@ import type {
   ViewportOverride,
 } from './tab-handle.js';
 import { TabHandle } from './tab-handle.js';
+import { TabLockManager, type TabLockStats } from './tab-lock-manager.js';
 import type { CDPTransport } from './transport.js';
 import type {
   CDPConnectOptions,
@@ -39,6 +41,9 @@ import type {
   WindowBoundsInput,
   WindowState,
 } from './types.js';
+import { ViewportOverrideStore } from './viewport-override-store.js';
+
+export type { TabLockStats } from './tab-lock-manager.js';
 
 /**
  * Provider of remote tray targets and transport factory.
@@ -83,32 +88,6 @@ function isStaleSessionError(err: unknown): boolean {
   return STALE_SESSION_ERRORS.some((needle) => message.includes(needle));
 }
 
-/** Freeze a mutable counter set into the public {@link TabLockStats} shape. */
-function statsOf(counters: TabLockCounters | undefined): TabLockStats {
-  const c = counters ?? { queueDepth: 0, tabWaitMs: 0, bridgeWaitMs: 0, acquisitions: 0 };
-  return {
-    queueDepth: c.queueDepth,
-    totalWaitMs: c.tabWaitMs + c.bridgeWaitMs,
-    tabWaitMs: c.tabWaitMs,
-    bridgeWaitMs: c.bridgeWaitMs,
-    acquisitions: c.acquisitions,
-  };
-}
-
-/**
- * A live hold on the bridge-wide lock.
- *
- * `owner` is a private token minted when the hold is taken; presenting it is
- * the ONLY way to re-enter the lock (see
- * {@link BrowserAPI.acquireBridgeLock}). `targetId` is the tab the hold is
- * driving, which is how same-tab helpers recover the token.
- */
-interface BridgeHold {
-  release: () => void;
-  owner: symbol;
-  targetId: string | null;
-}
-
 /** Options for {@link BrowserAPI.withTab}. */
 export interface WithTabOptions {
   /**
@@ -117,30 +96,6 @@ export interface WithTabOptions {
    * cancel. Omitted, `withTab` behaves as it always has.
    */
   signal?: AbortSignal | undefined;
-}
-
-/** Per-tab and bridge-wide contention counters — see {@link BrowserAPI.getTabLockStats}. */
-export interface TabLockStats {
-  queueDepth: number;
-  /** All time spent queued: `tabWaitMs + bridgeWaitMs`. */
-  totalWaitMs: number;
-  /** Time spent waiting for THIS tab's own lock (a sibling driving the same tab). */
-  tabWaitMs: number;
-  /**
-   * Time spent waiting for the bridge-wide lock — the few genuinely global
-   * operations (attaching, `Page.bringToFront`), not another tab's command
-   * body, which holds nothing bridge-wide.
-   */
-  bridgeWaitMs: number;
-  acquisitions: number;
-}
-
-/** Mutable per-target accumulator behind {@link TabLockStats}. */
-interface TabLockCounters {
-  queueDepth: number;
-  tabWaitMs: number;
-  bridgeWaitMs: number;
-  acquisitions: number;
 }
 
 /** Notified when a target's CDP session is replaced by a fresh attach. */
@@ -239,13 +194,10 @@ export class BrowserAPI implements TabHost {
   private trayTargetProvider: TrayTargetProvider | null = null;
   private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
   /**
-   * frameId → executionContextId, keyed by `"<world>:<sessionId>"`.
-   *
-   * Per SESSION, not per bridge cursor: with commands on different tabs now
-   * running concurrently, a sibling tab attaching must not invalidate this
-   * tab's contexts — which is exactly what a single bridge-wide cache did.
+   * Per-session frameId → executionContextId caches. Event wiring stays here;
+   * the maps live on the registry.
    */
-  private _frameContexts = new Map<string, Map<string, number>>();
+  private readonly frames = new FrameContextRegistry();
   /**
    * One live CDP session per attached target, in least-recently-used order.
    * Owns the maps + pin/eviction policy; wire detach stays on this class.
@@ -258,16 +210,13 @@ export class BrowserAPI implements TabHost {
   private _listenedTransports = new Set<CDPTransport>();
   /** Per-target session-replaced subscribers (console/network/routing capture). */
   private _sessionReplacedSubs = new Map<string, Set<SessionChangeCallback>>();
-  /** Per-target lock chains — commands on different tabs no longer queue behind each other. */
-  private _tabLocks = new Map<string, Promise<void>>();
-  /** Bridge-wide lock chain; see {@link acquireBridgeLock}. */
-  private _bridgeLock: Promise<void> = Promise.resolve();
-  /** Non-null while the bridge-wide lock is held. See {@link BridgeHold}. */
-  private _bridgeHold: BridgeHold | null = null;
-  /** Callers queued for the bridge lock; with no hold either, it is free. */
-  private _bridgeWaiters = 0;
-  private _viewportOverrides = new Map<string, ViewportOverride>();
-  private _tabLockStats = new Map<string, TabLockCounters>();
+  /**
+   * Per-tab + bridge-wide locks and contention counters. Orchestration
+   * (`withTab` / attach) stays here; the FIFO chains live on the manager.
+   */
+  private readonly locks = new TabLockManager();
+  /** Viewport overrides that survive session replacement; re-apply stays here. */
+  private readonly viewports = new ViewportOverrideStore();
   private _onSessionChange?: SessionChangeCallback | undefined;
   /**
    * Last-used connect options (url + protocols) captured on the first
@@ -344,7 +293,7 @@ export class BrowserAPI implements TabHost {
       | undefined;
     const frameId = context?.auxData?.frameId;
     if (context?.auxData?.isDefault === true && frameId && typeof context.id === 'number') {
-      this.frameContexts(sessionId, 'main').set(frameId, context.id);
+      this.frames.for(sessionId, 'main').set(frameId, context.id);
     }
   };
   private readonly handleExecutionContextDestroyed = (params: CdpPayload): void => {
@@ -352,14 +301,14 @@ export class BrowserAPI implements TabHost {
     if (!sessionId) return;
     const contextId = params['executionContextId'];
     if (typeof contextId !== 'number') return;
-    const cache = this._frameContexts.get(`main:${sessionId}`);
+    const cache = this.frames.peek(sessionId, 'main');
     if (!cache) return;
     for (const [frameId, cachedId] of cache) if (cachedId === contextId) cache.delete(frameId);
   };
   private readonly handleExecutionContextsCleared = (params: CdpPayload): void => {
     const sessionId = this.eventSessionId(params);
     if (!sessionId) return;
-    this._frameContexts.get(`main:${sessionId}`)?.clear();
+    this.frames.peek(sessionId, 'main')?.clear();
   };
 
   /**
@@ -536,31 +485,18 @@ export class BrowserAPI implements TabHost {
     opts?: WithTabOptions
   ): Promise<T> {
     const signal = opts?.signal;
-    throwIfAborted(signal, `starting a command on tab ${targetId}`);
-    const counters = this.tabCounters(targetId);
-    counters.queueDepth += 1;
-    let releaseTab: () => void;
-    try {
-      releaseTab = await this.acquireTabLock(targetId, counters, signal);
-    } catch (err) {
-      // Decremented here on the abort path: a caller that never got the lock
-      // is no longer queued, and leaving it counted would inflate the
-      // contention note every later command reads.
-      counters.queueDepth -= 1;
-      throw err;
-    }
-    // Pinned for the whole body: a body that waits on the page (a navigate
-    // waiting for load) would otherwise age into the eviction candidate and
-    // lose the session its wait is bound to.
-    const unpin = this.sessions.pin(targetId);
-    try {
-      counters.acquisitions += 1;
-      return await this.runOnTab(targetId, fn, signal);
-    } finally {
-      unpin();
-      counters.queueDepth -= 1;
-      releaseTab();
-    }
+    return this.locks.holdTabLock(targetId, signal, async (counters) => {
+      // Pinned for the whole body: a body that waits on the page (a navigate
+      // waiting for load) would otherwise age into the eviction candidate and
+      // lose the session its wait is bound to.
+      const unpin = this.sessions.pin(targetId);
+      try {
+        counters.acquisitions += 1;
+        return await this.runOnTab(targetId, fn, signal);
+      } finally {
+        unpin();
+      }
+    });
   }
 
   /**
@@ -608,7 +544,7 @@ export class BrowserAPI implements TabHost {
     fn: (tab: TabPage) => Promise<T>,
     signal?: AbortSignal
   ): Promise<T> {
-    const tab = await this.attachHandle(targetId, this.reentrantOwner(targetId), signal);
+    const tab = await this.attachHandle(targetId, this.locks.reentrantOwner(targetId), signal);
     // Attaching a fresh tab is two or three round trips of its own, each able
     // to burn a transport timeout on a slow bridge. Re-checked here so an
     // abort that landed anywhere in there stops before the body starts.
@@ -678,162 +614,7 @@ export class BrowserAPI implements TabHost {
    * bridge is busy" instead of guessing why calls are slow.
    */
   getTabLockStats(targetId?: string): TabLockStats {
-    if (targetId !== undefined) return statsOf(this._tabLockStats.get(targetId));
-    const total: TabLockCounters = {
-      queueDepth: 0,
-      tabWaitMs: 0,
-      bridgeWaitMs: 0,
-      acquisitions: 0,
-    };
-    for (const c of this._tabLockStats.values()) {
-      total.queueDepth += c.queueDepth;
-      total.tabWaitMs += c.tabWaitMs;
-      total.bridgeWaitMs += c.bridgeWaitMs;
-      total.acquisitions += c.acquisitions;
-    }
-    return statsOf(total);
-  }
-
-  private tabCounters(targetId: string): TabLockCounters {
-    let counters = this._tabLockStats.get(targetId);
-    if (!counters) {
-      counters = { queueDepth: 0, tabWaitMs: 0, bridgeWaitMs: 0, acquisitions: 0 };
-      this._tabLockStats.set(targetId, counters);
-    }
-    return counters;
-  }
-
-  /**
-   * FIFO lock for one target; different targets never wait on each other.
-   *
-   * A tab with no chain entry has no predecessor, so it neither waits nor
-   * records a wait. Awaiting an already-resolved promise still costs a
-   * scheduler turn that `Date.now()` can round up to 1 ms, which turned an
-   * uncontended tab into a "1 ms of contention" reading — enough to make the
-   * accounting test flaky and enough to mislead the `playwright-cli`
-   * contention note it feeds.
-   *
-   * A `signal` that fires while queued rejects this caller immediately, but
-   * its slot in the chain is handed on only once the PREDECESSOR actually
-   * finishes — releasing early would let the next caller drive the tab
-   * alongside the one still holding it.
-   */
-  private async acquireTabLock(
-    targetId: string,
-    counters: TabLockCounters,
-    signal?: AbortSignal
-  ): Promise<() => void> {
-    let release!: () => void;
-    const next = new Promise<void>((r) => {
-      release = r;
-    });
-    const prev = this._tabLocks.get(targetId);
-    this._tabLocks.set(targetId, next);
-    const drop = (): void => {
-      // Drop the chain once nobody is queued behind us, so a long-lived
-      // bridge does not keep a resolved promise per tab it ever touched.
-      if (this._tabLocks.get(targetId) === next) this._tabLocks.delete(targetId);
-      release();
-    };
-    if (prev) {
-      const waitStart = Date.now();
-      try {
-        await raceAbort(prev, signal, `queued for the lock on tab ${targetId}`);
-      } catch (err) {
-        counters.tabWaitMs += Date.now() - waitStart;
-        void prev.then(drop, drop);
-        throw err;
-      }
-      counters.tabWaitMs += Date.now() - waitStart;
-    }
-    return drop;
-  }
-
-  /**
-   * FIFO bridge-wide lock, held for the operations that touch state shared by
-   * every tab: the most-recently-used session cursor and the local↔remote
-   * transport swap that {@link activateSession} performs, `Page.bringToFront`,
-   * and the screenshot wake-up fallback's focus probe.
-   *
-   * It is deliberately NOT held across a command body any more. Page
-   * operations name their session through a {@link TabHandle}, so there is no
-   * ambient cursor for a body to protect and distinct tabs run their CDP round
-   * trips concurrently.
-   *
-   * **Invariant: the bridge cursor (`sessionId` / `attachedTargetId`) may only
-   * be moved while holding this lock.** Every public entry point that moves it
-   * — {@link withTab}, {@link attachToPage}, {@link selectTab},
-   * {@link bringTabToFront}, {@link bringToFront} — takes it.
-   *
-   * Re-entry is by TOKEN, not by "a hold exists". `opts.owner` bypasses the
-   * queue only when it is the token of the live hold, and the only holders of
-   * a live token are code running underneath it: the internal wake/focus
-   * fallback, which is handed the token explicitly, and same-tab helpers,
-   * which recover it from {@link reentrantOwner}. The boolean this replaces
-   * treated ANY current hold as the caller's own, so a UI timer's
-   * `attachToPage` could move the cursor out from under a running command.
-   */
-  private async acquireBridgeLock(opts?: {
-    /** Token of the live hold this caller is already running under. */
-    owner?: symbol | undefined;
-    /** The tab this hold drives; what {@link reentrantOwner} matches on. */
-    targetId?: string | null;
-    counters?: TabLockCounters;
-  }): Promise<() => void> {
-    if (opts?.owner !== undefined && this._bridgeHold?.owner === opts.owner) {
-      return () => undefined; // our own hold
-    }
-    let release!: () => void;
-    const next = new Promise<void>((r) => {
-      release = r;
-    });
-    const prev = this._bridgeLock;
-    const contended = this._bridgeHold !== null || this._bridgeWaiters > 0;
-    this._bridgeLock = next;
-    if (contended) {
-      // Nobody may be scheduled between the decrement and the hold below, so
-      // "no hold and no waiter" is a reliable "the chain is already settled" —
-      // which lets the uncontended path skip the await entirely. That keeps
-      // taking this lock on the attach path free of an extra scheduler turn,
-      // and keeps `bridgeWaitMs` from reporting the turn as contention.
-      this._bridgeWaiters += 1;
-      const waitStart = Date.now();
-      try {
-        await prev;
-      } finally {
-        this._bridgeWaiters -= 1;
-      }
-      if (opts?.counters) opts.counters.bridgeWaitMs += Date.now() - waitStart;
-    }
-    const hold: BridgeHold = {
-      release,
-      owner: Symbol('bridge-hold'),
-      targetId: opts?.targetId ?? null,
-    };
-    this._bridgeHold = hold;
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      // Holds never interleave — every one is taken and released inside a
-      // single synchronous-ish global operation — so the live hold IS ours,
-      // but check rather than assume.
-      if (this._bridgeHold === hold) this._bridgeHold = null;
-      release();
-    };
-  }
-
-  /**
-   * The live hold's token, but ONLY when that hold is driving `targetId` —
-   * i.e. the caller is running inside that tab's `withTab` body (or its
-   * `attachToPage`). Anything else, including a UI timer that happens to fire
-   * while a command holds the bridge, gets `undefined` and queues like any
-   * other caller.
-   */
-  private reentrantOwner(targetId: string | null): symbol | undefined {
-    const hold = this._bridgeHold;
-    if (!hold || targetId === null || hold.targetId !== targetId) return undefined;
-    return hold.owner;
+    return this.locks.getStats(targetId);
   }
 
   // -------------------------------------------------------------------------
@@ -847,20 +628,12 @@ export class BrowserAPI implements TabHost {
    * concurrently would fight.
    */
   async runGlobal<T>(targetId: string, fn: () => Promise<T>): Promise<T> {
-    const release = await this.acquireBridgeLock({
-      owner: this.reentrantOwner(targetId),
-      targetId,
-    });
-    try {
-      return await fn();
-    } finally {
-      release();
-    }
+    return this.locks.runGlobal(targetId, fn);
   }
 
   /** The viewport override recorded for a target, if any. */
   viewportOverride(targetId: string): ViewportOverride | undefined {
-    return this._viewportOverrides.get(targetId);
+    return this.viewports.get(targetId);
   }
 
   /**
@@ -872,7 +645,7 @@ export class BrowserAPI implements TabHost {
    * happens to have. Cleared by {@link closePage}.
    */
   recordViewportOverride(targetId: string, vp: ViewportOverride): void {
-    this._viewportOverrides.set(targetId, vp);
+    this.viewports.set(targetId, vp);
   }
 
   /**
@@ -881,24 +654,17 @@ export class BrowserAPI implements TabHost {
    * contexts.
    */
   frameContexts(sessionId: string, world: ExecutionWorld): Map<string, number> {
-    const key = `${world}:${sessionId}`;
-    let cache = this._frameContexts.get(key);
-    if (!cache) {
-      cache = new Map();
-      this._frameContexts.set(key, cache);
-    }
-    return cache;
+    return this.frames.for(sessionId, world);
   }
 
   /** Drop both worlds' context caches for a session that is gone. */
   private dropFrameContexts(sessionId: string): void {
-    this._frameContexts.delete(`main:${sessionId}`);
-    this._frameContexts.delete(`isolated:${sessionId}`);
+    this.frames.drop(sessionId);
   }
 
   /** Re-apply a recorded viewport override after a fresh attach (best-effort). */
   private async reapplyViewportOverride(targetId: string, entry: TabSession): Promise<void> {
-    const vp = this._viewportOverrides.get(targetId);
+    const vp = this.viewports.get(targetId);
     if (!vp) return;
     try {
       await this.handleFor(targetId, entry).applyViewportOverride(vp);
@@ -1259,7 +1025,7 @@ export class BrowserAPI implements TabHost {
    */
   async closePage(targetId: string): Promise<void> {
     await this.ensureConnected();
-    this._viewportOverrides.delete(targetId);
+    this.viewports.delete(targetId);
     // Detach before closing: the session dies with the tab either way, but
     // telling Chrome first is what keeps a long-lived bridge's session count
     // equal to its tab count instead of drifting upward (issue #2417).
@@ -1326,17 +1092,22 @@ export class BrowserAPI implements TabHost {
    * it's treated as a remote tray target and a RemoteCDPTransport is used.
    */
   async attachToPage(targetId: string): Promise<string> {
-    return this.attachToPageOwned(targetId, this.reentrantOwner(targetId));
+    return this.attachToPageOwned(targetId, this.locks.reentrantOwner(targetId));
   }
 
   /**
    * Move the bridge cursor to a tab under the bridge lock.
    *
    * `owner` is the token of a hold the caller is already running under — the
-   * `withTab` body for this same tab (recovered by {@link reentrantOwner}), or
-   * the wake/focus fallback, which is handed its own token so it can walk
+   * `withTab` body for this same tab (recovered by {@link TabLockManager.reentrantOwner}),
+   * or the wake/focus fallback, which is handed its own token so it can walk
    * across tabs without queueing against itself. Everything else queues, which
    * is what stops a UI timer from re-pointing the cursor mid-command.
+   *
+   * **Invariant: the bridge cursor (`sessionId` / `attachedTargetId`) may only
+   * be moved while holding the bridge lock.** Every public entry point that
+   * moves it — {@link withTab}, {@link attachToPage}, {@link selectTab},
+   * {@link bringTabToFront}, {@link bringToFront} — takes it.
    */
   private async attachToPageOwned(
     targetId: string,
@@ -1347,10 +1118,10 @@ export class BrowserAPI implements TabHost {
     // moving the cursor — is still reported as `bridgeWaitMs`, and the
     // `playwright-cli` contention note keeps telling "this tab is busy" apart
     // from "the bridge is busy".
-    const release = await this.acquireBridgeLock({
+    const release = await this.locks.acquireBridgeLock({
       owner,
       targetId,
-      counters: this.tabCounters(targetId),
+      counters: this.locks.countersFor(targetId),
     });
     try {
       await this.ensureConnected();
@@ -1480,15 +1251,15 @@ export class BrowserAPI implements TabHost {
     // Foregrounding and the focus probe walk every tab and move the bridge's
     // current-target cursor, so they run under the bridge-wide lock — one of
     // the few operations that still needs it.
-    const release = await this.acquireBridgeLock({
-      owner: this.reentrantOwner(tab.targetId),
+    const release = await this.locks.acquireBridgeLock({
+      owner: this.locks.reentrantOwner(tab.targetId),
       targetId: tab.targetId,
     });
     try {
       // Whichever hold is live now is the one this walk runs under; its token
       // is what lets the probe attach to OTHER tabs without queueing against
       // itself (and without a blanket "any hold is mine" bypass).
-      return await this.wakeCaptureLocked(tab, params, this._bridgeHold?.owner);
+      return await this.wakeCaptureLocked(tab, params, this.locks.liveOwner());
     } finally {
       release();
     }
