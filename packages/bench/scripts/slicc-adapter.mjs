@@ -96,9 +96,13 @@ export function parseSkillsCondition(text) {
  * `none` suppresses bundled seeding; every other base turns it back on.
  * The flag is set before the directory is rebuilt, and it has to survive
  * until the next `new-session` (unit init is what re-seeds missing files).
+ * Exit 127: the webapp has no `flags` verb yet (production until this lands).
+ * Builtin is the default seed behaviour, so a missing verb is fine when turning
+ * the flag off; `none` without it fails `assertStagedSkills` after new-session.
  */
 export function skillsFlagCommand(condition) {
-  return `flags set no-default-skills ${condition.builtin ? 'off' : 'on'}`;
+  const value = condition.builtin ? 'off' : 'on';
+  return `flags set no-default-skills ${value} || test $? -eq 127`;
 }
 
 /** One name per line. A missing directory prints nothing and exits 0. */
@@ -108,7 +112,13 @@ export function listSkillNamesCommand(dir) {
 
 /** `ls` output → sorted unique names. Skill names have no whitespace. */
 export function parseSkillNames(text) {
-  return [...new Set(String(text ?? '').split(/\s+/).filter(Boolean))].sort();
+  return [
+    ...new Set(
+      String(text ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+    ),
+  ].sort();
 }
 
 /**
@@ -160,8 +170,12 @@ export function stageSkillsCommand(condition) {
 export function restoreSkillsCommand() {
   // Leave the leader seeding again. A reused leader's last task may have been
   // `none`, and the restored files are the bundled set. The flag runs after
-  // the copy so a missing stash still clears it.
-  return `if [ -d ${SKILLS_STASH} ]; then rm -rf ${SKILLS_DIR} && mkdir -p ${SKILLS_DIR} && cp -r ${SKILLS_STASH}/. ${SKILLS_DIR}/; fi; flags set no-default-skills off`;
+  // the copy so a missing stash still clears it. Exit 127: no `flags` verb yet.
+  return (
+    `if [ -d ${SKILLS_STASH} ]; then rm -rf ${SKILLS_DIR} && mkdir -p ${SKILLS_DIR} && ` +
+    `cp -r ${SKILLS_STASH}/. ${SKILLS_DIR}/; fi; ` +
+    `flags set no-default-skills off || test $? -eq 127`
+  );
 }
 
 export async function stageSkills(leader, condition) {

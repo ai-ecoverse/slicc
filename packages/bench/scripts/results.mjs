@@ -15,14 +15,35 @@
 
 import { OUTCOMES, pathSegment } from './format.mjs';
 
+/** `none` / `none+…` — the condition that must not seed bundled skills. */
+function isNoneSkills(skills) {
+  return skills === 'none' || (typeof skills === 'string' && skills.startsWith('none+'));
+}
+
+/**
+ * Grouping key for a run config. Pre-flag `none` records omit `default_skills` and must not
+ * share a cell with post-flag `none` (`default_skills: false`).
+ */
 export function configKey(c) {
+  if (isNoneSkills(c.skills) && c.default_skills !== false && c.default_skills !== true) {
+    return `${c.model}|${c.skills}|preflag`;
+  }
   return `${c.model}|${c.skills}`;
 }
 
 /** The result-file name, in browser-use's `<Framework>_<version>_browser_<b>_model_<m>` style. */
 export function summaryFileName(benchmark, config) {
   const safe = pathSegment;
-  return `SLICC_${safe(config.harness)}_skills_${safe(config.skills)}_model_${safe(config.model)}_bench_${safe(benchmark)}.json`;
+  let skills = safe(config.skills);
+  // Keep the canonical `skills_none` name for post-flag runs; quarantine pre-flag `none`.
+  if (
+    isNoneSkills(config.skills) &&
+    config.default_skills !== false &&
+    config.default_skills !== true
+  ) {
+    skills = `${skills}_preflag`;
+  }
+  return `SLICC_${safe(config.harness)}_skills_${skills}_model_${safe(config.model)}_bench_${safe(benchmark)}.json`;
 }
 
 /**
@@ -224,7 +245,15 @@ export function reportData(records) {
     const models = [...new Set(configs.map((c) => c.model))];
     const skills = [...new Set(configs.map((c) => c.skills))];
     const harness = configs[0]?.harness;
-    const cfg = (model, s) => ({ harness, model, skills: s });
+    // Prefer the post-flag config when both pre-flag and real `none` are present.
+    const cfg = (model, s) => {
+      const hits = configs.filter((c) => c.model === model && c.skills === s);
+      return (
+        hits.find((c) => c.default_skills === false) ||
+        hits.find((c) => c.default_skills === true) ||
+        hits[0] || { harness, model, skills: s }
+      );
+    };
     const base = skillsBaseline(skills);
     const skillDeltas = [];
     for (const m of models) {

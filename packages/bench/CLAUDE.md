@@ -48,7 +48,7 @@ Everything is driven from outside, through the Go `slicc` CLI against the leader
 5. Records store the task, rubric and weights digests and the judge model, and `resumeAction()` decides each run on resume:
    - `done`: nothing changed.
    - `rejudge`: another judge, a changed rubric or weights, or a failed judge call. The saved trace is re-judged; the agent does not run again.
-   - `run`: the agent failed, or the task text changed.
+   - `run`: the agent failed, the task text changed, or `config.default_skills` is missing/mismatched for the planned condition (pre-flag `none` artifacts that still had bundled skills). Aggregation keys pre-flag `none` separately (`configKey` / `skills_*_preflag` result files) so they do not share a cell with real no-skill runs.
 
    An errored run is reported, never counted as a fail: #3180's matrix is sparse. The invocation still exits 1, so a CI job does not go green on runs that never happened. Scores and outcomes use only judged runs; time and cost use every finished run. Summaries name the judge from the records, never from the command line.
 

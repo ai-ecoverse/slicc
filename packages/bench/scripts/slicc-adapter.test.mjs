@@ -4,25 +4,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assertStagedSkills,
   buildPrompt,
   costTotals,
   decodeTranscriptPart,
+  expectedSkillNames,
   exportTranscript,
   exportTranscriptCommand,
   FINAL_INSTRUCTION,
   leaderHealth,
   parseExportListing,
-  assertStagedSkills,
-  expectedSkillNames,
   parseSkillNames,
   parseSkillsCondition,
-  skillsMismatch,
   parseTabList,
   quote,
   readShots,
   restoreSkills,
   restoreSkillsCommand,
   runTask,
+  skillsMismatch,
   spendDelta,
   stageSkills,
   stageSkillsCommand,
@@ -244,18 +244,18 @@ describe('skills conditions', () => {
     expect(cmd).toContain('cp -r /workspace/.bench-skills-builtin/. /workspace/skills/');
     expect(cmd).toContain('cp -r /workspace/bench-skills/ecoverse/. /workspace/skills/');
     expect(stageSkillsCommand(parseSkillsCondition('none'))).toContain(
-      'flags set no-default-skills on'
+      'flags set no-default-skills on || test $? -eq 127'
     );
     expect(stageSkillsCommand(parseSkillsCondition('builtin'))).toContain(
-      'flags set no-default-skills off'
+      'flags set no-default-skills off || test $? -eq 127'
     );
     expect(stageSkillsCommand(parseSkillsCondition('none+ecoverse'))).toContain(
-      'flags set no-default-skills on'
+      'flags set no-default-skills on || test $? -eq 127'
     );
     expect(stageSkillsCommand(parseSkillsCondition('none'))).not.toContain(
       'cp -r /workspace/.bench-skills-builtin/. /workspace/skills/'
     );
-    expect(restoreSkillsCommand()).toContain('flags set no-default-skills off');
+    expect(restoreSkillsCommand()).toContain('flags set no-default-skills off || test $? -eq 127');
     expect(restoreSkillsCommand()).toContain(
       'cp -r /workspace/.bench-skills-builtin/. /workspace/skills/'
     );
