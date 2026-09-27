@@ -3,9 +3,12 @@ package signaling
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func bootstrapObj(id string, cursor int) map[string]any {
@@ -232,5 +235,118 @@ func TestPollDecodesEvents(t *testing.T) {
 	}
 	if _, err := client.Retry(ctx, "ctrl", "b1", "slicc-cli"); err != nil {
 		t.Fatalf("retry: %v", err)
+	}
+}
+
+func noSleep(context.Context, time.Duration) bool { return true }
+
+// Cloudflare's "error code: 1101" is the plain-text page an uncaught worker
+// exception becomes. It is transient: the same poll is repeated, and the
+// error names the body that was seen.
+func TestPollRetriesCloudflareErrorPage(t *testing.T) {
+	var hits int
+	var logged []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		if hits < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("error code: 1101\n"))
+			return
+		}
+		writeJSON(w, map[string]any{
+			"role": "follower", "bootstrap": bootstrapObj("b1", 1), "events": []any{},
+		})
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, nil)
+	client.sleep = noSleep
+	client.SetLogf(func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	})
+	poll, err := client.Poll(context.Background(), "ctrl", "b1", 0)
+	if err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if poll.Bootstrap.BootstrapID != "b1" {
+		t.Fatalf("bootstrap = %+v", poll.Bootstrap)
+	}
+	if hits != 3 {
+		t.Fatalf("requests = %d, want 3", hits)
+	}
+	if len(logged) != 2 || !strings.Contains(logged[0], "error code: 1101") {
+		t.Fatalf("logs = %#v", logged)
+	}
+}
+
+func TestPollGivesUpOnPersistentErrorPage(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("error code: 1101\n"))
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, nil)
+	client.sleep = noSleep
+	_, err := client.Poll(context.Background(), "ctrl", "b1", 0)
+	if err == nil || !strings.Contains(err.Error(), "error code: 1101") || !strings.Contains(err.Error(), "tray signaling:") {
+		t.Fatalf("err = %v", err)
+	}
+	if hits != signalingAttempts {
+		t.Fatalf("requests = %d, want %d", hits, signalingAttempts)
+	}
+}
+
+func TestPollRetriesTrayUnavailableJSON(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		if hits == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":     "Tray hub temporarily unavailable",
+				"code":      "TRAY_TEMPORARILY_UNAVAILABLE",
+				"retryable": true,
+			})
+			return
+		}
+		writeJSON(w, map[string]any{
+			"role": "follower", "bootstrap": bootstrapObj("b1", 0), "events": []any{},
+		})
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, nil)
+	client.sleep = noSleep
+	if _, err := client.Poll(context.Background(), "ctrl", "b1", 0); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if hits != 2 {
+		t.Fatalf("requests = %d, want 2", hits)
+	}
+}
+
+func TestPollDoesNotRetryClientError(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		writeJSON(w, map[string]any{"error": "nope", "code": "BOOTSTRAP_NOT_FOUND"})
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, nil)
+	client.sleep = func(context.Context, time.Duration) bool {
+		t.Fatal("a 200 JSON refusal must not be retried")
+		return true
+	}
+	_, err := client.Poll(context.Background(), "ctrl", "b1", 0)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if hits != 1 {
+		t.Fatalf("requests = %d, want 1", hits)
 	}
 }

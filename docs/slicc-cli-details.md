@@ -23,6 +23,11 @@ authoritative command list, safety rules, env-var and Makefile references.
 | `internal/logging/`   | `log/slog` diagnostic logger + `Logf` adapter for the `tray` seam + pion factory     |
 | `internal/ui/`        | Terminal presentation: capability detection, event lines, sticky status bar          |
 
+A non-JSON signaling body (including Cloudflare's `error code: 1101` page), an
+HTTP 5xx, or a network error is retried with backoff. The error returned when
+that budget runs out names the status and the body. A 308 that names a
+successor is not retried.
+
 ## `follow --computer` (native macOS screen + input)
 
 `--computer` composes with every follow mode — `follow --computer`,
