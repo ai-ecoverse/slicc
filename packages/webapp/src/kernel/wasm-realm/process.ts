@@ -302,29 +302,33 @@ export class WasmProcess {
     return this.interrupt.signal;
   }
 
+  private async read(fd: number, max: number): Promise<Uint8Array> {
+    const file = this.fds.get(fd).file;
+    if (!file.read) throw new KernelError('EBADF');
+    if (file.tty) this.checkForeground(file.tty);
+    const signal = pollFile(file).readable ? this.interrupt.signal : this.blockingSignal();
+    return file.read(Math.max(0, Math.min(max, MAX_READ)), signal);
+  }
+
+  private async write(fd: number, body: Uint8Array): Promise<number> {
+    const file = this.fds.get(fd).file;
+    if (!file.write) throw new KernelError('EBADF');
+    if (!pollFile(file).writable) return file.write(body, this.blockingSignal());
+    // Room for some of it: with a signal pending, the write takes what fits
+    // and returns that short count instead of waiting for the rest.
+    return file.write(
+      body,
+      this.options.hasPending?.() ? AbortSignal.abort() : this.interrupt.signal
+    );
+  }
+
   /** Descriptor syscalls: reads and writes a caught signal can interrupt. */
   private async fdSyscall(req: FdSyscall): Promise<SyncFsResult> {
     switch (req.op) {
-      case 'fd-read': {
-        const file = this.fds.get(req.fd).file;
-        if (!file.read) throw new KernelError('EBADF');
-        if (file.tty) this.checkForeground(file.tty);
-        const max = Math.max(0, Math.min(req.max, MAX_READ));
-        const signal = pollFile(file).readable ? this.interrupt.signal : this.blockingSignal();
-        return { ok: true, kind: 'bytes', bytes: await file.read(max, signal) };
-      }
-      case 'fd-write': {
-        const file = this.fds.get(req.fd).file;
-        if (!file.write) throw new KernelError('EBADF');
-        // Room for some of it: with a signal pending, the write takes what fits
-        // and returns that short count instead of waiting for the rest.
-        const signal = pollFile(file).writable
-          ? this.options.hasPending?.()
-            ? AbortSignal.abort()
-            : this.interrupt.signal
-          : this.blockingSignal();
-        return { ok: true, kind: 'json', json: await file.write(req.body, signal) };
-      }
+      case 'fd-read':
+        return { ok: true, kind: 'bytes', bytes: await this.read(req.fd, req.max) };
+      case 'fd-write':
+        return { ok: true, kind: 'json', json: await this.write(req.fd, req.body) };
       case 'fd-close':
         await Promise.resolve(this.fds.close(req.fd));
         return { ok: true, kind: 'void' };
