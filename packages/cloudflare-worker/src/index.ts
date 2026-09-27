@@ -57,8 +57,10 @@ import {
   createCapabilityToken,
   type DurableObjectNamespaceLike,
   extractBearer,
+  fetchTrayStub,
   jsonResponse,
   parseCapabilityToken,
+  trayTemporarilyUnavailableResponse,
   wantsJSON,
 } from './shared.js';
 import { readBoundedWebhookBody, WebhookBodyError, withWebhookTimeout } from './webhook-body.js';
@@ -880,9 +882,9 @@ async function tryHandleSessionCapabilityRoutes(
   if (webhookId) {
     const doUrl = new URL(request.url);
     doUrl.pathname = `/webhook/${token}/${webhookId}`;
-    return stub.fetch(new Request(doUrl, request));
+    return fetchTrayStub(stub, new Request(doUrl, request));
   }
-  return stub.fetch(request);
+  return fetchTrayStub(stub, request);
 }
 
 const RELEASES_FALLBACK = 'https://github.com/ai-ecoverse/slicc/releases/latest';
@@ -1175,7 +1177,8 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
   };
 
   const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(trayId));
-  const initResponse = await stub.fetch(
+  const initResponse = await fetchTrayStub(
+    stub,
     new Request(new URL('/internal/create', url), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1336,28 +1339,52 @@ const worker = {
     env: WorkerEnv,
     ctx: ExecutionContext = NOOP_CTX
   ): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === '/' && url.search === '') {
-      if (url.hostname === 'sliccy.ai') {
-        return Response.redirect('https://www.sliccy.com/', 301);
-      }
-      if (url.hostname === SLICC_HOSTED_HOSTNAME) {
-        return Response.redirect('https://www.sliccy.com/', 301);
-      }
+    try {
+      return await routeWorkerFetch(request, env, ctx);
+    } catch (error) {
+      return recoverWorkerFetch(request, env, error);
     }
-
-    const response = await handleWorkerRequest(request, env, undefined, ctx);
-    if (response.status === 101) {
-      return response;
-    }
-
-    const withLinks = applySliccLinks(response, request);
-    const mutable = new Response(withLinks.body, withLinks);
-    mutable.headers.set('X-Robots-Tag', 'noindex');
-    return mutable;
   },
 };
+
+async function routeWorkerFetch(
+  request: Request,
+  env: WorkerEnv,
+  ctx: ExecutionContext
+): Promise<Response> {
+  const url = new URL(request.url);
+
+  if (url.pathname === '/' && url.search === '') {
+    if (url.hostname === 'sliccy.ai') {
+      return Response.redirect('https://www.sliccy.com/', 301);
+    }
+    if (url.hostname === SLICC_HOSTED_HOSTNAME) {
+      return Response.redirect('https://www.sliccy.com/', 301);
+    }
+  }
+
+  const response = await handleWorkerRequest(request, env, undefined, ctx);
+  if (response.status === 101) {
+    return response;
+  }
+
+  const withLinks = applySliccLinks(response, request);
+  const mutable = new Response(withLinks.body, withLinks);
+  mutable.headers.set('X-Robots-Tag', 'noindex');
+  return mutable;
+}
+
+function recoverWorkerFetch(request: Request, env: WorkerEnv, error: unknown): Response {
+  console.error('worker fetch failed', error instanceof Error ? error.message : String(error));
+  const body = trayTemporarilyUnavailableResponse();
+  try {
+    const url = new URL(request.url);
+    if (isCapabilityCorsPath(url)) {
+      return withCapabilityCors(body, capabilityCorsHeaders(request, env));
+    }
+  } catch {}
+  return body;
+}
 
 export default worker;
 export { CloudSessionsDurableObject, SessionTrayDurableObject, WebhookHomeDurableObject };

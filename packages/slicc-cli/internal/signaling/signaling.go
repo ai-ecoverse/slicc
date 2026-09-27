@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,20 @@ import (
 
 
 const defaultRequestTimeout = 30 * time.Second
+
+
+
+
+
+
+
+
+const (
+	signalingAttempts    = 4
+	signalingRetryBase   = time.Second
+	signalingRetryMax    = 4 * time.Second
+	signalingRetryBudget = 8 * time.Second
+)
 
 
 type TurnIceServer struct {
@@ -103,6 +118,12 @@ type BootstrapPlan struct {
 type Client struct {
 	joinURL string
 	http    *http.Client
+	logf    func(string, ...any)
+	
+	sleep func(context.Context, time.Duration) bool
+	
+	
+	retryBudget time.Duration
 }
 
 
@@ -121,8 +142,12 @@ func New(joinURL string, httpClient *http.Client) *Client {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	return &Client{joinURL: joinURL, http: &client}
+	return &Client{joinURL: joinURL, http: &client, sleep: sleepSignaling}
 }
+
+
+
+func (c *Client) SetLogf(fn func(string, ...any)) { c.logf = fn }
 
 
 func (c *Client) JoinURL() string { return c.joinURL }
@@ -266,6 +291,13 @@ func (c *Client) post(ctx context.Context, body map[string]any) ([]byte, error) 
 
 
 
+type networkError struct{ err error }
+
+func (e *networkError) Error() string { return "tray signaling network error: " + e.err.Error() }
+func (e *networkError) Unwrap() error { return e.err }
+
+
+
 type responseMeta struct {
 	Status int
 	Header http.Header
@@ -273,7 +305,79 @@ type responseMeta struct {
 
 
 
+
+
+
+
 func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte, responseMeta, error) {
+	deadline := c.retryDeadline(ctx)
+	backoff := signalingRetryBase
+	var last error
+	for attempt := 1; attempt <= signalingAttempts; attempt++ {
+		if !time.Now().Before(deadline) {
+			break
+		}
+		data, meta, err := c.postBounded(ctx, body, deadline)
+		var net *networkError
+		switch {
+		case err == nil && !transientResponse(meta, data):
+			return data, meta, nil
+		case err == nil:
+			last = fmt.Errorf("tray signaling: transient response: %s", describeResponse(meta.Status, data))
+		case errors.As(err, &net) && ctx.Err() == nil:
+			last = err
+		default:
+			return nil, responseMeta{}, err
+		}
+		
+		
+		
+		if attempt == signalingAttempts || time.Until(deadline) <= backoff {
+			break
+		}
+		c.logRetry(last, backoff)
+		if !c.wait(ctx, backoff) {
+			break
+		}
+		if backoff < signalingRetryMax {
+			backoff *= 2
+		}
+	}
+	if last == nil {
+		last = ctx.Err()
+	}
+	return nil, responseMeta{}, last
+}
+
+
+
+
+func (c *Client) retryDeadline(ctx context.Context) time.Time {
+	budget := signalingRetryBudget
+	if c.retryBudget > 0 {
+		budget = c.retryBudget
+	}
+	deadline := time.Now().Add(budget)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	return deadline
+}
+
+
+
+
+func (c *Client) postBounded(ctx context.Context, body map[string]any, deadline time.Time) ([]byte, responseMeta, error) {
+	bound := deadline
+	if capAt := time.Now().Add(defaultRequestTimeout); capAt.Before(bound) {
+		bound = capAt
+	}
+	reqCtx, cancel := context.WithDeadline(ctx, bound)
+	defer cancel()
+	return c.postOnce(reqCtx, body)
+}
+
+func (c *Client) postOnce(ctx context.Context, body map[string]any) ([]byte, responseMeta, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, responseMeta{}, err
@@ -285,14 +389,62 @@ func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte,
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, responseMeta{}, fmt.Errorf("tray signaling network error: %w", err)
+		return nil, responseMeta{}, &networkError{err: err}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, responseMeta{}, err
+		return nil, responseMeta{}, &networkError{err: err}
 	}
 	return data, responseMeta{Status: resp.StatusCode, Header: resp.Header}, nil
+}
+
+
+
+
+func transientResponse(meta responseMeta, data []byte) bool {
+	if SuccessorVersionFromLinkHeader(meta.Header) != "" ||
+		RedirectLocation(meta.Status, meta.Header.Get("Location")) != "" {
+		return false
+	}
+	if meta.Status >= 500 {
+		return true
+	}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return false
+	}
+	return !json.Valid(trimmed)
+}
+
+func describeResponse(status int, body []byte) string {
+	return fmt.Sprintf("status %d body: %s", status, truncate(body))
+}
+
+func (c *Client) logRetry(err error, backoff time.Duration) {
+	if c.logf == nil {
+		return
+	}
+	c.logf("tray signaling: %s; retrying in %s", err, backoff)
+}
+
+func (c *Client) wait(ctx context.Context, d time.Duration) bool {
+	sleep := c.sleep
+	if sleep == nil {
+		sleep = sleepSignaling
+	}
+	return sleep(ctx, d)
+}
+
+func sleepSignaling(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 
