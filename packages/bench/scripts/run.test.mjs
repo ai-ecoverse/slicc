@@ -395,7 +395,10 @@ describe('main', () => {
     expect(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1]))).toBe(true);
     expect(commands.findIndex((c) => c.startsWith('session export'))).toBeGreaterThan(order[4]);
     expect(commands.filter((c) => c.includes('ls /workspace/skills | wc -l'))).toHaveLength(2);
-    expect(commands.at(-1)).toContain('.bench-skills-builtin/. /workspace/skills/');
+    expect(commands.some((c) => c.includes('.bench-skills-builtin/. /workspace/skills/'))).toBe(
+      true
+    );
+    expect(commands.at(-1)).toBe('flags set no-default-skills off');
     const record = JSON.parse(
       readFileSync(recordPath(outDir, 'Own', 'none', 'claude-sonnet-5', 'own-2', 1), 'utf8')
     );

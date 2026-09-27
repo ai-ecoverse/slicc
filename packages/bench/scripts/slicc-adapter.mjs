@@ -96,13 +96,16 @@ export function parseSkillsCondition(text) {
  * `none` suppresses bundled seeding; every other base turns it back on.
  * The flag is set before the directory is rebuilt, and it has to survive
  * until the next `new-session` (unit init is what re-seeds missing files).
- * Exit 127: the webapp has no `flags` verb yet (production until this lands).
- * Builtin is the default seed behaviour, so a missing verb is fine when turning
- * the flag off; `none` without it fails `assertStagedSkills` after new-session.
+ *
+ * Production webapps have no `flags` until this ships. A missing command is
+ * skipped for every base except `none`, which cannot be faked.
  */
+export const FLAGS_PROBE = 'command -v flags';
+export const NO_DEFAULT_SKILLS_MISSING =
+  "this SLICC build can't run the none condition (no no-default-skills flag); pin a webapp that has it with pin-webapp, or wait for a release";
+
 export function skillsFlagCommand(condition) {
-  const value = condition.builtin ? 'off' : 'on';
-  return `flags set no-default-skills ${value} || test $? -eq 127`;
+  return `flags set no-default-skills ${condition.builtin ? 'off' : 'on'}`;
 }
 
 /** One name per line. A missing directory prints nothing and exits 0. */
@@ -155,7 +158,6 @@ export function skillsMismatch(condition, actual, expected) {
 /** The shell command that makes /workspace/skills match a condition. */
 export function stageSkillsCommand(condition) {
   const steps = [
-    skillsFlagCommand(condition),
     `if [ ! -d ${SKILLS_STASH} ]; then mkdir -p ${SKILLS_STASH} && cp -r ${SKILLS_DIR}/. ${SKILLS_STASH}/; fi`,
     `rm -rf ${SKILLS_DIR}`,
     `mkdir -p ${SKILLS_DIR}`,
@@ -169,22 +171,40 @@ export function stageSkillsCommand(condition) {
 
 export function restoreSkillsCommand() {
   // Leave the leader seeding again. A reused leader's last task may have been
-  // `none`, and the restored files are the bundled set. The flag runs after
-  // the copy so a missing stash still clears it. Exit 127: no `flags` verb yet.
-  return (
-    `if [ -d ${SKILLS_STASH} ]; then rm -rf ${SKILLS_DIR} && mkdir -p ${SKILLS_DIR} && ` +
-    `cp -r ${SKILLS_STASH}/. ${SKILLS_DIR}/; fi; ` +
-    `flags set no-default-skills off || test $? -eq 127`
-  );
+  // `none`, and the restored files are the bundled set.
+  return `if [ -d ${SKILLS_STASH} ]; then rm -rf ${SKILLS_DIR} && mkdir -p ${SKILLS_DIR} && cp -r ${SKILLS_STASH}/. ${SKILLS_DIR}/; fi`;
+}
+
+/** True when this leader can run `flags`. A leader that never answered is not "no flags". */
+async function leaderHasFlags(leader) {
+  const probe = await leader.exec(FLAGS_PROBE);
+  if (probe.leaderDown) throw failure(`leader: \`${FLAGS_PROBE}\``, probe);
+  return probe.status === 0;
+}
+
+/**
+ * Set the flag when the verb exists. A missing verb is skipped for builtin
+ * (production still seeds). `none` fails here, before the directory is emptied,
+ * so the run never continues with the bundled library.
+ * A `flags set` that runs and fails still fails the stage.
+ */
+async function applySkillsFlag(leader, condition) {
+  if (!(await leaderHasFlags(leader))) {
+    if (!condition.builtin) throw new Error(NO_DEFAULT_SKILLS_MISSING);
+    return;
+  }
+  await must(leader, skillsFlagCommand(condition));
 }
 
 export async function stageSkills(leader, condition) {
+  await applySkillsFlag(leader, condition);
   const r = await must(leader, stageSkillsCommand(condition));
   return Number.parseInt(r.stdout.trim().split('\n').pop(), 10) || 0;
 }
 
 export async function restoreSkills(leader) {
   await must(leader, restoreSkillsCommand());
+  if (await leaderHasFlags(leader)) await must(leader, skillsFlagCommand({ builtin: true }));
 }
 
 async function skillNames(leader, dir) {

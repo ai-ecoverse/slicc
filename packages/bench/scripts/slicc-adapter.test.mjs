@@ -12,7 +12,9 @@ import {
   exportTranscript,
   exportTranscriptCommand,
   FINAL_INSTRUCTION,
+  FLAGS_PROBE,
   leaderHealth,
+  NO_DEFAULT_SKILLS_MISSING,
   parseExportListing,
   parseSkillNames,
   parseSkillsCondition,
@@ -22,6 +24,7 @@ import {
   restoreSkills,
   restoreSkillsCommand,
   runTask,
+  skillsFlagCommand,
   skillsMismatch,
   spendDelta,
   stageSkills,
@@ -243,19 +246,18 @@ describe('skills conditions', () => {
     expect(cmd).toContain('if [ ! -d /workspace/.bench-skills-builtin ]');
     expect(cmd).toContain('cp -r /workspace/.bench-skills-builtin/. /workspace/skills/');
     expect(cmd).toContain('cp -r /workspace/bench-skills/ecoverse/. /workspace/skills/');
-    expect(stageSkillsCommand(parseSkillsCondition('none'))).toContain(
-      'flags set no-default-skills on || test $? -eq 127'
+    expect(skillsFlagCommand(parseSkillsCondition('none'))).toBe('flags set no-default-skills on');
+    expect(skillsFlagCommand(parseSkillsCondition('builtin'))).toBe(
+      'flags set no-default-skills off'
     );
-    expect(stageSkillsCommand(parseSkillsCondition('builtin'))).toContain(
-      'flags set no-default-skills off || test $? -eq 127'
+    expect(skillsFlagCommand(parseSkillsCondition('none+ecoverse'))).toBe(
+      'flags set no-default-skills on'
     );
-    expect(stageSkillsCommand(parseSkillsCondition('none+ecoverse'))).toContain(
-      'flags set no-default-skills on || test $? -eq 127'
-    );
+    expect(stageSkillsCommand(parseSkillsCondition('none'))).not.toContain('flags set');
     expect(stageSkillsCommand(parseSkillsCondition('none'))).not.toContain(
       'cp -r /workspace/.bench-skills-builtin/. /workspace/skills/'
     );
-    expect(restoreSkillsCommand()).toContain('flags set no-default-skills off || test $? -eq 127');
+    expect(restoreSkillsCommand()).not.toContain('flags set');
     expect(restoreSkillsCommand()).toContain(
       'cp -r /workspace/.bench-skills-builtin/. /workspace/skills/'
     );
@@ -267,12 +269,61 @@ describe('skills conditions', () => {
     });
     expect(await stageSkills(leader, parseSkillsCondition('builtin'))).toBe(29);
     await restoreSkills(leader);
-    const broken = fakeLeader({ commands: [[/./, fail('cp: no such file')]] });
+    const broken = fakeLeader({
+      commands: [
+        [/^command -v flags$/, ok()],
+        [/^flags set /, ok()],
+        [/./, fail('cp: no such file')],
+      ],
+    });
     await expect(stageSkills(broken.leader, parseSkillsCondition('none'))).rejects.toThrow(
       /exited 1: cp: no such file/
     );
     const odd = fakeLeader({ commands: [[/./, ok('n/a')]] });
     expect(await stageSkills(odd.leader, parseSkillsCondition('none'))).toBe(0);
+  });
+
+  it('skips a missing flags verb for builtin and refuses none', async () => {
+    const withoutFlags = (extra = []) =>
+      fakeLeader({
+        commands: [
+          [new RegExp(`^${FLAGS_PROBE}$`), fail('', 127)],
+          [/^flags /, fail('bash: flags: command not found', 127)],
+          ...extra,
+        ],
+      });
+
+    const builtin = withoutFlags([[/ls \/workspace\/skills \| wc -l$/, ok('29\n')]]);
+    expect(await stageSkills(builtin.leader, parseSkillsCondition('builtin'))).toBe(29);
+    expect(builtin.calls.map((c) => c.command)).toEqual([
+      FLAGS_PROBE,
+      stageSkillsCommand(parseSkillsCondition('builtin')),
+    ]);
+
+    await restoreSkills(builtin.leader);
+    expect(builtin.calls.map((c) => c.command).slice(-2)).toEqual([
+      restoreSkillsCommand(),
+      FLAGS_PROBE,
+    ]);
+
+    const none = withoutFlags();
+    await expect(stageSkills(none.leader, parseSkillsCondition('none'))).rejects.toThrow(
+      NO_DEFAULT_SKILLS_MISSING
+    );
+    await expect(stageSkills(none.leader, parseSkillsCondition('none+ecoverse'))).rejects.toThrow(
+      /pin-webapp/
+    );
+    expect(none.calls.map((c) => c.command)).toEqual([FLAGS_PROBE, FLAGS_PROBE]);
+
+    const setFails = fakeLeader({
+      commands: [
+        [new RegExp(`^${FLAGS_PROBE}$`), ok()],
+        [/^flags set /, fail('unknown flag', 2)],
+      ],
+    });
+    await expect(stageSkills(setFails.leader, parseSkillsCondition('builtin'))).rejects.toThrow(
+      /exited 2: unknown flag/
+    );
   });
 
   it('compares the directory after new-session with the condition', () => {
@@ -301,7 +352,11 @@ describe('skills conditions', () => {
     await expect(assertStagedSkills(empty.leader, none)).resolves.toBeUndefined();
 
     const reseeded = fakeLeader({
-      commands: [[/ls '\/workspace\/skills'/, ok('playwright-cli\nwiki\n')]],
+      commands: [
+        [new RegExp(`^${FLAGS_PROBE}$`), fail('', 127)],
+        [/^flags /, fail('bash: flags: command not found', 127)],
+        [/ls '\/workspace\/skills'/, ok('playwright-cli\nwiki\n')],
+      ],
     });
     await expect(assertStagedSkills(reseeded.leader, none)).rejects.toThrow(/playwright-cli/);
 
