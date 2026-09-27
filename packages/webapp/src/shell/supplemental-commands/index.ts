@@ -264,7 +264,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createRmdirCommand(),
     createStatCommand(),
     createCmpCommand(),
-    createWasmCommand(),
+    createWasmCommand({ buildProcessConfig: options.buildProcessConfig }),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),

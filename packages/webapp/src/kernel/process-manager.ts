@@ -59,8 +59,19 @@
 // Types
 // ---------------------------------------------------------------------------
 
-/** What kind of process this is — drives the `ps` `STAT` column. */
-export type ProcessKind = 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'py' | 'net' | 'computer';
+/**
+ * What kind of process this is — drives the `ps` `STAT` column. `wasm` is a
+ * wasm-realm process (#3530): one worker running one wasm program.
+ */
+export type ProcessKind =
+  | 'scoop-turn'
+  | 'tool'
+  | 'shell'
+  | 'jsh'
+  | 'py'
+  | 'net'
+  | 'computer'
+  | 'wasm';
 
 export type ProcessStatus = 'pending' | 'running' | 'exited' | 'killed';
 

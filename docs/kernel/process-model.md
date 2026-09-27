@@ -16,7 +16,7 @@ Every long-running async unit in the kernel registers a `Process` record:
 interface Process {
   readonly pid: number; // monotonic uint32 from 1024+
   readonly ppid: number; // 1 = kernel-host anchor (synthesized)
-  readonly kind: ProcessKind; // 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'py' | 'net'
+  readonly kind: ProcessKind; // 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'py' | 'net' | 'computer' | 'wasm'
   readonly argv: readonly string[];
   readonly cwd: string;
   readonly env: Record<string, string>;
@@ -366,6 +366,15 @@ the script's first sync `fs` call (the boot snapshot may be stale) — so a late
 just-bash runs any executable file as a **bash** script (it ignores `#!`), so a
 tool's launcher on `PATH` is a one-line bash script, e.g.
 `node /opt/toolchain/run.js clang "$@"`.
+
+## Wasm realm processes (`wasm`)
+
+The wasm realm (#3530) runs a wasm program as a process of its own: one `DedicatedWorker` per process, without the node realm's shims. `spawnWasmProcess` (`kernel/wasm-realm/host.ts`) registers nothing itself; the `wasm` command records a `kind:'wasm'` process (parented like a `node` realm, so a job's signal fans out to it) and turns a terminating signal into `worker.terminate()` (137 / 130 / 143).
+
+- **Descriptors are the kernel's.** Each process has an `FdTable` of reference-counted open file descriptions: pipe ends, a byte source (the command's stdin), output sinks. A pipe (`KernelPipe`) blocks a reader until data or EOF and a writer while full, and fails a writer with `EPIPE` once every reader is gone, so `yes | head -1` ends. A process's exit (or kill) releases its descriptors.
+- **Syscalls ride the SAB bridge.** fds 0-2 of the Emscripten program are wired to `fd-read` / `fd-write` requests over the same Atomics/SAB transport and responder the sync bridges use, with a dispatcher that sends syscalls to the process and file operations to the token-scoped `dispatchSyncFs`. A read on an empty pipe keeps the worker in `Atomics.wait`; the kernel answers when data arrives.
+- **Files** are the live VFS, mounted into the program's FS as `__slicc_mountVfs` does (below). A file written after it was unlinked (a temp file held open by fd) is not supported yet.
+- **Programs** are Emscripten glue linked with `-sENVIRONMENT` including `worker`; the kernel compiles the module (cached per path, size and mtime).
 
 ## Wiring map
 

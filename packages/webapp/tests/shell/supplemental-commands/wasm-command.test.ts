@@ -105,4 +105,65 @@ describe('wasm command', () => {
     await runWasmCommand(['cache.js'], ctx(files));
     expect(compile).toHaveBeenCalledTimes(1);
   });
+
+  it('registers the process in the process table and ends it on a signal', async () => {
+    compile.mockResolvedValue({});
+    let settle!: (code: number) => void;
+    const kill = vi.fn((code: number) => settle(code));
+    spawn.mockImplementation((opts) => ({
+      pid: opts.pid,
+      exited: new Promise<number>((resolve) => (settle = resolve)),
+      kill,
+    }));
+    let listener: ((proc: { pid: number }, sig: string) => void) | undefined;
+    const pm = {
+      spawn: vi.fn(() => ({ pid: 777 })),
+      exit: vi.fn(),
+      onSignal: vi.fn((l: typeof listener) => {
+        listener = l;
+        return () => {
+          listener = undefined;
+        };
+      }),
+    };
+    const config = {
+      processManager: pm,
+      owner: { kind: 'cone' },
+      getParentPid: () => 42,
+    } as unknown as Parameters<typeof runWasmCommand>[2];
+    const files = { '/w/loop.js': 'G', '/w/loop.wasm': 'W' };
+    const running = runWasmCommand(['loop.js', 'x'], ctx(files), config);
+    await vi.waitFor(() => expect(listener).toBeDefined());
+    expect(pm.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'wasm', argv: ['loop', 'x'], cwd: '/w', ppid: 42 })
+    );
+    expect(spawn.mock.calls[0][0].pid).toBe(777);
+    listener?.({ pid: 1 }, 'SIGTERM'); // another process: ignored
+    expect(kill).not.toHaveBeenCalled();
+    listener?.({ pid: 777 }, 'SIGTERM');
+    expect(kill).toHaveBeenCalledWith(143);
+    expect((await running).exitCode).toBe(143);
+    expect(pm.exit).toHaveBeenCalledWith(777, 143);
+    expect(listener).toBeUndefined(); // unsubscribed
+  });
+
+  it('stops a runaway producer at the output limit', async () => {
+    compile.mockResolvedValue({});
+    const kill = vi.fn();
+    spawn.mockImplementation((opts) => {
+      let settle!: (code: number) => void;
+      const exited = new Promise<number>((resolve) => (settle = resolve));
+      kill.mockImplementation((code: number) => settle(code));
+      void (async () => {
+        for (let i = 0; i < 10; i++) await opts.fds.get(1).file.write(bytes('y\n'.repeat(4)));
+      })();
+      return { pid: opts.pid, exited, kill };
+    });
+    const c = { ...ctx({ '/w/yes.js': 'G', '/w/yes.wasm': 'W' }), limits: { maxOutputSize: 20 } };
+    const r = await runWasmCommand(['yes.js'], c as unknown as CommandContext);
+    expect(kill).toHaveBeenCalledWith(1);
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout.length).toBeLessThanOrEqual(20);
+    expect(r.stderr).toMatch(/output exceeded 20 bytes/);
+  });
 });

@@ -14,6 +14,7 @@ import type { CommandContext } from 'just-bash';
 import { compileWasmFromVfs } from '../../../kernel/realm/wasm-compiler.js';
 import { bytesSource, FdTable, sinkFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess } from '../../../kernel/wasm-realm/host.js';
+import type { JshProcessConfig } from '../../jsh-executor.js';
 import { stdinAsLatin1 } from '../../just-bash-compat.js';
 
 type Result = {
@@ -28,7 +29,17 @@ const USAGE = 'usage: wasm [--argv0 NAME] PROGRAM [ARGS...]\n';
 /** Compiled modules, keyed by path, size and mtime: a rebuilt program recompiles. */
 const modules = new Map<string, Promise<WebAssembly.Module>>();
 
-/** Pids of wasm processes started by this command (process-table integration: Phase 2). */
+/** Exit codes of the terminating signals: the worker ends at once (128 + signo). */
+const SIGNAL_EXIT_CODE: Readonly<Partial<Record<string, number>>> = {
+  SIGKILL: 137,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+
+/** The shell's output limit when the context carries none (just-bash's default). */
+const DEFAULT_MAX_OUTPUT = 256 * 1024 * 1024;
+
+/** Pids when there is no process table (unit tests). */
 let nextPid = 40000;
 
 interface Invocation {
@@ -82,7 +93,11 @@ function stdinBytes(ctx: CommandContext): Uint8Array {
   return bytes;
 }
 
-export async function runWasmCommand(args: string[], ctx: CommandContext): Promise<Result> {
+export async function runWasmCommand(
+  args: string[],
+  ctx: CommandContext,
+  processConfig?: JshProcessConfig
+): Promise<Result> {
   if (args[0] === '--help' || args[0] === '-h') return { stdout: USAGE, stderr: '', exitCode: 0 };
   const call = parse(args);
   if (!call) return { stdout: '', stderr: USAGE, exitCode: 2 };
@@ -99,25 +114,52 @@ export async function runWasmCommand(args: string[], ctx: CommandContext): Promi
 
   const out: Uint8Array[] = [];
   const err: Uint8Array[] = [];
+  // The sinks never block, so a runaway producer (`yes`) is cut off at the
+  // shell's output limit instead of filling memory.
+  const limit = ctx.limits?.maxOutputSize ?? DEFAULT_MAX_OUTPUT;
+  let collected = 0;
+  let overflow = false;
+  const collect = (into: Uint8Array[]) => (bytes: Uint8Array) => {
+    collected += bytes.length;
+    if (collected > limit) {
+      overflow = true;
+      handle.kill(1);
+      return;
+    }
+    into.push(bytes);
+  };
   const fds = new FdTable();
   fds.install(bytesSource(stdinBytes(ctx)));
-  fds.install(sinkFile((b) => out.push(b)));
-  fds.install(sinkFile((b) => err.push(b)));
+  fds.install(sinkFile(collect(out)));
+  fds.install(sinkFile(collect(err)));
+  const argv0 = call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, '');
+  const env = ctx.exportedEnv ?? Object.fromEntries(ctx.env);
+  const pm = processConfig?.processManager;
+  const proc = processConfig && registerProcess(processConfig, [argv0, ...call.args], ctx.cwd, env);
   const handle = spawnWasmProcess({
-    pid: nextPid++,
+    pid: proc?.pid ?? nextPid++,
     program: { glue, module },
-    argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
+    argv0,
     args: call.args,
-    env: ctx.exportedEnv ?? Object.fromEntries(ctx.env),
+    env,
     cwd: ctx.cwd,
     fds,
     fs: ctx.fs,
     onError: (message) => err.push(new TextEncoder().encode(`wasm: ${message}\n`)),
   });
+  // `kill` / `ps`: a terminating signal to the pid ends the worker at once.
+  const unsubscribe = pm?.onSignal((signaled, sig) => {
+    const code = signaled.pid === handle.pid ? SIGNAL_EXIT_CODE[sig] : undefined;
+    if (code !== undefined) handle.kill(code);
+  });
   const abort = () => handle.kill(130);
   ctx.signal?.addEventListener('abort', abort, { once: true });
   try {
     const exitCode = await handle.exited;
+    if (proc) pm?.exit(proc.pid, exitCode);
+    if (overflow) {
+      err.push(new TextEncoder().encode(`wasm: output exceeded ${limit} bytes; stopped\n`));
+    }
     return {
       stdout: latin1(out),
       stderr: new TextDecoder().decode(concat(err)),
@@ -125,8 +167,26 @@ export async function runWasmCommand(args: string[], ctx: CommandContext): Promi
       stdoutKind: 'bytes',
     };
   } finally {
+    unsubscribe?.();
     ctx.signal?.removeEventListener('abort', abort);
   }
+}
+
+/** The process-table record (`ps`, `kill`), parented like a `node` realm's. */
+function registerProcess(
+  config: JshProcessConfig,
+  argv: string[],
+  cwd: string,
+  env: Record<string, string>
+): { pid: number } {
+  return config.processManager.spawn({
+    kind: 'wasm',
+    argv,
+    cwd,
+    env,
+    owner: config.owner,
+    ppid: config.getParentPid?.(),
+  });
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array {
