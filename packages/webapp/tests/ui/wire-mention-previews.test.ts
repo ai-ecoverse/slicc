@@ -7,6 +7,7 @@
 import type { SliccAgentMessage, SliccHoverCard, SliccUserMessage } from '@slicc/webcomponents';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@slicc/webcomponents';
+import type { AgentQuestionParser } from '../../src/core/agent-question-model.js';
 import { formatPathHints, TOOL_PATH_HINTS_ATTR } from '../../src/core/tool-call-paths.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import {
@@ -52,7 +53,7 @@ let card: SliccHoverCard;
 
 function setup(
   thread: HTMLElement,
-  opts: { readOnly?: boolean; fetchHtml?: string } = {}
+  opts: { readOnly?: boolean; fetchHtml?: string; questionParser?: AgentQuestionParser } = {}
 ): { dispose: () => void; fetchFn: ReturnType<typeof vi.fn> } {
   const fetchFn = vi.fn(async () => ({
     status: 200,
@@ -69,6 +70,7 @@ function setup(
     getTimeParser: async () => ({
       parseMany: async (texts) => texts.map(() => ({ spans: [], occurrences: [], rrules: [] })),
     }),
+    getQuestionParser: opts.questionParser ? () => opts.questionParser! : undefined,
     getCard: () => card,
     hoverDelayMs: 0,
   });
@@ -306,6 +308,41 @@ describe('wireMentionPreviews', () => {
     span.click();
     await settle();
     expect(card.querySelector('slicc-question-prompt')?.getAttribute('answer')).toBe('yes');
+    dispose();
+  });
+
+  it('renders model options in the transcript and answers without opening a card', async () => {
+    const thread = document.createElement('div');
+    document.body.append(thread);
+    const text = 'Should I merge now or wait for CI?';
+    const bubble = agent(`<p>${text}</p>`, 'choice-1');
+    thread.append(bubble);
+    const parse = vi.fn(async () => [
+      {
+        prompt: text,
+        kind: 'either_or',
+        options: ['Merge now', 'Wait for CI'],
+        default: 1,
+        multiSelect: false,
+        span: [0, text.length] as [number, number],
+      },
+    ]);
+    const { dispose } = setup(thread, { questionParser: { parse } });
+    await settle();
+    expect(parse).toHaveBeenCalledWith(text);
+    const inline = bubble.querySelector('slicc-question-prompt[inline]');
+    expect(inline?.getAttribute('kind')).toBe('choice');
+    expect(inline?.shadowRoot?.textContent).toContain('Wait for CI');
+    expect(card.open).toBe(false);
+    const answers: AgentQuestionAnswerDetail[] = [];
+    thread.addEventListener(AGENT_QUESTION_ANSWER_EVENT, (event) =>
+      answers.push((event as CustomEvent<AgentQuestionAnswerDetail>).detail)
+    );
+    (inline?.shadowRoot?.querySelectorAll('button[part="choice"]')[1] as HTMLButtonElement).click();
+    expect(answers).toEqual([
+      { question: text, kind: 'choice', answer: 'Wait for CI', messageId: 'choice-1' },
+    ]);
+    expect(inline?.getAttribute('state')).toBe('answered');
     dispose();
   });
 

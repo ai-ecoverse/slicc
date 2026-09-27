@@ -3,7 +3,7 @@ import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
 
 /** What kind of answer a question wants, and so which control it gets. */
-export type QuestionKind = 'yes-no' | 'text' | 'number' | 'datetime' | 'date' | 'email';
+export type QuestionKind = 'yes-no' | 'choice' | 'text' | 'number' | 'datetime' | 'date' | 'email';
 
 /** Whether the question can be answered here. */
 export type QuestionState = 'open' | 'answered' | 'inert';
@@ -15,11 +15,19 @@ export interface QuestionAnswerDetail {
   answer: string;
 }
 
-const KINDS = new Set<QuestionKind>(['yes-no', 'text', 'number', 'datetime', 'date', 'email']);
+const KINDS = new Set<QuestionKind>([
+  'yes-no',
+  'choice',
+  'text',
+  'number',
+  'datetime',
+  'date',
+  'email',
+]);
 const STATES = new Set<QuestionState>(['open', 'answered', 'inert']);
 
 /** The `<input type>` each free-form kind maps to. */
-const INPUT_TYPE: Record<Exclude<QuestionKind, 'yes-no'>, string> = {
+const INPUT_TYPE: Record<Exclude<QuestionKind, 'yes-no' | 'choice'>, string> = {
   text: 'text',
   number: 'number',
   datetime: 'datetime-local',
@@ -48,10 +56,13 @@ function withLocalOffset(value: string): string {
 const STYLE = `
 :host{display:block;width:300px;max-width:100%;color:var(--ink);}
 :host([hidden]){display:none;}
+:host([inline]){width:100%;margin:8px 0 12px;}
 .wrap{display:flex;flex-direction:column;gap:10px;padding:12px;}
+:host([inline]) .wrap{padding:10px;border:1px solid color-mix(in srgb,var(--ctx) 20%,transparent);border-radius:10px;background:color-mix(in srgb,var(--ctx) 4%,var(--canvas));}
+:host([inline]) .q{display:none;}
 .q{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.35;font-weight:550;}
 .q svg{flex:0 0 auto;margin-top:2px;color:var(--ctx,currentColor);}
-.row{display:flex;gap:6px;}
+.row{display:flex;gap:6px;flex-wrap:wrap;}
 button{
   -webkit-appearance:none;appearance:none;
   display:inline-flex;align-items:center;justify-content:center;gap:5px;
@@ -64,6 +75,13 @@ button:hover:not(:disabled){background:color-mix(in srgb,var(--ink) 12%,transpar
 button:focus-visible,input:focus-visible{outline:2px solid var(--ctx,currentColor);outline-offset:1px;}
 button.primary{color:var(--canvas,#fff);background:var(--ctx,var(--ink));border-color:transparent;}
 button.primary:hover:not(:disabled){filter:brightness(1.08);background:var(--ctx,var(--ink));}
+.choices{display:flex;flex-wrap:wrap;gap:6px;}
+.choices button{flex:0 1 auto;min-height:34px;text-align:left;}
+.choices button.recommended{border-color:var(--ctx,var(--ink));}
+.choices small{font-size:10px;font-weight:500;opacity:.7;}
+.multi{display:flex;flex-direction:column;gap:8px;align-items:flex-start;}
+.multi label{display:flex;gap:6px;align-items:center;font-size:12.5px;}
+.multi button{flex:none;}
 button.send{flex:0 0 auto;padding:0 10px;}
 button:disabled,input:disabled{opacity:.5;cursor:default;}
 input{
@@ -80,7 +98,7 @@ input{
 const SHEET = sheet(STYLE);
 
 /**
- * `<slicc-question-prompt>` — the hover card content for a question the agent
+ * `<slicc-question-prompt>` — answer controls for a question the agent
  * asked in prose ("Should I file an issue next?"). A yes/no question gets two
  * buttons; any other question gets an input suited to what it asks for (a
  * date-time picker for "when", a number for "how many", text otherwise).
@@ -92,14 +110,28 @@ const SHEET = sheet(STYLE);
  * read-only transcript).
  *
  * @attr question - the question text
- * @attr kind - `yes-no` | `text` | `number` | `datetime` | `date` | `email` (default `yes-no`)
+ * @attr kind - `yes-no` | `choice` | `text` | `number` | `datetime` | `date` | `email` (default `yes-no`)
+ * @attr data-question-options - JSON array of model choices
+ * @attr data-question-default - recommended choice index
+ * @attr data-question-multi - allow several choices
+ * @attr inline - show the controls in the message, without repeating its question
  * @attr state - `open` | `answered` | `inert` (default `open`)
  * @attr answer - the given answer, shown in the `answered` state
  * @attr note - explanation shown in the `inert` state
  * @fires question-answer - `{ question, kind, answer }` (composed, bubbling)
  */
 export class SliccQuestionPrompt extends HTMLElement {
-  static readonly observedAttributes = ['question', 'kind', 'state', 'answer', 'note'];
+  static readonly observedAttributes = [
+    'question',
+    'kind',
+    'state',
+    'answer',
+    'note',
+    'data-question-options',
+    'data-question-default',
+    'data-question-multi',
+    'inline',
+  ];
 
   readonly #root: ShadowRoot;
 
@@ -151,6 +183,17 @@ export class SliccQuestionPrompt extends HTMLElement {
     this.setAttribute('answer', value);
   }
 
+  get options(): string[] {
+    try {
+      const value: unknown = JSON.parse(this.getAttribute('data-question-options') ?? '[]');
+      return Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
   /** Focus the first control, for keyboard users arriving from the anchor. */
   override focus(options?: FocusOptions): void {
     const target = this.#root.querySelector<HTMLElement>('input,button:not(:disabled)');
@@ -195,14 +238,19 @@ export class SliccQuestionPrompt extends HTMLElement {
         h('b', null, this.answer)
       );
     } else {
-      body = this.kind === 'yes-no' ? this.#yesNo(state) : this.#input(state);
+      body =
+        this.kind === 'choice' && this.options.length >= 2
+          ? this.#choices(state)
+          : this.kind === 'yes-no'
+            ? this.#yesNo(state)
+            : this.#input(state);
     }
 
     const note = this.getAttribute('note');
     this.#root.replaceChildren(
       h(
         'div',
-        { class: 'wrap' },
+        { class: 'wrap', role: 'group', 'aria-label': this.question },
         heading,
         body,
         state === 'inert' && note ? h('div', { class: 'note', part: 'note' }, note) : null
@@ -227,8 +275,59 @@ export class SliccQuestionPrompt extends HTMLElement {
     return h('div', { class: 'row' }, button('Yes', 'check', true), button('No', 'x', false));
   }
 
+  #choices(state: QuestionState): HTMLElement {
+    const options = this.options;
+    const defaultValue = this.getAttribute('data-question-default');
+    const recommended = defaultValue === null ? -1 : Number(defaultValue);
+    if (this.hasAttribute('data-question-multi')) {
+      const labels = options.map((option, index) => {
+        const input = h('input', { type: 'checkbox', value: option }) as HTMLInputElement;
+        input.disabled = state !== 'open';
+        return h(
+          'label',
+          null,
+          input,
+          h('span', null, option),
+          index === recommended ? h('small', null, 'Recommended') : null
+        );
+      });
+      const send = h('button', { class: 'primary' }, 'Send choices') as HTMLButtonElement;
+      send.type = 'submit';
+      send.disabled = state !== 'open';
+      const form = h('form', { class: 'multi' }, ...labels, send) as HTMLFormElement;
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const chosen = Array.from(
+          form.querySelectorAll<HTMLInputElement>('input:checked'),
+          (input) => input.value
+        );
+        this.#submit(chosen.join(', '));
+      });
+      return form;
+    }
+    return h(
+      'div',
+      { class: 'choices', part: 'choices' },
+      ...options.map((option, index) => {
+        const button = h(
+          'button',
+          {
+            class: index === recommended ? 'recommended' : '',
+            part: 'choice',
+          },
+          h('span', null, option),
+          index === recommended ? h('small', null, 'Recommended') : null
+        ) as HTMLButtonElement;
+        button.type = 'button';
+        button.disabled = state !== 'open';
+        button.addEventListener('click', () => this.#submit(option));
+        return button;
+      })
+    );
+  }
+
   #input(state: QuestionState): HTMLElement {
-    const kind = this.kind as Exclude<QuestionKind, 'yes-no'>;
+    const kind = this.kind as Exclude<QuestionKind, 'yes-no' | 'choice'>;
     const disabled = state !== 'open';
     const input = h('input', {
       type: INPUT_TYPE[kind] ?? 'text',

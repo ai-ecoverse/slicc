@@ -1,7 +1,7 @@
 /**
  * Turning an answer given on a question's hover card into a lick for the cone.
  *
- * The card (`wire-mention-previews.ts`) only reports the answer on the thread;
+ * The question controls (`wire-mention-previews.ts`) report the answer on the thread;
  * this is where it becomes a `question` sprinkle lick, addressed like an
  * inline dip's lick — to the unit whose transcript asked, captured at answer
  * time, never to whichever cone happens to be oldest.

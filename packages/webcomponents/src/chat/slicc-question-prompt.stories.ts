@@ -8,6 +8,10 @@ interface QuestionPromptArgs {
   state: QuestionState;
   answer?: string;
   note?: string;
+  options?: string[];
+  defaultIndex?: number;
+  multiSelect?: boolean;
+  inline?: boolean;
 }
 
 const meta: Meta<QuestionPromptArgs> = {
@@ -18,16 +22,21 @@ const meta: Meta<QuestionPromptArgs> = {
     question: { control: 'text' },
     kind: {
       control: 'select',
-      options: ['yes-no', 'text', 'number', 'datetime', 'date', 'email'],
+      options: ['yes-no', 'choice', 'text', 'number', 'datetime', 'date', 'email'],
     },
     state: { control: 'inline-radio', options: ['open', 'answered', 'inert'] },
     answer: { control: 'text', description: 'Shown in the answered state' },
     note: { control: 'text', description: 'Shown in the inert state' },
+    options: { control: 'object', description: 'Choices extracted from the agent message' },
+    defaultIndex: { control: 'number', description: 'Recommended choice index' },
+    multiSelect: { control: 'boolean' },
+    inline: { control: 'boolean' },
   },
   render: (args) => {
     const frame = document.createElement('div');
     Object.assign(frame.style, {
-      display: 'inline-block',
+      display: 'block',
+      width: 'min(520px, 100%)',
       background: 'var(--canvas)',
       color: 'var(--ink)',
       font: '13px/1.4 var(--ui)',
@@ -37,7 +46,30 @@ const meta: Meta<QuestionPromptArgs> = {
     });
     const el = document.createElement('slicc-question-prompt');
     for (const [key, value] of Object.entries(args)) {
+      if (['options', 'defaultIndex', 'multiSelect', 'inline'].includes(key)) continue;
       if (value) el.setAttribute(key, String(value));
+    }
+    if (args.options) el.setAttribute('data-question-options', JSON.stringify(args.options));
+    if (args.defaultIndex !== undefined)
+      el.setAttribute('data-question-default', String(args.defaultIndex));
+    if (args.multiSelect) el.setAttribute('data-question-multi', '');
+    if (args.inline) el.setAttribute('inline', '');
+    if (args.inline) {
+      const message = document.createElement('p');
+      message.append('The change is ready. ');
+      const question = document.createElement('span');
+      question.textContent = args.question;
+      Object.assign(question.style, {
+        textDecoration: 'underline solid color-mix(in srgb, var(--ctx) 38%, transparent)',
+        textUnderlineOffset: '3px',
+      });
+      message.append(question);
+      Object.assign(message.style, {
+        margin: '16px 16px 4px',
+        lineHeight: '1.5',
+        fontSize: '14px',
+      });
+      frame.append(message);
     }
     // Answering in a story flips to the answered state, so the round trip is visible.
     el.addEventListener('question-answer', (event) => {
@@ -58,6 +90,27 @@ export const YesNo: Story = {
 };
 export const FreeText: Story = {
   args: { question: 'Which branch should I base it on?', kind: 'text', state: 'open' },
+};
+export const InlineChoices: Story = {
+  args: {
+    question: 'Should I merge now or wait for CI?',
+    kind: 'choice',
+    state: 'open',
+    options: ['Merge now', 'Wait for CI'],
+    defaultIndex: 1,
+    inline: true,
+  },
+};
+
+export const InlineMultiSelect: Story = {
+  args: {
+    question: 'Which checks should I run?',
+    kind: 'choice',
+    state: 'open',
+    options: ['Lint', 'Tests', 'Build'],
+    multiSelect: true,
+    inline: true,
+  },
 };
 export const HowMany: Story = {
   args: { question: 'How many retries should the fetch get?', kind: 'number', state: 'open' },

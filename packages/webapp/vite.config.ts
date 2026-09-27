@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
+import { gpuAskAssetsPlugin } from './vite-plugins/gpu-ask-assets';
 import { piAiModelDataGeneratedAt } from './vite-plugins/pi-ai-model-data';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
 import { stripFfmpegCoreCdnLiteralPlugin } from './vite-plugins/strip-ffmpeg-core-cdn-literal';
@@ -484,6 +485,7 @@ export default defineConfig(({ mode }) => ({
   root: workspaceRoot,
   publicDir: resolve(workspaceRoot, 'packages/assets'),
   plugins: [
+    gpuAskAssetsPlugin(),
     stripBiomeWasmAssetPlugin(),
     stripOrtWasmAssetPlugin(),
     curatedShikiBundlePlugin(),
