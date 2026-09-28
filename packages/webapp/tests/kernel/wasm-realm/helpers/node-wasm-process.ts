@@ -82,7 +82,8 @@ export function runProgram(
   program: WasmProgram,
   args: string[],
   net: LoopbackNet,
-  argv0 = 'socktest'
+  argv0 = 'socktest',
+  env: Record<string, string> = {}
 ): RunningProgram {
   const out: string[] = [];
   const err: string[] = [];
@@ -107,7 +108,7 @@ export function runProgram(
       program,
       argv0,
       args: argv,
-      env: {},
+      env,
       cwd: '/',
       fds: table,
       fs: emptyFs,

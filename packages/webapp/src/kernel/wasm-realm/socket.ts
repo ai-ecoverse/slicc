@@ -309,7 +309,13 @@ function keyOf(addr: SockAddr): string {
 
 export class LoopbackNet {
   private readonly bound = new Map<string, KernelSocket>();
+
+  private readonly activators = new Map<string, () => void>();
   private nextEphemeral = EPHEMERAL_FIRST;
+
+  activate(addr: SockAddr, start: () => void): void {
+    this.activators.set(keyOf(addr), start);
+  }
 
   socket(domain: SocketDomain): KernelSocket {
     return new KernelSocket(this, domain);
@@ -351,7 +357,9 @@ export class LoopbackNet {
     if (addr.family === 'inet' && !isLoopback(canonicalHost(addr.host))) {
       throw new KernelError('ENETUNREACH');
     }
-    const socket = this.bound.get(keyOf(addr));
+    const key = keyOf(addr);
+    if (!this.bound.has(key)) this.activators.get(key)?.();
+    const socket = this.bound.get(key);
     if (!socket?.listening) throw new KernelError('ECONNREFUSED');
     return socket;
   }

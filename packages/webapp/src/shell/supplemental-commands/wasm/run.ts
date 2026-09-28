@@ -7,6 +7,7 @@ import {
   sinkFile,
 } from '../../../kernel/wasm-realm/fd-table.js';
 import type { WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
+import { realmNetworkEnv } from '../../../kernel/wasm-realm/net/realm-network.js';
 import { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
@@ -165,7 +166,7 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
 }
 
 function programEnv(ctx: CommandContext, call: Invocation): Record<string, string> {
-  const env = { ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
+  const env = { ...realmNetworkEnv(), ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
   if (call.tty && (!env.TERM || env.TERM === 'dumb')) {
     env.TERM = 'xterm-256color';
     env.COLORTERM ??= 'truecolor';
