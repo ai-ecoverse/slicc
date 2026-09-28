@@ -15,13 +15,17 @@ async function install(fs: VirtualFS, name: string, pkg: object, files: string[]
   const dir = `${GLOBAL_NODE_MODULES}/${name}`;
   await fs.mkdir(`${dir}/bin`, { recursive: true });
   await fs.writeFile(`${dir}/package.json`, JSON.stringify({ name, ...pkg }));
-  for (const file of files) await fs.writeFile(`${dir}/${file}`, 'x');
+  for (const file of files) {
+    const path = `${dir}/${file}`;
+    await fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true });
+    await fs.writeFile(path, 'x');
+  }
 }
 
 describe('commandsFromManifest', () => {
   const dir = '/m/pkg';
 
-  it('gives commands the manifest’s env defaults, package paths resolved inside the package', () => {
+  it('gives commands the manifest’s env defaults, `${package}` expanded', () => {
     const [magick, convert] = commandsFromManifest(dir, {
       name: 'im',
       slicc: {
@@ -37,15 +41,13 @@ describe('commandsFromManifest', () => {
         },
       },
     });
-    expect(magick?.env).toEqual({
-      MAGICK_CONFIGURE_PATH: `${dir}/etc/ImageMagick-7`,
-      LANG: 'C.UTF-8',
-    });
+    expect(magick?.env).toEqual({ MAGICK_CONFIGURE_PATH: 'etc/ImageMagick-7', LANG: 'C.UTF-8' });
 
     expect(convert?.env).toEqual({
-      MAGICK_CONFIGURE_PATH: `${dir}/etc/ImageMagick-7`,
+      MAGICK_CONFIGURE_PATH: 'etc/ImageMagick-7',
       LANG: 'POSIX',
       HOME_DIR: `${dir}/share`,
+      ESCAPE: '../outside',
     });
     const [plain] = commandsFromManifest(dir, {
       slicc: { commands: { x: { glue: 'bin/x', wasm: 'bin/x.wasm' } } },
@@ -126,6 +128,32 @@ describe('scanWasmCommands', () => {
     expect([...commands.keys()].sort()).toEqual(['more', 'tool']);
     expect(commands.get('more')?.glue).toBe(`${GLOBAL_NODE_MODULES}/@x/more/more.js`);
     expect(commands.get('tool')?.pkg).toBe('tools');
+  });
+
+  it('resolves an env value naming something in the package; any other value is literal', async () => {
+    await install(
+      fs,
+      'im',
+      {
+        slicc: {
+          env: {
+            MAGICK_CONFIGURE_PATH: 'etc/ImageMagick-7',
+            TZ: 'America/New_York',
+            ENDPOINT: 'https://example.com/api',
+            ESCAPE: '../outside',
+          },
+          commands: { magick: { glue: 'bin/magick', wasm: 'bin/magick.wasm' } },
+        },
+      },
+      ['etc/ImageMagick-7/colors.xml']
+    );
+    const env = (await scanWasmCommands(fs, GLOBAL_NODE_MODULES)).get('magick')?.env;
+    expect(env).toEqual({
+      MAGICK_CONFIGURE_PATH: `${GLOBAL_NODE_MODULES}/im/etc/ImageMagick-7`,
+      TZ: 'America/New_York',
+      ENDPOINT: 'https://example.com/api',
+      ESCAPE: '../outside',
+    });
   });
 
   it('offers bin pairs of @ai-ecoverse/wasm-* packages without a manifest', async () => {

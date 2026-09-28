@@ -65,12 +65,23 @@ function manifestEnv(pkgDir: string, raw: unknown): Record<string, string> {
   if (!raw || typeof raw !== 'object') return env;
   for (const [key, value] of Object.entries(raw as ManifestEnvEntries)) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== 'string') continue;
-    const expanded = value.replaceAll('${package}', pkgDir);
-    const relativePath = !expanded.startsWith('/') && expanded.includes('/');
-    const resolved = relativePath ? insidePackage(pkgDir, expanded) : expanded;
-    if (resolved !== undefined) env[key] = resolved;
+    env[key] = value.replaceAll('${package}', pkgDir);
   }
   return env;
+}
+
+async function withPackagePaths(
+  fs: ProgramFs,
+  pkgDir: string,
+  command: WasmCommand
+): Promise<WasmCommand> {
+  if (!command.env) return command;
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(command.env)) {
+    const path = !value.startsWith('/') && value.includes('/') && insidePackage(pkgDir, value);
+    env[key] = path && (await fs.exists(path)) ? path : value;
+  }
+  return { ...command, env };
 }
 
 export function isInstalledProgramPath(path: string): boolean {
@@ -145,7 +156,9 @@ async function packageCommands(fs: ProgramFs, pkgDir: string): Promise<WasmComma
     return [];
   }
   const declared = commandsFromManifest(pkgDir, pkg);
-  if (declared.length > 0 || pkg.slicc) return declared;
+  if (declared.length > 0 || pkg.slicc) {
+    return Promise.all(declared.map((command) => withPackagePaths(fs, pkgDir, command)));
+  }
   const name = typeof pkg.name === 'string' ? pkg.name : '';
   if (
     name.startsWith(FALLBACK_SCOPE) &&
