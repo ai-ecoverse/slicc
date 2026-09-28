@@ -250,6 +250,20 @@ describe('resolveVersion', () => {
     expect(resolveVersion(packument, '1.2.0')).toBe('1.2.0');
   });
 
+  it('passes over a deprecated version in a range unless nothing else satisfies it', () => {
+    const p = makePackument('z', ['1.3.1-1', '1.3.1-2', '1.3.1'], { latest: '1.3.1-2' });
+    (p.versions!['1.3.1'] as { deprecated?: string }).deprecated = 'superseded by 1.3.1-2';
+    expect(resolveVersion(p, '^1.3.1-1')).toBe('1.3.1-2');
+    expect(resolveVersion(p, '1.3.1')).toBe('1.3.1');
+    expect(resolveVersion(p, '>=1.3.1')).toBe('1.3.1');
+  });
+
+  it('treats an empty deprecation message as live (how npm un-deprecates)', () => {
+    const p = makePackument('z', ['1.0.0', '1.1.0'], { latest: '1.1.0' });
+    (p.versions!['1.1.0'] as { deprecated?: string }).deprecated = '';
+    expect(resolveVersion(p, '^1.0.0')).toBe('1.1.0');
+  });
+
   it('resolves a caret range to the highest in-range version', () => {
     expect(resolveVersion(packument, '^1.0.0')).toBe('1.2.3');
   });

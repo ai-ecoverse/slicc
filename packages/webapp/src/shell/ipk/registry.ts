@@ -45,6 +45,8 @@ export interface PackumentVersion {
   type?: 'module' | 'commonjs';
   exports?: unknown;
   bin?: string | Record<string, string>;
+
+  deprecated?: string;
   [key: string]: unknown;
 }
 
@@ -192,6 +194,11 @@ function pickDistTag(ctx: ResolveContext, tag: string): string {
   );
 }
 
+function maxSatisfyingLive(ctx: ResolveContext, range: string): string | null {
+  const live = ctx.versions.filter((v) => !ctx.versionMap[v]?.deprecated);
+  return maxSatisfying(live, range) ?? maxSatisfying(ctx.versions, range);
+}
+
 export function resolveVersion(packument: Packument, range: string): string {
   const ctx = buildResolveContext(packument);
   const requested = (range ?? '').trim();
@@ -204,7 +211,7 @@ export function resolveVersion(packument: Packument, range: string): string {
   if (isValidRange(requested)) {
     let best: string | null = null;
     try {
-      best = maxSatisfying(ctx.versions, requested);
+      best = maxSatisfyingLive(ctx, requested);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(
