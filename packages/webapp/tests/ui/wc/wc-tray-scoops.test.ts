@@ -15,7 +15,6 @@ const cone = {
   jid: 'cone',
   name: 'sliccy',
   folder: 'cone',
-  isCone: true,
   parentJid: null,
   assistantLabel: 'sliccy',
 };
@@ -209,7 +208,6 @@ describe('tray scoop tab adapters', () => {
         ...cone,
         jid: 'research',
         name: 'research',
-        isCone: false,
         state: 'initializing',
         fill: 12,
       },
@@ -237,8 +235,8 @@ describe('tray scoop tab adapters', () => {
 
 describe('parentId on the wire (#1666 / #2270)', () => {
   const research = { ...cone, jid: 'cone_2', name: 'Research', assistantLabel: 'Research' };
-  const a = { ...cone, jid: 'scoop_a', name: 'a', isCone: false, parentJid: 'cone' };
-  const b = { ...cone, jid: 'scoop_b', name: 'b', isCone: false, parentJid: 'cone_2' };
+  const a = { ...cone, jid: 'scoop_a', name: 'a', parentJid: 'cone' };
+  const b = { ...cone, jid: 'scoop_b', name: 'b', parentJid: 'cone_2' };
 
   it('toScoopSummaries carries the ownership edge', () => {
     const summaries = toScoopSummaries([cone, a, research, b], []);
@@ -250,28 +248,21 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     ]);
   });
 
-  it('summaryIsRoot uses the edge when sent and the flag when it is not', () => {
-    expect(summaryIsRoot({ isCone: true, parentId: null })).toBe(true);
-    expect(summaryIsRoot({ isCone: false, parentId: 'cone' })).toBe(false);
-    // a lying flag loses to the edge
-    expect(summaryIsRoot({ isCone: true, parentId: 'cone' })).toBe(false);
-    // A hosted leader tab opened before `parentId` landed and never reloaded
-    // sends the flag alone. Dropping this fallback gives such a roster ZERO
-    // roots — every unit read-only — while iOS on the same bytes still roots
-    // via `isCone`. Stage 3 of #2358 deletes both halves together.
-    expect(summaryIsRoot({ isCone: true })).toBe(true);
-    expect(summaryIsRoot({ isCone: false })).toBe(false);
-    // Neither field at all is "owner unknown", never a second root.
+  it('summaryIsRoot is true only for an explicit null parentId', () => {
+    expect(summaryIsRoot({ parentId: null })).toBe(true);
+    expect(summaryIsRoot({ parentId: 'cone' })).toBe(false);
+    // Absent edge is unknown — never invent a root (#2358 stage 3).
     expect(summaryIsRoot({})).toBe(false);
+    expect(summaryIsRoot({ parentId: undefined })).toBe(false);
   });
 
-  it('resolves the role from the edge for a summary with no isCone flag (#2358)', () => {
-    // What a v8 peer receives once the leader stops projecting the flag.
-    const { isCone: _isCone, ...rootNoFlag } = toScoopSummaries([cone], [])[0];
-    const { isCone: _childFlag, ...childNoFlag } = toScoopSummaries([a], [])[0];
-    expect(rootNoFlag).not.toHaveProperty('isCone');
-    expect(summaryRole(rootNoFlag)).toBe('cone');
-    expect(summaryRole(childNoFlag)).toBe('scoop');
+  it('resolves the role from the ownership edge alone (#2358)', () => {
+    const root = toScoopSummaries([cone], [])[0];
+    const child = toScoopSummaries([a], [])[0];
+    expect(root).not.toHaveProperty('isCone');
+    expect(child).not.toHaveProperty('isCone');
+    expect(summaryRole(root)).toBe('cone');
+    expect(summaryRole(child)).toBe('scoop');
   });
 
   it('lists every cone first, then scoops grouped by owner (#2272)', () => {
@@ -314,10 +305,9 @@ describe('parentId on the wire (#1666 / #2270)', () => {
       ...cone,
       jid: 'scoop_aa',
       name: 'aa',
-      isCone: false,
       parentJid: 'scoop_a',
     };
-    const orphan = { ...cone, jid: 'scoop_x', name: 'x', isCone: false, parentJid: 'gone' };
+    const orphan = { ...cone, jid: 'scoop_x', name: 'x', parentJid: 'gone' };
     const descriptors = followerDescriptors(
       toScoopSummaries([orphan, grandchild, b, a, research, cone], [])
     );
@@ -331,11 +321,13 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     ]);
   });
 
-  it('keeps the legacy cone-first order when a leader sends no parentId', () => {
+  it('keeps units without parentId as non-roots rather than inventing cones', () => {
     const legacy = [
-      { jid: 's', name: 's', folder: 's', isCone: false, assistantLabel: 's' },
-      { jid: 'c', name: 'c', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      { jid: 's', name: 's', folder: 's', assistantLabel: 's' },
+      { jid: 'c', name: 'c', folder: 'cone', assistantLabel: 'sliccy', parentId: null },
     ];
+    // Only an explicit null edge is a root; a summary with no edge at all is
+    // unknown and must not be promoted (#2358 stage 3).
     expect(followerDescriptors(legacy).map((d) => d.key)).toEqual(['c', 's']);
   });
 

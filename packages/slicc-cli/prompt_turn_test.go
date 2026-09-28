@@ -158,8 +158,7 @@ func TestSoleConeJid(t *testing.T) {
 	if _, ok := soleConeJid([]byte(`{"type":"scoops.list","scoops":[{"jid":"legacy"}]}`)); ok {
 		t.Fatal("an absent parentId must not be invented as a cone")
 	}
-	jid, ok = soleConeJid([]byte(`{"type":"scoops.list","scoops":[{"jid":"cone-1","isCone":true}]}`))
-	if !ok || jid != "cone-1" {
-		t.Fatalf("isCone fallback = %q %v", jid, ok)
+	if _, ok := soleConeJid([]byte(`{"type":"scoops.list","scoops":[{"jid":"cone-1","isCone":true}]}`)); ok {
+		t.Fatal("isCone alone must not invent a cone after #2358 stage 3")
 	}
 }

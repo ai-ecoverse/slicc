@@ -11,10 +11,8 @@ public enum NewSessionAction: String, Codable {
 /// via the additive `hello` message both sides send on channel open.
 ///
 /// Version 8 says this peer derives a unit's role from `ScoopSummary.parentId`
-/// alone and does not need the deprecated `isCone` flag, so a leader may stop
-/// projecting it for us (#2358). Announcing 8 is only safe because
-/// `ScoopSummary.isCone` is OPTIONAL here — a build that decoded it as a
-/// required `Bool` would fail to decode the whole `scoops.list` it asked for.
+/// alone. Stage 3 of #2358 deleted the deprecated `isCone` flag from the wire;
+/// announcing 8 or above is how a peer said it no longer needed that flag.
 ///
 /// Version 9 is a LEADER capability: it honours `request_snapshot.peek`. A
 /// follower reads it off the leader's `hello` before prefetching other units.
@@ -216,18 +214,10 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let jid: String
     public let name: String
     public let folder: String
-    /// Derived presentation flag: `true` for a root unit (a cone).
-    ///
-    /// OPTIONAL, and it must stay that way: a leader that sees us announce
-    /// protocol version 8 stops sending it entirely (#2358), and a required
-    /// `Bool` here would turn that into a decode failure for the whole
-    /// `scoops.list`. Read `parentId` instead — see `ScoopSummary.isRootUnit`
-    /// in the app, where this flag survives only as the fallback for a leader
-    /// that predates the edge.
-    public let isCone: Bool?
     /// Ownership edge of the work-unit tree (#1666): `nil` for a cone (root) or
     /// when the leader predates the field; the owning unit's jid for a scoop.
-    /// This is the root test wherever the leader sends it.
+    /// This is the sole role source since #2358 stage 3 deleted the derived
+    /// `isCone` flag from the wire — see `ScoopSummary.isRootUnit` in the app.
     public let parentId: String?
     public let assistantLabel: String
     public let trigger: String?
@@ -261,23 +251,20 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         jid: String,
         name: String,
         folder: String,
-        // No default: `isCone` stays a required LABEL even though the type is
-        // optional, so a fixture that omits both it and `parentId` cannot
-        // quietly compile into a root (#2358).
-        isCone: Bool?,
+        // No default: a fixture that omits `parentId` must say so explicitly
+        // rather than quietly compile into a root (#2358).
+        parentId: String?,
         assistantLabel: String,
         trigger: String? = nil,
         state: String? = nil,
         activity: String? = nil,
         fill: Double? = nil,
-        parentId: String? = nil,
         turns: Double? = nil,
         model: ScoopSummaryModel? = nil
     ) {
         self.jid = jid
         self.name = name
         self.folder = folder
-        self.isCone = isCone
         self.parentId = parentId
         self.assistantLabel = assistantLabel
         self.trigger = trigger

@@ -85,10 +85,10 @@ answer it from different fields on different record shapes. The adapters
 resolve that once — `isRootUnit(record)` locally, `summaryIsRoot(summary)`
 remotely — so nothing downstream branches on the wire shape, and
 `parentId: undefined` means exactly "owner unknown", which the ordering rule
-below already has a place for. `summaryIsRoot` reads the ownership edge
-wherever the leader sends it and falls back to the deprecated `isCone` flag
-only when the edge is absent entirely — the last `.isCone` read in TypeScript,
-which #2358 stage 3 deletes with the field.
+below already has a place for. `summaryIsRoot` reads the ownership edge alone
+(`parentId === null`); an absent edge is unknown and must not invent a root
+([#2358](https://github.com/ai-ecoverse/slicc/issues/2358) stage 3 deleted
+the derived `isCone` flag).
 
 `state`/`phase`/`awaiting`/`fill` are the shell's expression model, not the
 wire's. The remote adapter expands `state` + `activity` through the existing

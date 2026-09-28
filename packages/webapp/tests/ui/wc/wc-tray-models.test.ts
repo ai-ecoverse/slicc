@@ -122,10 +122,10 @@ describe('role-switch follower model controls', () => {
 
     options.onScoopsList?.(
       [
-        { jid: 'cone-a', name: 'cone', isCone: true, parentId: null },
-        { jid: 'cone-b', name: 'research', isCone: true, parentId: null },
-        { jid: 'scoop-a', name: 'helper-a', isCone: false, parentId: 'cone-a' },
-        { jid: 'scoop-b', name: 'helper-b', isCone: false, parentId: 'cone-b' },
+        { jid: 'cone-a', name: 'cone', parentId: null },
+        { jid: 'cone-b', name: 'research', parentId: null },
+        { jid: 'scoop-a', name: 'helper-a', parentId: 'cone-a' },
+        { jid: 'scoop-b', name: 'helper-b', parentId: 'cone-b' },
       ] as never,
       'cone-a'
     );
@@ -164,8 +164,8 @@ describe('role-switch follower model controls', () => {
 
     options.onScoopsList?.(
       [
-        { jid: 'cone', name: 'cone', isCone: true, parentId: null },
-        { jid: 'research', name: 'research', isCone: false, parentId: 'cone' },
+        { jid: 'cone', name: 'cone', parentId: null },
+        { jid: 'research', name: 'research', parentId: 'cone' },
       ] as never,
       'cone'
     );
@@ -173,10 +173,7 @@ describe('role-switch follower model controls', () => {
     options.onConnectionChange?.(false);
     expect(options.getSelectedScoopJid?.()).toBe('research');
 
-    options.onScoopsList?.(
-      [{ jid: 'cone', name: 'cone', isCone: true, parentId: null }] as never,
-      'cone'
-    );
+    options.onScoopsList?.([{ jid: 'cone', name: 'cone', parentId: null }] as never, 'cone');
     expect(options.getSelectedScoopJid?.()).toBe('cone');
     expect(switcher.getAttribute('active')).toBe('cone');
   });
@@ -254,7 +251,6 @@ describe('role-switch follower status', () => {
       name: 'a',
       folder: 'cone',
       parentId: null,
-      isCone: true,
       assistantLabel: 'sliccy',
       model: { provider: 'anthropic', id: 'claude-opus-4-6' },
     },
@@ -263,7 +259,6 @@ describe('role-switch follower status', () => {
       name: 'b',
       folder: 'cone-b',
       parentId: null,
-      isCone: true,
       assistantLabel: 'sliccy',
       model: { provider: 'anthropic', id: 'claude-sonnet-4-6' },
     },
@@ -342,7 +337,6 @@ describe('role-switch follower status', () => {
           name: 'helper',
           folder: 'helper',
           parentId: 'cone_a',
-          isCone: false,
           assistantLabel: 'sliccy',
         },
       ] as never,
@@ -435,7 +429,7 @@ describe('role-switch follower status', () => {
       () => null
     );
     const roster = [
-      { jid: 'research', name: 'research', folder: 'research', parentId: null, isCone: true },
+      { jid: 'research', name: 'research', folder: 'research', parentId: null },
     ] as never;
 
     options.onScoopsList?.(roster, 'research');

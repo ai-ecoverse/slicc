@@ -40,31 +40,20 @@ describe('leader and follower render one roster identically (#2274)', () => {
     }
   });
 
-  it('reads a legacy leader’s role from isCone without inventing an owner', async () => {
+  it('does not invent a root when the leader omits parentId (#2358 stage 3)', async () => {
     const remote = makeRemoteHarness();
-    // A hosted leader tab opened before `parentId` landed (#1666) and never
-    // reloaded sends the flag alone. Without the fallback this roster has ZERO
-    // roots and the follower composer unmounts on every unit.
+    // A leader that predates the ownership edge leaves parentId absent. After
+    // stage 3 that unit is unknown — never promoted to a cone.
     const legacy: FakeUnit[] = ROSTER.map((unit) => ({ ...unit, legacyWire: true }));
     remote.setRoster(legacy, 'cone_1');
     const units = await remote.client.list();
-    expect(units.map((unit) => unit.role)).toEqual(['primary', 'primary', 'child']);
-    // The owner stays UNKNOWN rather than being guessed as a root.
+    expect(units.every((unit) => unit.role === 'child')).toBe(true);
     expect(units.find((unit) => unit.id === 'scoop_1')?.parentId).toBeUndefined();
-    // With no edges at all the strip falls back to cones-first, leader order.
-    expect(toTabDescriptors(units, 'cone_1', color).map((tab) => tab.key)).toEqual([
-      'cone_1',
-      'cone_2',
-      'scoop_1',
-    ]);
   });
 
-  it('resolves roles from the edge when the leader omits the isCone flag (#2358)', async () => {
+  it('resolves roles from the ownership edge alone (#2358)', async () => {
     const remote = makeRemoteHarness();
-    // A leader that saw this follower say `hello` at protocol version 8 stops
-    // projecting the deprecated flag. The edge alone must still answer.
-    const flagless: FakeUnit[] = ROSTER.map((unit) => ({ ...unit, noRoleFlag: true }));
-    remote.setRoster(flagless, 'cone_1');
+    remote.setRoster(ROSTER, 'cone_1');
     const units = await remote.client.list();
     expect(units.map((unit) => unit.role)).toEqual(['primary', 'primary', 'child']);
     expect(units.find((unit) => unit.id === 'scoop_1')?.parentId).toBe('cone_2');

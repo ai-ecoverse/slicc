@@ -129,11 +129,10 @@ final class ModelProtocolTests: XCTestCase {
                 LeaderToFollowerMessage.scoopsList(
                     scoops: [
                         ScoopSummary(
-                            jid: "cone", name: "cone", folder: "/workspace", isCone: true,
-                            assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil),
+                            jid: "cone", name: "cone", folder: "/workspace", parentId: nil, assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil),
                         ScoopSummary(
                             jid: "active", name: "active", folder: "/scoops/active",
-                            isCone: false, assistantLabel: "active", trigger: nil, state: nil,
+                            parentId: "cone", assistantLabel: "active", trigger: nil, state: nil,
                             fill: nil),
                     ], activeScoopJid: "active")))
 

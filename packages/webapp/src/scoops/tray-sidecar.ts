@@ -671,7 +671,7 @@ function routePromptFrame(
 function soleConeJid(message: Extract<LeaderToFollowerMessage, { type: 'scoops.list' }>): string {
   let cone = '';
   for (const scoop of message.scoops) {
-    const root = scoop.parentId === null || (scoop.parentId === undefined && scoop.isCone === true);
+    const root = scoop.parentId === null;
     if (!root) continue;
     if (cone && cone !== scoop.jid) return '';
     cone = scoop.jid;

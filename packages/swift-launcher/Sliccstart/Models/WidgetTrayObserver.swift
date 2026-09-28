@@ -366,10 +366,9 @@ extension ScoopSummary {
         WidgetUnit(
             id: jid,
             name: assistantLabel.isEmpty ? name : assistantLabel,
-            // Same rule as the follower's `ScoopSummary.isRootUnit`: the edge
-            // decides, and an absent `isCone` reads as `true` because only a
-            // leader that also sends the edge omits it (#2358).
-            role: (parentId == nil && (isCone ?? true)) ? .cone : .scoop,
+            // Same rule as the follower's `ScoopSummary.isRootUnit`: the
+            // ownership edge is the sole role source (#2358 stage 3).
+            role: parentId == nil ? .cone : .scoop,
             parentId: parentId,
             lifecycle: WidgetUnit.Lifecycle(rawValue: state ?? "") ?? .unknown,
             activity: activity.flatMap(WidgetUnit.Activity.init(rawValue:)),

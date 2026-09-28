@@ -182,11 +182,9 @@ final class AppStateStreamingTests: XCTestCase {
         let state = AppState()
         state.scoops = [
             ScoopSummary(
-                jid: "cone", name: "cone", folder: "/workspace", isCone: true,
-                assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil),
+                jid: "cone", name: "cone", folder: "/workspace", parentId: nil, assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil),
             ScoopSummary(
-                jid: "other", name: "other", folder: "/scoops/other", isCone: false,
-                assistantLabel: "other", trigger: nil, state: nil, fill: nil),
+                jid: "other", name: "other", folder: "/scoops/other", parentId: "cone", assistantLabel: "other", trigger: nil, state: nil, fill: nil),
         ]
         state.selectedScoopJid = "cone"
 
@@ -334,11 +332,9 @@ final class AppStateStreamingTests: XCTestCase {
         let state = AppState()
         state.scoops = [
             ScoopSummary(
-                jid: "cone", name: "cone", folder: "/workspace", isCone: true,
-                assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil),
+                jid: "cone", name: "cone", folder: "/workspace", parentId: nil, assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil),
             ScoopSummary(
-                jid: "scoop", name: "scoop", folder: "/scoops/scoop", isCone: false,
-                assistantLabel: "scoop", trigger: nil, state: nil, fill: nil),
+                jid: "scoop", name: "scoop", folder: "/scoops/scoop", parentId: "cone", assistantLabel: "scoop", trigger: nil, state: nil, fill: nil),
         ]
         state.selectedScoopJid = "cone"
         try send(.messageStart(messageId: "cone-reply"), scoopJid: "cone", to: state)

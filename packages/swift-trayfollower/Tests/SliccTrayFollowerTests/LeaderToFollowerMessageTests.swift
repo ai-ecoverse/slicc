@@ -180,7 +180,7 @@ final class LeaderToFollowerMessageTests: XCTestCase {
 
     func testScoopsListRoundTrip() throws {
         let scoop = ScoopSummary(
-            jid: "j1", name: "Cone", folder: "/", isCone: true, assistantLabel: "A",
+            jid: "j1", name: "Cone", folder: "/", parentId: nil, assistantLabel: "A",
             trigger: "manual", state: "active", fill: 42.5)
         guard case .scoopsList(let scoops, let active) = try roundTrip(.scoopsList(scoops: [scoop], activeScoopJid: "j1")) else {
             XCTFail("expected scoopsList")

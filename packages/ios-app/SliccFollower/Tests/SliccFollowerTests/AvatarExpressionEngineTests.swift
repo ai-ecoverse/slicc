@@ -289,8 +289,7 @@ final class AvatarExpressionEngineTests: XCTestCase {
 
     private func summary(_ state: String?, activity: String? = nil) -> ScoopSummary {
         .init(
-            jid: "s", name: "reviewer", folder: "/scoops/reviewer", isCone: false,
-            assistantLabel: "Reviewer", trigger: nil, state: state, activity: activity,
+            jid: "s", name: "reviewer", folder: "/scoops/reviewer", parentId: "cone", assistantLabel: "Reviewer", trigger: nil, state: state, activity: activity,
             fill: 40)
     }
 

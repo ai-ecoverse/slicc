@@ -19,9 +19,9 @@ final class ThreadListOrderTests: XCTestCase {
     }
 
     func testUnknownOwnersTrailInLeaderOrder() {
-        // A legacy leader: no edges at all, the scoops say `isCone: false`.
+        // Units whose owner is missing trail after the roots, in leader order.
         let legacy = [
-            ScoopSummary(jid: "x", name: "x", folder: "x", isCone: false, assistantLabel: "x"),
+            ScoopSummary(jid: "x", name: "x", folder: "x", parentId: "gone", assistantLabel: "x"),
             cone("c"),
             scoop("orphan", parent: "gone"),
         ]
@@ -270,8 +270,8 @@ private func cone(
     fill: Double? = 10, model: ScoopSummaryModel? = nil
 ) -> ScoopSummary {
     ScoopSummary(
-        jid: jid, name: jid, folder: "/\(jid)", isCone: true, assistantLabel: label ?? jid,
-        state: state, activity: activity, fill: fill, parentId: nil, model: model)
+        jid: jid, name: jid, folder: "/\(jid)", parentId: nil, assistantLabel: label ?? jid,
+        state: state, activity: activity, fill: fill, model: model)
 }
 
 private func scoop(
@@ -279,6 +279,6 @@ private func scoop(
     fill: Double? = 10
 ) -> ScoopSummary {
     ScoopSummary(
-        jid: jid, name: jid, folder: "/scoops/\(jid)", isCone: false, assistantLabel: jid.uppercased(),
-        state: state, activity: activity, fill: fill, parentId: parent)
+        jid: jid, name: jid, folder: "/scoops/\(jid)", parentId: parent, assistantLabel: jid.uppercased(),
+        state: state, activity: activity, fill: fill)
 }

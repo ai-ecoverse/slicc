@@ -24,16 +24,11 @@ extension UnitRole {
 extension ScoopSummary {
     /// `true` when this summary describes a root (cone).
     ///
-    /// `parentId` is the ownership edge and decides on its own wherever the
-    /// leader sends it: anything owned is a scoop. `nil` covers both "this is
-    /// a cone" and "this leader predates the field", so that one case falls
-    /// back to the legacy `isCone` flag — and nothing else does.
-    ///
-    /// An ABSENT flag reads as `true`, because the only leader that omits it
-    /// is one that saw us announce protocol version 8 and therefore also sends
-    /// the edge (#2358). It is the missing-`parentId` case that still needs
-    /// the flag, and no leader produces both gaps at once.
-    var isRootUnit: Bool { parentId == nil && (isCone ?? true) }
+    /// `parentId` is the sole role source (#2358 stage 3): `nil` is a cone
+    /// (JSON `null` on the wire), anything owned is a scoop. Codable cannot
+    /// tell absent from null, so a leader that omits the edge entirely also
+    /// reads as a root here — current leaders always send the edge.
+    var isRootUnit: Bool { parentId == nil }
 
     /// The role of this unit: a root is a cone, anything owned is a scoop.
     /// The follower's half of `unitRoleFor` / `summaryRole`.

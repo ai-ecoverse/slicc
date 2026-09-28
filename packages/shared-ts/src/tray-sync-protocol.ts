@@ -79,10 +79,9 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  *   `thinking.set` — so a follower must not prefetch other units' transcripts
  *   from a leader below 9.
  * - **8** — this peer derives a unit's role from {@link ScoopSummary.parentId}
- *   alone and does NOT need {@link ScoopSummary.isCone}. A leader may therefore
- *   omit the flag when talking to a peer at 8 or above; it keeps sending it to
- *   anything older, which includes every native follower shipped before the
- *   optional-decode build ([#2358](https://github.com/ai-ecoverse/slicc/issues/2358)).
+ *   alone. Stage 3 of [#2358](https://github.com/ai-ecoverse/slicc/issues/2358)
+ *   deleted the deprecated `isCone` flag from the wire; announcing 8 or above
+ *   is how a peer said it no longer needed that flag.
  */
 export const TRAY_SYNC_PROTOCOL_VERSION = 10;
 
@@ -989,21 +988,12 @@ export interface ScoopSummary {
   name: string;
   folder: string;
   /**
-   * Derived presentation flag: `true` for a root unit (a cone).
-   *
-   * @deprecated Read {@link ScoopSummary.parentId} instead — the ownership edge
-   * is the single source of the cone/scoop role (#1666). The leader still
-   * PROJECTS this flag, but only for peers below protocol version 8
-   * (`TRAY_SYNC_PROTOCOL_VERSION`); stage 3 of
-   * [#2358](https://github.com/ai-ecoverse/slicc/issues/2358) drops it from the
-   * wire once every shipped native follower decodes it optionally.
-   */
-  isCone?: boolean;
-  /**
    * Ownership edge of the work-unit tree (#1666): `null` for a root (cone),
    * the owning unit's jid for a scoop. Absent from older leaders — a follower
    * that does not receive it must not invent one (treat the owner as
-   * unknown), and must never turn a scoop into a root.
+   * unknown), and must never turn a scoop into a root. The sole role source
+   * since [#2358](https://github.com/ai-ecoverse/slicc/issues/2358) stage 3
+   * deleted the derived `isCone` flag from the wire.
    */
   parentId?: string | null;
   assistantLabel: string;

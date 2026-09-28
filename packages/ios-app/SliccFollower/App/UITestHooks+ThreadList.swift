@@ -103,31 +103,26 @@ import SliccTrayKit
             let opus = ScoopSummaryModel(provider: "anthropic", id: "claude-opus-4-6")
             return [
                 ScoopSummary(
-                    jid: threadListMainCone, name: "cone", folder: "/workspace", isCone: true,
-                    assistantLabel: "sliccy", state: "idle", activity: "awaiting", fill: 22,
-                    parentId: nil, model: opus),
+                    jid: threadListMainCone, name: "cone", folder: "/workspace", parentId: nil, assistantLabel: "sliccy", state: "idle", activity: "awaiting", fill: 22, model: opus),
                 ScoopSummary(
                     jid: threadListResearcher, name: "researcher",
-                    folder: "/scoops/researcher", isCone: false, assistantLabel: "researcher",
-                    state: "working", activity: "tool", fill: 64,
-                    parentId: threadListMainCone),
+                    folder: "/scoops/researcher", parentId: threadListMainCone, assistantLabel: "researcher",
+                    state: "working", activity: "tool", fill: 64),
                 ScoopSummary(
                     jid: "fixture-scoop-summarizer", name: "summarizer",
-                    folder: "/scoops/summarizer", isCone: false, assistantLabel: "summarizer",
-                    state: "idle", fill: 8, parentId: threadListResearcher),
+                    folder: "/scoops/summarizer", parentId: threadListResearcher, assistantLabel: "summarizer",
+                    state: "idle", fill: 8),
                 ScoopSummary(
                     jid: "fixture-scoop-reviewer", name: "reviewer", folder: "/scoops/reviewer",
-                    isCone: false, assistantLabel: "reviewer", state: "broken", fill: 82,
-                    parentId: threadListMainCone),
+                    parentId: threadListMainCone, assistantLabel: "reviewer", state: "broken", fill: 82),
                 ScoopSummary(
                     jid: threadListDeployCone, name: "deploy", folder: "/workspace/deploy",
-                    isCone: true, assistantLabel: "deploy-bot", state: deployState,
-                    activity: deployActivity, fill: 91, parentId: nil,
+                    parentId: nil, assistantLabel: "deploy-bot", state: deployState,
+                    activity: deployActivity, fill: 91,
                     model: ScoopSummaryModel(provider: "openai", id: "gpt-5")),
                 ScoopSummary(
                     jid: "fixture-scoop-tester", name: "tester", folder: "/scoops/tester",
-                    isCone: false, assistantLabel: "tester", state: "initializing", fill: nil,
-                    parentId: threadListDeployCone),
+                    parentId: threadListDeployCone, assistantLabel: "tester", state: "initializing", fill: nil),
             ]
         }
     }
