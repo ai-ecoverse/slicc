@@ -1,0 +1,214 @@
+/**
+ * `x509.ts` — just enough DER and X.509 to issue the realm CA's certificates
+ * (#3571): a self-signed CA and per-host server leaves, ECDSA P-256 with
+ * SHA-256, signed by a WebCrypto key the caller holds (so a CA key that is
+ * not extractable never has to be).
+ */
+
+/** Signs `tbs` with ECDSA P-256 / SHA-256; the raw (r || s) signature WebCrypto returns. */
+export type Signer = (tbs: Uint8Array) => Promise<Uint8Array>;
+
+function concat(parts: readonly Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+function length(n: number): Uint8Array {
+  if (n < 0x80) return Uint8Array.of(n);
+  const bytes: number[] = [];
+  for (let v = n; v > 0; v = Math.floor(v / 256)) bytes.unshift(v & 0xff);
+  return Uint8Array.of(0x80 | bytes.length, ...bytes);
+}
+
+/** A DER element: tag, length, contents. */
+export function tlv(tag: number, ...contents: readonly Uint8Array[]): Uint8Array {
+  const body = concat(contents);
+  return concat([Uint8Array.of(tag), length(body.length), body]);
+}
+
+const seq = (...parts: Uint8Array[]) => tlv(0x30, ...parts);
+const set = (...parts: Uint8Array[]) => tlv(0x31, ...parts);
+const octets = (bytes: Uint8Array) => tlv(0x04, bytes);
+const bits = (bytes: Uint8Array, unused = 0) => tlv(0x03, Uint8Array.of(unused), bytes);
+const TRUE = tlv(0x01, Uint8Array.of(0xff));
+
+/** A non-negative INTEGER from big-endian magnitude bytes. */
+export function integer(magnitude: Uint8Array): Uint8Array {
+  let start = 0;
+  while (start < magnitude.length - 1 && magnitude[start] === 0) start++;
+  const trimmed = magnitude.subarray(start);
+  return tlv(0x02, trimmed[0] & 0x80 ? concat([Uint8Array.of(0), trimmed]) : trimmed);
+}
+
+export function oid(dotted: string): Uint8Array {
+  const [a, b, ...rest] = dotted.split('.').map(Number);
+  const out = [40 * a + b];
+  for (const arc of rest) {
+    const groups: number[] = [];
+    for (let v = arc; ; v = Math.floor(v / 128)) {
+      groups.unshift(v & 0x7f);
+      if (v < 128) break;
+    }
+    out.push(...groups.map((g, i) => (i < groups.length - 1 ? g | 0x80 : g)));
+  }
+  return tlv(0x06, Uint8Array.from(out));
+}
+
+const utf8 = (text: string) => tlv(0x0c, new TextEncoder().encode(text));
+const ascii = (text: string) => Uint8Array.from(text, (c) => c.charCodeAt(0) & 0x7f);
+
+/** UTCTime through 2049, GeneralizedTime after (RFC 5280 §4.1.2.5). */
+function time(date: Date): Uint8Array {
+  const iso = date.toISOString().replace(/[-:T]/g, '').slice(0, 14); // YYYYMMDDHHMMSS
+  const year = date.getUTCFullYear();
+  return year < 2050 ? tlv(0x17, ascii(`${iso.slice(2)}Z`)) : tlv(0x18, ascii(`${iso}Z`));
+}
+
+const ECDSA_SHA256 = seq(oid('1.2.840.10045.4.3.2'));
+
+export interface DistinguishedName {
+  commonName: string;
+  organization?: string;
+}
+
+function name(dn: DistinguishedName): Uint8Array {
+  const rdns = [];
+  if (dn.organization) rdns.push(set(seq(oid('2.5.4.10'), utf8(dn.organization))));
+  rdns.push(set(seq(oid('2.5.4.3'), utf8(dn.commonName))));
+  return seq(...rdns);
+}
+
+function extension(id: string, critical: boolean, value: Uint8Array): Uint8Array {
+  return critical ? seq(oid(id), TRUE, octets(value)) : seq(oid(id), octets(value));
+}
+
+/** The immediate children of a DER SEQUENCE (or any constructed element). */
+export function children(der: Uint8Array): Uint8Array[] {
+  const out: Uint8Array[] = [];
+  const [, bodyStart, bodyEnd] = header(der, 0);
+  for (let at = bodyStart; at < bodyEnd; ) {
+    const [, , end] = header(der, at);
+    out.push(der.subarray(at, end));
+    at = end;
+  }
+  return out;
+}
+
+/** An element at `at`: its tag, where its contents start and where it ends. */
+function header(der: Uint8Array, at: number): [tag: number, start: number, end: number] {
+  const tag = der[at];
+  let len = der[at + 1];
+  let start = at + 2;
+  if (len & 0x80) {
+    const count = len & 0x7f;
+    len = 0;
+    for (let i = 0; i < count; i++) len = len * 256 + der[start + i];
+    start += count;
+  }
+  if (start + len > der.length) throw new Error('truncated DER');
+  return [tag, start, start + len];
+}
+
+/** An element's contents. */
+export function contents(element: Uint8Array): Uint8Array {
+  const [, start, end] = header(element, 0);
+  return element.subarray(start, end);
+}
+
+/** The subjectPublicKey bits of a SubjectPublicKeyInfo (what a key identifier hashes). */
+export function publicKeyBits(spki: Uint8Array): Uint8Array {
+  const key = children(spki)[1];
+  return contents(key).subarray(1); // after the unused-bits byte
+}
+
+/** A key identifier (RFC 5280 §4.2.1.2, method 1): SHA-1 of the public key bits. */
+export async function keyId(spki: Uint8Array): Promise<Uint8Array> {
+  return new Uint8Array(
+    await crypto.subtle.digest('SHA-1', publicKeyBits(spki) as Uint8Array<ArrayBuffer>)
+  );
+}
+
+/** A raw (r || s) ECDSA signature as DER `Ecdsa-Sig-Value`. */
+export function ecdsaDer(raw: Uint8Array): Uint8Array {
+  const half = raw.length / 2;
+  return seq(integer(raw.subarray(0, half)), integer(raw.subarray(half)));
+}
+
+/** A positive random serial of 16 bytes. */
+export function randomSerial(): Uint8Array {
+  const serial = crypto.getRandomValues(new Uint8Array(16));
+  serial[0] = (serial[0] & 0x7f) | 0x01;
+  return serial;
+}
+
+/** An IPv4 address's four bytes, or undefined for any other name. */
+export function ipv4(host: string): Uint8Array | undefined {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return undefined;
+  const parts = m.slice(1).map(Number);
+  return parts.every((p) => p <= 255) ? Uint8Array.from(parts) : undefined;
+}
+
+export interface CertificateRequest {
+  serial: Uint8Array;
+  issuer: DistinguishedName;
+  subject: DistinguishedName;
+  notBefore: Date;
+  notAfter: Date;
+  /** The subject's SubjectPublicKeyInfo (DER). */
+  spki: Uint8Array;
+  /** The issuer's SubjectPublicKeyInfo, for the authority key identifier. */
+  issuerSpki: Uint8Array;
+  /** A CA (pathLen 0) or a server leaf for `hosts`. */
+  kind: { ca: true } | { ca: false; host: string };
+  sign: Signer;
+}
+
+async function extensions(req: CertificateRequest): Promise<Uint8Array> {
+  const list = [extension('2.5.29.14', false, octets(await keyId(req.spki)))];
+  if (req.kind.ca) {
+    list.push(extension('2.5.29.19', true, seq(TRUE, integer(Uint8Array.of(0)))));
+    // digitalSignature, keyCertSign, cRLSign
+    list.push(extension('2.5.29.15', true, bits(Uint8Array.of(0x86), 1)));
+  } else {
+    list.push(extension('2.5.29.35', false, seq(tlv(0x80, await keyId(req.issuerSpki)))));
+    list.push(extension('2.5.29.19', true, seq()));
+    list.push(extension('2.5.29.15', true, bits(Uint8Array.of(0x80), 7))); // digitalSignature
+    list.push(extension('2.5.29.37', false, seq(oid('1.3.6.1.5.5.7.3.1')))); // serverAuth
+    const ip = ipv4(req.kind.host);
+    const altName = ip ? tlv(0x87, ip) : tlv(0x82, ascii(req.kind.host));
+    list.push(extension('2.5.29.17', false, seq(altName)));
+  }
+  return tlv(0xa3, seq(...list));
+}
+
+/** A signed certificate (DER). */
+export async function certificate(req: CertificateRequest): Promise<Uint8Array> {
+  const tbs = seq(
+    tlv(0xa0, integer(Uint8Array.of(2))), // v3
+    integer(req.serial),
+    ECDSA_SHA256,
+    name(req.issuer),
+    seq(time(req.notBefore), time(req.notAfter)),
+    name(req.subject),
+    req.spki,
+    await extensions(req)
+  );
+  const signature = ecdsaDer(await req.sign(tbs));
+  return seq(tbs, ECDSA_SHA256, bits(signature));
+}
+
+/** PEM armor for a DER certificate. */
+export function pem(der: Uint8Array): string {
+  let b64 = '';
+  for (let i = 0; i < der.length; i += 0x8000) {
+    b64 += String.fromCharCode(...der.subarray(i, i + 0x8000));
+  }
+  const lines = btoa(b64).match(/.{1,64}/g) ?? [];
+  return `-----BEGIN CERTIFICATE-----\n${lines.join('\n')}\n-----END CERTIFICATE-----\n`;
+}

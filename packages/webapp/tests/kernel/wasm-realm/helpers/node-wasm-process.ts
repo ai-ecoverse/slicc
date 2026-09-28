@@ -67,14 +67,50 @@ export async function loadProgram(glue: string): Promise<WasmProgram> {
   };
 }
 
-/** A filesystem with nothing on it: the programs here only use sockets, pipes, stdio and their own /tmp. */
-const emptyFs = {
-  resolvePath: (cwd: string, path: string) => (path.startsWith('/') ? path : `${cwd}/${path}`),
-  readdir: async () => [],
-  stat: async () => {
-    throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-  },
-} as unknown as SpawnWasmOptions['fs'];
+/**
+ * A read-only filesystem holding `files` (absolute path → contents) and their
+ * directories: the programs here otherwise use only sockets, pipes, stdio
+ * and their own /tmp.
+ */
+function memoryFs(files: Readonly<Record<string, string>> = {}): SpawnWasmOptions['fs'] {
+  const bytes = new Map(Object.entries(files).map(([p, c]) => [p, new TextEncoder().encode(c)]));
+  const isDir = (path: string) =>
+    path === '/' || [...bytes.keys()].some((p) => p.startsWith(`${path.replace(/\/$/, '')}/`));
+  const enoent = (path: string) => Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+  const stat = async (path: string) => {
+    const file = bytes.get(path);
+    if (!file && !isDir(path)) throw enoent(path);
+    return {
+      isFile: Boolean(file),
+      isDirectory: !file,
+      isSymbolicLink: false,
+      size: file?.length ?? 0,
+      mode: file ? 0o100644 : 0o40755,
+      mtime: new Date(0),
+    };
+  };
+  return {
+    resolvePath: (cwd: string, path: string) => (path.startsWith('/') ? path : `${cwd}/${path}`),
+    exists: async (path: string) => bytes.has(path) || isDir(path),
+    stat,
+    lstat: stat,
+    readFileBuffer: async (path: string) => {
+      const file = bytes.get(path);
+      if (!file) throw enoent(path);
+      return file;
+    },
+    readdir: async (path: string) => {
+      const prefix = `${path.replace(/\/$/, '')}/`;
+      return [
+        ...new Set(
+          [...bytes.keys()]
+            .filter((p) => p.startsWith(prefix))
+            .map((p) => p.slice(prefix.length).split('/')[0])
+        ),
+      ];
+    },
+  } as unknown as SpawnWasmOptions['fs'];
+}
 
 let nextPid = 7000;
 
@@ -89,8 +125,8 @@ export interface RunningProgram {
 }
 
 /**
- * Start `program` with `args` and `env` on the loopback network `net`; stdin
- * is /dev/null. Every child it spawns runs `program` again (with the argv it
+ * Start `program` with `args` and `env` on the loopback network `net`, over
+ * a filesystem of `files`; stdin is /dev/null. Every child it spawns runs `program` again (with the argv it
  * asked for) on the descriptors the kernel built for it, and writes where
  * those lead: stdout / stderr here, unless redirected.
  */
@@ -100,8 +136,10 @@ export function runProgram(
   args: string[],
   net: LoopbackNet,
   argv0 = 'socktest',
-  env: Record<string, string> = {}
+  env: Record<string, string> = {},
+  files: Readonly<Record<string, string>> = {}
 ): RunningProgram {
+  const fs = memoryFs(files);
   const out: string[] = [];
   const err: string[] = [];
   const waiters: Array<() => void> = [];
@@ -128,7 +166,7 @@ export function runProgram(
       env,
       cwd: '/',
       fds: table,
-      fs: emptyFs,
+      fs,
       net,
       createWorker: () => nodeWorker(workerFile),
       onError: (message) => err.push(message),

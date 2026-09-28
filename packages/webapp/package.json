@@ -20,6 +20,7 @@
     "@adobe/helix-rum-js": "2.15.3",
     "@ai-ecoverse/gpu-ask.js": "0.1.0",
     "@ai-ecoverse/spoon": "*",
+    "@ai-ecoverse/wasm-tls-engine": "3.6.5-1",
     "@cantoo/pdf-lib": "2.11.1",
     "@codemirror/commands": "6.11.1",
     "@codemirror/lang-html": "6.4.12",

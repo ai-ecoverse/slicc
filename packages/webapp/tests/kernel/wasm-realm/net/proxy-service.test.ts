@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { parseRequestHead } from '../../../../src/kernel/wasm-realm/net/http1.js';
 import {
   forwardResponseHeaders,
   isLoopbackHost,
   RealmProxy,
   type RealmProxyOptions,
+  tunnelRequestUrl,
 } from '../../../../src/kernel/wasm-realm/net/proxy-service.js';
 import type { RealmTransportRequest } from '../../../../src/kernel/wasm-realm/net/transport.js';
 import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
@@ -495,5 +497,50 @@ describe('forwardResponseHeaders', () => {
       ['Content-Encoding', 'gzip'],
     ]);
     expect(forwardResponseHeaders(headers, { encodedBodies: false, bodiless: true })).toEqual([]);
+  });
+});
+
+describe('tunnelRequestUrl', () => {
+  const url = (head: string, origin = 'https://example.com') =>
+    tunnelRequestUrl(parseRequestHead(enc(`${head}\r\n\r\n`)), origin);
+  it('resolves origin-form and same-origin absolute targets', () => {
+    expect(url('GET /a?b HTTP/1.1\r\nHost: example.com')).toBe('https://example.com/a?b');
+    expect(url('GET /a HTTP/1.1\r\nHost: EXAMPLE.com:443')).toBe('https://example.com/a');
+    expect(url('GET https://example.com/x HTTP/1.1')).toBe('https://example.com/x');
+    expect(url('GET / HTTP/1.1\r\nHost: h.test:8443', 'https://h.test:8443')).toBe(
+      'https://h.test:8443/'
+    );
+  });
+  it('refuses another origin or Host with 421', () => {
+    for (const head of [
+      'GET / HTTP/1.1\r\nHost: evil.test',
+      'GET https://evil.test/ HTTP/1.1',
+      'GET http://example.com/ HTTP/1.1',
+      'GET / HTTP/1.1\r\nHost: example.com:8443',
+    ]) {
+      expect(() => url(head)).toThrow('this tunnel is for example.com');
+    }
+  });
+});
+
+describe('CONNECT inside a tunnel', () => {
+  it('is refused', async () => {
+    const t = scripted(ok);
+    const { client } = start({
+      transport: t.transport,
+      tunnel: async (conn, incoming, target, _signal, serveHttp) => {
+        await serveHttp(
+          { read: (max, signal) => incoming.some(max, signal) },
+          conn,
+          `https://${target.host}`
+        );
+      },
+    });
+    const c = client();
+    await c.send('CONNECT a.test:443 HTTP/1.1\r\n\r\nCONNECT b.test:443 HTTP/1.1\r\n\r\n');
+    expect(text((await c.incoming.head(1024)) ?? new Uint8Array())).toContain('200');
+    const res = await c.response();
+    expect(res.status).toBe(400);
+    expect(res.body).toContain('CONNECT inside a tunnel');
   });
 });

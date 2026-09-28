@@ -22,9 +22,12 @@ import { SecretProxyManager } from '../../../../../node-server/src/secrets/proxy
 import { readOrCreateSessionId } from '../../../../../node-server/src/secrets/session-id-file.js';
 import { proxiedFetchTransport } from '../../../../src/kernel/wasm-realm/net/fetch-transport.js';
 import { RealmProxy } from '../../../../src/kernel/wasm-realm/net/proxy-service.js';
+import { type CaRecord, RealmCa } from '../../../../src/kernel/wasm-realm/net/realm-ca.js';
+import { TlsTerminator } from '../../../../src/kernel/wasm-realm/net/tls-tunnel.js';
 import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
 import { setLocalApiBaseUrl } from '../../../../src/shell/proxied-fetch.js';
 import { Client } from './proxy-helpers.js';
+import { exchange, nodeTlsEngine, tlsTunnel } from './tls-helpers.js';
 
 const REAL = 'ghp_realSecretValue0123456789abcdefXYZ';
 
@@ -33,6 +36,7 @@ let server: Server;
 let masked: string;
 let proxy: RealmProxy;
 let net: LoopbackNet;
+let ca: RealmCa;
 const upstreamSaw: Array<{ url: string; authorization: string | null; body: string }> = [];
 
 beforeAll(async () => {
@@ -71,9 +75,15 @@ beforeAll(async () => {
     });
   });
 
+  const records = new Map<string, CaRecord>();
+  ca = await RealmCa.open('cone:', {
+    get: async (o) => records.get(o),
+    put: async (o, r) => void records.set(o, r),
+  });
+  const tls = new TlsTerminator({ ca: async () => ca, engine: () => nodeTlsEngine() });
   net = new LoopbackNet();
-  proxy = new RealmProxy({ net, transport: proxiedFetchTransport() });
-});
+  proxy = new RealmProxy({ net, transport: proxiedFetchTransport(), tunnel: tls.handler });
+}, 30_000);
 
 afterAll(async () => {
   proxy?.close();
@@ -128,5 +138,24 @@ describe('realm proxy secret boundary (CLI route)', () => {
     expect(JSON.stringify(res)).not.toContain(REAL);
     expect(upstreamSaw.length).toBe(before);
     c.close();
+  });
+
+  it('does the same inside a terminated TLS tunnel (https://)', async () => {
+    const socket = await tlsTunnel(net, 'api.example.test:443', ca.pem);
+    const res = (
+      await exchange(
+        socket,
+        `GET /echo HTTP/1.1\r\nHost: api.example.test\r\nAuthorization: Bearer ${masked}\r\n\r\n`,
+        (text) => text.endsWith('0\r\n\r\n')
+      )
+    ).toString();
+    socket.destroy();
+    expect(upstreamSaw.at(-1)).toMatchObject({
+      url: 'https://api.example.test/echo',
+      authorization: `Bearer ${REAL}`,
+    });
+    expect(res).toContain(`you sent Bearer ${masked}`);
+    expect(res).toContain(`x-echo: Bearer ${masked}`);
+    expect(res).not.toContain(REAL);
   });
 });

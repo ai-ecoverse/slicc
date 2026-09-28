@@ -7,7 +7,13 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const run = vi.hoisted(() => vi.fn());
-vi.mock('../../src/shell/supplemental-commands/wasm/run.js', () => ({ runWasmCommand: run }));
+vi.mock('../../src/shell/supplemental-commands/wasm/run.js', async (importOriginal) => ({
+  // The real filter: what a run exports is what the shell carries, realm defaults aside.
+  withoutRealmDefaults: (
+    await importOriginal<typeof import('../../src/shell/supplemental-commands/wasm/run.js')>()
+  ).withoutRealmDefaults,
+  runWasmCommand: run,
+}));
 
 import { VirtualFS } from '../../src/fs/index.js';
 import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
@@ -172,6 +178,26 @@ describe('AlmostBashShellHeadless on GNU bash', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('does not carry the realm’s network defaults into the shell’s exports', async () => {
+    await installBash(fs);
+    const shell = new AlmostBashShellHeadless({ fs, gnuBash: true, env: { HOME: '/home/user' } });
+    fakeBash('', (ctx) =>
+      state(0, '0', '/', {
+        ...ctx.exportedEnv,
+        http_proxy: 'http://127.0.0.1:3128',
+        SSL_CERT_FILE: '/home/user/.config/slicc/realm-ca-cone.pem',
+        https_proxy: 'http://corp:8080',
+      })
+    );
+    await shell.executeCommand('true');
+    fakeBash('', () => null);
+    await shell.executeCommand('true');
+    const carried = (run.mock.calls[1]![1] as RunCtx).exportedEnv;
+    expect(carried.http_proxy).toBeUndefined();
+    expect(carried.SSL_CERT_FILE).toBeUndefined();
+    expect(carried.https_proxy).toBe('http://corp:8080');
   });
 
   it('registers the .jsh commands of a PATH a run exported', async () => {
