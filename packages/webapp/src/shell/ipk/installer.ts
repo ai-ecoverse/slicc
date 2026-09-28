@@ -834,6 +834,8 @@ function collectManifestEntries(manifest: ProjectManifest): ManifestEntry[] {
   const combined = new Map<string, string>();
   addNamedRanges(combined, manifest.devDependencies);
   addNamedRanges(combined, manifest.dependencies);
+  // Last, so a name also listed elsewhere is optional, as npm treats it.
+  addNamedRanges(combined, manifest.optionalDependencies);
   return Array.from(combined.entries()).map(([name, range]) => ({ name, range }));
 }
 
@@ -869,6 +871,8 @@ export async function installFromManifest(
 
   const validated: ManifestEntry[] = [];
   const errors: InstallFailure[] = [];
+  const optionalRoots = optionalRootNames(manifest);
+  const notes: string[] = [];
   warmPackuments(
     supplier,
     entries.map((entry) => entry.name),
@@ -880,12 +884,18 @@ export async function installFromManifest(
       resolveVersion(packument, entry.range);
       validated.push(entry);
     } catch (err) {
-      errors.push({ spec: `${entry.name}@${entry.range}`, error: toError(err) });
+      if (optionalRoots.has(entry.name)) {
+        notes.push(
+          `skipping optional dependency ${entry.name}@${entry.range} (${toError(err).message})`
+        );
+      } else {
+        errors.push({ spec: `${entry.name}@${entry.range}`, error: toError(err) });
+      }
     }
   }
 
   if (validated.length === 0) {
-    return { results: [], errors, empty: false };
+    return { results: [], errors, empty: false, notes };
   }
 
   const rootDependencies: Record<string, string> = {};
@@ -897,7 +907,7 @@ export async function installFromManifest(
     rootDependencies,
     fetchPackument: supplier,
     concurrency,
-    optionalRoots: optionalRootNames(manifest),
+    optionalRoots,
   });
 
   const modulesDir = joinPath(cwd, 'node_modules');
@@ -919,7 +929,7 @@ export async function installFromManifest(
     })
     .filter((r): r is InstallResult => r !== null);
 
-  return { results, errors, empty: false, notes: skipNotes(plan) };
+  return { results, errors, empty: false, notes: [...notes, ...skipNotes(plan)] };
 }
 
 function packageListedInManifest(manifest: ProjectManifest, name: string): boolean {

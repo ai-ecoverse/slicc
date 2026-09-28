@@ -340,6 +340,41 @@ describe('createIpkCommand', () => {
     expect(root.devDependencies).toEqual({ 'is-odd': '^3.0.0' });
   });
 
+  it('bare ipk install also installs optionalDependencies, keeping only the wasm ones', async () => {
+    const manifest = {
+      name: 'demo',
+      dependencies: { 'is-number': '^7.0.0' },
+      optionalDependencies: {
+        'napi-wasm32-wasi': '^1.0.0',
+        'napi-darwin-arm64': '^1.0.0',
+        gone: '^1.0.0',
+      },
+    };
+    await fs.writeFile('/work/package.json', `${JSON.stringify(manifest, null, 2)}\n`);
+    const reg = buildRegistry([
+      { name: 'is-number', version: '7.0.0' },
+      { name: 'napi-wasm32-wasi', version: '1.0.0', packumentExtras: { cpu: ['wasm32'] } },
+      {
+        name: 'napi-darwin-arm64',
+        version: '1.0.0',
+        packumentExtras: { os: ['darwin'], cpu: ['arm64'] },
+      },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(await fs.exists('/work/node_modules/is-number/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/napi-wasm32-wasi/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/napi-darwin-arm64')).toBe(false);
+    expect(r.stderr).toContain(
+      'ipk: skipping optional dependency napi-darwin-arm64@1.0.0 (unsupported platform)'
+    );
+    expect(r.stderr).toContain('ipk: skipping optional dependency gone@^1.0.0');
+    expect(r.stderr).not.toContain('failed to install');
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root).toEqual(manifest);
+  });
+
   it('bare npm install is the same non-destructive no-arg path', async () => {
     const manifest = {
       name: 'demo',
