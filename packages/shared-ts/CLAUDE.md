@@ -14,6 +14,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 - `oauth-extra-domains-storage.ts` — pure-JS read/write over the `slicc_oauth_extra_domains` localStorage key; shares the per-provider store between the extension options page (`secrets.html`) and webapp `provider-settings.ts`.
 - `sigv4.ts` — pure SigV4 request signer over Web Crypto (`crypto.subtle`), no AWS SDK; verified against canonical AWS vectors in `tests/sigv4.test.ts`.
 - `sign-and-forward.ts` — S3 / Adobe da.live orchestration (`executeS3SignAndForward` / `executeDaSignAndForward`): validates an envelope, resolves credentials via async `SecretGetter`, signs (S3) or attaches a Bearer token (DA), forwards, returns a JSON-cloneable reply. Used by webapp mount barrel, node-server handlers, and the extension SW.
+- `raw-fetch-protocol.ts` — raw-mode fetch-proxy contract (#3571) for the wasm realm's HTTP proxy: request-head JSON (`X-Slicc-Raw-Request`), the length-prefixed response-head frame, hop-by-hop stripping, and the rules for dropping `Content-Encoding`/`Content-Length` once a body is decoded. Used by node-server `routes/fetch-proxy-raw.ts` and webapp `shell/proxied-fetch-raw.ts`.
 - `proxy-headers.ts` — pure forbidden-header (Cookie/Origin/Referer/Proxy-\*, Set-Cookie) encode/decode helpers for `/api/fetch-proxy`. Shared by the webapp shell fetch proxy and extension SW backend.
 
 ### Tray / sync wire contracts

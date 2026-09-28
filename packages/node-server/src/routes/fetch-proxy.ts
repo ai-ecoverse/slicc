@@ -159,7 +159,7 @@ export function injectRequestSecrets(
  * (already stripped from `headers` by `buildForwardHeaders`'s skip-list;
  * this only needs to read it off the raw request).
  */
-async function applyHmacSigning(
+export async function applyHmacSigning(
   secretProxy: SecretProxyManager,
   headers: Record<string, string>,
   hmacSpec: string | undefined,
@@ -190,7 +190,7 @@ async function applyHmacSigning(
  * substring splice would corrupt it whenever the real secret carries a
  * form-reserved character (base64 `+` / `/` / `=`).
  */
-function unmaskRequestBody(
+export function unmaskRequestBody(
   secretProxy: SecretProxyManager,
   headers: Record<string, string>,
   rawBody: Buffer,
@@ -331,7 +331,8 @@ export function streamUpstreamBody(
   const decoded = isText
     ? createMaybeGunzipStream({
         onDecided: (inflating) => {
-          if (inflating) res.removeHeader(FETCH_PROXY_CONTENT_LENGTH_HEADER);
+          // Raw mode (`fetch-proxy-raw.ts`) has already sent its head frame.
+          if (inflating && !res.headersSent) res.removeHeader(FETCH_PROXY_CONTENT_LENGTH_HEADER);
         },
       })
     : new PassThrough();

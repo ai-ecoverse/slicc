@@ -239,6 +239,7 @@ Different types of HTTP traffic route through different code paths:
 | `git push` / `git clone` over HTTPS         | isomorphic-git → `createProxiedFetch` → `/api/fetch-proxy` (CLI) or `fetch-proxy.fetch` (SW); Basic-auth unmask                                                                                    |
 | `curl`, `wget`, `node fetch(...)`           | shell → `createProxiedFetch` → fetch proxy (CLI/SW); header-substring + Basic + URL-creds unmask                                                                                                   |
 | native `curl` / libcurl / git (wasm realm)  | realm HTTP proxy on `127.0.0.1:3128` (`http_proxy`) → `createProxiedFetch` → fetch proxy (CLI/SW); same unmask/scrub as the shell's `curl` (`docs/kernel/process-model.md`, Network)               |
+| raw fetch mode (the realm proxy's raw path) | `createProxiedStreamingFetch({ mode: 'raw' })` → raw `/api/fetch-proxy` (CLI/cloud); same unmask and HMAC signing, 403 on a foreign domain; manual redirects                                       |
 | `upskill <github-url>`                      | `createProxiedFetch` → fetch proxy; `Authorization: Bearer <masked>` unmasked at boundary                                                                                                          |
 | LLM provider streaming (Anthropic, etc.)    | direct `fetch()` from page; routed via `llm-proxy-sw.ts` to `/api/fetch-proxy` (CLI) or extension `host_permissions` (CORS bypass; no secret injection — provider holds real key in webapp memory) |
 | `aws s3 cp` from agent shell (raw S3 HTTP)  | shell → `createProxiedFetch` → upstream. NOT signed. **Use `mount` instead.**                                                                                                                      |
@@ -301,16 +302,16 @@ The file-on-disk PAT workaround (writing the real PAT to a file in the VFS so th
 
 The secrets system defends against multiple exfiltration paths:
 
-| Vector                                      | Mitigation                                                   |
-| ------------------------------------------- | ------------------------------------------------------------ |
-| HTTP requests (`curl`, `fetch`)             | Fetch proxy with domain-scoped injection                     |
-| Environment variables (`echo $TOKEN`)       | Shell env contains masked values, not real ones              |
-| File reads (`cat ~/.env`)                   | Tool output scrubbed before reaching agent                   |
-| Shell output (any command stdout/stderr)    | All bash tool output scrubbed                                |
-| Git operations (`git diff`, `git log -p`)   | Output goes through bash scrubbing                           |
-| Response echo-back (API returns your token) | Response body/headers scrubbed by fetch proxy                |
-| Browser automation (CDP `evaluate`)         | Agent only has masked values; can't construct real requests  |
-| Redirect URLs (secret in query params)      | Fetch proxy follows redirects server-side; URL never exposed |
+| Vector                                      | Mitigation                                                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| HTTP requests (`curl`, `fetch`)             | Fetch proxy with domain-scoped injection                                                                      |
+| Environment variables (`echo $TOKEN`)       | Shell env contains masked values, not real ones                                                               |
+| File reads (`cat ~/.env`)                   | Tool output scrubbed before reaching agent                                                                    |
+| Shell output (any command stdout/stderr)    | All bash tool output scrubbed                                                                                 |
+| Git operations (`git diff`, `git log -p`)   | Output goes through bash scrubbing                                                                            |
+| Response echo-back (API returns your token) | Response body/headers scrubbed by fetch proxy                                                                 |
+| Browser automation (CDP `evaluate`)         | Agent only has masked values; can't construct real requests                                                   |
+| Redirect URLs (secret in query params)      | Default mode follows redirects server-side, so the URL is never exposed. Raw mode returns `Location` scrubbed |
 
 ### Threat model addendum
 

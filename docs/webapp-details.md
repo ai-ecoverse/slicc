@@ -538,3 +538,15 @@ Hover cards for links, GitHub references and times, plus composer answer control
 ## Secret-Aware Fetch Proxy
 
 `createProxiedFetch()` (`packages/webapp/src/shell/proxied-fetch.ts`) routes agent-initiated HTTP through the fetch proxy. Extension mode uses a Port-based path (`chrome.runtime.connect({ name: 'fetch-proxy.fetch' })`). Shell-env population: `secret-env.ts` filters secret names to POSIX-valid identifiers (`/^[A-Za-z_][A-Za-z0-9_]*$/`) so dot-namespaced internal secrets stay out of `$ENV`. See `docs/secrets.md` for OAuth bootstrap, silent renewal, and per-provider extra domains.
+
+### Raw mode (#3571)
+
+`createProxiedStreamingFetch({ mode: 'raw' })` (`shell/proxied-fetch-raw.ts`) is the HTTP-client flavor the wasm realm's HTTP proxy forwards curl, libcurl and git through. The default mode, which every other caller uses, is unchanged. The contract lives in `@slicc/shared-ts` `raw-fetch-protocol.ts`:
+
+- Redirects are manual: the 3xx, `Location` and each `Set-Cookie` reach the caller.
+- Headers are an ordered `[name, value]` list. Each `Set-Cookie` stays separate; other repeats arrive folded with `, ` (RFC 9110 §5.3), because `fetch` folds them in every float.
+- The body is always decoded. `Content-Encoding` is removed when a coding was undone. `Content-Length` is kept only while it still counts the delivered bytes: identity-coded binary bodies. Text bodies go through the scrub and the gunzip sniff, so they lose it. HEAD, 204 and 304 answers keep both headers as sent.
+- The response body is a pull-driven `ReadableStream` (`highWaterMark: 0`), so a slow reader holds the bridge and the upstream back.
+- Failures that are not upstream responses throw `RawFetchError`, with a `code` and a `status` for the proxy to answer its own client with. The codes are `unsupported` (501), `request-body-too-large` (413), `forbidden-secret` (403), `upstream` (502) and `bridge` (502).
+
+`getRawFetchCapabilities()` reports the float's support. On CLI and cloud (node-server, including `--hosted` in e2b) the raw mode is supported with a buffered upload capped at 256 MiB (`RAW_FETCH_BRIDGE_REQUEST_BODY_CAP`): Chromium won't stream a request body over the HTTP/1.1 bridge hop. The Chrome extension float, and a swift-server bridge (which answers 400 for the missing `X-Target-URL`), report `unsupported`.

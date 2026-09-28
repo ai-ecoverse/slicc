@@ -129,11 +129,13 @@ export function buildFetchProxyExposeHeaders(forwardedHeaderNames: Iterable<stri
 }
 
 /**
- * Which requests the global `express.json()` consumes. Two exclusions:
+ * Which requests the global `express.json()` consumes. Three exclusions:
  *
  *   - `X-Slicc-Raw-Body: 1` — SigV4-signed bodies must reach the
  *     /api/fetch-proxy handler byte-for-byte (the parser would re-serialize
  *     them via JSON.stringify and break the signature);
+ *   - `X-Slicc-Raw-Request` — raw-mode fetch-proxy uploads, read as a
+ *     bounded byte stream by `routes/fetch-proxy-raw.ts`;
  *   - the stable hostfs dispatcher — it owns a bounded 1 MiB parser and an
  *     errno error adapter, and this parser is mounted ahead of
  *     `registerHostFsRoutes`, so without the exclusion it would consume the
@@ -141,6 +143,7 @@ export function buildFetchProxyExposeHeaders(forwardedHeaderNames: Iterable<stri
  */
 export function shouldParseGlobalJson(req: IncomingMessage): boolean {
   if (req.headers['x-slicc-raw-body'] === '1') return false;
+  if (req.headers['x-slicc-raw-request'] !== undefined) return false;
   if (isHostFsStableBodyRequest(req)) return false;
   return (req.headers['content-type'] ?? '').includes('application/json');
 }
