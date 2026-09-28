@@ -93,7 +93,7 @@ export class GitRemoteRepoResolver {
 
   #repoAt(dir: string): Promise<string | null> {
     const cached = this.#byDir.get(dir);
-    if (cached) return cached;
+    if (cached != null) return cached;
     const pending = this.#read(`${dir}/.git/config`);
     this.#byDir.set(dir, pending);
     return pending;

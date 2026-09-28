@@ -204,7 +204,7 @@ function memoize<T>(
   options: MemoOptions<T>
 ): Promise<T> {
   const hit = map.get(key);
-  if (hit) return hit;
+  if (hit != null) return hit;
   const pending = load();
   if (!options.admit()) return pending;
   map.set(key, pending);
