@@ -5,6 +5,7 @@
  *
  *   wasm [--argv0 NAME] [--module PATH] PROGRAM [ARGS...]
  *   wasm --list
+ *   wasm --login
  *
  * PROGRAM is the Emscripten glue, or the name of a command an installed
  * package provides (`wasm --list`). Its module sits next to it (`x.js` →
@@ -24,6 +25,7 @@ import type { WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
 import { stdinAsLatin1 } from '../../just-bash-compat.js';
 import type { TerminalLease, TerminalPort } from '../../terminal-port.js';
+import { NO_LOGIN_SHELL } from '../../terminal-protocol.js';
 import { installedCommands, modulePath, type NativeGate, WasmSession } from './launch.js';
 
 type Result = {
@@ -34,7 +36,7 @@ type Result = {
 };
 
 const USAGE =
-  'usage: wasm [-t] [--argv0 NAME] [--module PATH] PROGRAM [ARGS...]\n       wasm --list\n';
+  'usage: wasm [-t] [--argv0 NAME] [--module PATH] PROGRAM [ARGS...]\n       wasm --list\n       wasm --login\n';
 
 const NO_SAB =
   'the wasm realm needs SharedArrayBuffer, which this page lacks (it is not cross-origin isolated)';
@@ -47,6 +49,8 @@ interface Invocation {
   module?: string;
   /** `-t`: run on the panel terminal (a TTY), interactively. */
   tty?: boolean;
+  /** The panel terminal's login shell (`--login`): a prompt that looks like slicc's. */
+  login?: boolean;
   program: string;
   args: string[];
 }
@@ -57,6 +61,11 @@ function parse(args: string[]): Invocation | undefined {
   for (;;) {
     if (args[i] === '-t') {
       call.tty = true;
+      i += 1;
+      continue;
+    }
+    if (args[i] === '--login-prompt') {
+      call.login = true;
       i += 1;
       continue;
     }
@@ -164,13 +173,32 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
  * which is Ghostty's VT core, a `TERM` that is unset or `dumb` becomes
  * `xterm-256color` (with `COLORTERM=truecolor`), so curses programs use it.
  */
-function programEnv(ctx: CommandContext, terminal: boolean): Record<string, string> {
+function programEnv(ctx: CommandContext, call: Invocation): Record<string, string> {
   const env = { ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
-  if (terminal && (!env.TERM || env.TERM === 'dumb')) {
+  if (call.tty && (!env.TERM || env.TERM === 'dumb')) {
     env.TERM = 'xterm-256color';
     env.COLORTERM ??= 'truecolor';
   }
+  // The working directory and a `$`, as the slicc prompt shows (bash's `\$`
+  // would print `#`: every process runs as uid 0).
+  if (call.login) env.PS1 ??= '\\w $ ';
   return env;
+}
+
+/**
+ * The panel terminal's login shell: GNU bash (`bash -il`, which reads
+ * `~/.profile`) on the terminal, when a package provides it and the shell
+ * has not opted out (`SLICC_SHELL=just-bash`). Otherwise nothing, with
+ * {@link NO_LOGIN_SHELL}, and the panel keeps its own prompt.
+ */
+async function loginShell(ctx: CommandContext, options: RunWasmOptions): Promise<Result> {
+  const none = { stdout: '', stderr: '', exitCode: NO_LOGIN_SHELL };
+  const choice = ctx.exportedEnv?.SLICC_SHELL ?? ctx.env.get('SLICC_SHELL');
+  if (choice === 'just-bash' || !options.terminal || typeof SharedArrayBuffer !== 'function') {
+    return none;
+  }
+  if (!(await installedCommands(ctx)).has('bash')) return none;
+  return runWasmCommand(['-t', '--login-prompt', 'bash', '-il'], ctx, options);
 }
 
 function listing(commands: Map<string, WasmCommand>): string {
@@ -224,6 +252,7 @@ export async function runWasmCommand(
 ): Promise<Result> {
   const { processConfig, terminal } = options;
   if (args[0] === '--help' || args[0] === '-h') return { stdout: USAGE, stderr: '', exitCode: 0 };
+  if (args[0] === '--login' && args.length === 1) return loginShell(ctx, options);
   if (args[0] === '--list' && args.length === 1) {
     return { stdout: listing(await installedCommands(ctx)), stderr: '', exitCode: 0 };
   }
@@ -267,7 +296,7 @@ export async function runWasmCommand(
       module: call.module ? ctx.fs.resolvePath(ctx.cwd, call.module) : modulePath(gluePath),
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
-      env: programEnv(ctx, call.tty === true),
+      env: programEnv(ctx, call),
       cwd: ctx.cwd,
       fds,
       signal: ctx.signal,

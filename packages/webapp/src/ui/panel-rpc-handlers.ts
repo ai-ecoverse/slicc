@@ -301,7 +301,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildSliccSidecarHandlers(options),
     ...buildUsbHandlers(options),
     ...buildHidHandlers(options, hidSubscriptions),
-    ...buildSerialHandlers(),
+    ...buildSerialHandlers(options),
     ...buildEsptoolHandlers(options),
     ...buildRemoteCdpHandlers(options),
     ...buildPermissionRequestHandler(options),

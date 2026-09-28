@@ -49,7 +49,11 @@ import {
   parseSerialFilters,
 } from '../shell/supplemental-commands/serial-command.js';
 import { parseUsbArgs, parseUsbFilters } from '../shell/supplemental-commands/usb-command.js';
-import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
+import {
+  NO_LOGIN_SHELL,
+  type TerminalEventMsg,
+  type TerminalSessionId,
+} from '../shell/terminal-protocol.js';
 import {
   getSharedHidRegistry,
   type HidDevice,
@@ -105,6 +109,8 @@ export class RemoteTerminalView {
    * keystrokes go to it raw and its output is shown as is.
    */
   private ptyMode = false;
+  /** GNU bash, the terminal's login shell, is running (`startSession`). */
+  private loginShell = false;
   private reportedSize = '';
   /**
    * When true, the `handleEvent` route swallows `terminal-output`
@@ -192,11 +198,30 @@ export class RemoteTerminalView {
     this.resizeObserver = new ResizeObserver(() => this.refit());
     this.resizeObserver.observe(this.terminalHost);
 
-    terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
-    terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
-    terminal.writeln('');
-
     await this.client.open({ cwd: this.options.cwd, env: this.options.env });
+    void this.startSession(terminal);
+  }
+
+  /**
+   * GNU bash is the terminal's shell when a package provides it (`wasm
+   * --login`); the slicc prompt takes over when bash exits, or right away
+   * when there is none.
+   */
+  private async startSession(terminal: SliccTerminal): Promise<void> {
+    this.loginShell = true;
+    const login = await this.runRemote('wasm --login');
+    this.loginShell = false;
+    if (this.disposed) return;
+    const hadBash = !(login.exitCode === NO_LOGIN_SHELL && !login.stdout && !login.stderr);
+    if (hadBash) {
+      terminal.writeln(
+        `\x1b[90mbash exited (${login.exitCode}); this is the slicc shell. \`wasm --login\` starts bash again.\x1b[0m`
+      );
+    } else {
+      terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
+      terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
+      terminal.writeln('');
+    }
     void this.runPromptLoop();
   }
 
@@ -228,6 +253,12 @@ export class RemoteTerminalView {
   async executeCommandInTerminal(command: string): Promise<TerminalExecResult> {
     const trimmed = command.trim();
     if (!trimmed) return { stdout: '', stderr: '', exitCode: 0 };
+    if (this.loginShell && this.ptyMode) {
+      // bash owns the terminal: type the command at its prompt, as the user
+      // would. Its output shows on the terminal, not in this result.
+      this.client.stdin(`${trimmed}\r`);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
     if (!this.terminal || !this.editor) return this.client.exec(trimmed);
     if (
       this.isExecuting ||

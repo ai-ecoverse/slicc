@@ -247,3 +247,10 @@ export function isTerminalEventMsg(msg: unknown): msg is TerminalEventMsg {
     t === 'terminal-status'
   );
 }
+
+/**
+ * `wasm --login`'s answer, silently, when there is no GNU bash to log in to
+ * (none installed, `SLICC_SHELL=just-bash`, no wasm realm): the panel keeps
+ * its own prompt.
+ */
+export const NO_LOGIN_SHELL = 125;

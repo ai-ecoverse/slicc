@@ -229,6 +229,45 @@ describe('wasm command', () => {
       }));
     });
 
+    it('--login runs installed GNU bash on the terminal as a login shell with a slicc-like prompt', async () => {
+      const bashPkg = '/shared/lib/node_modules/@ai-ecoverse/wasm-bash';
+      const files = {
+        [`${bashPkg}/package.json`]: JSON.stringify({
+          name: '@ai-ecoverse/wasm-bash',
+          slicc: { commands: { bash: { glue: 'bin/bash', wasm: 'bin/bash.wasm' } } },
+        }),
+        [`${bashPkg}/bin/bash`]: 'BASH',
+        [`${bashPkg}/bin/bash.wasm`]: 'W',
+      };
+      const lease = {
+        cols: 80,
+        rows: 24,
+        write: () => {},
+        onInput: () => {},
+        onResize: () => {},
+        release: vi.fn(),
+      };
+      const terminal = { lease: () => lease };
+      const r = await runWasmCommand(['--login'], ctx(files), { terminal });
+      expect(r.exitCode).toBe(0);
+      const opts = spawn.mock.calls.at(-1)![0];
+      expect(opts.program.glue).toBe('BASH');
+      expect(opts.args).toEqual(['-il']);
+      expect(opts.env).toMatchObject({ PS1: '\\w $ ', TERM: 'xterm-256color' });
+      expect(lease.release).toHaveBeenCalled();
+    });
+
+    it('--login answers 125 silently without bash, a terminal, or when opted out', async () => {
+      const quiet = { stdout: '', stderr: '', exitCode: 125 };
+      const terminal = { lease: () => null };
+      expect(await runWasmCommand(['--login'], ctx(installed), { terminal })).toEqual(quiet);
+      expect(await runWasmCommand(['--login'], ctx(installed))).toEqual(quiet);
+      const optedOut = ctx(installed);
+      optedOut.exportedEnv = { SLICC_SHELL: 'just-bash' };
+      expect(await runWasmCommand(['--login'], optedOut, { terminal })).toEqual(quiet);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
     it('lists them with --list', async () => {
       const r = await runWasmCommand(['--list'], ctx(installed));
       expect(r).toEqual({
