@@ -67,7 +67,8 @@ dispatch only after the fix is merged.
 
 The regression tests for pending tools, passive `wait`, late child abort, and
 export-time recovery were each observed failing against the previous code
-before their corresponding fixes. A run that never settles or lacks its final
+before their corresponding fixes. A run that reaches its limit is now aborted
+and judged from its final transcript; an unconfirmed stop or missing final
 transcript remains an unscored error.
 
 ## Pinned eight-task check on 4ec7d5c83
