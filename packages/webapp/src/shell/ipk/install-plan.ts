@@ -94,7 +94,12 @@ export async function resolveDependencyTree(
   function getPackument(name: string): Promise<Packument> {
     let cached = packumentCache.get(name);
     if (!cached) {
-      cached = limit(async () => options.fetchPackument(name));
+      cached = limit(async () => {
+        // Placement awaits every packument it needs before the walk ends, so
+        // a fetch still queued once it has ended is speculative: drop it.
+        if (settled) throw new Error(`fetchPackument(${name}): resolution already finished`);
+        return options.fetchPackument(name);
+      });
       packumentCache.set(name, cached);
     }
     return cached;
@@ -157,7 +162,8 @@ export async function resolveDependencyTree(
       await place(name, range, []);
     }
   } finally {
-    // Stop speculating; fetches already in flight just land in a dead cache.
+    // Stop speculating: queued fetches are dropped when their turn comes, and
+    // ones already in flight just land in a dead cache.
     settled = true;
   }
 

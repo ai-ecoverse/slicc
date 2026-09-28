@@ -530,6 +530,34 @@ describe('resolveDependencyTree: concurrent packument fetching', () => {
     expect(plan.root.ghost).toBeUndefined();
   });
 
+  it('drops speculative fetches still queued when resolution finishes', async () => {
+    // b@^1 alone would pick 1.1.0 and prefetch its ten dependencies, but a pins
+    // b@1.0.0 first, so none of them is ever needed.
+    const ghosts = Array.from({ length: 10 }, (_, i) => `g${i}`);
+    const supplier = makeSupplier([
+      { name: 'a', versions: ['1.0.0'], deps: { '1.0.0': { b: '1.0.0' } } },
+      {
+        name: 'b',
+        versions: ['1.0.0', '1.1.0'],
+        deps: { '1.1.0': Object.fromEntries(ghosts.map((g) => [g, '^1'])) },
+      },
+      ...ghosts.map((name) => ({ name, versions: ['1.0.0'] })),
+    ]);
+    const asked: string[] = [];
+    await resolveDependencyTree({
+      rootDependencies: { a: '^1', b: '^1' },
+      fetchPackument: async (name) => {
+        asked.push(name);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return supplier(name);
+      },
+      concurrency: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // At most the one fetch already running when the walk ended.
+    expect(asked.filter((n) => n.startsWith('g')).length).toBeLessThanOrEqual(1);
+  });
+
   it('still reports a needed packument that fails to fetch', async () => {
     const supplier = makeSupplier([
       { name: 'a', versions: ['1.0.0'], deps: { '1.0.0': { missing: '^1' } } },
