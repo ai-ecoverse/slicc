@@ -13,7 +13,10 @@
  *   }
  *
  * `argv0` selects the program of a multi-call binary (default: the command
- * name). Until the `@ai-ecoverse/wasm-*` packages carry the manifest, such a
+ * name). `env` (on `slicc`, and per command, which wins) gives the program
+ * environment defaults — the caller's environment still wins. A value that
+ * is a relative path (`etc/ImageMagick-7`) names a place in the package, and
+ * `${package}` stands for the package directory; anything else is literal. Until the `@ai-ecoverse/wasm-*` packages carry the manifest, such a
  * package without one offers each `bin/<x>` that has a `bin/<x>.wasm` beside it.
  */
 
@@ -38,6 +41,8 @@ export interface WasmCommand {
   argv0: string;
   /** The package that provides it. */
   pkg: string;
+  /** Environment defaults for the program (the manifest's `env`, resolved). */
+  env?: Readonly<Record<string, string>>;
 }
 
 /** The filesystem surface the scan needs (a `VirtualFS` or `RestrictedFS`). */
@@ -70,11 +75,31 @@ interface CommandEntry {
   glue?: unknown;
   wasm?: unknown;
   argv0?: unknown;
+  env?: unknown;
 }
 
 interface PackageJson {
   name?: unknown;
-  slicc?: { abi?: unknown; commands?: unknown };
+  slicc?: { abi?: unknown; commands?: unknown; env?: unknown };
+}
+
+/** A manifest `env` object as read: names to (hopefully string) values. */
+interface ManifestEnvEntries {
+  readonly [name: string]: unknown;
+}
+
+/** A manifest's `env`: valid names with string values, paths resolved inside the package. */
+function manifestEnv(pkgDir: string, raw: unknown): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object') return env;
+  for (const [key, value] of Object.entries(raw as ManifestEnvEntries)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== 'string') continue;
+    const expanded = value.replaceAll('${package}', pkgDir);
+    const relativePath = !expanded.startsWith('/') && expanded.includes('/');
+    const resolved = relativePath ? insidePackage(pkgDir, expanded) : expanded;
+    if (resolved !== undefined) env[key] = resolved;
+  }
+  return env;
 }
 
 /** True for a write that can change the installed command set (a manifest or a module). */
@@ -105,6 +130,7 @@ export function commandsFromManifest(pkgDir: string, pkg: PackageJson): WasmComm
   const commands = slicc.commands;
   if (!commands || typeof commands !== 'object') return [];
   const name = typeof pkg.name === 'string' ? pkg.name : pkgDir;
+  const packageEnv = manifestEnv(pkgDir, slicc.env);
   const out: WasmCommand[] = [];
   for (const [command, raw] of Object.entries(commands as Record<string, CommandEntry>)) {
     if (!validCommandName(command) || !raw || typeof raw !== 'object') continue;
@@ -112,7 +138,15 @@ export function commandsFromManifest(pkgDir: string, pkg: PackageJson): WasmComm
     const wasm = insidePackage(pkgDir, raw.wasm);
     if (!glue || !wasm) continue;
     const argv0 = typeof raw.argv0 === 'string' && raw.argv0 ? raw.argv0 : command;
-    out.push({ name: command, glue, wasm, argv0, pkg: name });
+    const env = { ...packageEnv, ...manifestEnv(pkgDir, raw.env) };
+    out.push({
+      name: command,
+      glue,
+      wasm,
+      argv0,
+      pkg: name,
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+    });
   }
   return out;
 }

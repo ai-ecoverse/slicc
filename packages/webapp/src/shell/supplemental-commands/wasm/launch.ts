@@ -227,7 +227,20 @@ export class WasmSession {
       await req.fds.closeAll();
       throw e;
     }
-    return this.start({ ...req, program: { glue, module } });
+    return this.start({ ...req, env: await this.withDefaults(req), program: { glue, module } });
+  }
+
+  /**
+   * The environment a program starts with: its package's defaults (the
+   * manifest's `env`, e.g. where ImageMagick keeps its configuration) under
+   * the caller's, which wins.
+   */
+  private async withDefaults(req: LaunchRequest): Promise<Record<string, string>> {
+    let defaults: Readonly<Record<string, string>> | undefined;
+    for (const command of (await this.commands()).values()) {
+      if (command.glue === req.glue && command.env) defaults = command.env;
+    }
+    return defaults ? { ...defaults, ...req.env } : req.env;
   }
 
   /** Start a loaded program: a new process, or (with `fork`) a forked copy of its parent. */

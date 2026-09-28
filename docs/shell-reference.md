@@ -630,7 +630,11 @@ declares its programs in `package.json`:
 ```
 
 Paths are package-relative and may not leave the package; `argv0` (default: the
-command name) picks the program of a multi-call binary. An `@ai-ecoverse/wasm-*`
+command name) picks the program of a multi-call binary. `env`, on `slicc` and per
+command (which wins), gives the program environment defaults; the caller's
+environment still wins. A value that is a relative path
+(`"MAGICK_CONFIGURE_PATH": "etc/ImageMagick-7"`) names a place in the package,
+and `${package}` stands for the package directory; anything else is literal. An `@ai-ecoverse/wasm-*`
 package without a `slicc` field offers each `bin/<x>` that has a `bin/<x>.wasm`
 beside it. Programs never come from a host mount, so they work in every float
 that has the wasm realm.
