@@ -29,14 +29,14 @@ import {
   reconcileGlobalBinDelegators,
 } from './global-bin-delegators.js';
 import { GLOBAL_NODE_MODULES, GLOBAL_NPM_PREFIX, GLOBAL_PACKAGE_JSON } from './global-prefix.js';
-import { verifyTarballIntegrity } from './integrity.js';
-import { fetchPackument, fetchTarball, type Packument, resolveVersion } from './registry.js';
 import {
   type InstallNode,
   type InstallPlan,
   type PackumentSupplier,
   resolveDependencyTree,
-} from './resolver.js';
+} from './install-plan.js';
+import { verifyTarballIntegrity } from './integrity.js';
+import { fetchPackument, fetchTarball, type Packument, resolveVersion } from './registry.js';
 import { gunzip, readTar, type TarEntry } from './tar.js';
 
 export interface InstallOptions {

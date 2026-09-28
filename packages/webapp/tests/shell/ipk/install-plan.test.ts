@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Packument } from '../../../src/shell/ipk/registry.js';
 import {
   type InstallNode,
   type PackumentSupplier,
   resolveDependencyTree,
-} from '../../../src/shell/ipk/resolver.js';
+} from '../../../src/shell/ipk/install-plan.js';
+import type { Packument } from '../../../src/shell/ipk/registry.js';
 import { trackInFlight } from './helpers/in-flight.js';
 
 interface PackumentInput {
