@@ -28,10 +28,10 @@ import type { SecureFetch } from 'just-bash';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes, type SecureFetchRequestBody } from './fetch-body.js';
 import {
-  createRawProxiedFetch,
+  type RawFetchCapabilities,
   type RawProxiedFetch,
   usesFetchProxyEndpoint,
-} from './proxied-fetch-raw.js';
+} from './proxied-fetch-raw-types.js';
 import { isProxyError, readProxyErrorMessage } from './proxy-error.js';
 import {
   decodeForbiddenResponseHeaders as _decodeForbiddenResponseHeaders,
@@ -133,7 +133,6 @@ function resolveFetchProxyUrl(): string {
 
 /** Raw mode (#3571): the realm HTTP proxy's view of the proxied fetch. */
 export {
-  getRawFetchCapabilities,
   type RawFetchCapabilities,
   RawFetchError,
   type RawFetchErrorCode,
@@ -141,8 +140,22 @@ export {
   type RawFetchResponse,
   type RawHeaderList,
   type RawProxiedFetch,
-  resetRawFetchCapabilities,
-} from './proxied-fetch-raw.js';
+} from './proxied-fetch-raw-types.js';
+
+/**
+ * Raw-mode capabilities of the current float, probed from its transport.
+ * Lazy like raw mode itself, so the probe code stays out of the boot graph.
+ */
+export async function getRawFetchCapabilities(): Promise<RawFetchCapabilities> {
+  const raw = await import('./proxied-fetch-raw.js');
+  return raw.getRawFetchCapabilities();
+}
+
+/** Forget the raw-mode probe answers, e.g. after the bridge was replaced. */
+export async function resetRawFetchCapabilities(): Promise<void> {
+  const raw = await import('./proxied-fetch-raw.js');
+  raw.resetRawFetchCapabilities();
+}
 
 /** Shared content-type predicate, re-exported for backwards compatibility. */
 export { isTextContentType };
@@ -759,7 +772,15 @@ export function createProxiedStreamingFetch(fetchOptions?: ProxiedFetchOptions):
 export function createProxiedStreamingFetch(
   fetchOptions: ProxiedFetchOptions = {}
 ): StreamingFetch | RawProxiedFetch {
-  if (fetchOptions.mode === 'raw') return createRawProxiedFetch();
+  if (fetchOptions.mode === 'raw') {
+    // Lazy: raw mode serves the wasm realm's HTTP proxy only, so its
+    // transport stays out of the boot graph.
+    const raw: RawProxiedFetch = async (url, init) => {
+      const { createRawProxiedFetch } = await import('./proxied-fetch-raw.js');
+      return createRawProxiedFetch()(url, init);
+    };
+    return raw;
+  }
   return createDefaultStreamingFetch(fetchOptions);
 }
 

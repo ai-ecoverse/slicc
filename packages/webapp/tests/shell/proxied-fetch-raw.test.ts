@@ -95,10 +95,10 @@ describe('raw proxied fetch — bridge floats (CLI, cloud)', () => {
   let probeReply: () => Promise<Response> | Response;
   let probes: number;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     setLocalApiBaseUrl('http://localhost:5710');
     setBridgeToken('bridge-token');
-    resetRawFetchCapabilities();
+    await resetRawFetchCapabilities();
     fetchSpy = vi.fn();
     probes = 0;
     probeReply = probeOk;
