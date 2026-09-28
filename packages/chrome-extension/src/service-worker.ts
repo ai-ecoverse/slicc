@@ -43,6 +43,7 @@ import {
   setCherryPanelRecoveryDeps,
 } from './cherry-panel-sw.js';
 import { installDiscoveryObserver } from './discovery-sw.js';
+import { rawSessionStarter } from './fetch-proxy-raw.js';
 import { handleFetchProxyConnectionAsync, type PortLike } from './fetch-proxy-shared.js';
 import { installHandoffNotifications } from './handoff-notifications-sw.js';
 import {
@@ -54,6 +55,7 @@ import {
   writeStoredLeaderTabId,
 } from './leader-tab-sw.js';
 import { handleMountMessage, handleMountSignAndForwardPort } from './mount-backends-sw.js';
+import { createRawFetchCapture, installRawFetchCapture } from './raw-fetch-capture.js';
 import { handleRelayMessage } from './relay-sw.js';
 import {
   buildReloadedPipelinePromise,
@@ -140,6 +142,10 @@ installDiscoveryObserver();
 
 installCdpProxyListeners();
 
+// Raw-mode fetch-proxy (#3571) reads upstream heads from `webRequest`.
+const rawFetchDeps = { capture: createRawFetchCapture() };
+installRawFetchCapture(rawFetchDeps.capture);
+
 // ONE `chrome.runtime.onMessage` listener. The SW used to register three
 // independent listeners racing on the same channel; the router walks the
 // backends in the original registration order and owns the `return true`
@@ -190,7 +196,11 @@ function connectExternalFetchProxy(port: ChromeRuntimePort): void {
   pipelinePromise.catch((err) => {
     console.error('[sw] external fetch-proxy init failed', err);
   });
-  handleFetchProxyConnectionAsync(port as PortLike, pipelinePromise);
+  handleFetchProxyConnectionAsync(
+    port as PortLike,
+    pipelinePromise,
+    rawSessionStarter(port as PortLike, pipelinePromise, rawFetchDeps)
+  );
 }
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -217,5 +227,9 @@ chrome.runtime.onConnect.addListener((port) => {
     // The handler's await pipelinePromise will throw and post response-error,
     // so we just log here. Don't disconnect — the handler needs the port.
   });
-  handleFetchProxyConnectionAsync(port as PortLike, pipelinePromise);
+  handleFetchProxyConnectionAsync(
+    port as PortLike,
+    pipelinePromise,
+    rawSessionStarter(port as PortLike, pipelinePromise, rawFetchDeps)
+  );
 });

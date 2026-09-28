@@ -1,14 +1,15 @@
 /**
  * The eager surface of the proxied fetch's raw mode (#3571): types, the error
- * class and the float probe. The transport (`proxied-fetch-raw.ts`) loads
- * lazily, so `proxied-fetch.ts` imports only this module and keeps raw mode
- * out of the boot graph.
+ * class and the float probe. The transports (`proxied-fetch-raw.ts`,
+ * `proxied-fetch-raw-port.ts`) load lazily, so `proxied-fetch.ts` and the
+ * panel-RPC handler map import only this module and keep raw mode out of the
+ * boot graph.
  */
 
-import type { RawFetchResponseHead, RawHeaderList } from '@slicc/shared-ts';
+import type { RawFetchErrorCode, RawFetchResponseHead, RawHeaderList } from '@slicc/shared-ts';
 import { getChromeExtensionRealm, getExtensionDelegateId } from '../base/api-endpoint.js';
 
-export type { RawHeaderList } from '@slicc/shared-ts';
+export type { RawFetchErrorCode, RawHeaderList } from '@slicc/shared-ts';
 
 /** A raw-mode request. */
 export interface RawFetchInit {
@@ -16,6 +17,8 @@ export interface RawFetchInit {
   /** Ordered; repeats are folded as `fetch` would (`Cookie` with `; `). */
   headers?: RawHeaderList;
   body?: Uint8Array | Blob | ReadableStream<Uint8Array>;
+  /** Size of a streamed `body` when known (the client's `Content-Length`). */
+  bodyLength?: number;
   signal?: AbortSignal;
 }
 
@@ -34,18 +37,6 @@ export interface RawFetchCapabilities {
   /** Largest request body the float accepts. */
   maxRequestBodyBytes: number;
 }
-
-export type RawFetchErrorCode =
-  /** The float has no raw mode (extension, or a bridge that predates it). */
-  | 'unsupported'
-  /** The request body is past {@link RawFetchCapabilities.maxRequestBodyBytes}. */
-  | 'request-body-too-large'
-  /** A masked secret was used against a domain it is not scoped to. */
-  | 'forbidden-secret'
-  /** The upstream could not be reached, or the stream broke. */
-  | 'upstream'
-  /** The bridge answered with something raw mode cannot read. */
-  | 'bridge';
 
 /**
  * A raw-mode failure that is not an upstream HTTP response. `status` is the

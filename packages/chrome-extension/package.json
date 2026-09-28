@@ -9,6 +9,7 @@
     "size": "size-limit",
     "test": "vitest run",
     "test:extension-smoke": "tsx ../dev-tools/tools/extension-smoke-test.ts",
+    "test:raw-fetch": "tsx ../dev-tools/tools/extension-raw-fetch-check.ts",
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
   "size-limit": [
@@ -16,7 +17,7 @@
       "name": "extension: service worker",
       "path": "../../dist/extension/service-worker.js",
       "brotli": false,
-      "limit": "60 kB"
+      "limit": "70 kB"
     },
     {
       "name": "extension: side panel entry",
@@ -28,7 +29,7 @@
       "name": "extension: total JS payload",
       "path": "../../dist/extension/**/*.js",
       "brotli": false,
-      "limit": "105 kB"
+      "limit": "115 kB"
     }
   ],
   "dependencies": {

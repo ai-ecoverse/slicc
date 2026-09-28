@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BROWSER_DECODED_CODINGS,
   decodeRawRequestHead,
   decodeRawResponseFrame,
   encodeRawRequestHead,
@@ -12,6 +13,7 @@ import {
   rawAcceptEncoding,
   rawResponseHasBody,
   rawResponseHeaders,
+  reasonFromStatusLine,
   stripRawRequestHeaders,
 } from '../src/raw-fetch-protocol.js';
 
@@ -215,5 +217,35 @@ describe('rawResponseHeaders', () => {
     }
     expect(rawResponseHasBody('head', 200)).toBe(false);
     expect(rawResponseHasBody('GET', 302)).toBe(true);
+  });
+});
+
+describe('float-specific decoding', () => {
+  const headers: Array<[string, string]> = [
+    ['content-encoding', 'zstd'],
+    ['content-length', '10'],
+  ];
+
+  it('treats zstd as decoded only for the browser float', () => {
+    expect(
+      rawResponseHeaders({ method: 'GET', status: 200, headers, bodyRewritten: false })
+    ).toEqual(headers);
+    expect(
+      rawResponseHeaders({
+        method: 'GET',
+        status: 200,
+        headers,
+        bodyRewritten: false,
+        decodedCodings: BROWSER_DECODED_CODINGS,
+      })
+    ).toEqual([]);
+  });
+
+  it('reads the reason phrase from a status line', () => {
+    expect(reasonFromStatusLine('HTTP/1.1 302 Found')).toBe('Found');
+    expect(reasonFromStatusLine('HTTP/1.1 404 Not Found')).toBe('Not Found');
+    expect(reasonFromStatusLine('HTTP/2 200')).toBe('');
+    expect(reasonFromStatusLine(undefined)).toBe('');
+    expect(reasonFromStatusLine('garbage')).toBe('');
   });
 });
