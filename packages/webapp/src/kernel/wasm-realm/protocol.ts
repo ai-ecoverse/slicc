@@ -47,7 +47,13 @@ export interface ForkState {
  * reopens by path.
  */
 export type ForkStream =
-  | { fd: number; kernel: number; kind: 'tty' | 'stream' | 'file' }
+  | {
+      fd: number;
+      kernel: number;
+      kind: 'tty' | 'stream' | 'file' | 'socket';
+      /** A socket's status flags (O_NONBLOCK), which the child's stream keeps. */
+      flags?: number;
+    }
   | { fd: number; path: string; flags: number };
 
 export interface WasmProcessInitMsg {

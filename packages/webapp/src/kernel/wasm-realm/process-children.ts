@@ -16,6 +16,7 @@ import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
 import type { ChildStdio } from './children.js';
 import type { ProcessFs, ProcessStream } from './kernel-streams.js';
 import type { WasmSyscall } from './process.js';
+import type { SocketKernel } from './process-sockets.js';
 import type { ForkState, ForkStream } from './protocol.js';
 import { wasiErrno } from './wasi-errno.js';
 
@@ -78,6 +79,8 @@ export interface ProcessKernel {
     write: number[],
     timeoutMs: number
   ): { read: number[]; write: number[] } | number | null;
+  /** BSD sockets on the owner's loopback network (`slicc_socket.c`). */
+  net?: SocketKernel;
 }
 
 export interface ProcessKernelDeps {

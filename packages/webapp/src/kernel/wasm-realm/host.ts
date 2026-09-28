@@ -39,6 +39,7 @@ import {
   type WasmProgram,
 } from './protocol.js';
 import { SIG, sigbit } from './signals.js';
+import type { LoopbackNet } from './socket.js';
 
 /** The worker surface the host needs (a DedicatedWorker; a fake in tests). */
 export interface WasmWorkerLike {
@@ -72,6 +73,8 @@ export interface SpawnWasmOptions {
   kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
   /** Process groups and sessions of its invocation. */
   jobs?: JobTable;
+  /** The loopback network its sockets live on: its owner's, shared across invocations. */
+  net?: LoopbackNet;
 }
 
 export interface WasmProcessHandle {
@@ -110,6 +113,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     fs: opts.fs,
     kill: opts.kill,
     jobs: opts.jobs,
+    net: opts.net,
     // The worker takes the word after every syscall and runs the handlers.
     onPending: (sig) => void Atomics.or(header, SAB_I_SIGNALS, sigbit(sig)),
     hasPending: () => Atomics.load(header, SAB_I_SIGNALS) !== 0,

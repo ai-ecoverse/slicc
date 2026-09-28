@@ -24,6 +24,11 @@ const POLLHUP = 0x010;
 const POLLRDNORM = 0x040;
 const POLLWRNORM = 0x100;
 
+/** fcntl's O_NONBLOCK (musl): a socket's reads and writes fail with EAGAIN instead of waiting. */
+export const O_NONBLOCK = 0o4000;
+/** A socket node's mode: S_IFSOCK, rwx for all. */
+const SOCKET_MODE = 0o140777;
+
 /** SIGPIPE's default action: a write to a pipe with no reader ends the writer. */
 const KILLED_BY_SIGPIPE = 128 + 13;
 
@@ -44,12 +49,18 @@ export class SyscallError extends Error {
   }
 }
 
+/** A read that must not wait (EAGAIN), or leaves the bytes (recv's MSG_PEEK). */
+export interface ReadOptions {
+  nonblock?: boolean;
+  peek?: boolean;
+}
+
 /** The blocking syscalls a process makes on its kernel descriptors. */
 export interface ProcessSys {
   /** Up to `max` bytes; empty at end of file. */
-  read(fd: number, max: number): Uint8Array;
-  /** Bytes written (all of them). */
-  write(fd: number, bytes: Uint8Array): number;
+  read(fd: number, max: number, opts?: ReadOptions): Uint8Array;
+  /** Bytes written (all of them; `nonblock`: what fits now, or EAGAIN). */
+  write(fd: number, bytes: Uint8Array, opts?: { nonblock?: boolean }): number;
   close(fd: number): void;
   /** A new kernel pipe: `[read end, write end]`. */
   pipe(): [number, number];
@@ -90,6 +101,8 @@ export interface ProcessStream {
   sliccKernelFd?: number;
   /** Backed by a kernel VFS file description (seekable, offset shared across processes). */
   sliccKernelFile?: boolean;
+  /** Backed by a kernel socket (O_NONBLOCK counts; send / recv work on it). */
+  sliccKernelSocket?: boolean;
   path?: string;
   flags: number;
   position: number;
@@ -97,6 +110,19 @@ export interface ProcessStream {
   node: { mode: number; mount?: { type?: unknown } };
   /** Emscripten's per-description state (the offset), shared by dups in one worker. */
   shared: object;
+}
+
+/** A node of the module's FS, as a socket stream needs one. */
+interface FsNode {
+  mode: number;
+  node_ops: object;
+}
+
+/** What makes a socket node (Emscripten's FS, as its SOCKFS uses it). */
+interface SocketNodeFs {
+  mount(type: { mount(): FsNode }, opts: object, mountpoint: null): FsNode;
+  createNode(parent: FsNode | null, name: string, mode: number, rdev: number): FsNode;
+  createStream(stream: object, fd?: number): ProcessStream;
 }
 
 /** The slice of Emscripten's FS the runtime uses. */
@@ -130,9 +156,17 @@ export interface KernelStreamOptions {
   restartable?: () => boolean;
 }
 
+/** A socket stream in O_NONBLOCK mode (pipes and terminals keep blocking, as before). */
+function nonblocking(stream: ProcessStream): boolean {
+  return stream.sliccKernelSocket === true && (stream.flags & O_NONBLOCK) !== 0;
+}
+
 export class KernelStreams {
   /** Emscripten streams per kernel descriptor (dups and fork clones included). */
   private readonly refs = new Map<number, number>();
+  /** The pseudo-mount socket nodes hang off (as Emscripten's SOCKFS does), made on first use. */
+  private socketRoot: FsNode | undefined;
+  private sockets = 0;
 
   constructor(
     private readonly Fs: ProcessFs,
@@ -219,6 +253,41 @@ export class KernelStreams {
     return undefined;
   }
 
+  /**
+   * Back `stream` by kernel socket `kfd`: as {@link attach}, and its reads and
+   * writes follow the stream's O_NONBLOCK (fcntl, accept4, SOCK_NONBLOCK).
+   */
+  attachSocket(stream: ProcessStream, kfd: number): void {
+    this.attach(stream, kfd, false);
+    stream.sliccKernelSocket = true;
+  }
+
+  /**
+   * A new stream of the program for a socket: an S_IFSOCK node (fstat), not
+   * yet attached to a kernel descriptor. Where the FS cannot make one (a
+   * test's fake), a `/dev/null` stream stands in.
+   */
+  socketStream(flags: number): ProcessStream {
+    const fs = this.Fs as unknown as Partial<SocketNodeFs>;
+    if (!fs.mount || !fs.createNode || !fs.createStream) {
+      const stream = this.Fs.open('/dev/null', 2 /* O_RDWR */);
+      stream.flags = flags;
+      return stream;
+    }
+    this.socketRoot ??= fs.mount(
+      { mount: () => (fs.createNode as SocketNodeFs['createNode'])(null, '/', 0o40777, 0) },
+      {},
+      null
+    );
+    const ino = ++this.sockets;
+    const node = fs.createNode(this.socketRoot, `socket:${ino}`, SOCKET_MODE, 0);
+    const now = new Date();
+    const stat = { dev: 0, ino, mode: SOCKET_MODE, nlink: 1, uid: 0, gid: 0, rdev: 0, size: 0 };
+    const times = { atime: now, mtime: now, ctime: now, blksize: 4096, blocks: 0 };
+    node.node_ops = { getattr: () => ({ ...stat, ...times }) };
+    return fs.createStream({ node, flags, seekable: false, position: 0, stream_ops: {} });
+  }
+
   /** Make `pipe()` return kernel pipes. */
   usePipes(pipefs: ProcessPipeFs): void {
     const createPipe = pipefs.createPipe.bind(pipefs);
@@ -270,15 +339,18 @@ export class KernelStreams {
   private ops(kfd: number, base: StreamOps): StreamOps {
     return {
       ...base,
-      read: (_s, buffer, offset, length) =>
+      read: (s, buffer, offset, length) =>
         this.call(() => {
-          const bytes = this.restarting(() => this.sys.read(kfd, length));
+          const opts = nonblocking(s) ? { nonblock: true } : undefined;
+          const bytes = this.restarting(() => this.sys.read(kfd, length, opts));
           buffer.set(bytes, offset);
           return bytes.length;
         }),
-      write: (_s, buffer, offset, length) => {
+      write: (s, buffer, offset, length) => {
         try {
-          return this.restarting(() => this.sys.write(kfd, buffer.slice(offset, offset + length)));
+          const bytes = buffer.slice(offset, offset + length);
+          const opts = nonblocking(s) ? { nonblock: true } : undefined;
+          return this.restarting(() => this.sys.write(kfd, bytes, opts));
         } catch (e) {
           // A pipe with no reader: SIGPIPE ends the program unless it ignores
           // or handles the signal; then the write fails with EPIPE.
