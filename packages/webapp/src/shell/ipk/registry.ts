@@ -65,6 +65,10 @@ export interface PackumentVersion {
   bin?: string | Record<string, string>;
   /** Deprecation message; an empty string does not deprecate (npm's rule). */
   deprecated?: string;
+  /** Platforms the version runs on (`!x` excludes x); see `platform.ts`. */
+  os?: string | string[];
+  cpu?: string | string[];
+  libc?: string | string[];
   [key: string]: unknown;
 }
 

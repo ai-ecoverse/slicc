@@ -69,6 +69,8 @@ export interface InstallFailure {
 export interface InstallPackagesResult {
   results: InstallResult[];
   errors: InstallFailure[];
+  /** Non-fatal messages, e.g. skipped optional dependencies (npm prints them as warnings). */
+  notes?: string[];
 }
 
 export interface ParsedSpec {
@@ -186,6 +188,23 @@ async function readInstalledJsonOr<T>(fs: VirtualFS, path: string, fallback: T):
   } catch {
     return fallback;
   }
+}
+
+/**
+ * Root names the manifest declares under `optionalDependencies`, minus
+ * `explicit` ones the user just named: those install like any other.
+ */
+function optionalRootNames(
+  manifest: ProjectManifest,
+  explicit: Iterable<string> = []
+): Set<string> {
+  const names = new Set(Object.keys(manifest.optionalDependencies ?? {}));
+  for (const name of explicit) names.delete(name);
+  return names;
+}
+
+function skipNotes(plan: InstallPlan): string[] {
+  return plan.skippedOptional.map((s) => s.note);
 }
 
 interface ProjectManifest {
@@ -714,6 +733,10 @@ export async function installPackages(
     rootDependencies,
     fetchPackument: supplier,
     concurrency,
+    optionalRoots: optionalRootNames(
+      existingManifest,
+      directs.map((d) => d.parsed.name)
+    ),
   });
 
   const modulesDir = globalInstall ? GLOBAL_NODE_MODULES : joinPath(cwd, 'node_modules');
@@ -753,7 +776,7 @@ export async function installPackages(
     };
   });
 
-  return { results, errors: stageErrors };
+  return { results, errors: stageErrors, notes: skipNotes(plan) };
 }
 
 export async function installPackage(
@@ -772,6 +795,8 @@ export interface InstallFromManifestResult {
   results: InstallResult[];
   errors: InstallFailure[];
   empty: boolean;
+  /** Non-fatal messages, e.g. skipped optional dependencies. */
+  notes?: string[];
 }
 
 export class ManifestNotFoundError extends Error {
@@ -872,6 +897,7 @@ export async function installFromManifest(
     rootDependencies,
     fetchPackument: supplier,
     concurrency,
+    optionalRoots: optionalRootNames(manifest),
   });
 
   const modulesDir = joinPath(cwd, 'node_modules');
@@ -893,7 +919,7 @@ export async function installFromManifest(
     })
     .filter((r): r is InstallResult => r !== null);
 
-  return { results, errors, empty: false };
+  return { results, errors, empty: false, notes: skipNotes(plan) };
 }
 
 function packageListedInManifest(manifest: ProjectManifest, name: string): boolean {
@@ -993,6 +1019,7 @@ export async function syncGlobalInstallTree(
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
+    optionalRoots: optionalRootNames(manifest),
   });
 
   await pruneTopLevelPackages(fs, GLOBAL_NODE_MODULES, new Set(Object.keys(plan.root)));
@@ -1098,6 +1125,7 @@ async function syncLocalInstallTree(
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
+    optionalRoots: optionalRootNames(manifest),
   });
 
   await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));

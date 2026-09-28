@@ -626,6 +626,25 @@ instead of 15.7 MB). If the response lacks something ipk installs from (the
 `dist-tags`, or a version's `dist.tarball` or its hash), ipk refetches the full
 packument (`fetchPackument` in `shell/ipk/registry.ts`).
 
+### `ipk install`: optional dependencies and the wasm host
+
+`optionalDependencies` are followed like `dependencies`, but an optional
+dependency that can't be resolved, or whose `os`/`cpu` exclude the install host,
+is skipped with a note on stderr
+(`ipk: skipping optional dependency <name>@<version> (unsupported platform): …`)
+instead of failing the install. The install host is a wasm host,
+`{ os: 'wasi', cpu: 'wasm32' }` (`INSTALL_HOST` in `shell/ipk/platform.ts`),
+whatever the Node realm reports in `process.platform`/`process.arch`. No native
+binary can run in SLICC, and installing, say, a `linux-x64` binding would make
+loaders like napi-rs, esbuild or rollup pick it and crash instead of falling back
+to their wasm or JS path. So `sharp` gets `@img/sharp-webcontainers-wasm32`
+(`cpu: ["wasm32"]`) and none of its native builds, and `esbuild` installs
+without any `@esbuild/*` binary. The matching follows npm: `!x` entries exclude
+`x`, and a list of only negations admits everything else. Dependencies without
+`os`/`cpu` are unaffected, and a non-optional dependency is installed whatever
+its `os`/`cpu` say. Root packages declared under `optionalDependencies` follow
+the same rule; a package named on the command line is always installed.
+
 ### `ipk install -g` / `npm install -g`
 
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared

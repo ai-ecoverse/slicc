@@ -97,6 +97,8 @@ interface SyntheticPackage {
   version: string;
   dependencies?: Record<string, string>;
   files?: Record<string, string>;
+  /** Extra packument fields for this version (`optionalDependencies`, `os`, `cpu`). */
+  packumentExtras?: Record<string, unknown>;
 }
 
 function buildTarball(pkg: SyntheticPackage): Uint8Array {
@@ -147,6 +149,7 @@ function buildRegistry(packages: SyntheticPackage[]): Registry {
         version: p.version,
         ...(p.dependencies ? { dependencies: p.dependencies } : {}),
         ...(bin !== undefined ? { bin } : {}),
+        ...p.packumentExtras,
         dist: {
           tarball: `https://registry.npmjs.org/${name}/-/${tarballBasename(name, p.version)}`,
         },
@@ -357,6 +360,44 @@ describe('createIpkCommand', () => {
     const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
     expect(root).toEqual(manifest);
     expect(root.dependencies).toBeUndefined();
+  });
+
+  it('skips native optional bindings with a note and installs the wasm32-wasi one', async () => {
+    const reg = buildRegistry([
+      {
+        name: 'napi',
+        version: '1.0.0',
+        packumentExtras: {
+          optionalDependencies: {
+            'napi-linux-x64-gnu': '1.0.0',
+            'napi-darwin-arm64': '1.0.0',
+            'napi-wasm32-wasi': '1.0.0',
+          },
+        },
+      },
+      {
+        name: 'napi-linux-x64-gnu',
+        version: '1.0.0',
+        packumentExtras: { os: ['linux'], cpu: ['x64'], libc: ['glibc'] },
+      },
+      {
+        name: 'napi-darwin-arm64',
+        version: '1.0.0',
+        packumentExtras: { os: ['darwin'], cpu: ['arm64'] },
+      },
+      { name: 'napi-wasm32-wasi', version: '1.0.0', packumentExtras: { cpu: ['wasm32'] } },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', 'napi'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(await fs.exists('/work/node_modules/napi-wasm32-wasi/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/napi-linux-x64-gnu')).toBe(false);
+    expect(await fs.exists('/work/node_modules/napi-darwin-arm64')).toBe(false);
+    expect(r.stderr).toContain(
+      'ipk: skipping optional dependency napi-linux-x64-gnu@1.0.0 (unsupported platform)'
+    );
+    expect(r.stderr).toContain('ipk: skipping optional dependency napi-darwin-arm64@1.0.0');
+    expect(r.stderr).not.toContain('failed to install');
   });
 
   it('installs multiple packages in one invocation', async () => {
