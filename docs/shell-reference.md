@@ -616,6 +616,16 @@ turns out to be unneeded, or that fails, is ignored. A package is extracted
 before anything nested inside it, and after the first failure no further
 tarball starts. At most eight tarballs are held in memory at once.
 
+### `ipk install`: abbreviated metadata
+
+Packuments are requested as npm's abbreviated install metadata
+(`Accept: application/vnd.npm.install-v1+json`, as pnpm asks), which keeps
+`dist-tags` and each version's `dist`, `deprecated`, dependency sections, `bin`,
+`engines`, `os` and `cpu` but drops READMEs and the like (typescript: 8.7 MB
+instead of 15.7 MB). If the response lacks something ipk installs from (the
+`dist-tags`, or a version's `dist.tarball` or its hash), ipk refetches the full
+packument (`fetchPackument` in `shell/ipk/registry.ts`).
+
 ### `ipk install -g` / `npm install -g`
 
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared

@@ -79,6 +79,23 @@ export interface RegistryFetchOptions {
   timeoutMs?: number;
 }
 
+export interface PackumentFetchOptions extends RegistryFetchOptions {
+  /** Ask for the full packument instead of npm's abbreviated install metadata. */
+  full?: boolean;
+}
+
+/**
+ * npm's abbreviated ("corgi") install metadata, preferred as pnpm asks for it.
+ * It keeps what an installer reads (`dist-tags`, and per version `dist`,
+ * `deprecated`, the dependency sections, `bin`, `engines`, `os`, `cpu`) and
+ * drops READMEs, maintainers and the like (the typescript packument: 8.7 MB
+ * instead of 15.7 MB). Empty sections such as `dependencies: {}` are
+ * omitted, which ipk reads the same as absent ones.
+ */
+const ABBREVIATED_ACCEPT =
+  'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*';
+const FULL_ACCEPT = 'application/json';
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -99,18 +116,53 @@ function describeStatus(result: FetchResult, fallback: string): string {
 
 /**
  * GET `https://registry.npmjs.org/<name>` via the injected `SecureFetch`
- * and return the parsed packument JSON. Bounded by `opts.timeoutMs`
- * (default 30s); surfaces a clear error on non-2xx, malformed JSON,
- * empty response, or timeout.
+ * and return the parsed packument. Asks for npm's abbreviated install
+ * metadata first and falls back to the full packument when the response
+ * lacks something ipk installs from (see {@link hasInstallMetadata}), or
+ * straight away with `opts.full`. Each request is bounded by
+ * `opts.timeoutMs` (default 30s); surfaces a clear error on non-2xx,
+ * malformed JSON, empty response, or timeout.
  */
 export async function fetchPackument(
   name: string,
   fetch: SecureFetch,
-  opts: RegistryFetchOptions = {}
+  opts: PackumentFetchOptions = {}
 ): Promise<Packument> {
   if (!name || typeof name !== 'string') {
     throw new Error('fetchPackument: package name is required');
   }
+  if (!opts.full) {
+    const abbreviated = await requestPackument(name, fetch, opts, ABBREVIATED_ACCEPT);
+    if (hasInstallMetadata(abbreviated)) return abbreviated;
+  }
+  return requestPackument(name, fetch, opts, FULL_ACCEPT);
+}
+
+/**
+ * True when `packument` carries everything ipk installs from: a `dist-tags`
+ * object and, for every version, `dist.tarball` plus a hash to verify it
+ * against (`dist.integrity` or `dist.shasum`). The other fields ipk reads
+ * (`deprecated`, `dependencies`, `bin`) are optional in both formats, so
+ * their absence cannot be told from "not set"; npm's abbreviated format
+ * keeps each of them whenever the full packument has it.
+ */
+function hasInstallMetadata(packument: Packument): boolean {
+  const tags = packument['dist-tags'];
+  if (!tags || typeof tags !== 'object') return false;
+  for (const entry of Object.values(packument.versions)) {
+    const dist = entry?.dist;
+    if (!dist || typeof dist.tarball !== 'string') return false;
+    if (typeof dist.integrity !== 'string' && typeof dist.shasum !== 'string') return false;
+  }
+  return true;
+}
+
+async function requestPackument(
+  name: string,
+  fetch: SecureFetch,
+  opts: RegistryFetchOptions,
+  accept: string
+): Promise<Packument> {
   const label = `fetchPackument(${name})`;
   const built = registryUrl(name);
   if (built.host !== REGISTRY_NPMJS_HOST) {
@@ -126,7 +178,7 @@ export async function fetchPackument(
     result = await withTimeout(
       fetch(url, {
         method: 'GET',
-        headers: { Accept: 'application/json' },
+        headers: { Accept: accept },
         timeoutMs,
       }),
       timeoutMs,
