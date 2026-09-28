@@ -252,8 +252,9 @@ describe('wasm command', () => {
       expect(r.exitCode).toBe(0);
       const opts = spawn.mock.calls.at(-1)![0];
       expect(opts.program.glue).toBe('BASH');
-      expect(opts.args).toEqual(['-il']);
+      expect(opts.args).toEqual(['-i']); // not -l: the slicc shell already sourced ~/.profile
       expect(opts.env).toMatchObject({ PS1: '\\w $ ', TERM: 'xterm-256color' });
+      expect(opts.env.PROMPT_COMMAND).toContain('7777');
       expect(lease.release).toHaveBeenCalled();
     });
 

@@ -40,24 +40,35 @@ describe('RemoteTerminalView login shell', () => {
   it('without GNU bash: the slicc banner and prompt, as before', async () => {
     const s = setup((resolve) => resolve({ stdout: '', stderr: '', exitCode: NO_LOGIN_SHELL }));
     await s.start();
-    expect(s.exec).toHaveBeenCalledWith('wasm --login');
+    expect(s.exec).toHaveBeenCalledWith('wasm --login', { discardCapturedOutput: true });
     expect(s.lines.join('\n')).toContain('Type "help"');
     expect(s.loop).toHaveBeenCalled();
     s.view.dispose();
   });
 
-  it('runs bash first; "run in terminal" types into it; the slicc prompt follows its exit', async () => {
+  it('runs bash first; "run in terminal" types into it and gets its result; the slicc prompt follows its exit', async () => {
     let finish!: (r: Result) => void;
     const s = setup((resolve) => (finish = resolve));
     const started = s.start();
     await Promise.resolve();
     s.event({ type: 'terminal-mode', sid: 's', mode: 'pty' });
-    expect(await s.view.executeCommandInTerminal('  ls -la  ')).toEqual({
+    // Before the first prompt mark there is nothing to collect a result by.
+    expect(await s.view.executeCommandInTerminal('true')).toEqual({
       stdout: '',
       stderr: '',
       exitCode: 0,
     });
-    expect(s.stdin).toHaveBeenCalledWith('ls -la\r');
+    s.event({ type: 'terminal-output', sid: 's', stream: 'stdout', data: '\x1b]7777;0\x07/ $ ' });
+    const typed = s.view.executeCommandInTerminal('  ls -la  ');
+    expect(s.stdin).toHaveBeenLastCalledWith('ls -la\r');
+    expect(await s.view.executeCommandInTerminal('pwd')).toMatchObject({ exitCode: 1 }); // busy
+    s.event({
+      type: 'terminal-output',
+      sid: 's',
+      stream: 'stdout',
+      data: 'ls -la\r\nfile\r\n\x1b]7777;0\x07/ $ ',
+    });
+    expect(await typed).toEqual({ stdout: 'file\n', stderr: '', exitCode: 0 });
     expect(s.loop).not.toHaveBeenCalled();
     s.event({ type: 'terminal-mode', sid: 's', mode: 'line' });
     finish({ stdout: '', stderr: '', exitCode: 3 });

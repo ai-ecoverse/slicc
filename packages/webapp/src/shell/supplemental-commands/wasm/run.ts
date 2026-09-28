@@ -18,6 +18,7 @@
  * An abort or the output limit ends the whole process tree.
  */
 import type { CommandContext } from 'just-bash';
+import { LOGIN_PROMPT_COMMAND } from '../../../kernel/login-shell-marks.js';
 import { bytesSource, FdTable, sinkFile } from '../../../kernel/wasm-realm/fd-table.js';
 import type { WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import { KernelTty } from '../../../kernel/wasm-realm/tty.js';
@@ -181,13 +182,18 @@ function programEnv(ctx: CommandContext, call: Invocation): Record<string, strin
   }
   // The working directory and a `$`, as the slicc prompt shows (bash's `\$`
   // would print `#`: every process runs as uid 0).
-  if (call.login) env.PS1 ??= '\\w $ ';
+  if (call.login) {
+    env.PS1 ??= '\\w $ ';
+    // Marks each prompt with the last status: how the panel collects the
+    // result of a command it types into the shell (`login-shell-marks.ts`).
+    env.PROMPT_COMMAND ??= LOGIN_PROMPT_COMMAND;
+  }
   return env;
 }
 
 /**
- * The panel terminal's login shell: GNU bash (`bash -il`, which reads
- * `~/.profile`) on the terminal, when a package provides it and the shell
+ * The panel terminal's login shell: GNU bash (`bash -i`, on the slicc
+ * shell's environment, which has sourced `~/.profile`) on the terminal, when a package provides it and the shell
  * has not opted out (`SLICC_SHELL=just-bash`). Otherwise nothing, with
  * {@link NO_LOGIN_SHELL}, and the panel keeps its own prompt.
  */
@@ -198,7 +204,9 @@ async function loginShell(ctx: CommandContext, options: RunWasmOptions): Promise
     return none;
   }
   if (!(await installedCommands(ctx)).has('bash')) return none;
-  return runWasmCommand(['-t', '--login-prompt', 'bash', '-il'], ctx, options);
+  // Not a login bash (-l): the environment is already the slicc shell's,
+  // which sourced ~/.profile; reading it again would repeat its effects.
+  return runWasmCommand(['-t', '--login-prompt', 'bash', '-i'], ctx, options);
 }
 
 function listing(commands: Map<string, WasmCommand>): string {
