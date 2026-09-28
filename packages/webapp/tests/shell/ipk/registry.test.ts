@@ -251,6 +251,14 @@ describe('resolveVersion', () => {
     expect(resolveVersion(packument, '1.2.0')).toBe('1.2.0');
   });
 
+  it('passes over a deprecated version in a range unless nothing else satisfies it', () => {
+    const p = makePackument('z', ['1.3.1-1', '1.3.1-2', '1.3.1'], { latest: '1.3.1-2' });
+    (p.versions!['1.3.1'] as { deprecated?: string }).deprecated = 'superseded by 1.3.1-2';
+    expect(resolveVersion(p, '^1.3.1-1')).toBe('1.3.1-2');
+    expect(resolveVersion(p, '1.3.1')).toBe('1.3.1'); // asked for exactly
+    expect(resolveVersion(p, '>=1.3.1')).toBe('1.3.1'); // the only one in range
+  });
+
   it('resolves a caret range to the highest in-range version', () => {
     expect(resolveVersion(packument, '^1.0.0')).toBe('1.2.3');
   });

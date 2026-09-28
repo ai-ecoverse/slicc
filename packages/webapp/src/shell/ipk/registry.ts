@@ -57,6 +57,8 @@ export interface PackumentVersion {
   type?: 'module' | 'commonjs';
   exports?: unknown;
   bin?: string | Record<string, string>;
+  /** Set by `npm deprecate`: the message. */
+  deprecated?: string;
   [key: string]: unknown;
 }
 
@@ -171,7 +173,8 @@ function isLikelyDistTag(spec: string): boolean {
  *   1. Empty / "*" / "latest" → the `latest` dist-tag.
  *   2. Exact version present in `packument.versions` → that version.
  *   3. A name matching a dist-tag entry → the version it points at.
- *   4. Otherwise: maxSatisfying() against the available versions.
+ *   4. Otherwise: maxSatisfying() against the available versions, deprecated
+ *      ones only when nothing else satisfies the range.
  *
  * Throws a clear error when the packument is empty, the dist-tag points at a
  * missing version, or no version satisfies the supplied range.
@@ -222,6 +225,16 @@ function pickDistTag(ctx: ResolveContext, tag: string): string {
   );
 }
 
+/**
+ * The highest version in `range`, passing over deprecated ones as npm does
+ * unless nothing else satisfies it: a deprecated `1.3.1` must not win over
+ * the `1.3.1-2` that superseded it.
+ */
+function maxSatisfyingLive(ctx: ResolveContext, range: string): string | null {
+  const live = ctx.versions.filter((v) => typeof ctx.versionMap[v]?.deprecated !== 'string');
+  return maxSatisfying(live, range) ?? maxSatisfying(ctx.versions, range);
+}
+
 export function resolveVersion(packument: Packument, range: string): string {
   const ctx = buildResolveContext(packument);
   const requested = (range ?? '').trim();
@@ -237,7 +250,7 @@ export function resolveVersion(packument: Packument, range: string): string {
   if (isValidRange(requested)) {
     let best: string | null = null;
     try {
-      best = maxSatisfying(ctx.versions, requested);
+      best = maxSatisfyingLive(ctx, requested);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(
