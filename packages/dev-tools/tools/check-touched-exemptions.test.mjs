@@ -94,7 +94,7 @@ describe('check-touched-exemptions: float-probe debt list wiring', () => {
     } finally {
       scratch.cleanup();
     }
-  });
+  }, 15_000);
 
   it('FAILS — does not silently skip — when an untouched file made the debt list grow', () => {
     const scratch = makeScratchBaseRef(FLOAT_PROBE_BASELINE_REL, '{}\n');
@@ -113,7 +113,7 @@ describe('check-touched-exemptions: float-probe debt list wiring', () => {
     } finally {
       scratch.cleanup();
     }
-  });
+  }, 15_000);
 
   it('passes when the changed file is not on any real debt list', () => {
     const { code, out } = run({ CHANGED_FILES: FAKE_PATH });

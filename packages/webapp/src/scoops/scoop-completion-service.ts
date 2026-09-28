@@ -82,6 +82,10 @@ export class ScoopCompletionService {
   private failureReasons: Map<string, string> = new Map();
 
   private completionWaiters: Map<string, Array<(summary: string | null) => void>> = new Map();
+
+  private scheduledWaits: Map<string, Set<AbortController>> = new Map();
+
+  private suppressedCompletions: Set<string> = new Set();
   private readonly deps: ScoopCompletionServiceDeps;
 
   constructor(deps: ScoopCompletionServiceDeps) {
@@ -119,6 +123,7 @@ export class ScoopCompletionService {
   }
 
   forgetScoop(jid: string, reason: 'unregister' | 'fatal-error' | 'close'): void {
+    this.suppressedCompletions.delete(jid);
     this.scoopResponseBuffer.delete(jid);
     this.mutedScoops.delete(jid);
     this.pendingCompletions.delete(jid);
@@ -142,6 +147,7 @@ export class ScoopCompletionService {
   }
 
   shutdown(): void {
+    for (const requester of this.scheduledWaits.keys()) this.cancelScheduledWaits(requester);
     for (const waiters of this.completionWaiters.values()) {
       for (const w of waiters) {
         try {
@@ -159,6 +165,7 @@ export class ScoopCompletionService {
     this.deferredCompletions.clear();
     this.failureReasons.clear();
     this.scoopResponseBuffer.clear();
+    this.suppressedCompletions.clear();
   }
 
   async notifyCompletion(jid: string): Promise<void> {
@@ -169,6 +176,7 @@ export class ScoopCompletionService {
 
     const responseText = this.scoopResponseBuffer.get(jid) ?? '';
     this.scoopResponseBuffer.delete(jid);
+    if (this.suppressedCompletions.has(jid)) return;
 
     if (scoop.notifyOnComplete === false) {
       this.failureReasons.delete(jid);
@@ -207,6 +215,7 @@ export class ScoopCompletionService {
     this.deferredCompletions.delete(jid);
 
     if (!scoop || scoop.parentJid === null) return;
+    if (this.suppressedCompletions.has(jid)) return;
     if (scoop.notifyOnComplete === false) return;
 
     const responseText =
@@ -482,7 +491,11 @@ export class ScoopCompletionService {
     return consumed;
   }
 
-  async waitForScoops(jids: readonly string[], timeoutMs?: number): Promise<WaitResult[]> {
+  async waitForScoops(
+    jids: readonly string[],
+    timeoutMs?: number,
+    signal?: AbortSignal
+  ): Promise<WaitResult[]> {
     if (jids.length === 0) return [];
 
     const uniqueJids = Array.from(new Set(jids));
@@ -525,7 +538,7 @@ export class ScoopCompletionService {
     );
 
     try {
-      await this.awaitScoopWaiters(promises, timeoutMs);
+      await this.awaitScoopWaiters(promises, timeoutMs, signal);
     } finally {
       this.removeCompletionWaiters(registered);
       for (const jid of muteAdded) this.mutedScoops.delete(jid);
@@ -555,22 +568,40 @@ export class ScoopCompletionService {
     }
   }
 
-  private async awaitScoopWaiters(promises: Promise<void>[], timeoutMs?: number): Promise<void> {
+  private async awaitScoopWaiters(
+    promises: Promise<void>[],
+    timeoutMs?: number,
+    signal?: AbortSignal
+  ): Promise<void> {
     if (promises.length === 0) return;
-    if (timeoutMs == null || timeoutMs < 0) {
+    if (!signal && (timeoutMs == null || timeoutMs < 0)) {
       await Promise.all(promises);
       return;
     }
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let onAbort: (() => void) | null = null;
     try {
-      await Promise.race([
-        Promise.all(promises),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(() => resolve(), timeoutMs);
-        }),
-      ]);
+      const choices: Promise<void>[] = [Promise.all(promises).then(() => {})];
+      if (timeoutMs != null && timeoutMs >= 0) {
+        choices.push(
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, timeoutMs);
+          })
+        );
+      }
+      if (signal) {
+        choices.push(
+          new Promise<void>((resolve) => {
+            onAbort = () => resolve();
+            if (signal.aborted) onAbort();
+            else signal.addEventListener('abort', onAbort, { once: true });
+          })
+        );
+      }
+      await Promise.race(choices);
     } finally {
       if (timer) clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
     }
   }
 
@@ -595,15 +626,43 @@ export class ScoopCompletionService {
     const scheduled = uniqueJids.filter((jid) => this.deps.hasScoop(jid));
     const unknown = uniqueJids.filter((jid) => !this.deps.hasScoop(jid));
 
-    void this.waitForScoops(scheduled, timeoutMs)
-      .then((results) => this.deliverWaitResultsToCone(results, requesterJid))
+    const owner = requesterJid ?? '';
+    const abort = new AbortController();
+    const active = this.scheduledWaits.get(owner) ?? new Set<AbortController>();
+    active.add(abort);
+    this.scheduledWaits.set(owner, active);
+    void this.waitForScoops(scheduled, timeoutMs, abort.signal)
+      .then((results) => {
+        if (!abort.signal.aborted) return this.deliverWaitResultsToCone(results, requesterJid);
+      })
       .catch((err) => {
         log.error('scheduleScoopWait failed', {
           error: err instanceof Error ? err.message : String(err),
         });
+      })
+      .finally(() => {
+        active.delete(abort);
+        if (active.size === 0) this.scheduledWaits.delete(owner);
       });
 
     return { scheduled, unknown };
+  }
+
+  cancelScheduledWaits(requesterJid: string): void {
+    const active = this.scheduledWaits.get(requesterJid);
+    if (!active) return;
+    this.scheduledWaits.delete(requesterJid);
+    for (const controller of active) controller.abort();
+  }
+
+  suppressCompletionUntilNextPrompt(jid: string): void {
+    this.suppressedCompletions.add(jid);
+    this.pendingCompletions.delete(jid);
+    this.deferredCompletions.delete(jid);
+  }
+
+  allowCompletion(jid: string): void {
+    this.suppressedCompletions.delete(jid);
   }
 
   private async deliverWaitResultsToCone(

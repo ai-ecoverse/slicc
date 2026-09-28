@@ -26,6 +26,8 @@ const log = createLogger('scoop-management-tools');
 
 export interface ScoopManagementToolsConfig {
   scoop: RegisteredScoop;
+
+  getTurnSignal?: () => AbortSignal | undefined;
   onSendMessage: (text: string, sender?: string) => void;
 
   onFeedScoop?: (scoopJid: string, prompt: string) => Promise<void>;
@@ -508,6 +510,8 @@ async function executeScoopScoop(
   input: unknown,
   config: ScoopManagementToolsConfig
 ): Promise<ToolResult> {
+  const turnSignal = config.getTurnSignal?.();
+  if (turnSignal?.aborted) return { content: 'The parent turn was stopped.', isError: true };
   const {
     name,
     model,
@@ -584,9 +588,21 @@ async function executeScoopScoop(
       canCreateChildren: canCreateChildren === true,
     });
     const newScoop = await config.onScoopScoop!(record);
+    if (turnSignal?.aborted) {
+      await config.onDropScoop?.(newScoop.jid);
+      return {
+        content: 'The parent turn was stopped before the scoop could start.',
+        isError: true,
+      };
+    }
     log.info('Scoop created', { name, folder });
     if (taskPrompt && config.onFeedScoop) {
-      return autoFeedNewScoop(newScoop, taskPrompt, name, folder, config.onFeedScoop);
+      const result = await autoFeedNewScoop(newScoop, taskPrompt, name, folder, config.onFeedScoop);
+      if (turnSignal?.aborted) {
+        await config.onDropScoop?.(newScoop.jid);
+        return { content: 'The parent turn was stopped while starting the scoop.', isError: true };
+      }
+      return result;
     }
     return {
       content: `Scoop "${name}" created as "${folder}". Use feed_scoop to give it a task.`,

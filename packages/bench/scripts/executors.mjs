@@ -92,7 +92,11 @@ export function callLabel(args) {
   }`;
 }
 
-export const REQUIRED_CLI_OPTIONS = ['--allsettled'];
+export const REQUIRED_CLI_OPTIONS = [
+  'prompt [--allsettled',
+  'wait --allsettled',
+  '<join-url> abort',
+];
 
 const checkedClis = new Set();
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
+	"github.com/pion/webrtc/v4"
 )
 
 func runPromptArgs(t *testing.T, bin, joinURL string, args ...string) (string, string, time.Duration, error) {
@@ -164,6 +165,64 @@ func TestCLIPromptAllSettledHoldsWhileAScoopIsBusy(t *testing.T) {
 	}
 	if took < 1500*time.Millisecond {
 		t.Fatalf("prompt exited after %s, while the scoop was still processing", took)
+	}
+}
+
+
+
+func TestCLIPromptAllSettledHoldsPendingForeignTool(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := ackLeader(t, coneAck, []any{
+		statusFrameFor("cone-1", "processing"),
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "DISPATCHED"),
+		agentFrameFor("scout", protocol.AgentToolUseStart, "s1", ""),
+		statusFrameFor("scout", "ready"),
+		agentFrameFor("cone-1", protocol.AgentTurnEnd, "m1", ""),
+		statusFrameFor("cone-1", "ready"),
+		1200 * time.Millisecond,
+		agentFrameFor("scout", protocol.AgentToolResult, "s1", ""),
+		statusFrameFor("cone-1", "processing"),
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m2", "FINAL ANSWER: recovered"),
+		agentFrameFor("cone-1", protocol.AgentTurnEnd, "m2", ""),
+		statusFrameFor("cone-1", "ready"),
+	})
+	stdout, stderr, took, err := runPromptArgs(t, bin, leader.joinURL, "--allsettled", "300ms")
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if took < 1200*time.Millisecond || !strings.Contains(stdout, "FINAL ANSWER: recovered") {
+		t.Fatalf("prompt exited after %s with %q, before the pending scoop tool finished", took, stdout)
+	}
+}
+
+func TestCLIWaitAllSettledObservesPendingToolWithoutSendingPrompt(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := newBridgedLeader(t)
+	leader.dc.OnOpen(func() {
+		go func() {
+			_ = sendJSON(leader.dc, rosterWithState("idle", "cone-1", "scout"))
+			_ = sendJSON(leader.dc, agentFrameFor("scout", protocol.AgentToolUseStart, "s1", ""))
+			_ = sendJSON(leader.dc, statusFrameFor("scout", "ready"))
+			time.Sleep(1200 * time.Millisecond)
+			_ = sendJSON(leader.dc, agentFrameFor("scout", protocol.AgentToolResult, "s1", ""))
+		}()
+	})
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var frame struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal(msg.Data, &frame)
+		if frame.Type == "user_message" {
+			t.Error("wait sent a prompt")
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, leader.joinURL, "wait", "--allsettled", "300ms")
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	if err != nil || time.Since(start) < 1200*time.Millisecond {
+		t.Fatalf("wait exited after %s: %v (%s)", time.Since(start), err, out)
 	}
 }
 

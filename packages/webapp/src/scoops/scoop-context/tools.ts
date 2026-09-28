@@ -53,6 +53,7 @@ export interface ScoopToolsDeps {
   spawnBashJob: (command: string) => BashJobProcess | null;
 
   getTurnGuestGates: () => readonly TurnGuestGate[];
+  getTurnSignal?: () => AbortSignal | undefined;
 }
 
 function buildGuestToolGate(deps: ScoopToolsDeps): ToolAdapterGateConfig {
@@ -79,6 +80,7 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
   const { scoop, unit, callbacks } = deps;
   const scoopManagementToolsConfig: ScoopManagementToolsConfig = {
     scoop,
+    getTurnSignal: deps.getTurnSignal,
     onSendMessage: callbacks.onSendMessage,
     getScoops: callbacks.getScoops,
     getScoopTabState: callbacks.getScoopTabState,

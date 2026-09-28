@@ -23,13 +23,20 @@ type allSettled struct {
 	
 	busy map[string]bool
 	
+	
+	pendingTools map[string]int
+	rosterSeen   map[string]bool
+	
 	last time.Time
 	
 	ended bool
 }
 
 func newAllSettled(quiet time.Duration, now time.Time) *allSettled {
-	return &allSettled{quiet: quiet, busy: map[string]bool{}, last: now}
+	return &allSettled{
+		quiet: quiet, busy: map[string]bool{}, pendingTools: map[string]int{},
+		rosterSeen: map[string]bool{}, last: now,
+	}
 }
 
 
@@ -40,16 +47,37 @@ func (a *allSettled) observe(typ string, raw []byte, now time.Time) {
 		if json.Unmarshal(raw, &s) != nil {
 			return
 		}
+		debugLogf("allsettled: status %s for %q", s.ScoopStatus, s.ScoopJid)
 		a.mu.Lock()
 		if s.ScoopStatus == protocol.ScoopStatusProcessing {
 			a.busy[s.ScoopJid] = true
 		} else {
 			delete(a.busy, s.ScoopJid)
+			if s.ScoopStatus == protocol.ScoopStatusError {
+				delete(a.pendingTools, s.ScoopJid)
+			}
 		}
 		a.last = now
 		a.mu.Unlock()
 	case protocol.TypeAgentEvent:
+		var env protocol.AgentEventEnvelope
+		if json.Unmarshal(raw, &env) != nil {
+			return
+		}
+		debugLogf("allsettled: event %s for %q", env.Event.Type, env.ScoopJid)
 		a.mu.Lock()
+		switch env.Event.Type {
+		case protocol.AgentToolUseStart:
+			a.pendingTools[env.ScoopJid]++
+			debugLogf("allsettled: pending tool started for %q (%d)", env.ScoopJid, a.pendingTools[env.ScoopJid])
+		case protocol.AgentToolResult:
+			if a.pendingTools[env.ScoopJid] <= 1 {
+				delete(a.pendingTools, env.ScoopJid)
+			} else {
+				a.pendingTools[env.ScoopJid]--
+			}
+			debugLogf("allsettled: pending tool finished for %q (%d)", env.ScoopJid, a.pendingTools[env.ScoopJid])
+		}
 		a.last = now
 		a.mu.Unlock()
 	case "scoops.list":
@@ -82,22 +110,31 @@ func (a *allSettled) applyRoster(raw []byte, now time.Time) {
 	defer a.mu.Unlock()
 	for _, s := range msg.Scoops {
 		present[s.Jid] = true
+		a.rosterSeen[s.Jid] = true
 		switch s.State {
 		case "working", "initializing":
 			if !a.busy[s.Jid] {
 				a.busy[s.Jid] = true
 				a.last = now
+				debugLogf("allsettled: roster %q became %s", s.Jid, s.State)
 			}
 		case "idle", "broken":
 			if a.busy[s.Jid] {
 				delete(a.busy, s.Jid)
 				a.last = now
+				debugLogf("allsettled: roster %q became %s", s.Jid, s.State)
 			}
 		}
 	}
 	for jid := range a.busy {
 		if jid != "" && !present[jid] {
 			delete(a.busy, jid)
+			a.last = now
+		}
+	}
+	for jid := range a.pendingTools {
+		if jid != "" && a.rosterSeen[jid] && !present[jid] {
+			delete(a.pendingTools, jid)
 			a.last = now
 		}
 	}
@@ -116,7 +153,7 @@ func (a *allSettled) turnEnded() {
 func (a *allSettled) settled(now time.Time) (bool, time.Duration) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.ended || len(a.busy) > 0 {
+	if !a.ended || len(a.busy) > 0 || len(a.pendingTools) > 0 {
 		return false, 0
 	}
 	if remaining := a.quiet - now.Sub(a.last); remaining > 0 {

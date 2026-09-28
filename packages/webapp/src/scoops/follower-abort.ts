@@ -30,22 +30,26 @@ export interface ConfirmFollowerStopOptions {
 export async function confirmFollowerStop(
   opts: ConfirmFollowerStopOptions
 ): Promise<FollowerAbortOutcome> {
-  const stopped = stopOrder(opts.units(), opts.target);
-  try {
-    for (const id of stopped) await opts.stop(id);
-  } catch {
-    return { confirmed: false, scoopJid: opts.target, stopped };
-  }
-
+  const signaled = new Set<string>();
   const deadline = opts.now() + opts.boundMs;
   let idle = false;
   while (opts.now() <= deadline) {
     const ids = stopOrder(opts.units(), opts.target);
+
+    const added = ids.filter((id) => !signaled.has(id));
+    try {
+      for (const id of added) {
+        await opts.stop(id);
+        signaled.add(id);
+      }
+    } catch {
+      return { confirmed: false, scoopJid: opts.target, stopped: ids };
+    }
     const busy = ids.some((id) => opts.isProcessing(id));
-    if (!busy && idle) {
+    if (!busy && idle && added.length === 0) {
       return { confirmed: true, scoopJid: opts.target, stopped: ids };
     }
-    idle = !busy;
+    idle = !busy && added.length === 0;
     await opts.sleep(opts.pollMs);
   }
   return { confirmed: false, scoopJid: opts.target, stopped: stopOrder(opts.units(), opts.target) };

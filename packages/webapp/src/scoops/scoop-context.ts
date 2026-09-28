@@ -281,6 +281,7 @@ export class ScoopContext {
         coneJid: this.coneJid,
         getTurnPid: () => this.currentTurnProcess?.pid,
         getTurnGuestGates: () => this.turnGuestGates,
+        getTurnSignal: () => this.promptAbortController?.signal,
         getLickTarget: () => this.ownLickTarget(),
         getTmpDir: () => this.ownTmpDir(),
         getEffortOverride: () => this.activeEffortOverride,

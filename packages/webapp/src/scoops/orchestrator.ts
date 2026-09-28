@@ -1071,6 +1071,7 @@ export class Orchestrator implements ConeApprovalRouter {
     images: ImageContent[] = [],
     options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void> {
+    this.completionService.allowCompletion(jid);
     return this.lifecycle.sendPrompt(jid, text, senderId, senderName, images, options);
   }
 
@@ -1108,6 +1109,8 @@ export class Orchestrator implements ConeApprovalRouter {
 
   stopScoop(jid: string): void {
     for (const id of stopOrder(this.scoops.values(), jid)) {
+      this.completionService.cancelScheduledWaits(id);
+      this.completionService.suppressCompletionUntilNextPrompt(id);
       this.lifecycle.getContext(id)?.stop();
       void this.clearQueuedMessages(id).catch((err) => {
         log.warn('Failed to clear queued messages on stop', {

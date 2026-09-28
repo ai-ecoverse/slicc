@@ -43,6 +43,7 @@ export interface RuntimeInitDeps {
   getTurnPid: () => number | undefined;
 
   getTurnGuestGates: () => readonly TurnGuestGate[];
+  getTurnSignal?: () => AbortSignal | undefined;
 
   getLickTarget: () => string | undefined;
 
@@ -96,6 +97,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
 
   const tools = await buildScoopTools({
     getTurnGuestGates: deps.getTurnGuestGates,
+    getTurnSignal: deps.getTurnSignal,
     scoop,
     unit,
     callbacks,
