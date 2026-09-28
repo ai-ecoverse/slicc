@@ -18,20 +18,24 @@ import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { GLOBAL_NODE_MODULES, GLOBAL_NPM_PREFIX } from '../ipk/global-prefix.js';
-import {
-  type InstallFromManifestResult,
-  installFromManifest,
-  installPackages,
-  listGlobalPackages,
-  listLocalPackages,
-  ManifestNotFoundError,
-  uninstallPackages,
+import type {
+  InstallFromManifestResult,
+  InstallPackagesResult,
+  UninstallPackagesResult,
 } from '../ipk/installer.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { LIFECYCLE_SHORTCUTS, RUN_ALIASES, runNpmScript } from './npm-run.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest as isSubHelpRequest } from './subcommand-help.js';
+
 // `ipk-mamba` (and its bzip2 dep) load lazily — see createIpkCommand.
+
+/**
+ * The installer (registry, version picking, integrity, tar) loads on first
+ * use: this command is registered on the kernel worker's boot graph, and a
+ * static import would put all of ipk there.
+ */
+const loadInstaller = () => import('../ipk/installer.js');
 
 export interface IpkCommandDeps {
   fs: VirtualFS;
@@ -253,6 +257,7 @@ async function runManifestInstall(
   ctx: CommandContext,
   deps: IpkCommandDeps
 ): Promise<ExecResult> {
+  const { installFromManifest, ManifestNotFoundError } = await loadInstaller();
   let outcome: InstallFromManifestResult;
   try {
     outcome = await installFromManifest({
@@ -323,7 +328,8 @@ async function runInstall(
     return runManifestInstall(name, ctx, deps);
   }
 
-  let outcome: Awaited<ReturnType<typeof installPackages>>;
+  const { installPackages } = await loadInstaller();
+  let outcome: InstallPackagesResult;
   try {
     outcome = await installPackages(specs, {
       fs: deps.fs,
@@ -388,7 +394,8 @@ async function runUninstall(
     };
   }
 
-  let outcome: Awaited<ReturnType<typeof uninstallPackages>>;
+  const { uninstallPackages } = await loadInstaller();
+  let outcome: UninstallPackagesResult;
   try {
     outcome = await uninstallPackages(specs, {
       fs: deps.fs,
@@ -432,6 +439,7 @@ async function runList(
 ): Promise<ExecResult> {
   const { global } = parseGlobalFlagArgs(args);
   try {
+    const { listGlobalPackages, listLocalPackages } = await loadInstaller();
     const packages = global
       ? await listGlobalPackages(deps.fs)
       : await listLocalPackages(deps.fs, ctx.cwd);
