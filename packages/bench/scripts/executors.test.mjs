@@ -23,6 +23,22 @@ describe('assertCliSupports', () => {
     expect(run).toHaveBeenCalledWith('/tmp/new-slicc', ['--help'], expect.any(Object));
   });
 
+  it('requires the passive wait verb for a recovered run', () => {
+    const old = vi.fn(() => ({ stdout: 'slicc <join-url> prompt [--allsettled <dur>] "<text>"' }));
+    expect(() => assertCliSupports('/tmp/no-wait-slicc', undefined, old)).toThrow(
+      /wait --allsettled/
+    );
+    const current = vi.fn(() => ({
+      stdout: 'prompt [--allsettled <dur>] wait --allsettled <duration> <join-url> abort',
+    }));
+    expect(() => assertCliSupports('/tmp/wait-slicc', undefined, current)).not.toThrow();
+    expect(() =>
+      assertCliSupports('/tmp/no-abort-slicc', undefined, () => ({
+        stdout: 'prompt [--allsettled <dur>] wait --allsettled <duration>',
+      }))
+    ).toThrow(/abort/);
+  });
+
   it('refuses an older CLI, which would send the option as the prompt text', () => {
     const run = vi.fn(() => ({ stdout: 'slicc <join-url> prompt "<text>"' }));
     expect(() => assertCliSupports('/tmp/old-slicc', ['--allsettled'], run)).toThrow(

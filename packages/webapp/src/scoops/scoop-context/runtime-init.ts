@@ -56,6 +56,7 @@ export interface RuntimeInitDeps {
   getTurnPid: () => number | undefined;
   /** Live lookup for the guest gates on the turn in flight (see `tools.ts`). */
   getTurnGuestGates: () => readonly TurnGuestGate[];
+  getTurnSignal?: () => AbortSignal | undefined;
   /** Live, because the roster it derives from changes as roots come and go. */
   getLickTarget: () => string | undefined;
   /** Live for the same reason: a scoop's scratch nests under its owning cone's. */
@@ -114,6 +115,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
 
   const tools = await buildScoopTools({
     getTurnGuestGates: deps.getTurnGuestGates,
+    getTurnSignal: deps.getTurnSignal,
     scoop,
     unit,
     callbacks,

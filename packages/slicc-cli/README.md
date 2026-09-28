@@ -11,6 +11,8 @@ first run.
 
 ```
 slicc <join-url> prompt "<text>"                Send one message, stream the assistant's reply, exit
+slicc <join-url> wait --allsettled 2m          Observe until all units are quiet, without sending a prompt
+slicc <join-url> abort                         Stop the cone and scoops; wait for leader confirmation
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output, exit
 slicc <join-url> new-session [--save|--skip|--erase]
                                                 Start a fresh cone conversation, like "New chat"

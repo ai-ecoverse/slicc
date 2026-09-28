@@ -127,12 +127,16 @@ above are unchanged against it.
 
 The cone can end its turn while scoops it started are still working, then wake when they report back and write the real answer. A plain `prompt` exits at the first turn end. With `--allsettled`, `prompt_settled.go` watches every unit's `status` and `agent_event` frames, not only the prompted one:
 
-- The prompt exits 0 once the prompted turn has ended at least once, no unit's last status is `processing`, and no frame from any unit has arrived for the duration.
+- The prompt exits 0 once the prompted turn has ended at least once, no unit's last status is `processing`, no unit has a pending `tool_use_start` without its `tool_result`, and no frame from any unit has arrived for the duration. A `ready` status during a long tool call cannot make it settle.
 - A `scoops.list` snapshot counts units whose `state` is `working` or `initializing` as busy (a scoop already running when the prompt connects appears only there), `idle` and `broken` as not busy, and a unit that leaves the roster stops counting; a dropped scoop never sends its own `ready`. The leader re-sends this snapshot every 5 s, so only a change (a unit turning busy, or a busy unit turning idle or leaving) restarts the quiet period.
 - The cone's later turns stream to stdout after a blank line; scoops' text does not.
 - Errors, SIGINT and a closed connection exit as for a plain prompt. A unit that never settles keeps the prompt open, so a caller needs its own timeout; the bench's is SIGINT.
 
 The benchmark runner uses `--allsettled 2m` (`PROMPT_ALL_SETTLED` in `packages/bench/scripts/slicc-adapter.mjs`) and refuses to start with a CLI whose `--help` does not list it: an older CLI joins the option into the prompt text.
+
+`slicc <join-url> wait --allsettled <duration>` observes the same statuses, roster, and pending tools without sending a prompt. It starts a fresh quiet period when it connects, prints `settled` on success, and exits 130 on Ctrl+C without aborting the leader. Bench uses it if the cone resumes after its first settled prompt, including while `session export` waits for a working scoop. The runner requires this verb in the CLI help before starting.
+
+`slicc <join-url> abort` sends the same `abort` frame as an interrupted `prompt`. It prints `stopped` and exits 0 only after `abort_ack` confirms the cone and its scoops stopped; a missing confirmation exits 1 after `SLICC_ABORT_CONFIRM` (12 s by default). The bench uses this after a passive wait reaches the task timeout or cost cap. `abort --help` prints usage without stopping the leader.
 
 ## `thinking`
 

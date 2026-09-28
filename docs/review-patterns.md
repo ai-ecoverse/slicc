@@ -572,6 +572,7 @@ Changes to export-service, redaction logic, or the Cherry/follower export protoc
 - `privacy.reasoningExcluded` must always be `true`. Any path that can produce an export with
   a reasoning block is a Critical finding.
 - Binary attachments go through unchanged — confirm no text-redaction step touches them.
+- For bench transcript collection after a resumed prompt, keep the task cost watcher active; a wait or export that reaches the task limit must confirm `abort_ack`, observe flat spend, and export the final cone answer before judging. A failed stop or missing transcript is an error, never a scored run.
 - Approval gate: every follower/Cherry export path must go through the sudo funnel —
   `requestSudoApproval({ kind: 'export', detail: <subject> })` → `SudoManager.approve()` —
   before streaming. A bypass, or a second export path that raises its own dialog, is Critical.

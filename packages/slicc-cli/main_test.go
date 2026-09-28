@@ -21,6 +21,8 @@ func TestRunArgDispatch(t *testing.T) {
 		{"unknown subcommand", []string{"https://x/join/t", "bogus"}, 2},
 		{"prompt missing text", []string{"https://x/join/t", "prompt"}, 2},
 		{"exec missing command", []string{"https://x/join/t", "exec"}, 2},
+		{"abort help", []string{"https://x/join/t", "abort", "--help"}, 0},
+		{"abort extra argument", []string{"https://x/join/t", "abort", "extra"}, 2},
 		{"follow help", []string{"https://x/join/t", "follow", "--help"}, 0},
 	}
 	for _, tc := range cases {

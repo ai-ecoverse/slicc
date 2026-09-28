@@ -61,6 +61,10 @@ included). `session export` only includes still-registered scoops. After an
 interrupt, spend is read until flat or for 3 minutes (failed readings count,
 15s each). Giving up sets `leader_down` and the lane restarts the leader.
 
+Abort reaches the cone and every scoop in the active family. A scoop registered
+while the abort is being confirmed is stopped before acknowledgment; a pending
+`scoop_wait` timer and a late scoop-completion lick cannot wake the stopped cone.
+
 ## Transcript collection
 
 While the cone works, the runner polls `playwright-cli tab-list` and screenshots
@@ -69,6 +73,20 @@ done. Cost, tokens and turns are the delta of `cost --json --all` across the
 prompt: the cone plus every scoop it spawned, dropped ones included. The judge's
 trajectory comes from `session export`; its per-message model ids fill
 `modelsUsed`, which shows when scoops ran on another model.
+
+If the prompt appears settled but spend continues, or a transcript export times
+out, the runner calls passive `slicc wait --allsettled 2m` within the task's
+remaining timeout and retries the export. A successful export whose final cone
+message is absent from prompt stdout also proves a continuation, even when
+spend is flat: the runner takes that final transcript message and records
+`metrics.resumed_after_settle`. If spend is rising during that export, it waits
+and re-exports before scoring. The cost watcher remains active during recovery.
+If the passive wait reaches the task timeout or cost cap, the runner calls
+`slicc abort`, waits for `abort_ack` and flat spend, then exports again. That
+run is judged with `timedOut` or `cost_capped` and the cone's latest final
+message; timeout duration is capped at the task limit. An unconfirmed abort,
+continued spend after abort, or a missing final transcript remains an unscored
+error.
 
 - **Never `cat` a large file over one `exec`.** The leader sends an exec's whole
   stdout as one tray message, and a message over 8 MiB (about 6.3 MB of output

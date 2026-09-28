@@ -33,7 +33,7 @@ An always-on adaptive model reports `thinking_effective=adaptive` for `@default`
 
 **Where it runs.** The shards run on self-hosted runners in the GCP project `ai-ecoverse-493315` ([Cyclenerd/google-cloud-github-runner](https://github.com/Cyclenerd/google-cloud-github-runner)): each job gets its own VM from the GCE instance template that `runner` names, deleted when the job ends. So a benchmark leaves the org's GitHub-hosted runners to everyone else, except for `plan` and `report`, which take seconds to minutes and run GitHub-hosted: a VM of theirs held quota the shards needed, and a VM the manager started for `report` was taken by another org job with the same label. `gcp-bench-8core` is an e2-standard-8 with a 50 GB pd-balanced disk, made by hand from the Terraform `gcp-ubuntu-24-04-8core` template, whose 300 GB pd-ssd let only one shard fit the project's 500 GB regional SSD quota (`SSD_TOTAL_GB`; V2.1 pilot, 2026-09-26). GCP deletes its VMs after 8 hours whatever their state, so a runner that never gets a job cannot hang on; `deadline-minutes` is therefore at most 420. The project's quota allows 24 E2 vCPUs, which is three `8core` shards at once. Each leader is a Chrome plus a node-server, about 2 vCPU, so an `8core` shard runs 4. For BU Bench V2.1 (200 tasks, up to an hour each), plan `shards` × `leaders` × `deadline-minutes` / 80 ≥ runs (a run's hour plus 20 minutes of overhead).
 
-**Guardrails.** A shard stops taking runs once the next might not finish before its deadline (the run's `timeout` plus 20 minutes for the restart, collection and judge; collecting the transcript has 15 of them). It stops a run that has spent `max-task-cost` (the record says `cost_capped`, and the judge is told), and stops taking runs at `max-cost`. The run step's time limit sits 20 minutes past the deadline, below the job's, so the diagnostics and the upload always run. **Re-run failed jobs** resumes a shard from its artifact. `bench-reaper.yml` runs every 30 minutes. When a run's jobs have waited over an hour for a runner while none of its jobs run (a zone out of capacity, a full quota, a dropped webhook), it force-cancels the run and re-runs its failed jobs, up to twice, then only cancels. It force-cancels a run with a job running for over 9 hours.
+**Guardrails.** A shard stops taking runs once the next might not finish before its deadline (the run's `timeout` plus 20 minutes for the restart, collection and judge; collecting the transcript has 15 of them). It stops a run that has spent `max-task-cost` (the record says `cost_capped`, and the judge is told), including spend during post-prompt recovery, and stops taking runs at `max-cost`. If recovery reaches a task limit, the runner confirms an abort, waits for flat spend, then exports and judges the latest cone answer as a capped run. The run step's time limit sits 20 minutes past the deadline, below the job's, so the diagnostics and the upload always run. **Re-run failed jobs** resumes a shard from its artifact. `bench-reaper.yml` runs every 30 minutes. When a run's jobs have waited over an hour for a runner while none of its jobs run (a zone out of capacity, a full quota, a dropped webhook), it force-cancels the run and re-runs its failed jobs, up to twice, then only cancels. It force-cancels a run with a job running for over 9 hours.
 
 The `Report` job merges the shards (`scripts/merge.mjs`) and shows the report in its summary. Artifacts:
 
@@ -62,6 +62,17 @@ Each task starts a fresh chat with erased memories, selects the model, reads or 
 - **Kept:** runs whose task, rubric, weights and judge are unchanged.
 - **Re-judged from the saved trace, without running the agent again:** runs whose judgement no longer stands. That means another `--judge-model`, a changed rubric or weights, or a judge call that failed.
 - **Run again:** runs that errored, and runs whose task text changed.
+
+For BU Bench V2.1 Stage 2, dispatch `bench.yml` **after this fix reaches `main`**
+with `resume-run: 36397375699` and the same task set, models, skills, repeats,
+and shard count. The workflow downloads each source shard artifact into its
+`bench-out`; `resumeAction()` retains scored records (`done`) and selects error
+records (`run`). A local replay of the first 14 shard artifacts found 38 error
+records selected as `run` and 480 scored records selected as `done`, with no
+misclassifications. Those shards also had 42 planned runs with no record yet;
+they are selected as `run` too. Leave the source run and its active shards alone.
+The [sanitized live frame timeline and resume audit](../../docs/bench-opus-max-recovery.md)
+records the evidence behind this change.
 
 **When the leader stops answering.** A run that cannot reach the leader is recorded with `leader_down`, never judged as a fail. In CI the runner then restarts the leader and retries the run once. After `--leader-down-limit` (default 2) such runs in a row it stops, so a resume can pick up the rest. Every record notes which leader ran it (`leader.generation`, `leader.age_s`). A cost the leader could not report is recorded as unknown (null), never as a difference from zero. The out dir keeps a journal for diagnosing the leader:
 

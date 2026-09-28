@@ -94,6 +94,37 @@ describe('send_message tool — registration gating', () => {
 });
 
 describe('scoop_scoop tool — config defaults', () => {
+  it('drops a scoop created after its parent turn was aborted, without feeding it', async () => {
+    const controller = new AbortController();
+    let release!: () => void;
+    const registration = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const onFeedScoop = vi.fn(async () => {});
+    const onDropScoop = vi.fn(async () => {});
+    const onScoopScoop = vi.fn(async (scoop: Omit<RegisteredScoop, 'jid'>) => {
+      await registration;
+      return { ...scoop, jid: 'late-child' };
+    });
+    const tool = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone],
+      getTurnSignal: () => controller.signal,
+      onScoopScoop,
+      onFeedScoop,
+      onDropScoop,
+    }).find((candidate) => candidate.name === 'scoop_scoop');
+    expect(tool).toBeDefined();
+    const pending = tool!.execute({ name: 'late-child', prompt: 'Investigate a page.' });
+    controller.abort();
+    release();
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(onFeedScoop).not.toHaveBeenCalled();
+    expect(onDropScoop).toHaveBeenCalledWith('late-child');
+  });
+
   it('injects visiblePaths: ["/workspace/"] when no model is specified', async () => {
     const { tool, onScoopScoop } = findScoopScoopTool();
     await tool.execute({ name: 'hero-block' });

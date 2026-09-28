@@ -79,6 +79,7 @@ export interface ScoopToolsDeps {
    * not, so this must be a lookup and never a captured value.
    */
   getTurnGuestGates: () => readonly TurnGuestGate[];
+  getTurnSignal?: () => AbortSignal | undefined;
 }
 
 /**
@@ -114,6 +115,7 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
   const { scoop, unit, callbacks } = deps;
   const scoopManagementToolsConfig: ScoopManagementToolsConfig = {
     scoop,
+    getTurnSignal: deps.getTurnSignal,
     onSendMessage: callbacks.onSendMessage,
     getScoops: callbacks.getScoops,
     getScoopTabState: callbacks.getScoopTabState,

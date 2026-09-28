@@ -7,6 +7,8 @@ Deep reference: [details](../../docs/slicc-cli-details.md).
 
 ```
 slicc <join-url> prompt [--allsettled 2m] "<text>"   Stream one assistant turn, then exit
+slicc <join-url> wait --allsettled 2m       Observe all units until they settle, without a prompt
+slicc <join-url> abort                      Stop the cone and its scoops; wait for abort_ack
 slicc <join-url> exec "<command>"            Run in the leader's shell, stream output
 slicc <join-url> new-session [--save|--skip|--erase]   Fresh cone chat, verified empty
 slicc <join-url> model [--json] [<model>]    List models, or switch the cone
@@ -26,9 +28,10 @@ slicc <verb>-cloud [--index N|--session <id>]   Resolve join URL from iCloud, ru
   first gives an empty reply. A v10 leader's `user_message_ack` `rejected` exits 1;
   leaders < 10 send none. [Exit codes](../../docs/slicc-cli-details.md#prompt-exit-codes).
 - `prompt --allsettled <dur>` (`prompt_settled.go`) also waits for every unit: exits once the
-  turn ended, no unit is `processing`, and no frame arrived for `<dur>`; later cone turns stream
-  too. [Details](../../docs/slicc-cli-details.md#prompt---allsettled).
-- SIGINT: `prompt` sends `abort`, waits for `abort_ack`, exits 130; no ack in `SLICC_ABORT_CONFIRM` (12s) → exit 1.
+  turn ended, no unit is `processing` or has a pending tool, and no frame arrived for `<dur>`;
+  later cone turns stream too. `wait --allsettled <dur>` (`wait.go`) uses the same observer without
+  sending a message. [Details](../../docs/slicc-cli-details.md#prompt---allsettled).
+- SIGINT: `prompt` sends `abort`, waits for `abort_ack`, exits 130; no ack in `SLICC_ABORT_CONFIRM` (12s) → exit 1. Standalone `abort` sends the same frame and exits 0 only after the acknowledgment, so a bench recovery can stop work after its original prompt process is gone.
 - `new-session`/`model` (`session.go`) send the same follower control messages
   browser/iOS use: `new-session` polls `request_snapshot` until the transcript has
   no user message (no ack); `model` resolves an exact catalogue id, awaits `model.state`;
