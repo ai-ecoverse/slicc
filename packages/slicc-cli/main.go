@@ -95,6 +95,8 @@ func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) i
 	switch sub {
 	case "prompt":
 		return runPromptVerb(ctx, joinURL, "prompt", rest)
+	case "wait":
+		return runWaitVerb(ctx, joinURL, rest)
 	case "exec":
 		if len(rest) == 0 {
 			fmt.Fprintln(os.Stderr, "slicc exec: missing command")
@@ -179,6 +181,9 @@ Usage:
                                       --allsettled 2m keeps going until the turn has ended,
                                       no scoop is still processing, and no unit has said
                                       anything for 2m; later cone turns stream too.
+  slicc <join-url> wait --allsettled <dur>
+                                      Observe the leader without sending a prompt; exit once
+                                      all units and tools are idle for the quiet period.
   slicc <join-url> exec "<command>"   Run a command in the leader's shell, stream stdout/stderr
   slicc <join-url> new-session [--save|--skip|--erase] [--timeout 30s]
                                       Start a fresh conversation on the cone, like "New chat":
