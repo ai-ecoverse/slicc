@@ -1,4 +1,5 @@
 import { KernelPipe, PipeError } from './pipe.js';
+import type { KernelTty } from './tty.js';
 
 export type KernelErrno =
   | 'EBADF'
@@ -10,7 +11,8 @@ export type KernelErrno =
   | 'ENOSYS'
   | 'ESPIPE'
   | 'EINTR'
-  | 'ESRCH';
+  | 'ESRCH'
+  | 'ENOTTY';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {
@@ -40,6 +42,8 @@ export interface KernelFile {
   seek?(offset: number, whence: number): Promise<number>;
 
   flush?(): Promise<void>;
+
+  tty?: KernelTty;
 }
 
 export function pollFile(file: KernelFile): PollState {

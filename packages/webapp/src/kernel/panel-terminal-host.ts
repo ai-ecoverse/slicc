@@ -98,6 +98,7 @@ export function createPanelTerminalHost(
         crontask: options.crontask,
         processManager,
         processOwner: { kind: 'system' },
+        terminal: opts.terminal,
         sudo: shellSudo,
         executionLimits: PANEL_TERMINAL_EXECUTION_LIMITS,
       }),

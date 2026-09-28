@@ -5,6 +5,7 @@ import type {
   HeadlessShellOptions,
 } from '../shell/almost-bash-shell-headless.js';
 import { bytesToStdin, EMPTY_BYTES } from '../shell/just-bash-compat.js';
+import type { TerminalPort } from '../shell/terminal-port.js';
 import type {
   TerminalCloseMsg,
   TerminalControlMsg,
@@ -23,11 +24,12 @@ import type {
   PanelToOffscreenMessage,
 } from './messages.js';
 import type { Process, ProcessManager, ProcessOwner, Signal } from './process-manager.js';
+import { SessionTerminal } from './session-terminal.js';
 import type { KernelTransport } from './types.js';
 
 export type TerminalShellFactory = (
   sid: TerminalSessionId,
-  options: { cwd?: string; env?: Record<string, string> }
+  options: { cwd?: string; env?: Record<string, string>; terminal?: TerminalPort }
 ) => HeadlessShellLike & { dispose?: () => void };
 
 export interface TerminalSessionHostOptions {
@@ -51,6 +53,10 @@ interface Session {
   currentExec: AbortController | null;
 
   currentProcess: Process | null;
+
+  currentExecMsg: TerminalExecMsg | null;
+
+  terminal: SessionTerminal;
 }
 
 export class TerminalSessionHost {
@@ -110,7 +116,10 @@ export class TerminalSessionHost {
       case 'terminal-signal':
         return this.handleSignal(msg);
       case 'terminal-stdin':
+        this.sessions.get(msg.sid)?.terminal.input(msg.data);
+        return;
       case 'terminal-resize':
+        this.sessions.get(msg.sid)?.terminal.resize(msg.cols, msg.rows);
         return;
     }
   }
@@ -121,8 +130,19 @@ export class TerminalSessionHost {
       return;
     }
     try {
-      const shell = this.createShell(msg.sid, { cwd: msg.cwd, env: msg.env });
-      this.sessions.set(msg.sid, { shell, currentExec: null, currentProcess: null });
+      const session: Partial<Session> = { currentExec: null, currentProcess: null };
+      session.currentExecMsg = null;
+      const terminal = new SessionTerminal({
+        output: (text) => {
+          const exec = session.currentExecMsg;
+          if (exec) this.emitStream(exec, 'stdout', text);
+        },
+        mode: (mode) => this.emit({ type: 'terminal-mode', sid: msg.sid, mode }),
+      });
+      if (msg.cols && msg.rows) terminal.resize(msg.cols, msg.rows);
+      session.terminal = terminal;
+      session.shell = this.createShell(msg.sid, { cwd: msg.cwd, env: msg.env, terminal });
+      this.sessions.set(msg.sid, session as Session);
       this.emitStatus(msg.sid, 'opened');
     } catch (err) {
       this.emitStatus(msg.sid, 'error', err instanceof Error ? err.message : String(err));
@@ -177,6 +197,7 @@ export class TerminalSessionHost {
 
     const abort = new AbortController();
     session.currentExec = abort;
+    session.currentExecMsg = msg;
     session.shell.applySessionOverrides?.({ cwd: msg.cwd, env: msg.env });
     const proc = this.pm
       ? this.pm.spawn({
@@ -215,6 +236,7 @@ export class TerminalSessionHost {
       if (session.currentExec === abort) {
         session.currentExec = null;
         session.currentProcess = null;
+        session.currentExecMsg = null;
       }
     }
   }

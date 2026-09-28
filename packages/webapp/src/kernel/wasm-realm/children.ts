@@ -27,6 +27,8 @@ export interface ChildHandle {
   pid: number;
 
   exited: Promise<number>;
+
+  termsig?: () => number | undefined;
 }
 
 export class SpawnError extends Error {
@@ -41,6 +43,7 @@ export type ChildForker = (state: ForkState, fds: FdTable) => Promise<ChildHandl
 
 interface Child {
   exited: Promise<number>;
+  termsig?: () => number | undefined;
 
   code?: number;
 
@@ -61,8 +64,8 @@ function interrupted(signal: AbortSignal | undefined): {
   return { promise, done: () => signal?.removeEventListener('abort', fail) };
 }
 
-export function waitStatus(code: number): number {
-  return (code & 0xff) << 8;
+export function waitStatus(code: number, termsig?: number): number {
+  return termsig ? termsig & 0x7f : (code & 0xff) << 8;
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array {
@@ -119,7 +122,7 @@ export class ChildTable {
       await fds.closeAll();
       throw e;
     }
-    const child: Child = { exited: handle.exited, captured };
+    const child: Child = { exited: handle.exited, termsig: handle.termsig, captured };
     void handle.exited.then((code) => {
       child.code = code;
       this.onChildExit?.();
@@ -161,7 +164,7 @@ export class ChildTable {
     const child = this.children.get(pid);
     this.children.delete(pid);
     if (child && child.captured.size > 0) this.leftovers.set(pid, child.captured);
-    return [pid, waitStatus(code)];
+    return [pid, waitStatus(code, child?.termsig?.())];
   }
 
   captured(pid: number, slot: number): Uint8Array {

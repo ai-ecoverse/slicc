@@ -4,6 +4,7 @@ import type { ProcessManager } from '../../kernel/process-manager.js';
 import type { JshProcessConfig } from '../jsh-executor.js';
 import type { StreamingFetch } from '../proxied-fetch.js';
 import type { ScriptCatalog } from '../script-catalog.js';
+import type { TerminalPort } from '../terminal-port.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createAgentCommand } from './agent-command.js';
 import { createBashBuiltinCommands } from './bash-builtins-command.js';
@@ -153,6 +154,8 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   crontask?: CrontaskCommandOptions;
 
   buildProcessConfig?: (runEnv?: ReadonlyMap<string, string>) => JshProcessConfig | undefined;
+
+  terminal?: TerminalPort;
 }
 
 function secretCommandDeps(options: SupplementalCommandsConfig): SecretCommandDeps {
@@ -204,7 +207,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createRmdirCommand(),
     createStatCommand(),
     createCmpCommand(),
-    createWasmCommand({ buildProcessConfig: options.buildProcessConfig }),
+    createWasmCommand({
+      buildProcessConfig: options.buildProcessConfig,
+      terminal: options.terminal,
+    }),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),

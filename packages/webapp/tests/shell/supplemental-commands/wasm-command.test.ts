@@ -262,4 +262,68 @@ describe('wasm command', () => {
       expect((await runWasmCommand(['--module'], ctx({}))).exitCode).toBe(2);
     });
   });
+
+  describe('-t (the panel terminal)', () => {
+    it('runs on a TTY over the leased terminal and gives it back', async () => {
+      compile.mockResolvedValue({});
+      const screen: string[] = [];
+      const release = vi.fn();
+      let input!: (b: Uint8Array) => void;
+      const lease = {
+        cols: 100,
+        rows: 30,
+        write: (b: Uint8Array) => void screen.push(new TextDecoder().decode(b)),
+        onInput: (l: (b: Uint8Array) => void) => void (input = l),
+        onResize: vi.fn(),
+        release,
+      };
+      spawn.mockImplementation((opts) => {
+        const tty = opts.fds.get(0).file.tty;
+        expect(opts.fds.get(1).file.tty).toBe(tty);
+        expect(opts.fds.get(2).file.tty).toBe(tty);
+        expect(tty.winsize()).toEqual([30, 100]);
+        void opts.fds.get(1).file.write(bytes('hello\n'));
+        input(bytes('typed\r'));
+        return {
+          pid: opts.pid,
+          exited: opts.fds
+            .get(0)
+            .file.read(64)
+            .then(() => 0),
+          kill: vi.fn(),
+          signal: vi.fn(),
+        };
+      });
+      const r = await runWasmCommand(
+        ['-t', 'sh.js'],
+        ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }),
+        undefined,
+        {
+          lease: () => lease,
+        }
+      );
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toBe('');
+      expect(screen.join('')).toBe('hello\r\ntyped\r\n');
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails without a terminal to lease', async () => {
+      const r = await runWasmCommand(
+        ['-t', 'sh.js'],
+        ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }),
+        undefined,
+        {
+          lease: () => null,
+        }
+      );
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toMatch(/-t: no terminal/);
+      const none = await runWasmCommand(
+        ['-t', 'sh.js'],
+        ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' })
+      );
+      expect(none.exitCode).toBe(1);
+    });
+  });
 });

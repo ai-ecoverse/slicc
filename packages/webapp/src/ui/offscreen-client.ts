@@ -860,7 +860,8 @@ export class OffscreenClient implements KernelClientFacade {
       case 'terminal-output':
       case 'terminal-media-preview':
       case 'terminal-exit':
-      case 'terminal-cleared': {
+      case 'terminal-cleared':
+      case 'terminal-mode': {
         for (const handler of this.terminalEventListeners) {
           try {
             handler(msg);

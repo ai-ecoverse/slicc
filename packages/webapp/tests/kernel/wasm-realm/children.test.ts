@@ -269,3 +269,39 @@ describe('VFS file syscalls', () => {
     expect(writes).toEqual(['done']);
   });
 });
+
+describe('death by signal', () => {
+  it('reports a child a signal ended as WIFSIGNALED, else its exit code', async () => {
+    let end!: (code: number) => void;
+    let sig: number | undefined;
+    const spawner: ChildSpawner = async () => ({
+      pid: 60,
+      exited: new Promise<number>((resolve) => (end = resolve)),
+      termsig: () => sig,
+    });
+    const children = new ChildTable(new FdTable(), spawner);
+    await children.spawn(REQ, []);
+    sig = SIG_INT;
+    end(130);
+    expect(await children.wait(60, false)).toEqual([60, SIG_INT]);
+    expect(waitStatus(3)).toBe(3 << 8);
+    expect(waitStatus(130, 2)).toBe(2);
+  });
+
+  it("a process that exec'd a program a signal ended reports that signal", async () => {
+    let end!: (code: number) => void;
+    const spawner: ChildSpawner = async () => ({
+      pid: 61,
+      exited: new Promise<number>((resolve) => (end = resolve)),
+      termsig: () => SIG_INT,
+    });
+    const p = new WasmProcess(1, new FdTable(), { spawner });
+    await p.syscall({ op: 'proc-spawn', ...REQ, stdio: [] });
+    const execing = p.syscall({ op: 'proc-exec', pid: 61 });
+    end(130);
+    expect(await execing).toEqual({ ok: true, kind: 'json', json: [61, SIG_INT] });
+    expect(p.execTermsig).toBe(SIG_INT);
+  });
+});
+
+const SIG_INT = 2;

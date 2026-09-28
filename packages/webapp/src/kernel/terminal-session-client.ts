@@ -133,6 +133,10 @@ export class TerminalSessionClient {
     this.send({ type: 'terminal-signal', sid: this.sid, signal: sig });
   }
 
+  stdin(data: string): void {
+    this.send({ type: 'terminal-stdin', sid: this.sid, data });
+  }
+
   resize(cols: number, rows: number): void {
     this.send({ type: 'terminal-resize', sid: this.sid, cols, rows });
   }
@@ -191,6 +195,7 @@ export class TerminalSessionClient {
         return;
       case 'terminal-cleared':
       case 'terminal-media-preview':
+      case 'terminal-mode':
         return;
     }
 

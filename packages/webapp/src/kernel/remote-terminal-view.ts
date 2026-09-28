@@ -66,6 +66,9 @@ export class RemoteTerminalView {
   private programmaticResolve: ((result: TerminalExecResult) => void) | null = null;
   private isExecuting = false;
 
+  private ptyMode = false;
+  private reportedSize = '';
+
   private suppressOutput = false;
 
   private tabBusy = false;
@@ -147,6 +150,16 @@ export class RemoteTerminalView {
 
   refit(): void {
     this.terminal?.fit();
+    this.reportSize();
+  }
+
+  private reportSize(): void {
+    const term = this.terminal?.terminal;
+    if (!term) return;
+    const size = `${term.cols}x${term.rows}`;
+    if (size === this.reportedSize) return;
+    this.reportedSize = size;
+    this.client.resize(term.cols, term.rows);
   }
 
   clearTerminal(): void {
@@ -309,6 +322,10 @@ export class RemoteTerminalView {
   }
 
   private handleTerminalData(data: string): void {
+    if (this.ptyMode) {
+      this.client.stdin(data);
+      return;
+    }
     if (data === '\t') {
       if (!this.tabBusy) void this.handleTab();
     } else if (data === '\x03' && this.isExecuting) {
@@ -626,6 +643,10 @@ export class RemoteTerminalView {
     switch (event.type) {
       case 'terminal-output':
         if (this.suppressOutput) return;
+        if (this.ptyMode) {
+          this.terminal.write(event.data);
+          return;
+        }
 
         const output = event.data.replace(/\r?\n/g, '\r\n');
         if (event.stream === 'stderr') {
@@ -638,6 +659,13 @@ export class RemoteTerminalView {
         return;
       case 'terminal-cleared':
         this.terminal.clear();
+        return;
+      case 'terminal-mode':
+        this.ptyMode = event.mode === 'pty';
+        if (this.ptyMode) {
+          this.reportedSize = '';
+          this.reportSize();
+        }
         return;
       case 'terminal-status':
         if (event.state === 'error') {

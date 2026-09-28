@@ -205,6 +205,10 @@ export class WasmSession {
     return name !== undefined && pm.signal(pid, name);
   }
 
+  signalAll(sig: number): void {
+    for (const handle of this.live) handle.signal(sig);
+  }
+
   killAll(code: number): void {
     for (const handle of this.live) handle.kill(code);
     for (const child of this.shellChildren) child.abort();
@@ -231,7 +235,7 @@ export class WasmSession {
         ppid,
         fork: state,
       });
-      return { pid: handle.pid, exited: handle.exited };
+      return { pid: handle.pid, exited: handle.exited, termsig: handle.termsig };
     };
   }
 
@@ -247,7 +251,7 @@ export class WasmSession {
         fds,
         ppid,
       });
-      return { pid: handle.pid, exited: handle.exited };
+      return { pid: handle.pid, exited: handle.exited, termsig: handle.termsig };
     };
   }
 

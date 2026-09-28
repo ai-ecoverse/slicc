@@ -222,4 +222,28 @@ describe('KernelStreams', () => {
       expect.objectContaining({ errno: 27 })
     );
   });
+
+  it('marks a terminal fd as a TTY (isatty, termios, window size) and nothing else', () => {
+    const termios = { c_iflag: 1, c_oflag: 2, c_cflag: 3, c_lflag: 4, c_cc: [] };
+    const set: unknown[] = [];
+    const sys = fakeSys({
+      isatty: (fd) => fd === 0,
+      tcgets: () => termios,
+      tcsets: (_fd, t) => void set.push(t),
+      winsize: () => [30, 100],
+    });
+    const { fs, streams } = fakeFs(3);
+    streams[1]!.tty = { ops: {} };
+    const kernel = new KernelStreams(fs, sys);
+    kernel.attach(streams[0]!, 0);
+    kernel.attach(streams[1]!, 1);
+    kernel.attach(streams[2]!, 5, false);
+    expect(streams[1]!.tty).toBeUndefined();
+    expect(streams[2]!.tty).toBeUndefined();
+    const ops = (streams[0]!.tty as { ops: Record<string, (...a: unknown[]) => unknown> }).ops;
+    expect(ops.ioctl_tcgets!(streams[0])).toBe(termios);
+    expect(ops.ioctl_tcsets!(null, 0x5402, termios)).toBe(0);
+    expect(set).toEqual([termios]);
+    expect(ops.ioctl_tiocgwinsz!(null)).toEqual([30, 100]);
+  });
 });

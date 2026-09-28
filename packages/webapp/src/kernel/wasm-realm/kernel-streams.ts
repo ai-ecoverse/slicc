@@ -1,5 +1,6 @@
 import type { EmscriptenFsForHook } from '../realm/emscripten-vfs-hook.js';
 import type { PollState } from './fd-table.js';
+import type { Termios } from './tty.js';
 import { wasiErrno } from './wasi-errno.js';
 
 const POLLIN = 0x001;
@@ -42,6 +43,12 @@ export interface ProcessSys {
   seek(fd: number, offset: number, whence: number): number;
 
   flush(fd: number): void;
+
+  isatty?(fd: number): boolean;
+
+  tcgets?(fd: number): Termios;
+  tcsets?(fd: number, termios: Termios): void;
+  winsize?(fd: number): [number, number];
 }
 
 export interface StreamOps {
@@ -101,15 +108,32 @@ export class KernelStreams {
     private readonly options: KernelStreamOptions = {}
   ) {}
 
-  attach(stream: ProcessStream, kfd: number): void {
+  attach(stream: ProcessStream, kfd: number, terminal?: boolean): void {
     this.refs.set(kfd, (this.refs.get(kfd) ?? 0) + 1);
 
     stream.sliccKernelFd = kfd;
     stream.stream_ops = this.ops(kfd, stream.stream_ops);
+    if (terminal ?? this.sys.isatty?.(kfd) ?? false) stream.tty = this.ttyOps(kfd);
+    else delete stream.tty;
+  }
+
+  private ttyOps(kfd: number): object {
+    return {
+      ops: {
+        ioctl_tcgets: () => this.call(() => this.sys.tcgets?.(kfd)),
+        ioctl_tcsets: (_tty: unknown, _op: number, termios: Termios) =>
+          this.call(() => {
+            this.sys.tcsets?.(kfd, termios);
+            return 0;
+          }),
+        ioctl_tiocgwinsz: () => this.call(() => this.sys.winsize?.(kfd) ?? [24, 80]),
+        fsync: () => {},
+      },
+    };
   }
 
   attachFile(stream: ProcessStream, kfd: number): void {
-    this.attach(stream, kfd);
+    this.attach(stream, kfd, false);
     stream.sliccKernelFile = true;
     stream.stream_ops = {
       ...stream.stream_ops,
@@ -139,8 +163,8 @@ export class KernelStreams {
         }
         throw e;
       }
-      this.attach(this.Fs.getStream(fds.readable_fd) as ProcessStream, read);
-      this.attach(this.Fs.getStream(fds.writable_fd) as ProcessStream, write);
+      this.attach(this.Fs.getStream(fds.readable_fd) as ProcessStream, read, false);
+      this.attach(this.Fs.getStream(fds.writable_fd) as ProcessStream, write, false);
       return fds;
     };
   }
@@ -202,7 +226,9 @@ export class KernelStreams {
         this.refs.set(kfd, (this.refs.get(kfd) ?? 0) + 1);
       },
       close: (stream) => {
-        base.close?.(stream);
+        try {
+          base.close?.(stream);
+        } catch {}
         const left = (this.refs.get(kfd) ?? 1) - 1;
         if (left > 0) {
           this.refs.set(kfd, left);

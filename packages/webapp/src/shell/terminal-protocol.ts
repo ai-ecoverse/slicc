@@ -87,6 +87,12 @@ export interface TerminalExitMsg {
   exitCode: number;
 }
 
+export interface TerminalModeMsg {
+  type: 'terminal-mode';
+  sid: TerminalSessionId;
+  mode: 'pty' | 'line';
+}
+
 export interface TerminalClearedMsg {
   type: 'terminal-cleared';
   sid: TerminalSessionId;
@@ -104,6 +110,7 @@ export type TerminalEventMsg =
   | TerminalMediaPreviewMsg
   | TerminalExitMsg
   | TerminalClearedMsg
+  | TerminalModeMsg
   | TerminalStatusMsg;
 
 export function isTerminalControlMsg(msg: unknown): msg is TerminalControlMsg {
@@ -127,6 +134,7 @@ export function isTerminalEventMsg(msg: unknown): msg is TerminalEventMsg {
     t === 'terminal-media-preview' ||
     t === 'terminal-exit' ||
     t === 'terminal-cleared' ||
+    t === 'terminal-mode' ||
     t === 'terminal-status'
   );
 }

@@ -120,7 +120,11 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
   it('open → status: opened resolves', async () => {
     const ctx = setupChannel();
     await ctx.client.open({ cwd: '/tmp' });
-    expect(ctx.shellFactory).toHaveBeenCalledWith('s1', { cwd: '/tmp', env: undefined });
+    expect(ctx.shellFactory).toHaveBeenCalledWith('s1', {
+      cwd: '/tmp',
+      env: undefined,
+      terminal: expect.any(Object),
+    });
     expect(ctx.events.some((e) => e.type === 'terminal-status' && e.state === 'opened')).toBe(true);
     ctx.dispose();
   });
@@ -134,6 +138,7 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     expect(ctx.shellFactory).toHaveBeenCalledWith('s1', {
       cwd: '/workspace',
       env: { GITHUB_TOKEN: 'ghp_masked_xyz', NPM_TOKEN: 'npm_masked_abc' },
+      terminal: expect.any(Object),
     });
     ctx.dispose();
   });
@@ -688,7 +693,11 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     const stopHost = host.start();
 
     await openP;
-    expect(shellFactory).toHaveBeenCalledWith('br', { cwd: '/', env: undefined });
+    expect(shellFactory).toHaveBeenCalledWith('br', {
+      cwd: '/',
+      env: undefined,
+      terminal: expect.any(Object),
+    });
 
     client.close();
     stopHost();
@@ -740,5 +749,51 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
 
     channel.port1.close();
     channel.port2.close();
+  });
+});
+
+describe('TerminalSessionHost terminal lease (pty)', () => {
+  it('lends the session terminal to a program: mode events, raw input, resize, streamed output', async () => {
+    const ctx = setupChannel();
+    await ctx.client.open({ cwd: '/' });
+    const terminal = (ctx.shellFactory.mock.calls[0] as unknown[])[1] as {
+      terminal: import('../../src/shell/terminal-port.js').TerminalPort;
+    };
+    const keys: string[] = [];
+    const sizes: string[] = [];
+    let release!: () => void;
+    const gotInput = new Promise<void>((resolve) => {
+      ctx.shell.executeCommand.mockImplementationOnce(async () => {
+        const lease = terminal.terminal.lease()!;
+        lease.onInput((b) => {
+          keys.push(new TextDecoder().decode(b));
+          resolve();
+        });
+        lease.onResize((c, r) => sizes.push(`${c}x${r}`));
+        lease.write(new TextEncoder().encode('prompt> '));
+        await new Promise<void>((done) => (release = done));
+        lease.release();
+        return { stdout: '', stderr: '', exitCode: 0 };
+      });
+    });
+    const running = ctx.client.exec('wasm -t bash');
+    await vi.waitFor(() => expect(ctx.events.some((e) => e.type === 'terminal-mode')).toBe(true));
+    ctx.client.resize(90, 20);
+    ctx.client.stdin('ls\r');
+    await gotInput;
+    await vi.waitFor(() => expect(sizes).toEqual(['90x20']));
+    release();
+    await running;
+    expect(keys).toEqual(['ls\r']);
+    const modes = ctx.events
+      .filter((e) => e.type === 'terminal-mode')
+      .map((e) => (e as { mode: string }).mode);
+    expect(modes).toEqual(['pty', 'line']);
+    expect(
+      ctx.events.some(
+        (e) => e.type === 'terminal-output' && (e as { data: string }).data === 'prompt> '
+      )
+    ).toBe(true);
+    ctx.dispose();
   });
 });

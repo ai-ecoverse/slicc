@@ -67,6 +67,7 @@ import { createSkillCommand, createUpskillCommand } from './supplemental-command
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
 import { emitShellCommand } from './telemetry-hook.js';
+import type { TerminalPort } from './terminal-port.js';
 import { VfsAdapter } from './vfs-adapter.js';
 import { buildWorkflowRunArgv, type WorkflowCommandEntry } from './workflow-discovery.js';
 
@@ -98,6 +99,8 @@ export interface HeadlessShellOptions {
   processManager?: ProcessManager;
 
   processOwner?: ProcessOwner;
+
+  terminal?: TerminalPort;
 
   getCurrentShellPid?: () => number | undefined;
 
@@ -357,6 +360,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       getParentJid: options.getParentJid,
       isScoop: options.isScoop,
       buildProcessConfig: this.resolveJshProcessConfig,
+      terminal: options.terminal,
 
       processManager: options.processManager,
 
