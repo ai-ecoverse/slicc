@@ -360,7 +360,19 @@ function keyOf(addr: SockAddr): string {
 export class LoopbackNet {
   /** Bound addresses (listening or not) and their sockets. */
   private readonly bound = new Map<string, KernelSocket>();
+  /** Kernel services started by the first connect to their address (socket activation). */
+  private readonly activators = new Map<string, () => void>();
   private nextEphemeral = EPHEMERAL_FIRST;
+
+  /**
+   * Socket activation: when a connect reaches `addr` and nothing is bound
+   * there, `start` runs first, and is expected to listen on `addr` (a
+   * kernel service such as the realm's proxy). A program that binds `addr`
+   * itself takes precedence. `start` runs again after its listener closes.
+   */
+  activate(addr: SockAddr, start: () => void): void {
+    this.activators.set(keyOf(addr), start);
+  }
 
   /** A new unconnected socket of `domain` (socket(2)). */
   socket(domain: SocketDomain): KernelSocket {
@@ -412,7 +424,9 @@ export class LoopbackNet {
     if (addr.family === 'inet' && !isLoopback(canonicalHost(addr.host))) {
       throw new KernelError('ENETUNREACH');
     }
-    const socket = this.bound.get(keyOf(addr));
+    const key = keyOf(addr);
+    if (!this.bound.has(key)) this.activators.get(key)?.();
+    const socket = this.bound.get(key);
     if (!socket?.listening) throw new KernelError('ECONNREFUSED');
     return socket;
   }

@@ -26,6 +26,7 @@ import {
   sinkFile,
 } from '../../../kernel/wasm-realm/fd-table.js';
 import type { WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
+import { realmNetworkEnv } from '../../../kernel/wasm-realm/net/realm-network.js';
 import { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
@@ -200,12 +201,13 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
 }
 
 /**
- * The program's environment: the shell's exports. On the panel terminal,
+ * The program's environment: the realm's network defaults (the proxy, see
+ * `realm-network.ts`) under the shell's exports. On the panel terminal,
  * which is Ghostty's VT core, a `TERM` that is unset or `dumb` becomes
  * `xterm-256color` (with `COLORTERM=truecolor`), so curses programs use it.
  */
 function programEnv(ctx: CommandContext, call: Invocation): Record<string, string> {
-  const env = { ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
+  const env = { ...realmNetworkEnv(), ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
   if (call.tty && (!env.TERM || env.TERM === 'dumb')) {
     env.TERM = 'xterm-256color';
     env.COLORTERM ??= 'truecolor';
