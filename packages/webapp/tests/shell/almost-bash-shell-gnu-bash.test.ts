@@ -128,11 +128,18 @@ describe('AlmostBashShellHeadless on GNU bash', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it('keeps a shell restricted to a command list on just-bash', async () => {
+  it('runs a shell restricted to a command list on GNU bash, gating what bash runs', async () => {
     await installBash(fs);
     const shell = new AlmostBashShellHeadless({ fs, gnuBash: true, allowedCommands: ['echo'] });
-    expect((await shell.executeCommand('echo just')).stdout).toBe('just\n');
-    expect(run).not.toHaveBeenCalled();
+    fakeBash('', () => null);
+    await shell.executeCommand('echo hi; rm -rf /');
+    expect(run.mock.calls[0]![0]).toEqual(['bash', '-c', 'echo hi; rm -rf /']);
+    const gate = (run.mock.calls[0]![2] as RunOptions).gate!;
+    expect(await gate('rm', ['-rf', '/'], {})).toEqual({
+      stderr: 'bash: rm: command not found\n',
+      exitCode: 127,
+    });
+    expect(await gate('echo', ['hi'], {})).toBeNull();
   });
 
   it('gates what a wasm program runs with the shell’s command list', async () => {

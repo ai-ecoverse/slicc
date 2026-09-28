@@ -1235,13 +1235,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   /**
    * Whether this run goes to GNU bash: asked for, installed, not opted out,
-   * and runnable here. A shell restricted to a command list stays on
-   * just-bash, whose registry holds exactly those commands (bash's builtins
-   * would come on top).
+   * and runnable here. A shell restricted to a command list runs on it too:
+   * its list gates every program bash runs (`gateNativeCommand`) and every
+   * command bash runs through just-bash (the filtered registry); bash's own
+   * builtins are always there, as in any bash.
    */
   private async usesGnuBash(): Promise<boolean> {
-    if (!this.options.gnuBash || this.allowedCommands !== null) return false;
-    if (this.lastEnv[SHELL_CHOICE_ENV] === 'just-bash') return false;
+    if (!this.options.gnuBash || this.lastEnv[SHELL_CHOICE_ENV] === 'just-bash') return false;
     if (typeof SharedArrayBuffer !== 'function') return false; // the wasm realm needs it
     return (await this.scriptCatalog.getWasmCommands()).has('bash');
   }
