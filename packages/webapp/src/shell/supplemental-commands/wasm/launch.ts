@@ -65,6 +65,11 @@ export interface WasmTarget {
   glue: string;
   module: string;
   argv0: string;
+  /**
+   * The installed command's environment defaults (its manifest's `env`, e.g.
+   * where ImageMagick keeps its configuration), under the caller's `env`.
+   */
+  defaults?: Readonly<Record<string, string>>;
 }
 
 export interface LaunchRequest extends WasmTarget {
@@ -236,20 +241,8 @@ export class WasmSession {
       await req.fds.closeAll();
       throw e;
     }
-    return this.start({ ...req, env: await this.withDefaults(req), program: { glue, module } });
-  }
-
-  /**
-   * The environment a program starts with: its package's defaults (the
-   * manifest's `env`, e.g. where ImageMagick keeps its configuration) under
-   * the caller's, which wins.
-   */
-  private async withDefaults(req: LaunchRequest): Promise<Record<string, string>> {
-    let defaults: Readonly<Record<string, string>> | undefined;
-    for (const command of (await this.commands()).values()) {
-      if (command.glue === req.glue && command.env) defaults = command.env;
-    }
-    return defaults ? { ...defaults, ...req.env } : req.env;
+    const env = req.defaults ? { ...req.defaults, ...req.env } : req.env;
+    return this.start({ ...req, env, program: { glue, module } });
   }
 
   /** Start a loaded program: a new process, or (with `fork`) a forked copy of its parent. */
@@ -355,7 +348,14 @@ export class WasmSession {
     const name = REGISTRY_PATH.exec(file)?.[1] ?? (file.includes('/') ? undefined : file);
     if (name !== undefined) {
       const command = (await this.commands()).get(name);
-      return command && { glue: command.glue, module: command.wasm, argv0: command.argv0 };
+      return (
+        command && {
+          glue: command.glue,
+          module: command.wasm,
+          argv0: command.argv0,
+          defaults: command.env,
+        }
+      );
     }
     const glue = this.ctx.fs.resolvePath(cwd, file);
     const module = modulePath(glue);

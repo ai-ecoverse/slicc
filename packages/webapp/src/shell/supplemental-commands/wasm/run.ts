@@ -59,6 +59,8 @@ interface Invocation {
   login?: boolean;
   program: string;
   args: string[];
+  /** The installed command's environment defaults (its manifest's `env`). */
+  defaults?: Readonly<Record<string, string>>;
 }
 
 function parse(args: string[]): Invocation | undefined {
@@ -107,6 +109,8 @@ export interface RunWasmOptions {
   onOutput?: (text: string) => void;
   /** Descriptors beyond 0-2 the program starts with (piped stdio), by number. */
   fds?: ReadonlyArray<readonly [number, OpenFile]>;
+  /** The installed command's env defaults, when the shell dispatched it by name. */
+  defaults?: Readonly<Record<string, string>>;
 }
 
 /** A tee of the bytes written, decoded as UTF-8 per stream. */
@@ -240,6 +244,7 @@ async function resolveInstalled(
     argv0: call.argv0 ?? command.argv0,
     module: call.module ?? command.wasm,
     program: command.glue,
+    defaults: command.env,
   };
 }
 
@@ -258,6 +263,14 @@ function stdinBytes(ctx: CommandContext): Uint8Array {
   const bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i) & 0xff;
   return bytes;
+}
+
+/** The program's env defaults: its installed command's, as looked up or as the shell dispatched it. */
+function programDefaults(
+  call: Invocation,
+  options: RunWasmOptions
+): Readonly<Record<string, string>> | undefined {
+  return call.defaults ?? options.defaults;
 }
 
 export async function runWasmCommand(
@@ -315,6 +328,7 @@ export async function runWasmCommand(
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
       env: programEnv(ctx, call),
+      defaults: programDefaults(call, options),
       cwd: ctx.cwd,
       fds,
       signal: ctx.signal,

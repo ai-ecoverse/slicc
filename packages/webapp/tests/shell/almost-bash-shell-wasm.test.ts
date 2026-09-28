@@ -55,6 +55,27 @@ describe('AlmostBashShellHeadless installed wasm commands', () => {
     ]);
   });
 
+  it('hands a program run by name its own env defaults', async () => {
+    await fs.mkdir(`${PKG}/bin`, { recursive: true });
+    await fs.writeFile(
+      `${PKG}/package.json`,
+      JSON.stringify({
+        name: 'wasm-tools',
+        slicc: {
+          env: { MODE: 'pkg' },
+          commands: {
+            frob: { glue: 'bin/multi', wasm: 'bin/multi.wasm', env: { WHO: 'frob' } },
+            zap: { glue: 'bin/multi', wasm: 'bin/multi.wasm', env: { WHO: 'zap' } },
+          },
+        },
+      })
+    );
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+    await shell.executeCommand('frob');
+    expect(run.mock.calls[0][2].defaults).toEqual({ MODE: 'pkg', WHO: 'frob' });
+  });
+
   it('never shadows a built-in of the same name', async () => {
     await installTools(fs, ['cat']);
     await fs.writeFile('/workspace/f', 'builtin-cat\n');
