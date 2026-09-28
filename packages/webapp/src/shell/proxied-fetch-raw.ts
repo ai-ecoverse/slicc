@@ -6,7 +6,7 @@
  * HTTP client, which is what the wasm realm's HTTP proxy needs to forward
  * curl, libcurl and git: redirects come back as 3xx with `Location`, headers
  * are an ordered list (every `Set-Cookie` separate), the body is decoded with
- * `Content-Encoding` removed to match, and it streams with backpressure. The
+ * `Content-Encoding` removed to match, and it streams, pulled on demand. The
  * contract is `@slicc/shared-ts` `raw-fetch-protocol.ts`.
  *
  * Float support:
@@ -167,7 +167,8 @@ async function bridgeError(resp: Response): Promise<RawFetchError> {
 /**
  * Read the response-head frame off the front of the bridge body and hand the
  * rest on as a pull-driven stream: nothing is read from the bridge until the
- * caller asks, so a slow consumer holds the bridge (and upstream) back.
+ * caller asks. That bounds what this layer holds, not the upstream: Chrome's
+ * `fetch` reads the bridge response ahead of any JS reader.
  */
 async function splitRawResponse(resp: Response, method: string): Promise<RawFetchResponse> {
   if (!resp.body) throw new RawFetchError('bridge', 502, 'raw fetch: bridge sent no body');

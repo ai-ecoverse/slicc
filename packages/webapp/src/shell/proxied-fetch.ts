@@ -748,7 +748,7 @@ function streamProxyBody(
  * the buffered fetch and yield it as one chunk.
  *
  * `{ mode: 'raw' }` returns the HTTP-client flavor instead (manual redirects,
- * ordered headers, decoded body, backpressure) for the wasm realm's HTTP
+ * ordered headers, decoded body, pull-driven stream) for the wasm realm's HTTP
  * proxy; see `proxied-fetch-raw.ts`.
  */
 export function createProxiedStreamingFetch(

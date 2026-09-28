@@ -11,7 +11,10 @@
  *   - the body is always delivered DECODED: `Content-Encoding` is removed
  *     whenever a coding was undone, and `Content-Length` survives only when
  *     it still counts the delivered bytes (see {@link rawResponseHeaders});
- *   - the body streams with backpressure.
+ *   - the body streams, and nothing is read from the float's hop until the
+ *     caller asks. Chrome's own `fetch` still reads a response off the
+ *     network ahead of the reader (measured on Chrome 146: 400 MiB drained
+ *     while a page held one chunk), so the upstream itself is not throttled.
  *
  * Every float speaks this contract; each one frames it for its own hop. The
  * CLI/cloud node-server route reads the request head from

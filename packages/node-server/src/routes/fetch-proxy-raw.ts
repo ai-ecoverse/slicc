@@ -10,8 +10,9 @@
  *   - redirects are manual: the 3xx, `Location` and every `Set-Cookie` go
  *     back to the caller in an ordered header list;
  *   - the answer is always `200` + `application/vnd.slicc.raw-fetch`: one
- *     response-head frame, then the body streamed with backpressure (Node
- *     `pipe` pauses upstream when the browser stops reading).
+ *     response-head frame, then the body streamed through (Node `pipe`
+ *     pauses upstream whenever the browser stops reading, though Chrome's
+ *     `fetch` reads ahead of its JS reader, so in practice it rarely does).
  *
  * Secret handling is the default route's: masked values in headers, URL
  * credentials and text bodies are unmasked for allowed domains only (403
