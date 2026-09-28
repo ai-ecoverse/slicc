@@ -231,7 +231,8 @@ function pickDistTag(ctx: ResolveContext, tag: string): string {
  * the `1.3.1-2` that superseded it.
  */
 function maxSatisfyingLive(ctx: ResolveContext, range: string): string | null {
-  const live = ctx.versions.filter((v) => typeof ctx.versionMap[v]?.deprecated !== 'string');
+  // An empty message is how `npm deprecate pkg@v ""` un-deprecates.
+  const live = ctx.versions.filter((v) => !ctx.versionMap[v]?.deprecated);
   return maxSatisfying(live, range) ?? maxSatisfying(ctx.versions, range);
 }
 
