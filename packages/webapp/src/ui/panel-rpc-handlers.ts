@@ -150,7 +150,7 @@ export function createStandalonePanelRpcHandlers(
   ensureScreenSessionEndedRelay(options.emitEvent);
 
   return {
-    ...buildPageAudioHandlers(),
+    ...buildPageAudioHandlers(options),
     ...buildClipboardCaptureHandlers(options),
     ...buildHearHandlers(),
     ...buildTrayOauthHandlers(options),

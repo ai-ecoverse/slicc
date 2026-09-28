@@ -27,6 +27,7 @@ import {
   type WasmProgram,
 } from './protocol.js';
 import { SIG, sigbit } from './signals.js';
+import type { LoopbackNet } from './socket.js';
 
 export interface WasmWorkerLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -59,6 +60,8 @@ export interface SpawnWasmOptions {
   kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
 
   jobs?: JobTable;
+
+  net?: LoopbackNet;
 }
 
 export interface WasmProcessHandle {
@@ -92,6 +95,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     fs: opts.fs,
     kill: opts.kill,
     jobs: opts.jobs,
+    net: opts.net,
 
     onPending: (sig) => void Atomics.or(header, SAB_I_SIGNALS, sigbit(sig)),
     hasPending: () => Atomics.load(header, SAB_I_SIGNALS) !== 0,

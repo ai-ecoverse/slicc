@@ -10,6 +10,7 @@ import {
   bedrockCampRegionFromBaseUrl,
   isBedrockCampClaudeModel,
   isBedrockCampCompatible,
+  isBedrockCampGpt6Model,
 } from '../../src/providers/built-in/bedrock-camp-compat.js';
 import { CLAUDE_FAMILIES, parseClaudeVersion } from '../../src/providers/claude-model-version.js';
 
@@ -225,6 +226,37 @@ describe('isBedrockCampClaudeModel', () => {
 });
 
 describe('bedrockCampOpenAIEffortMap', () => {
+  it('identifies only the live-verified GPT-6 Bedrock variants for image placement', () => {
+    for (const variant of ['sol', 'luna', 'astra']) {
+      expect(isBedrockCampGpt6Model({ id: `global.openai.gpt-6-${variant}` })).toBe(true);
+    }
+    expect(isBedrockCampGpt6Model({ id: 'global.openai.gpt-6-terra' })).toBe(false);
+    expect(isBedrockCampGpt6Model({ id: 'global.anthropic.claude-opus-5-5' })).toBe(false);
+  });
+
+  it.each([
+    ['GPT-6 Luna', BEDROCK_CAMP_GPT6_EFFORT_MAP],
+    ['GPT-6 Sol', BEDROCK_CAMP_GPT6_EFFORT_MAP],
+    ['GPT-6 Astra', BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP],
+    ['GPT-6 Luna (Global)', BEDROCK_CAMP_GPT6_EFFORT_MAP],
+  ])('recognizes opaque application profiles named %s', (name, effortMap) => {
+    const model = {
+      id: 'arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/opaque',
+      name,
+    };
+    expect(isBedrockCampGpt6Model(model)).toBe(true);
+    expect(bedrockCampOpenAIEffortMap(model)).toBe(effortMap);
+  });
+
+  it('does not infer GPT-6 from an unrelated opaque profile name', () => {
+    const model = {
+      id: 'arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/opaque',
+      name: 'GPT-6 Terra',
+    };
+    expect(isBedrockCampGpt6Model(model)).toBe(false);
+    expect(bedrockCampOpenAIEffortMap(model)).toBeNull();
+  });
+
   it.each([['global.openai.gpt-6-sol'], ['us.openai.gpt-6-sol'], ['global.openai.gpt-6-luna']])(
     'lets %s turn reasoning off with none',
     (id) => {

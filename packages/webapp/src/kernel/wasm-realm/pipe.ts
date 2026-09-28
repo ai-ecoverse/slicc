@@ -67,6 +67,22 @@ export class KernelPipe {
     return out;
   }
 
+  async peek(max: number, signal?: AbortSignal): Promise<Uint8Array> {
+    while (this.size === 0) {
+      if (this.writers === 0) return new Uint8Array(0);
+      await this.changed(signal);
+    }
+    const out = new Uint8Array(Math.min(max, this.size));
+    let filled = 0;
+    for (const chunk of this.chunks) {
+      if (filled === out.length) break;
+      const count = Math.min(chunk.length, out.length - filled);
+      out.set(chunk.subarray(0, count), filled);
+      filled += count;
+    }
+    return out;
+  }
+
   async write(bytes: Uint8Array, signal?: AbortSignal): Promise<number> {
     let offset = 0;
     while (offset < bytes.length) {

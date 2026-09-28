@@ -52,9 +52,7 @@ final class WidgetTrayObserverWireTests: XCTestCase {
             .scoopsList(
                 scoops: [
                     ScoopSummary(
-                        jid: "cone", name: "cone", folder: "/", isCone: true,
-                        assistantLabel: "Sliccy", state: "working", activity: "thinking", fill: 30,
-                        parentId: nil)
+                        jid: "cone", name: "cone", folder: "/", parentId: nil, assistantLabel: "Sliccy", state: "working", activity: "thinking", fill: 30)
                 ],
                 activeScoopJid: active))
     }

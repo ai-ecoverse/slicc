@@ -24,7 +24,13 @@ export interface ForkState {
 }
 
 export type ForkStream =
-  | { fd: number; kernel: number; kind: 'tty' | 'stream' | 'file' }
+  | {
+      fd: number;
+      kernel: number;
+      kind: 'tty' | 'stream' | 'file' | 'socket';
+
+      flags?: number;
+    }
   | { fd: number; path: string; flags: number };
 
 export interface WasmProcessInitMsg {

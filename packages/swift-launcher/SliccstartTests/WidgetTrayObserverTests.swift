@@ -102,12 +102,9 @@ final class WidgetTrayObserverTests: XCTestCase {
         let message = LeaderToFollowerMessage.scoopsList(
             scoops: [
                 ScoopSummary(
-                    jid: "cone", name: "cone", folder: "/", isCone: true,
-                    assistantLabel: "Sliccy", state: "working", activity: "thinking", fill: 30,
-                    parentId: nil),
+                    jid: "cone", name: "cone", folder: "/", parentId: nil, assistantLabel: "Sliccy", state: "working", activity: "thinking", fill: 30),
                 ScoopSummary(
-                    jid: "s1", name: "s1", folder: "/s", isCone: false,
-                    assistantLabel: "boy-scout", state: "broken", fill: 5, parentId: "cone"),
+                    jid: "s1", name: "s1", folder: "/s", parentId: "cone", assistantLabel: "boy-scout", state: "broken", fill: 5),
             ],
             activeScoopJid: active)
         return try! JSONEncoder().encode(message)
@@ -325,38 +322,36 @@ final class WidgetTrayObserverTests: XCTestCase {
 
 final class SliccstartWidgetUnitTests: XCTestCase {
     private func summary(
-        isCone: Bool? = false, parentId: String? = "cone", state: String? = "working",
-        activity: String? = nil, trigger: String? = nil
+        parentId: String? = "cone", state: String? = "working", activity: String? = nil,
+        trigger: String? = nil
     ) -> ScoopSummary {
         ScoopSummary(
-            jid: "j", name: "folder", folder: "/", isCone: isCone, assistantLabel: "Label",
-            trigger: trigger, state: state, activity: activity, fill: 50, parentId: parentId)
+            jid: "j", name: "folder", folder: "/", parentId: parentId, assistantLabel: "Label", trigger: trigger,
+            state: state, activity: activity, fill: 50)
     }
 
     func testTheOwnershipEdgeDecidesTheRole() {
         XCTAssertEqual(summary().widgetUnit(isActive: false).role, .scoop)
-        XCTAssertEqual(
-            summary(isCone: true, parentId: nil).widgetUnit(isActive: false).role, .cone)
-        XCTAssertEqual(
-            summary(isCone: false, parentId: nil).widgetUnit(isActive: false).role, .scoop)
+        XCTAssertEqual(summary(parentId: nil).widgetUnit(isActive: false).role, .cone)
+        XCTAssertEqual(summary(parentId: "cone").widgetUnit(isActive: false).role, .scoop)
     }
 
     
     
-    
-    func testRoleResolvesFromTheEdgeWhenIsConeIsAbsent() throws {
-        XCTAssertEqual(
-            summary(isCone: nil, parentId: nil).widgetUnit(isActive: false).role, .cone)
-        XCTAssertEqual(
-            summary(isCone: nil, parentId: "cone").widgetUnit(isActive: false).role, .scoop)
-
+    func testRoleResolvesFromTheOwnershipEdgeOnDecodedWire() throws {
         let decoded = try JSONDecoder().decode(
             ScoopSummary.self,
             from: Data(
                 #"{"jid":"j","name":"folder","folder":"/","assistantLabel":"Label","parentId":"cone"}"#
                     .utf8))
-        XCTAssertNil(decoded.isCone)
         XCTAssertEqual(decoded.widgetUnit(isActive: false).role, .scoop)
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                ScoopSummary.self,
+                from: Data(
+                    #"{"jid":"c","name":"cone","folder":"/","assistantLabel":"Label","parentId":null}"#
+                        .utf8)
+            ).widgetUnit(isActive: false).role, .cone)
     }
 
     func testUnknownWireValuesDegradeTheUnitNotTheSnapshot() {

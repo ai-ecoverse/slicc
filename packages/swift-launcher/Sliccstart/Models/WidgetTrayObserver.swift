@@ -368,8 +368,7 @@ extension ScoopSummary {
             name: assistantLabel.isEmpty ? name : assistantLabel,
             
             
-            
-            role: (parentId == nil && (isCone ?? true)) ? .cone : .scoop,
+            role: parentId == nil ? .cone : .scoop,
             parentId: parentId,
             lifecycle: WidgetUnit.Lifecycle(rawValue: state ?? "") ?? .unknown,
             activity: activity.flatMap(WidgetUnit.Activity.init(rawValue:)),

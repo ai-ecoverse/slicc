@@ -117,11 +117,17 @@ export function stopMediaStreamTracks(stream: { getTracks(): Array<{ stop(): voi
   }
 }
 
+export type GetDisplayMedia = (constraints: MediaStreamConstraints) => Promise<MediaStream>;
+
+const browserGetDisplayMedia: GetDisplayMedia = (constraints) =>
+  navigator.mediaDevices.getDisplayMedia(constraints);
+
 export async function captureDisplayMedia(
-  req: DisplayCaptureRequest
+  req: DisplayCaptureRequest,
+  getDisplayMedia: GetDisplayMedia = browserGetDisplayMedia
 ): Promise<DisplayCaptureResult> {
   if (req.mode === 'session') {
-    return runDisplaySession(req);
+    return runDisplaySession(req, getDisplayMedia);
   }
   if (!navigator.mediaDevices?.getDisplayMedia) {
     throw new Error('screen capture is not supported in this browser');
@@ -132,7 +138,7 @@ export async function captureDisplayMedia(
   const wantAudio = req.mode === 'video' && !!req.audio;
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({
+    stream = await getDisplayMedia({
       video: true,
       audio: wantAudio,
     });
@@ -155,9 +161,10 @@ async function runDisplaySession(
     | DisplaySessionStartRequest
     | DisplaySessionFrameRequest
     | DisplaySessionStopRequest
-    | DisplaySessionRecordRequest
+    | DisplaySessionRecordRequest,
+  getDisplayMedia: GetDisplayMedia
 ): Promise<DisplayCaptureResult> {
-  if (req.action === 'start') return startDisplaySession();
+  if (req.action === 'start') return startDisplaySession(getDisplayMedia);
   if (req.action === 'frame') return frameDisplaySession(req);
   if (req.action === 'record') return recordDisplaySession(req);
   const stopped = displaySessions.stop(req.handle);
@@ -171,14 +178,16 @@ async function runDisplaySession(
   };
 }
 
-async function startDisplaySession(): Promise<DisplayCaptureResult> {
+async function startDisplaySession(
+  getDisplayMedia: GetDisplayMedia
+): Promise<DisplayCaptureResult> {
   if (!navigator.mediaDevices?.getDisplayMedia) {
     throw new Error('screen capture is not supported in this browser');
   }
   await whenDisplayCaptureReady();
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({
+    stream = await getDisplayMedia({
       video: true,
       audio: false,
     });

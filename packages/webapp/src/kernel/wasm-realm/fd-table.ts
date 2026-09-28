@@ -15,7 +15,19 @@ export type KernelErrno =
   | 'ENOTTY'
   | 'EPERM'
   | 'EIO'
-  | 'EACCES';
+  | 'EACCES'
+  | 'EAGAIN'
+  | 'ENOTSOCK'
+  | 'EAFNOSUPPORT'
+  | 'EPROTONOSUPPORT'
+  | 'EOPNOTSUPP'
+  | 'EADDRINUSE'
+  | 'EADDRNOTAVAIL'
+  | 'ENETUNREACH'
+  | 'ECONNREFUSED'
+  | 'EINPROGRESS'
+  | 'EISCONN'
+  | 'ENOTCONN';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {
@@ -33,6 +45,8 @@ export interface PollState {
 
 export interface KernelFile {
   read?(max: number, signal?: AbortSignal): Promise<Uint8Array>;
+
+  peek?(max: number, signal?: AbortSignal): Promise<Uint8Array>;
 
   write?(bytes: Uint8Array, signal?: AbortSignal): Promise<number>;
 

@@ -125,9 +125,9 @@ final class AppStateSudoApprovalTests: XCTestCase {
     func testScoopSwipeWrapsAndFallsBackToTheCone() {
         let state = AppState()
         let cone = ScoopSummary(
-            jid: "cone", name: "cone", folder: "cone", isCone: true, assistantLabel: "SLICC")
+            jid: "cone", name: "cone", folder: "cone", parentId: nil, assistantLabel: "SLICC")
         let scoop = ScoopSummary(
-            jid: "s1", name: "s1", folder: "s1", isCone: false, assistantLabel: "Researcher")
+            jid: "s1", name: "s1", folder: "s1", parentId: "cone", assistantLabel: "Researcher")
         state.scoops = [cone, scoop]
         state.selectedScoopJid = "cone"
         state.swipeToNextScoop()

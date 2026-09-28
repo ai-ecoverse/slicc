@@ -11,12 +11,22 @@ import type { JobTable } from './jobs.js';
 import type { ForkState } from './protocol.js';
 import { selectFds } from './select.js';
 import { type DefaultAction, defaultAction, isSignal, SIG, sigbit } from './signals.js';
+import { LoopbackNet } from './socket.js';
+import { SOCKET_OPS, type SocketSyscall, socketSyscall } from './socket-syscalls.js';
 import type { KernelTty, Termios } from './tty.js';
 import { type VfsFileFs, vfsFile } from './vfs-file.js';
 
 export type WasmSyscall =
-  | { op: 'fd-read'; fd: number; max: number }
-  | { op: 'fd-write'; fd: number; body: Uint8Array }
+  | {
+      op: 'fd-read';
+      fd: number;
+      max: number;
+
+      nonblock?: boolean;
+
+      peek?: boolean;
+    }
+  | { op: 'fd-write'; fd: number; body: Uint8Array; nonblock?: boolean }
   | { op: 'fd-close'; fd: number }
   | { op: 'fd-pipe' }
   | { op: 'fd-poll'; fd: number }
@@ -63,7 +73,8 @@ export type WasmSyscall =
   | { op: 'proc-setsid' }
   | { op: 'tty-pgrp-get'; fd: number }
   | { op: 'tty-pgrp-set'; fd: number; pgrp: number }
-  | { op: 'sig-mask'; caught: number; ignored: number };
+  | { op: 'sig-mask'; caught: number; ignored: number }
+  | SocketSyscall;
 
 type FdSyscall = Extract<WasmSyscall, { op: `fd-${string}` }>;
 
@@ -81,6 +92,10 @@ const JOB_OPS: ReadonlySet<string> = new Set([
 
 function isJobSyscall(req: WasmSyscall): req is JobSyscall {
   return JOB_OPS.has(req.op);
+}
+
+function isSocketSyscall(req: WasmSyscall): req is SocketSyscall {
+  return req.op.startsWith('sock-');
 }
 
 function isFdSyscall(req: WasmSyscall): req is FdSyscall {
@@ -118,6 +133,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'tty-pgrp-get',
   'tty-pgrp-set',
   'sig-mask',
+  ...SOCKET_OPS,
 ]);
 
 type TtySyscall = Extract<WasmSyscall, { op: `tty-${string}` }>;
@@ -143,6 +159,8 @@ export interface WasmProcessOptions {
   hasPending?: () => boolean;
 
   jobs?: JobTable;
+
+  net?: LoopbackNet;
 }
 
 export type StateListener = (state: 'stopped' | 'continued', sig: number) => void;
@@ -168,6 +186,7 @@ export class WasmProcess {
   private resumed: Promise<void> = Promise.resolve();
   private wake: () => void = () => {};
   private readonly stateListeners: StateListener[] = [];
+  private net: LoopbackNet | undefined;
 
   constructor(
     readonly pid: number,
@@ -242,6 +261,7 @@ export class WasmProcess {
       if (isFdSyscall(req)) return await this.fdSyscall(req);
       if (isTtySyscall(req)) return this.ttySyscall(req);
       if (isJobSyscall(req)) return this.jobSyscall(req);
+      if (isSocketSyscall(req)) return await this.socketSyscall(req);
       return await this.procSyscall(req);
     } catch (e) {
       if (e instanceof KernelError || e instanceof SpawnError) {
@@ -256,18 +276,28 @@ export class WasmProcess {
     return this.interrupt.signal;
   }
 
-  private async read(fd: number, max: number): Promise<Uint8Array> {
-    const file = this.fds.get(fd).file;
-    if (!file.read) throw new KernelError('EBADF');
+  private async read(req: Extract<WasmSyscall, { op: 'fd-read' }>): Promise<Uint8Array> {
+    const file = this.fds.get(req.fd).file;
+    const read = req.peek ? file.peek : file.read;
+    if (!read) throw new KernelError(req.peek && file.read ? 'EOPNOTSUPP' : 'EBADF');
     if (file.tty) this.checkForeground(file.tty);
-    const signal = pollFile(file).readable ? this.interrupt.signal : this.blockingSignal();
-    return file.read(Math.max(0, Math.min(max, MAX_READ)), signal);
+
+    if (req.max <= 0) return new Uint8Array(0);
+    const ready = pollFile(file).readable;
+    if (!ready && req.nonblock) throw new KernelError('EAGAIN');
+    const signal = ready ? this.interrupt.signal : this.blockingSignal();
+    return read.call(file, Math.max(0, Math.min(req.max, MAX_READ)), signal);
   }
 
-  private async write(fd: number, body: Uint8Array): Promise<number> {
+  private async write(fd: number, body: Uint8Array, nonblock = false): Promise<number> {
     const file = this.fds.get(fd).file;
     if (!file.write) throw new KernelError('EBADF');
-    if (!pollFile(file).writable) return file.write(body, this.blockingSignal());
+    if (!pollFile(file).writable) {
+      if (nonblock) throw new KernelError('EAGAIN');
+      return file.write(body, this.blockingSignal());
+    }
+
+    if (nonblock) return file.write(body, AbortSignal.abort());
 
     return file.write(
       body,
@@ -278,9 +308,9 @@ export class WasmProcess {
   private async fdSyscall(req: FdSyscall): Promise<SyncFsResult> {
     switch (req.op) {
       case 'fd-read':
-        return { ok: true, kind: 'bytes', bytes: await this.read(req.fd, req.max) };
+        return { ok: true, kind: 'bytes', bytes: await this.read(req) };
       case 'fd-write':
-        return { ok: true, kind: 'json', json: await this.write(req.fd, req.body) };
+        return { ok: true, kind: 'json', json: await this.write(req.fd, req.body, req.nonblock) };
       case 'fd-close':
         await Promise.resolve(this.fds.close(req.fd));
         return { ok: true, kind: 'void' };
@@ -407,8 +437,17 @@ export class WasmProcess {
     return tty;
   }
 
+  private socketSyscall(req: SocketSyscall): Promise<SyncFsResult> {
+    this.net ??= this.options.net ?? new LoopbackNet();
+    return socketSyscall(req, {
+      fds: this.fds,
+      net: this.net,
+      blocking: () => this.blockingSignal(),
+    });
+  }
+
   private async procSyscall(
-    req: Exclude<WasmSyscall, FdSyscall | TtySyscall | JobSyscall>
+    req: Exclude<WasmSyscall, FdSyscall | TtySyscall | JobSyscall | SocketSyscall>
   ): Promise<SyncFsResult> {
     switch (req.op) {
       case 'proc-fork':

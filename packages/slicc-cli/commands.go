@@ -441,13 +441,11 @@ func (p *promptTurn) ingestWireError(raw []byte) (int, bool) {
 
 
 
-
 func soleConeJid(raw []byte) (string, bool) {
 	var msg struct {
 		Scoops []struct {
 			Jid    string          `json:"jid"`
 			Parent json.RawMessage `json:"parentId"`
-			IsCone *bool           `json:"isCone"`
 		} `json:"scoops"`
 	}
 	if json.Unmarshal(raw, &msg) != nil {
@@ -455,7 +453,7 @@ func soleConeJid(raw []byte) (string, bool) {
 	}
 	cone := ""
 	for _, scoop := range msg.Scoops {
-		if scoop.Jid == "" || !rosterRoot(scoop.Parent, scoop.IsCone) {
+		if scoop.Jid == "" || !rosterRoot(scoop.Parent) {
 			continue
 		}
 		if cone != "" && cone != scoop.Jid {
@@ -469,11 +467,8 @@ func soleConeJid(raw []byte) (string, bool) {
 	return cone, true
 }
 
-func rosterRoot(parent json.RawMessage, isCone *bool) bool {
-	if len(parent) > 0 {
-		return string(parent) == "null"
-	}
-	return isCone != nil && *isCone
+func rosterRoot(parent json.RawMessage) bool {
+	return len(parent) > 0 && string(parent) == "null"
 }
 
 func quotedScoop(jid string) string {

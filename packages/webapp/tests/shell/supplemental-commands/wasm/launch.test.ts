@@ -9,6 +9,7 @@ vi.mock('../../../../src/kernel/realm/wasm-compiler.js', () => ({
 
 import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
 import { bytesSource, FdTable, sinkFile } from '../../../../src/kernel/wasm-realm/fd-table.js';
+import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
 import { WasmSession } from '../../../../src/shell/supplemental-commands/wasm/launch.js';
 
@@ -129,6 +130,29 @@ describe('WasmSession', () => {
     expect((await session.resolve('/bin/tac', 'tac', '/w'))?.glue).toBe(`${PKG}/bin/core`);
     expect(await session.resolve('/usr/bin/sed', 'sed', '/w')).toBeUndefined();
     expect(await session.resolve('sed', 'sed', '/w')).toBeUndefined();
+  });
+
+  it("puts every invocation of one owner on that owner's loopback network", async () => {
+    fakeProcesses();
+    const launch = async (config: ConstructorParameters<typeof WasmSession>[1]) => {
+      const session = new WasmSession(ctx(installed), config, () => {});
+      await session.launch({
+        glue: '/w/tool.js',
+        module: '/w/tool.wasm',
+        argv0: 'tool',
+        args: [],
+        env: {},
+        cwd: '/w',
+        fds: stdio(),
+      });
+      return spawn.mock.calls.at(-1)?.[0].net;
+    };
+    const cone = processConfig().config;
+    const scoop = { ...cone, owner: { kind: 'scoop', scoopJid: 's1' } } as typeof cone;
+    const first = await launch(cone);
+    expect(first).toBeInstanceOf(LoopbackNet);
+    expect(await launch(processConfig().config)).toBe(first);
+    expect(await launch(scoop)).not.toBe(first);
   });
 
   it('asks the gate before a program runs natively; a denied one reports and exits', async () => {

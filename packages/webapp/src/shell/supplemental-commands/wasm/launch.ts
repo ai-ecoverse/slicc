@@ -12,6 +12,7 @@ import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-r
 import { JobTable } from '../../../kernel/wasm-realm/jobs.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
+import { type LoopbackNet, loopbackNet, ownerKey } from '../../../kernel/wasm-realm/socket.js';
 import type { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
 import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
@@ -167,12 +168,16 @@ export class WasmSession {
 
   private leader: number | undefined;
 
+  private readonly net: LoopbackNet;
+
   constructor(
     private readonly ctx: CommandContext,
     private readonly processConfig: JshProcessConfig | undefined,
     private readonly onError: (message: string) => void,
     private readonly gate?: NativeGate
-  ) {}
+  ) {
+    this.net = loopbackNet(ownerKey(processConfig?.owner));
+  }
 
   commands(): Promise<Map<string, WasmCommand>> {
     this.installed ??= installedCommands(this.ctx);
@@ -218,6 +223,7 @@ export class WasmSession {
       forker: this.forker(pid, req),
       kill: (target, sig) => this.kill(target, sig),
       jobs: this.jobs,
+      net: this.net,
       ...(req.fork ? { fork: req.fork } : {}),
     });
     this.live.add(handle);

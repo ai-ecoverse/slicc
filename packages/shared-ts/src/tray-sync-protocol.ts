@@ -459,8 +459,6 @@ export interface ScoopSummary {
   name: string;
   folder: string;
 
-  isCone?: boolean;
-
   parentId?: string | null;
   assistantLabel: string;
 

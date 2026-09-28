@@ -59,8 +59,8 @@ async function waitReady(
 
     const round = new AbortController();
     const changes = [...new Set([...read, ...write])].flatMap((fd) => {
-      const { changed } = fds.get(fd).file;
-      return changed === undefined ? [] : [changed(round.signal).catch(() => undefined)];
+      const file = fds.get(fd).file;
+      return file.changed === undefined ? [] : [file.changed(round.signal).catch(() => undefined)];
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expiry =

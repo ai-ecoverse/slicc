@@ -163,7 +163,6 @@ describe('bootFollowerFloat', () => {
         {
           assistantLabel: 'sliccy',
           folder: 'cone',
-          isCone: true,
           jid: 'cone_1',
           name: 'sliccy',
           parentId: null,
@@ -628,7 +627,6 @@ describe('bootFollowerFloat', () => {
         {
           assistantLabel: 'sliccy',
           folder: 'cone',
-          isCone: true,
           jid: 'cone_1',
           name: 'sliccy',
           parentId: null,
@@ -883,7 +881,6 @@ describe('bootFollowerFloat', () => {
         {
           assistantLabel: 'sliccy',
           folder: 'cone',
-          isCone: true,
           jid: 'cone_1',
           name: 'sliccy',
           parentId: null,
@@ -997,7 +994,6 @@ describe('bootFollowerFloat', () => {
           jid: 'cone-jid',
           name: 'cone',
           folder: '/workspace',
-          isCone: true,
           parentId: null,
           assistantLabel: 'sliccy',
           state: 'working',
@@ -1007,7 +1003,6 @@ describe('bootFollowerFloat', () => {
           jid: 'scoop-1',
           name: 'research',
           folder: '/scoops/research',
-          isCone: false,
           parentId: 'cone-jid',
           assistantLabel: 'research',
           state: 'broken',
@@ -1034,8 +1029,8 @@ describe('bootFollowerFloat', () => {
     const switcher = app.querySelector('slicc-agent-tabs')!;
     opts.onScoopsList?.(
       [
-        { jid: 'cone-jid', name: 'cone', isCone: true, parentId: null },
-        { jid: 'research', name: 'research', isCone: false, parentId: 'cone-jid' },
+        { jid: 'cone-jid', name: 'cone', parentId: null },
+        { jid: 'research', name: 'research', parentId: 'cone-jid' },
       ] as never,
       'cone-jid'
     );
@@ -1044,10 +1039,7 @@ describe('bootFollowerFloat', () => {
     opts.onConnectionChange?.(false);
     expect(opts.getSelectedScoopJid?.()).toBe('research');
 
-    opts.onScoopsList?.(
-      [{ jid: 'cone-jid', name: 'cone', isCone: true, parentId: null }] as never,
-      'cone-jid'
-    );
+    opts.onScoopsList?.([{ jid: 'cone-jid', name: 'cone', parentId: null }] as never, 'cone-jid');
     expect(opts.getSelectedScoopJid?.()).toBe('cone-jid');
     expect(switcher.getAttribute('active')).toBe('cone-jid');
   });
@@ -1062,10 +1054,10 @@ describe('bootFollowerFloat', () => {
     };
     opts.onScoopsList?.(
       [
-        { jid: 'cone-a', name: 'cone', isCone: true, parentId: null },
-        { jid: 'cone-b', name: 'research', isCone: true, parentId: null },
-        { jid: 'scoop-a', name: 'helper-a', isCone: false, parentId: 'cone-a' },
-        { jid: 'scoop-b', name: 'helper-b', isCone: false, parentId: 'cone-b' },
+        { jid: 'cone-a', name: 'cone', parentId: null },
+        { jid: 'cone-b', name: 'research', parentId: null },
+        { jid: 'scoop-a', name: 'helper-a', parentId: 'cone-a' },
+        { jid: 'scoop-b', name: 'helper-b', parentId: 'cone-b' },
       ] as never,
       'cone-a'
     );
@@ -1089,8 +1081,8 @@ describe('bootFollowerFloat', () => {
 
     opts.onScoopsList?.(
       [
-        { jid: 'cone-a', name: 'cone', isCone: true, parentId: null },
-        { jid: 'scoop-a', name: 'helper', isCone: false, parentId: 'cone-a' },
+        { jid: 'cone-a', name: 'cone', parentId: null },
+        { jid: 'scoop-a', name: 'helper', parentId: 'cone-a' },
       ] as never,
       'cone-a'
     );
@@ -1121,8 +1113,8 @@ describe('bootFollowerFloat', () => {
 
       opts.onScoopsList?.(
         [
-          { jid: 'cone-a', name: 'cone', isCone: true, parentId: null },
-          { jid: 'scoop-a', name: 'helper', isCone: false, parentId: 'cone-a' },
+          { jid: 'cone-a', name: 'cone', parentId: null },
+          { jid: 'scoop-a', name: 'helper', parentId: 'cone-a' },
         ] as never,
         'cone-a'
       );
@@ -1147,8 +1139,8 @@ describe('bootFollowerFloat', () => {
 
     opts.onScoopsList?.(
       [
-        { jid: 'cone-a', name: 'cone', isCone: true, parentId: null },
-        { jid: 'scoop-a', name: 'helper', isCone: false, parentId: 'cone-a' },
+        { jid: 'cone-a', name: 'cone', parentId: null },
+        { jid: 'scoop-a', name: 'helper', parentId: 'cone-a' },
       ] as never,
       'cone-a'
     );

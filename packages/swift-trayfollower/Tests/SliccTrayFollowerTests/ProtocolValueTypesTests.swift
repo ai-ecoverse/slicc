@@ -50,14 +50,14 @@ final class ProtocolValueTypesTests: XCTestCase {
 
     func testScoopSummaryFullRoundTripAndIdentity() throws {
         let scoop = ScoopSummary(
-            jid: "j1", name: "Cone", folder: "/root", isCone: true, assistantLabel: "Assistant",
+            jid: "j1", name: "Cone", folder: "/root", parentId: nil, assistantLabel: "Assistant",
             trigger: "manual", state: "active", fill: 55.0)
         XCTAssertEqual(scoop.id, "j1")
         XCTAssertEqual(try WireCodec.roundTrip(scoop), scoop)
     }
 
     func testScoopSummaryOptionalDefaults() {
-        let scoop = ScoopSummary(jid: "j1", name: "n", folder: "/", isCone: false, assistantLabel: "A")
+        let scoop = ScoopSummary(jid: "j1", name: "n", folder: "/", parentId: nil, assistantLabel: "A")
         XCTAssertNil(scoop.trigger)
         XCTAssertNil(scoop.state)
         XCTAssertNil(scoop.fill)
@@ -67,14 +67,13 @@ final class ProtocolValueTypesTests: XCTestCase {
     
     
     
-    func testScoopSummaryDecodesWithoutIsCone() throws {
+    func testScoopSummaryDecodesParentIdOnly() throws {
         let decoder = JSONDecoder()
         let root = try decoder.decode(
             ScoopSummary.self,
             from: Data(
                 #"{"jid":"c","name":"Cone","folder":"cone","assistantLabel":"sliccy","parentId":null}"#
                     .utf8))
-        XCTAssertNil(root.isCone)
         XCTAssertNil(root.parentId)
 
         let child = try decoder.decode(
@@ -82,7 +81,6 @@ final class ProtocolValueTypesTests: XCTestCase {
             from: Data(
                 #"{"jid":"s","name":"reviewer","folder":"/scoops/reviewer","assistantLabel":"Reviewer","parentId":"c"}"#
                     .utf8))
-        XCTAssertNil(child.isCone)
         XCTAssertEqual(child.parentId, "c")
 
         
@@ -96,7 +94,7 @@ final class ProtocolValueTypesTests: XCTestCase {
         }
         XCTAssertEqual(active, "c")
         XCTAssertEqual(scoops.count, 1)
-        XCTAssertNil(scoops[0].isCone)
+        XCTAssertNil(scoops[0].parentId)
     }
 
     
@@ -104,23 +102,27 @@ final class ProtocolValueTypesTests: XCTestCase {
     
     func testScoopSummaryParentIdRoundTripAndLegacyDecode() throws {
         let scoop = ScoopSummary(
-            jid: "s1", name: "reviewer", folder: "/scoops/reviewer", isCone: false,
-            assistantLabel: "Reviewer", parentId: "cone")
+            jid: "s1", name: "reviewer", folder: "/scoops/reviewer", parentId: "cone", assistantLabel: "Reviewer")
         XCTAssertEqual(try WireCodec.roundTrip(scoop), scoop)
         XCTAssertEqual(try WireCodec.roundTrip(scoop).parentId, "cone")
 
         let decoder = JSONDecoder()
         let explicitNull = Data(
-            #"{"jid":"c","name":"Cone","folder":"cone","isCone":true,"assistantLabel":"sliccy","parentId":null}"#
+            #"{"jid":"c","name":"Cone","folder":"cone","assistantLabel":"sliccy","parentId":null}"#
                 .utf8)
         let cone = try decoder.decode(ScoopSummary.self, from: explicitNull)
-        XCTAssertEqual(cone.isCone, true)
         XCTAssertNil(cone.parentId)
 
+        
+        let withObsoleteFlag = Data(
+            #"{"jid":"c","name":"Cone","folder":"cone","isCone":true,"assistantLabel":"sliccy","parentId":null}"#
+                .utf8)
+        let stillDecodes = try decoder.decode(ScoopSummary.self, from: withObsoleteFlag)
+        XCTAssertNil(stillDecodes.parentId)
+
         let legacy = Data(
-            #"{"jid":"s","name":"old","folder":"/scoops/old","isCone":false,"assistantLabel":"old"}"#.utf8)
+            #"{"jid":"s","name":"old","folder":"/scoops/old","assistantLabel":"old"}"#.utf8)
         let old = try decoder.decode(ScoopSummary.self, from: legacy)
-        XCTAssertEqual(old.isCone, false)
         XCTAssertNil(old.parentId)
     }
 

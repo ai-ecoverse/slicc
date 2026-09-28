@@ -27,8 +27,6 @@ export interface FakeUnit {
   fill?: number;
   model?: { provider: string; id: string };
 
-  noRoleFlag?: boolean;
-
   legacyWire?: boolean;
 }
 
@@ -261,7 +259,6 @@ export function makeRemoteHarness(): ClientHarness {
         name: unit.name,
         state: STATE_FOR[unit.status],
         ...(unit.legacyWire ? {} : { parentId: unit.parentId }),
-        ...(unit.noRoleFlag ? {} : { isCone: unit.parentId === null }),
         ...(unit.phase ? { activity: unit.phase } : {}),
         ...(unit.awaiting ? { activity: 'awaiting' as const } : {}),
         ...(typeof unit.fill === 'number' ? { fill: unit.fill } : {}),

@@ -43,14 +43,13 @@ function mountFollower(): {
   };
 }
 
-const CONE = { jid: 'cone-a', name: 'cone', isCone: true, parentId: null };
+const CONE = { jid: 'cone-a', name: 'cone', parentId: null };
 
 const roster = (state: 'working' | 'idle', turns?: number) => [
   CONE,
   {
     jid: 'cone-b',
     name: 'cone',
-    isCone: true,
     parentId: null,
     state,
     ...(turns === undefined ? {} : { turns }),
@@ -58,7 +57,6 @@ const roster = (state: 'working' | 'idle', turns?: number) => [
   {
     jid: 'scoop-a',
     name: 'helper',
-    isCone: false,
     parentId: 'cone-b',
     state,
     ...(turns === undefined ? {} : { turns }),
@@ -114,7 +112,6 @@ describe('follower sprinkle selectedScoop', () => {
       jid: 'cone-a',
       name: 'Cone',
       folder: 'cone',
-      isCone: true,
       parentId: null,
       state,
     },
@@ -122,7 +119,6 @@ describe('follower sprinkle selectedScoop', () => {
       jid: 'scoop-a',
       name: 'helper',
       folder: 'helper-scoop',
-      isCone: false,
       parentId: 'cone-a',
       state,
     },

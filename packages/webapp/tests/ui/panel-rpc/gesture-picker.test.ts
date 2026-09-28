@@ -4,6 +4,7 @@ import type { HidApi } from '../../../src/kernel/hid-device-registry.js';
 import type { SerialApi } from '../../../src/kernel/serial-port-registry.js';
 import type { UsbApi } from '../../../src/kernel/usb-device-registry.js';
 import {
+  gestureDisplayMedia,
   gestureHid,
   gestureSerial,
   gestureUsb,
@@ -74,5 +75,32 @@ describe('device choosers without a user gesture', () => {
     await expect(gestureUsb(usb, () => null).requestDevice({ filters: [] })).rejects.toThrow(
       /needs a click/
     );
+  });
+
+  it('shares a screen through the prompt, with the capture constraints', async () => {
+    const getDisplayMedia = vi.fn(async () => ({ direct: true }));
+    vi.stubGlobal('navigator', {
+      userActivation: { isActive: false },
+      mediaDevices: { getDisplayMedia },
+    });
+    const stream = { prompted: true };
+    const s = surface({ status: 'granted', grants: [{ kind: 'screenshare', stream }] });
+    const constraints = { video: true, audio: false };
+    expect(await gestureDisplayMedia(s.get)(constraints)).toBe(stream);
+    expect(s.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kinds: ['screenshare'],
+        description: 'A command in the terminal asks to share a screen.',
+        requestOptions: { screenshare: { constraints } },
+      })
+    );
+    expect(getDisplayMedia).not.toHaveBeenCalled();
+
+    vi.stubGlobal('navigator', {
+      userActivation: { isActive: true },
+      mediaDevices: { getDisplayMedia },
+    });
+    expect(await gestureDisplayMedia(s.get)(constraints)).toEqual({ direct: true });
+    expect(getDisplayMedia).toHaveBeenCalledWith(constraints);
   });
 });

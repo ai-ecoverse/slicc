@@ -737,7 +737,6 @@ describe('LeaderSyncManager', () => {
           jid,
           name: jid,
           folder: `/${jid}`,
-          isCone: true,
           assistantLabel: jid,
         })),
     });
@@ -775,7 +774,6 @@ describe('LeaderSyncManager', () => {
           jid,
           name: jid,
           folder: `/${jid}`,
-          isCone: true,
           assistantLabel: jid,
         })),
     });
@@ -829,7 +827,6 @@ describe('LeaderSyncManager', () => {
             jid,
             name: jid,
             folder: `/${jid}`,
-            isCone: true,
             assistantLabel: jid,
           })),
         getMessagesForScoop: (jid: string) => [makeChatMessage(`${jid}-1`, 'assistant', jid)],

@@ -582,8 +582,8 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         let scoopName = name ?? (isCone ? "sliccy" : "reviewer")
         return .init(
             jid: isCone ? "cone" : scoopName, name: scoopName,
-            folder: isCone ? "/workspace" : "/scoops/\(scoopName)", isCone: isCone,
-            assistantLabel: isCone ? "Sliccy" : "Reviewer", trigger: nil, state: state,
+            folder: isCone ? "/workspace" : "/scoops/\(scoopName)", parentId: isCone ? nil : "cone", assistantLabel: isCone ? "Sliccy" : "Reviewer",
+            trigger: nil, state: state,
             fill: fill)
     }
 }

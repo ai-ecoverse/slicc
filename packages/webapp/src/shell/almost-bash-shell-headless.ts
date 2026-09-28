@@ -56,6 +56,7 @@ import {
 } from './proxied-fetch.js';
 import { clearReadByteProvenance } from './request-body-provenance.js';
 import { ScriptCatalog } from './script-catalog.js';
+import { settleOnAbort } from './settle-on-abort.js';
 import {
   commandSudoSubject,
   enforceCommandSudo,
@@ -893,7 +894,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           (ctx as CommandContext & { writeStdout?: (chunk: string) => void }).writeStdout = tee;
         }
         try {
-          const result = await wrapped.execute(args, ctx);
+          const result = await settleOnAbort(() => wrapped.execute(args, ctx), ctx.signal);
 
           teeOutput(ctx.env, result);
           return result;

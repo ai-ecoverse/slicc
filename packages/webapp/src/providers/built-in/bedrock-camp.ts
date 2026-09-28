@@ -31,7 +31,12 @@ import {
 } from '../claude-model-version.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
-import { type BedrockCampEffortMap, bedrockCampOpenAIEffortMap } from './bedrock-camp-compat.js';
+import {
+  type BedrockCampEffortMap,
+  bedrockCampOpenAIEffortMap,
+  getModelMatchCandidates,
+  isBedrockCampGpt6Model,
+} from './bedrock-camp-compat.js';
 
 export const config: ProviderConfig = {
   id: 'bedrock-camp',
@@ -303,14 +308,6 @@ function pickCampExtras(
   };
 }
 
-function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
-  const values = modelName ? [modelId, modelName] : [modelId];
-  return values.flatMap((value) => {
-    const lower = value.toLowerCase();
-    return [lower, lower.replace(/[\s_.:]+/g, '-')];
-  });
-}
-
 function normalizeToolCallId(id: string): string {
   const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, '_');
   return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
@@ -422,34 +419,54 @@ function convertToolResultContentItem(content: unknown): BedrockCampToolResultCo
       };
 }
 
-function buildToolResultEntry(m: {
-  toolCallId?: string;
-  content: unknown[];
-  isError?: boolean;
-}): BedrockCampToolResultBlock {
+function buildToolResultEntry(
+  m: {
+    toolCallId?: string;
+    content: unknown[];
+    isError?: boolean;
+  },
+  liftImages: boolean
+): { result: BedrockCampToolResultBlock; images: BedrockCampImageBlock[] } {
+  const images: BedrockCampImageBlock[] = [];
+  const content = m.content.map((item): BedrockCampToolResultContent => {
+    const block = convertToolResultContentItem(item);
+    if (liftImages && 'image' in block) {
+      images.push(block);
+      return { text: '[Image from tool result attached to this message.]' };
+    }
+    return block;
+  });
   return {
-    toolResult: {
-      toolUseId: m.toolCallId ?? '',
-      content: m.content.map(convertToolResultContentItem),
-      status: m.isError ? 'error' : 'success',
+    result: {
+      toolResult: {
+        toolUseId: m.toolCallId ?? '',
+        content,
+        status: m.isError ? 'error' : 'success',
+      },
     },
+    images,
   };
 }
 
 function coalesceToolResults(
   transformed: Array<{ role: string; content: unknown[]; toolCallId?: string; isError?: boolean }>,
-  startIndex: number
+  startIndex: number,
+  model: Model<Api>
 ): {
   message: BedrockCampUserMessage;
   nextIndex: number;
 } {
-  const toolResults = [buildToolResultEntry(transformed[startIndex])];
-  let j = startIndex + 1;
-  while (j < transformed.length && transformed[j].role === 'toolResult') {
-    toolResults.push(buildToolResultEntry(transformed[j]));
+  const liftImages = isBedrockCampGpt6Model(model);
+  const toolResults: BedrockCampToolResultBlock[] = [];
+  const images: BedrockCampImageBlock[] = [];
+  let j = startIndex;
+  do {
+    const converted = buildToolResultEntry(transformed[j], liftImages);
+    toolResults.push(converted.result);
+    images.push(...converted.images);
     j++;
-  }
-  return { message: { role: 'user', content: toolResults }, nextIndex: j - 1 };
+  } while (j < transformed.length && transformed[j].role === 'toolResult');
+  return { message: { role: 'user', content: [...toolResults, ...images] }, nextIndex: j - 1 };
 }
 
 function appendCachePointToLastUser(
@@ -485,7 +502,7 @@ function convertMessages(
       const converted = convertAssistantMessage(m, model);
       if (converted !== null) result.push(converted);
     } else if (m.role === 'toolResult') {
-      const { message, nextIndex } = coalesceToolResults(transformed, i);
+      const { message, nextIndex } = coalesceToolResults(transformed, i, model);
       result.push(message);
       i = nextIndex;
     }

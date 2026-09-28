@@ -62,7 +62,7 @@ Options:
   --erase         write_flash: erase the whole chip before writing
   -h, --help
 
-Without --port, the Web Serial picker opens (needs a user gesture).
+Without --port, the Web Serial picker opens (asks for permission).
 `;
 
 async function resolveHandle(flags: Map<string, string>, serial: SerialBackend): Promise<string> {

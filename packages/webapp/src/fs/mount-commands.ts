@@ -3,6 +3,7 @@ import {
   getToolExecutionContext,
   type ToolExecutionContext,
 } from '../base/tool-execution-context.js';
+import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { AemMountBackend } from './mount/backend-aem.js';
 import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
 import { LocalMountBackend } from './mount/backend-local.js';
@@ -10,6 +11,7 @@ import { S3MountBackend, type SignedFetchS3 } from './mount/backend-s3.js';
 import { type ContentBackendKind, probeContentSource } from './mount/content-source.js';
 import {
   acquireLocalMountViaDirectPicker,
+  acquireLocalMountViaPanelPrompt,
   acquireLocalMountViaPopup,
 } from './mount/local-mount-acquire.js';
 import { newMountId } from './mount/mount-id.js';
@@ -215,6 +217,8 @@ export class MountCommands {
           };
         }
       }
+
+      const workerRpc = hasLocalDom() ? null : getPanelRpcClient();
       let dirHandle: FileSystemDirectoryHandle;
       if (ctx) {
         const acquire = this.options.acquireLocalMountViaToolUI;
@@ -224,6 +228,8 @@ export class MountCommands {
         dirHandle = await acquire(ctx, targetPath);
       } else if (isExtensionRealm()) {
         dirHandle = await acquireLocalMountViaPopup();
+      } else if (workerRpc) {
+        dirHandle = await acquireLocalMountViaPanelPrompt(workerRpc, targetPath);
       } else {
         dirHandle = await acquireLocalMountViaDirectPicker();
       }

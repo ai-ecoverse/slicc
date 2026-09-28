@@ -10,8 +10,8 @@ final class ThreadSyncPlannerTests: XCTestCase {
         _ jid: String, parent: String? = nil, state: String = "idle", turns: Double? = nil
     ) -> ScoopSummary {
         ScoopSummary(
-            jid: jid, name: jid, folder: "/\(jid)", isCone: parent == nil, assistantLabel: jid,
-            trigger: nil, state: state, fill: 10, parentId: parent, turns: turns)
+            jid: jid, name: jid, folder: "/\(jid)", parentId: parent, assistantLabel: jid,
+            trigger: nil, state: state, fill: 10, turns: turns)
     }
 
     private var roster: [ScoopSummary] {

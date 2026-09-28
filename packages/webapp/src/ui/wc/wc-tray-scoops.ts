@@ -1,7 +1,6 @@
 import type { ScoopSummary } from '../../scoops/tray-sync-protocol.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
-import { isRootUnit } from '../../work-unit/policy.js';
 import { modelFor } from '../../work-unit/record.js';
 import type { SwitcherScoop } from './wc-shell.js';
 import type { UnitRole } from './wc-unit-context.js';
@@ -60,7 +59,6 @@ export function toScoopSummaries(
       name: scoop.name,
       folder: scoop.folder,
 
-      isCone: isRootUnit(scoop),
       parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
 
@@ -76,11 +74,11 @@ export function toScoopSummaries(
   });
 }
 
-export function summaryIsRoot(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): boolean {
-  return scoop.parentId === undefined ? scoop.isCone === true : scoop.parentId === null;
+export function summaryIsRoot(scoop: Pick<ScoopSummary, 'parentId'>): boolean {
+  return scoop.parentId === null;
 }
 
-export function summaryRole(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): UnitRole {
+export function summaryRole(scoop: Pick<ScoopSummary, 'parentId'>): UnitRole {
   return summaryIsRoot(scoop) ? 'cone' : 'scoop';
 }
 

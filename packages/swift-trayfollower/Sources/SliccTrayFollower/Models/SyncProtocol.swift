@@ -21,8 +21,6 @@ public enum NewSessionAction: String, Codable {
 
 
 
-
-
 public let traySyncProtocolVersion = 10
 
 
@@ -220,14 +218,6 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     
     
     
-    
-    
-    
-    
-    public let isCone: Bool?
-    
-    
-    
     public let parentId: String?
     public let assistantLabel: String
     public let trigger: String?
@@ -263,21 +253,18 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         folder: String,
         
         
-        
-        isCone: Bool?,
+        parentId: String?,
         assistantLabel: String,
         trigger: String? = nil,
         state: String? = nil,
         activity: String? = nil,
         fill: Double? = nil,
-        parentId: String? = nil,
         turns: Double? = nil,
         model: ScoopSummaryModel? = nil
     ) {
         self.jid = jid
         self.name = name
         self.folder = folder
-        self.isCone = isCone
         self.parentId = parentId
         self.assistantLabel = assistantLabel
         self.trigger = trigger

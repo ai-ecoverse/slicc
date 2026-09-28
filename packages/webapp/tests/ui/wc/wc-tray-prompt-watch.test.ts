@@ -102,7 +102,7 @@ describe('tray role-switch follower: prompt silence hint', () => {
     handle.sendMessage('for cone 1', 'm1');
 
     role.options.onScoopsList?.(
-      [{ jid: 'cone_2', name: 'other', isCone: true, parentId: null }] as never,
+      [{ jid: 'cone_2', name: 'other', parentId: null }] as never,
       'cone_2'
     );
     await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS);

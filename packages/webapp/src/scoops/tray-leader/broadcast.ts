@@ -40,16 +40,6 @@ export function degradeOversizeAgentEvent(event: AgentEvent): AgentEvent | null 
   }
 }
 
-export const PARENT_ID_ONLY_PROTOCOL_VERSION_MIN = 8;
-
-export function scoopsListForPeer(
-  scoops: readonly ScoopSummary[],
-  peerProtocolVersion: number | undefined
-): ScoopSummary[] {
-  if ((peerProtocolVersion ?? 0) < PARENT_ID_ONLY_PROTOCOL_VERSION_MIN) return [...scoops];
-  return scoops.map(({ isCone: _isCone, ...rest }) => rest);
-}
-
 export class BroadcastManager {
   constructor(private readonly context: LeaderSyncContext) {}
 
@@ -244,7 +234,7 @@ export class BroadcastManager {
     try {
       follower.sync.send({
         type: 'scoops.list',
-        scoops: scoopsListForPeer(getScoops(), follower.peerProtocolVersion),
+        scoops: getScoops(),
         activeScoopJid: this.context.options.getScoopJid(),
       });
     } catch (err) {
@@ -284,12 +274,11 @@ export class BroadcastManager {
       return;
     }
 
-    const activeScoopJid = this.context.options.getScoopJid();
-    this.context.followers.broadcastPerFollower((follower) => ({
+    this.broadcast({
       type: 'scoops.list',
-      scoops: scoopsListForPeer(scoops, follower.peerProtocolVersion),
-      activeScoopJid,
-    }));
+      scoops,
+      activeScoopJid: this.context.options.getScoopJid(),
+    });
   }
 
   broadcastSprinklesList(): void {

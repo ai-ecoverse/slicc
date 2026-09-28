@@ -83,7 +83,6 @@ import UIKit
         
         
         
-        
         @MainActor
         static func applyUnitRoleFixture(into appState: AppState) -> Bool {
             
@@ -95,12 +94,11 @@ import UIKit
                 return false
             }
             let cone = ScoopSummary(
-                jid: "fixture-cone", name: "cone", folder: "/workspace", isCone: true,
-                assistantLabel: "sliccy", trigger: nil, state: "idle", fill: 20)
+                jid: "fixture-cone", name: "cone", folder: "/workspace", parentId: nil, assistantLabel: "sliccy", trigger: nil, state: "idle", fill: 20)
             let scoop = ScoopSummary(
                 jid: "fixture-owned-scoop", name: "reviewer", folder: "/scoops/reviewer",
-                isCone: false, assistantLabel: "reviewer", trigger: nil, state: "working",
-                fill: 40, parentId: "fixture-cone")
+                parentId: "fixture-cone", assistantLabel: "reviewer", trigger: nil, state: "working",
+                fill: 40)
             appState.scoops = [cone, scoop]
             
             
@@ -156,8 +154,7 @@ import UIKit
             jid: String, label: String, state: String?, fill: Double?
         ) -> ScoopSummary {
             ScoopSummary(
-                jid: jid, name: jid, folder: "/scoops/\(jid)", isCone: false,
-                assistantLabel: label, trigger: nil, state: state, fill: fill)
+                jid: jid, name: jid, folder: "/scoops/\(jid)", parentId: "cone", assistantLabel: label, trigger: nil, state: state, fill: fill)
         }
 
         

@@ -35,7 +35,6 @@ function makeCollectionDeps(): TranscriptCollectionDeps {
         [
           {
             jid: 'jid-cone',
-            isCone: true,
             name: 'Sliccy',
             folder: 'cone',
             parentJid: null,
@@ -592,16 +591,15 @@ describe('DefaultTranscriptExportService — captureFrozen', () => {
       listScoops: vi.fn(
         () =>
           [
-            { jid: 'jid-cone', isCone: true, name: 'Sliccy', folder: 'cone', parentJid: null },
-            { jid: 'jid-scoop-a', isCone: false, name: 'A', folder: 'a', parentJid: 'jid-cone' },
+            { jid: 'jid-cone', name: 'Sliccy', folder: 'cone', parentJid: null },
+            { jid: 'jid-scoop-a', name: 'A', folder: 'a', parentJid: 'jid-cone' },
             {
               jid: 'jid-cone-b',
-              isCone: true,
               name: 'Research',
               folder: 'cone-research',
               parentJid: null,
             },
-            { jid: 'jid-scoop-b', isCone: false, name: 'B', folder: 'b', parentJid: 'jid-cone-b' },
+            { jid: 'jid-scoop-b', name: 'B', folder: 'b', parentJid: 'jid-cone-b' },
           ] as any
       ),
     };

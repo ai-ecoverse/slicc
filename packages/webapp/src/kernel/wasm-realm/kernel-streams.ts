@@ -10,6 +10,10 @@ const POLLHUP = 0x010;
 const POLLRDNORM = 0x040;
 const POLLWRNORM = 0x100;
 
+export const O_NONBLOCK = 0o4000;
+
+const SOCKET_MODE = 0o140777;
+
 const KILLED_BY_SIGPIPE = 128 + 13;
 
 export class ProcessExit extends Error {
@@ -24,10 +28,15 @@ export class SyscallError extends Error {
   }
 }
 
-export interface ProcessSys {
-  read(fd: number, max: number): Uint8Array;
+export interface ReadOptions {
+  nonblock?: boolean;
+  peek?: boolean;
+}
 
-  write(fd: number, bytes: Uint8Array): number;
+export interface ProcessSys {
+  read(fd: number, max: number, opts?: ReadOptions): Uint8Array;
+
+  write(fd: number, bytes: Uint8Array, opts?: { nonblock?: boolean }): number;
   close(fd: number): void;
 
   pipe(): [number, number];
@@ -67,6 +76,8 @@ export interface ProcessStream {
   sliccKernelFd?: number;
 
   sliccKernelFile?: boolean;
+
+  sliccKernelSocket?: boolean;
   path?: string;
   flags: number;
   position: number;
@@ -74,6 +85,17 @@ export interface ProcessStream {
   node: { mode: number; mount?: { type?: unknown } };
 
   shared: object;
+}
+
+interface FsNode {
+  mode: number;
+  node_ops: object;
+}
+
+interface SocketNodeFs {
+  mount(type: { mount(): FsNode }, opts: object, mountpoint: null): FsNode;
+  createNode(parent: FsNode | null, name: string, mode: number, rdev: number): FsNode;
+  createStream(stream: object, fd?: number): ProcessStream;
 }
 
 export interface ProcessFs extends EmscriptenFsForHook {
@@ -99,8 +121,15 @@ export interface KernelStreamOptions {
   restartable?: () => boolean;
 }
 
+function nonblocking(stream: ProcessStream): boolean {
+  return stream.sliccKernelSocket === true && (stream.flags & O_NONBLOCK) !== 0;
+}
+
 export class KernelStreams {
   private readonly refs = new Map<number, number>();
+
+  private socketRoot: FsNode | undefined;
+  private sockets = 0;
 
   constructor(
     private readonly Fs: ProcessFs,
@@ -167,6 +196,32 @@ export class KernelStreams {
     return undefined;
   }
 
+  attachSocket(stream: ProcessStream, kfd: number): void {
+    this.attach(stream, kfd, false);
+    stream.sliccKernelSocket = true;
+  }
+
+  socketStream(flags: number): ProcessStream {
+    const fs = this.Fs as unknown as Partial<SocketNodeFs>;
+    if (!fs.mount || !fs.createNode || !fs.createStream) {
+      const stream = this.Fs.open('/dev/null', 2);
+      stream.flags = flags;
+      return stream;
+    }
+    this.socketRoot ??= fs.mount(
+      { mount: () => (fs.createNode as SocketNodeFs['createNode'])(null, '/', 0o40777, 0) },
+      {},
+      null
+    );
+    const ino = ++this.sockets;
+    const node = fs.createNode(this.socketRoot, `socket:${ino}`, SOCKET_MODE, 0);
+    const now = new Date();
+    const stat = { dev: 0, ino, mode: SOCKET_MODE, nlink: 1, uid: 0, gid: 0, rdev: 0, size: 0 };
+    const times = { atime: now, mtime: now, ctime: now, blksize: 4096, blocks: 0 };
+    node.node_ops = { getattr: () => ({ ...stat, ...times }) };
+    return fs.createStream({ node, flags, seekable: false, position: 0, stream_ops: {} });
+  }
+
   usePipes(pipefs: ProcessPipeFs): void {
     const createPipe = pipefs.createPipe.bind(pipefs);
     pipefs.createPipe = () => {
@@ -213,15 +268,18 @@ export class KernelStreams {
   private ops(kfd: number, base: StreamOps): StreamOps {
     return {
       ...base,
-      read: (_s, buffer, offset, length) =>
+      read: (s, buffer, offset, length) =>
         this.call(() => {
-          const bytes = this.restarting(() => this.sys.read(kfd, length));
+          const opts = nonblocking(s) ? { nonblock: true } : undefined;
+          const bytes = this.restarting(() => this.sys.read(kfd, length, opts));
           buffer.set(bytes, offset);
           return bytes.length;
         }),
-      write: (_s, buffer, offset, length) => {
+      write: (s, buffer, offset, length) => {
         try {
-          return this.restarting(() => this.sys.write(kfd, buffer.slice(offset, offset + length)));
+          const bytes = buffer.slice(offset, offset + length);
+          const opts = nonblocking(s) ? { nonblock: true } : undefined;
+          return this.restarting(() => this.sys.write(kfd, bytes, opts));
         } catch (e) {
           if (e instanceof SyscallError && e.code === 'EPIPE' && !this.options.sigpipe?.()) {
             throw new ProcessExit(KILLED_BY_SIGPIPE);

@@ -12,6 +12,19 @@ function openPipe(capacity?: number): KernelPipe {
 }
 
 describe('KernelPipe', () => {
+  it('peeks across chunks without consuming, waits for data, and is empty at EOF', async () => {
+    const pipe = openPipe();
+    const waiting = pipe.peek(4);
+    await pipe.write(bytes('ab'));
+    expect(text(await waiting)).toBe('ab');
+    await pipe.write(bytes('cd'));
+    expect(text(await pipe.peek(3))).toBe('abc');
+    expect(text(await pipe.peek(10))).toBe('abcd');
+    expect(text(await pipe.read(10))).toBe('abcd');
+    pipe.closeWrite();
+    expect(await pipe.peek(4)).toEqual(new Uint8Array(0));
+  });
+
   it('passes bytes through in order', async () => {
     const pipe = openPipe();
     await pipe.write(bytes('hello '));

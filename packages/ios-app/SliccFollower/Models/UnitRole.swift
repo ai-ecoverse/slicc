@@ -28,12 +28,7 @@ extension ScoopSummary {
     
     
     
-    
-    
-    
-    
-    
-    var isRootUnit: Bool { parentId == nil && (isCone ?? true) }
+    var isRootUnit: Bool { parentId == nil }
 
     
     
