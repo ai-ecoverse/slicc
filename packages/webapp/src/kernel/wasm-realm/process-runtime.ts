@@ -144,21 +144,37 @@ export function glueBody(glue: string): string {
  * Runs in the glue's scope right after its body. ENV, FS and callMain are the
  * glue's own variables: ENV is filled before the (asynchronous) instantiation
  * reads it, and FS and callMain are taken from the scope, so a program linked
- * without exporting them (`-sEXPORTED_RUNTIME_METHODS`) still runs.
+ * without exporting them (`-sEXPORTED_RUNTIME_METHODS`) still runs. With
+ * assertions on (any `-O0` link) such a symbol is an accessor on `Module`
+ * that aborts when read, so it is replaced without reading it.
  */
 const GLUE_TRAILER = [
   'Object.assign(ENV, Module.sliccEnv);',
-  "if (typeof FS !== 'undefined') Module.FS ??= FS;",
-  "if (typeof callMain === 'function') Module.callMain ??= callMain;",
-  "if (typeof sliccRunMain === 'function') Module.sliccRunMain ??= sliccRunMain;",
-  "if (typeof sliccForkChild === 'function') Module.sliccForkChild ??= sliccForkChild;",
-  "if (typeof PIPEFS !== 'undefined') Module.PIPEFS ??= PIPEFS;",
+  'const __sliccTake = (name, value) => {',
+  '  const own = Object.getOwnPropertyDescriptor(Module, name);',
+  "  if (own && 'value' in own && own.value != null) return;",
+  '  Object.defineProperty(Module, name, { value, writable: true, configurable: true, enumerable: true });',
+  '};',
+  "if (typeof FS !== 'undefined') __sliccTake('FS', FS);",
+  "if (typeof callMain === 'function') __sliccTake('callMain', callMain);",
+  "if (typeof sliccRunMain === 'function') __sliccTake('sliccRunMain', sliccRunMain);",
+  "if (typeof sliccForkChild === 'function') __sliccTake('sliccForkChild', sliccForkChild);",
+  "if (typeof PIPEFS !== 'undefined') __sliccTake('PIPEFS', PIPEFS);",
   // The toolchain's SIGPIPE disposition query (exported once instantiated).
   "Module.sliccSigpipe ??= () => (typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
   // The toolchain's signal support (slicc_signals.c): dispositions and raise().
   "Module.sliccSigMask ??= (w) => (typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
   "Module.sliccRaise ??= (sig) => { if (typeof _slicc_raise === 'function') _slicc_raise(sig); };",
 ].join('\n');
+
+/**
+ * An optional runtime symbol of the module, without reading an accessor: an
+ * assertions build defines unexported ones as getters that abort.
+ */
+export function ownValue<T>(module: object, name: string): T | undefined {
+  const own = Object.getOwnPropertyDescriptor(module, name);
+  return own && 'value' in own ? (own.value as T | undefined) : undefined;
+}
 
 export const evaluateGlue: GlueEvaluator = (glue, module) => {
   let run: (module: object) => void;
@@ -266,7 +282,9 @@ export async function runWasmProcess(
   });
   if (init.fork) restoreForkedStreams(running.FS, streams, init.fork.streams ?? []);
   else wireKernelStdio(running.FS, streams);
-  if (running.PIPEFS) streams.usePipes(running.PIPEFS);
+  const pipefs = ownValue<ProcessPipeFs>(running, 'PIPEFS');
+  if (pipefs) streams.usePipes(pipefs);
+  streams.useControllingTerminal();
   running.sliccKernel = createProcessKernel({
     transport,
     Fs: running.FS,

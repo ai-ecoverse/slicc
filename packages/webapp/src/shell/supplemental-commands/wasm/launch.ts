@@ -22,13 +22,16 @@ import {
   type ChildSpawnRequest,
   SpawnError,
 } from '../../../kernel/wasm-realm/children.js';
-import type { FdTable, OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
+import { type FdTable, KernelError, type OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
+import { JobTable } from '../../../kernel/wasm-realm/jobs.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
+import type { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
 import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
+import { STDIN_ISATTY_ENV, STDOUT_ISATTY_ENV } from '../stdio-tty.js';
 
 /** Compiled modules, keyed by path, size and mtime: a rebuilt program recompiles. */
 const modules = new Map<string, Promise<WebAssembly.Module>>();
@@ -43,6 +46,18 @@ const REGISTRY_PATH = /^\/(?:usr\/)?bin\/([^/]+)$/;
 
 /** Pids when there is no process table (unit tests). */
 let nextPid = 40000;
+
+/**
+ * The shell's command policy (allowed commands, sudo `Cmnd` rules) for a
+ * program a wasm process spawns: a denial is what the program's run reports
+ * instead (its message and exit code), `null` lets it run. A shell command
+ * needs none: it runs through the shell, whose dispatch applies the policy.
+ */
+export type NativeGate = (
+  name: string,
+  args: string[],
+  env: Record<string, string>
+) => Promise<{ stderr: string; exitCode: number } | null>;
 
 /** A wasm program to start: its glue and module paths and `argv[0]`. */
 export interface WasmTarget {
@@ -71,6 +86,11 @@ interface StartRequest extends LaunchRequest {
 /** The glue's module: `x.js` → `x.wasm`, `x` → `x.wasm`. */
 export function modulePath(glue: string): string {
   return glue.endsWith('.js') ? `${glue.slice(0, -3)}.wasm` : `${glue}.wasm`;
+}
+
+/** The command a program path names: `/usr/bin/rm` and `rm` are `rm`. */
+function commandName(file: string): string {
+  return REGISTRY_PATH.exec(file)?.[1] ?? baseName(file);
 }
 
 function baseName(path: string): string {
@@ -146,19 +166,47 @@ async function writeAll(fds: FdTable, fd: number, bytes: Uint8Array): Promise<vo
   }
 }
 
+function isTerminal(fds: FdTable, fd: number): boolean {
+  return fds.has(fd) && fds.get(fd).file.tty !== undefined;
+}
+
+/** What a shell command learns of its stdio: `0` for a stdin / stdout that is no terminal. */
+function ttyHints(fds: FdTable): Record<string, string> {
+  return {
+    ...(isTerminal(fds, 0) ? {} : { [STDIN_ISATTY_ENV]: '0' }),
+    ...(isTerminal(fds, 1) ? {} : { [STDOUT_ISATTY_ENV]: '0' }),
+  };
+}
+
+/** A wasm process as its parent's child table sees it. */
+function childHandle(handle: WasmProcessHandle): ChildHandle {
+  return {
+    pid: handle.pid,
+    exited: handle.exited,
+    termsig: handle.termsig,
+    onState: (listener) => handle.onState(listener),
+  };
+}
+
 export class WasmSession {
   private readonly live = new Set<WasmProcessHandle>();
   /** The running shell children: each one's abort ends it. */
   private readonly shellChildren = new Set<AbortController>();
   /** The session's processes by pid: kill(2) between them. */
   private readonly wasmByPid = new Map<number, WasmProcessHandle>();
-  private readonly shellByPid = new Map<number, AbortController>();
+  /** Signal a shell child: every signal whose default action ends a process ends it. */
+  private readonly shellByPid = new Map<number, (sig: number) => void>();
   private installed: Promise<Map<string, WasmCommand>> | undefined;
+  /** Process groups and sessions of the invocation's wasm processes (job control). */
+  private readonly jobs = new JobTable();
+  /** The invocation's first process: the terminal's foreground until a program picks one. */
+  private leader: number | undefined;
 
   constructor(
     private readonly ctx: CommandContext,
     private readonly processConfig: JshProcessConfig | undefined,
-    private readonly onError: (message: string) => void
+    private readonly onError: (message: string) => void,
+    private readonly gate?: NativeGate
   ) {}
 
   /** The installed commands, scanned once per invocation. */
@@ -199,10 +247,13 @@ export class WasmSession {
       spawner: this.spawner(pid),
       forker: this.forker(pid, req),
       kill: (target, sig) => this.kill(target, sig),
+      jobs: this.jobs,
       ...(req.fork ? { fork: req.fork } : {}),
     });
     this.live.add(handle);
     this.wasmByPid.set(pid, handle);
+    this.leader ??= pid;
+    this.jobs.add(pid, req.ppid, (sig) => handle.signal(sig));
     // `kill` / `ps`: SIGKILL and uncaught signals end the worker; caught ones run the handler.
     const unsubscribe = pm?.onSignal((signaled, sig) => {
       if (signaled.pid === pid) handle.signal(SIGNAL_BY_NAME[sig]);
@@ -210,6 +261,7 @@ export class WasmSession {
     void handle.exited.then((code) => {
       this.live.delete(handle);
       this.wasmByPid.delete(pid);
+      this.jobs.remove(pid);
       unsubscribe?.();
       if (this.processConfig) pm?.exit(pid, code);
     });
@@ -218,10 +270,12 @@ export class WasmSession {
 
   /**
    * kill(2) from a program: a process of this session gets any signal; one
-   * elsewhere in the process table gets the signals the table knows. Signal 0
-   * only asks whether the process exists.
+   * elsewhere in the process table gets the signals the table knows. A
+   * negative pid names a process group of the session. Signal 0 only asks
+   * whether the process exists.
    */
-  private kill(pid: number, sig: number): boolean {
+  private kill(pid: number, sig: number): boolean | Promise<boolean> {
+    if (pid < 0) return this.jobs.killGroup(-pid, sig);
     const wasm = this.wasmByPid.get(pid);
     if (wasm) {
       if (sig !== 0) wasm.signal(sig);
@@ -229,20 +283,38 @@ export class WasmSession {
     }
     const shell = this.shellByPid.get(pid);
     if (shell) {
-      // It has no handlers of its own: every signal whose default action ends a process ends it.
-      if (sig !== 0 && defaultAction(sig) === 'terminate') shell.abort();
+      if (sig !== 0) shell(sig);
       return true;
     }
     const pm = this.processConfig?.processManager;
     if (!pm) return false;
     if (sig === 0) return pm.get(pid) !== null;
     const name = SIGNAL_NAME.get(sig);
-    return name !== undefined && pm.signal(pid, name);
+    if (name === undefined) return false;
+    if (!this.gate) return pm.signal(pid, name);
+    return this.killOutside(pid, name);
   }
 
-  /** Signal every process of the invocation (the terminal's foreground job: ^C, ^Z, SIGWINCH). */
+  /**
+   * A signal to a process outside the invocation goes through the shell's
+   * command policy as `kill -SIG PID` would: bash's `kill` is a builtin, so
+   * no command dispatch gates it otherwise. A denial is EPERM.
+   */
+  private async killOutside(pid: number, name: keyof typeof SIGNAL_BY_NAME): Promise<boolean> {
+    const denial = await this.gate?.('kill', [`-${name.slice(3)}`, String(pid)], {});
+    if (denial) throw new KernelError('EPERM');
+    return this.processConfig?.processManager.signal(pid, name) ?? false;
+  }
+
+  /** Signal every process of the invocation. */
   signalAll(sig: number): void {
     for (const handle of this.live) handle.signal(sig);
+  }
+
+  /** A signal from the terminal (^C, ^Z, SIGWINCH): its foreground process group. */
+  signalTerminal(tty: KernelTty, sig: number): void {
+    // The first process leads the invocation's session: its group until a program picks one.
+    if (this.leader !== undefined) this.jobs.signalForeground(tty, this.leader, sig);
   }
 
   /** End every process of the invocation (an abort, the output limit). */
@@ -278,7 +350,7 @@ export class WasmSession {
         ppid,
         fork: state,
       });
-      return { pid: handle.pid, exited: handle.exited, termsig: handle.termsig };
+      return childHandle(handle);
     };
   }
 
@@ -286,6 +358,8 @@ export class WasmSession {
     return async (req, fds) => {
       const target = await this.resolve(req.file, req.argv[0] ?? req.file, req.cwd);
       if (!target) return this.runShellChild(req, fds, ppid);
+      const denial = await this.gate?.(commandName(req.file), req.argv.slice(1), req.env);
+      if (denial) return this.deniedChild(req, fds, ppid, denial);
       const handle = await this.launch({
         ...target,
         args: req.argv.slice(1),
@@ -294,8 +368,27 @@ export class WasmSession {
         fds,
         ppid,
       });
-      return { pid: handle.pid, exited: handle.exited, termsig: handle.termsig };
+      return childHandle(handle);
     };
+  }
+
+  /** A program the shell's policy refused: a child that reports the denial and exits. */
+  private deniedChild(
+    req: ChildSpawnRequest,
+    fds: FdTable,
+    ppid: number,
+    denial: { stderr: string; exitCode: number }
+  ): ChildHandle {
+    const { pid } = this.register('shell', req.argv, req.cwd, req.env, ppid);
+    const exited = (async () => {
+      await writeAll(fds, 2, new TextEncoder().encode(denial.stderr));
+      await fds.closeAll();
+      return denial.exitCode;
+    })();
+    if (this.processConfig) {
+      void exited.then((code) => this.processConfig?.processManager.exit(pid, code));
+    }
+    return { pid, exited };
   }
 
   /** A child that is no wasm program: a shell command on the child's descriptors. */
@@ -312,15 +405,35 @@ export class WasmSession {
     const onAbort = () => controller.abort();
     this.ctx.signal?.addEventListener('abort', onAbort, { once: true });
     if (this.ctx.signal?.aborted) onAbort();
+    // It has no handlers of its own: a signal whose default action ends a
+    // process ends it (reported as WIFSIGNALED); stop and continue cannot
+    // pause a shell command, so they do nothing.
+    let endedBy: number | undefined;
+    const signal = (sig: number): void => {
+      if (defaultAction(sig) !== 'terminate') return;
+      endedBy ??= sig;
+      controller.abort();
+    };
     this.shellChildren.add(controller);
-    this.shellByPid.set(pid, controller);
+    this.shellByPid.set(pid, signal);
+    // A member of its parent's process group: `kill -- -pgid` and the
+    // terminal's ^C reach it.
+    this.jobs.add(pid, ppid, signal);
+    // `kill <pid>` through the process table aborts the record's controller
+    // itself; hear which signal it was, so the end reports as WIFSIGNALED.
+    const unsubscribe = this.processConfig?.processManager.onSignal((signaled, sig) => {
+      if (signaled.pid === pid) signal(SIGNAL_BY_NAME[sig]);
+    });
     const exited = (async () => {
       try {
-        const stdin = fds.has(0) ? await readAll(fds.get(0)) : new Uint8Array(0);
+        // A shell command takes its stdin whole, read to the end first; a
+        // terminal never ends (until ^D), so on one it gets none.
+        const onTerminal = isTerminal(fds, 0);
+        const stdin = fds.has(0) && !onTerminal ? await readAll(fds.get(0)) : new Uint8Array(0);
         const r = await exec(req.file, {
           args: req.argv.slice(1),
           cwd: req.cwd,
-          env: req.env,
+          env: { ...req.env, ...ttyHints(fds) },
           replaceEnv: true,
           stdin: latin1(stdin),
           stdinKind: 'bytes',
@@ -342,13 +455,15 @@ export class WasmSession {
         await fds.closeAll();
         this.shellChildren.delete(controller);
         this.shellByPid.delete(pid);
+        this.jobs.remove(pid);
+        unsubscribe?.();
         this.ctx.signal?.removeEventListener('abort', onAbort);
       }
     })();
     if (this.processConfig) {
       void exited.then((code) => this.processConfig?.processManager.exit(pid, code));
     }
-    return { pid, exited };
+    return { pid, exited, termsig: () => endedBy };
   }
 
   /**

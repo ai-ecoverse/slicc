@@ -11,11 +11,28 @@
  * descriptor holds now, and its output is captured and written there once it
  * has exited — `spawn` returns after the child is done, as in the node realm.
  */
+import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
 import type { ChildStdio } from './children.js';
 import type { ProcessFs, ProcessStream } from './kernel-streams.js';
+import type { WasmSyscall } from './process.js';
 import type { ForkState, ForkStream } from './protocol.js';
 import { wasiErrno } from './wasi-errno.js';
+
+/** waitpid's WUNTRACED and WCONTINUED bits (musl's). */
+const WUNTRACED = 2;
+const WCONTINUED = 8;
+
+/** A syscall's success as 0, or its negative WASI errno. */
+function status(r: SyncFsResult): number {
+  return r.ok ? 0 : -wasiErrno(r.errno);
+}
+
+/** A syscall's number result, or its negative WASI errno. */
+function number(r: SyncFsResult): number {
+  if (!r.ok) return -wasiErrno(r.errno);
+  return r.kind === 'json' && typeof r.json === 'number' ? r.json : -wasiErrno('EIO');
+}
 
 /** What the libc shims call: pids and wait statuses, or a negative WASI errno. */
 export interface ProcessKernel {
@@ -26,12 +43,25 @@ export interface ProcessKernel {
     cwd: string | null,
     stdio: number[]
   ): number;
-  /** `[pid, status]`; `[0, 0]` for `nohang` with no child exited yet. */
-  wait(pid: number, nohang: boolean): [number, number] | number;
+  /**
+   * `[pid, status]`; `[0, 0]` for `nohang` with no child exited yet.
+   * `options`: waitpid's bits, of which WUNTRACED and WCONTINUED count here.
+   */
+  wait(pid: number, nohang: boolean, options?: number): [number, number] | number;
   /** fork(2) into a new worker (`slicc-fork.js` supplies the parent's state): the child's pid. */
   fork(state: ForkState): number;
-  /** kill(2): 0, or a negative WASI errno (ESRCH, EINVAL). */
+  /** kill(2): 0, or a negative WASI errno (ESRCH, EINVAL). 0 and negative pids name groups. */
   kill(pid: number, sig: number): number;
+  /** setpgid(2) / setsid(2): 0 / the new session, or a negative WASI errno. */
+  setpgid(pid: number, pgid: number): number;
+  setsid(): number;
+  /** getpgid(2) / getsid(2) (`pid` 0: the caller), or a negative WASI errno. */
+  getpgid(pid: number): number;
+  getsid(pid: number): number;
+  /** The terminal's foreground group (`fd` a program fd), or a negative WASI errno (ENOTTY). */
+  tcgetpgrp(fd: number): number;
+  /** 0, or a negative WASI errno. */
+  tcsetpgrp(fd: number, pgrp: number): number;
   /**
    * execve(): wait for the program just spawned as this process's
    * replacement (signals to this process go to it). Its wait status, or a
@@ -95,6 +125,9 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
   /** Children the program has not waited for yet whose status is already here. */
   const reaped = new Map<number, number>();
 
+  const call = (req: WasmSyscall, label: string): SyncFsResult =>
+    transport.call(req, Infinity, label);
+
   const slot = (fd: number, n: number): ChildStdio => {
     const stream = fd >= 0 ? Fs.getStream(fd) : null;
     if (!stream) return { none: true };
@@ -102,11 +135,18 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
     return n === 0 ? { input: drain(Fs, stream) } : { capture: true };
   };
 
-  const kernelWait = (pid: number, nohang: boolean): [number, number] | number => {
-    let r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+  const kernelWait = (pid: number, nohang: boolean, options = 0): [number, number] | number => {
+    const req = {
+      op: 'proc-wait' as const,
+      pid,
+      nohang,
+      ...(options & WUNTRACED ? { untraced: true } : {}),
+      ...(options & WCONTINUED ? { continued: true } : {}),
+    };
+    let r = transport.call(req, Infinity, `proc-wait ${pid}`);
     // Interrupted by a caught signal whose handler asked for SA_RESTART: wait on.
     while (!r.ok && r.errno === 'EINTR' && deps.restartable?.()) {
-      r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+      r = transport.call(req, Infinity, `proc-wait ${pid}`);
     }
     if (!r.ok) return -wasiErrno(r.errno);
     const waited = r.kind === 'json' ? (r.json as [number, number]) : [0, 0];
@@ -183,23 +223,35 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
       return r.kind === 'json' ? (r.json as [number, number])[1] : 0;
     },
     kill(pid, sig) {
-      // Itself (or its own group, until process groups exist): raise in place.
-      if (pid === 0 || pid === deps.pid || pid === -(deps.pid ?? Number.NaN)) {
+      // Itself: raise in place. A group (0, or a negative pid) is the kernel's to signal.
+      if (pid === deps.pid) {
         if (sig !== 0) deps.raise?.(sig);
         return 0;
       }
-      const target = pid < -1 ? -pid : pid;
-      const r = transport.call({ op: 'proc-kill', pid: target, sig }, Infinity, `kill ${pid}`);
-      return r.ok ? 0 : -wasiErrno(r.errno);
+      return status(call({ op: 'proc-kill', pid, sig }, `kill ${pid}`));
     },
-    wait(pid, nohang) {
+    setpgid: (pid, pgid) => status(call({ op: 'proc-setpgid', pid, pgid }, 'setpgid')),
+    setsid: () => number(call({ op: 'proc-setsid' }, 'setsid')),
+    getpgid: (pid) => number(call({ op: 'proc-getpgid', pid }, 'getpgid')),
+    getsid: (pid) => number(call({ op: 'proc-getsid', pid }, 'getsid')),
+    tcgetpgrp(fd) {
+      const kfd = Fs.getStream(fd)?.sliccKernelFd;
+      if (kfd === undefined) return -wasiErrno('ENOTTY');
+      return number(call({ op: 'tty-pgrp-get', fd: kfd }, 'tcgetpgrp'));
+    },
+    tcsetpgrp(fd, pgrp) {
+      const kfd = Fs.getStream(fd)?.sliccKernelFd;
+      if (kfd === undefined) return -wasiErrno('ENOTTY');
+      return status(call({ op: 'tty-pgrp-set', fd: kfd, pgrp }, 'tcsetpgrp'));
+    },
+    wait(pid, nohang, options) {
       const key = pid > 0 ? (reaped.has(pid) ? pid : undefined) : reaped.keys().next().value;
       if (key !== undefined) {
         const status = reaped.get(key) as number;
         reaped.delete(key);
         return [key, status];
       }
-      return kernelWait(pid, nohang);
+      return kernelWait(pid, nohang, options);
     },
   };
 }

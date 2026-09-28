@@ -223,6 +223,45 @@ describe('KernelStreams', () => {
     );
   });
 
+  it('puts a terminal device the program opens on its kernel terminal, with its own access mode', () => {
+    const { fs, streams } = fakeFs();
+    const opened: Array<[string, number]> = [];
+    (fs as unknown as { open: (path: string, flags: number) => ProcessStream }).open = (
+      path,
+      flags
+    ) => {
+      opened.push([path, flags]);
+      // Emscripten's console devices come with its TTY (`stream.tty`).
+      const tty = path.startsWith('/dev/tty') ? { ops: {} } : undefined;
+      return { fd: 9, flags, stream_ops: {}, tty } as unknown as ProcessStream;
+    };
+    const reads: number[] = [];
+    const sys = fakeSys({
+      isatty: (fd) => fd === 2,
+      read: (fd) => {
+        reads.push(fd);
+        return bytes('q');
+      },
+    });
+    const kernel = new KernelStreams(fs, sys);
+    kernel.useControllingTerminal();
+    expect(fs.open('/dev/tty', 0).sliccKernelFd).toBeUndefined(); // no kernel terminal yet
+    wireKernelStdio(fs, kernel);
+    const tty = fs.open('/dev/tty1', 0); // what ttyname() names
+    expect(tty.flags).toBe(0); // read-only, though fd 2 is write-only
+    expect(tty.sliccKernelFd).toBe(2);
+    expect(tty.tty).toBeDefined();
+    const buf = new Uint8Array(1);
+    expect(tty.stream_ops.read?.(tty, buf, 0, 1)).toBe(1);
+    expect(reads).toEqual([2]);
+    // Closing it drops one reference: fd 2 keeps the kernel descriptor open.
+    tty.stream_ops.close?.(tty);
+    expect(sys.closed).toEqual([]);
+    expect(fs.open('/etc/passwd', 0).sliccKernelFd).toBeUndefined();
+    expect(opened.map(([path]) => path)).toEqual(['/dev/tty', '/dev/tty1', '/etc/passwd']);
+    void streams;
+  });
+
   it('marks a terminal fd as a TTY (isatty, termios, window size) and nothing else', () => {
     const termios = { c_iflag: 1, c_oflag: 2, c_cflag: 3, c_lflag: 4, c_cc: [] };
     const set: unknown[] = [];

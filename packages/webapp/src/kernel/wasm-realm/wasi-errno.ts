@@ -1,5 +1,6 @@
 /** Emscripten's (WASI) errno numbers for the kernel errors a syscall returns. */
 const WASI_ERRNO: Readonly<Partial<Record<string, number>>> = {
+  EACCES: 2,
   EBADF: 8,
   ECHILD: 12,
   EINTR: 27,
@@ -9,6 +10,7 @@ const WASI_ERRNO: Readonly<Partial<Record<string, number>>> = {
   ENOENT: 44,
   ENOSYS: 52,
   ENOTTY: 59,
+  EPERM: 63,
   EPIPE: 64,
   ESPIPE: 70,
   ESRCH: 71,

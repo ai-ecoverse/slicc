@@ -9,6 +9,7 @@ vi.mock('../../../../src/kernel/realm/wasm-compiler.js', () => ({
 
 import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
 import { bytesSource, FdTable, sinkFile } from '../../../../src/kernel/wasm-realm/fd-table.js';
+import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
 import { WasmSession } from '../../../../src/shell/supplemental-commands/wasm/launch.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
@@ -61,7 +62,13 @@ function fakeProcesses() {
     let end!: (code: number) => void;
     const exited = new Promise<number>((resolve) => (end = resolve));
     ends.set(opts.pid, end);
-    return { pid: opts.pid, exited, kill: vi.fn((code: number) => end(code)) };
+    return {
+      pid: opts.pid,
+      exited,
+      kill: vi.fn((code: number) => end(code)),
+      signal: vi.fn(),
+      onState: vi.fn(),
+    };
   });
   return ends;
 }
@@ -125,6 +132,30 @@ describe('WasmSession', () => {
     expect(await session.resolve('sed', 'sed', '/w')).toBeUndefined();
   });
 
+  it('asks the gate before a program runs natively; a denied one reports and exits', async () => {
+    fakeProcesses();
+    const { config } = processConfig();
+    const gate = vi.fn(async (name: string) =>
+      name === 'tac' ? { stderr: 'sudo: denied\n', exitCode: 77 } : null
+    );
+    const session = new WasmSession(ctx(installed), config, () => {}, gate);
+    const spawner = await parentSpawner(session);
+    const launched = spawn.mock.calls.length;
+    const err: Uint8Array[] = [];
+    const fds = new FdTable();
+    fds.install(bytesSource(new Uint8Array(0)));
+    fds.install(sinkFile(() => {}));
+    fds.install(sinkFile((b) => err.push(b)));
+    const child = await spawner(
+      { file: '/usr/bin/tac', argv: ['tac', '-r'], env: { R: 'why' }, cwd: '/w' },
+      fds
+    );
+    expect(gate).toHaveBeenCalledWith('tac', ['-r'], { R: 'why' });
+    expect(await child.exited).toBe(77);
+    expect(new TextDecoder().decode(err[0])).toBe('sudo: denied\n');
+    expect(spawn.mock.calls.length).toBe(launched); // no worker started
+  });
+
   it('starts a wasm child as a process parented to its spawner', async () => {
     const ends = fakeProcesses();
     const { pm, config } = processConfig();
@@ -166,7 +197,8 @@ describe('WasmSession', () => {
     expect(exec).toHaveBeenCalledWith('sed', {
       args: ['s/a/b/'],
       cwd: '/d',
-      env: { X: '1' },
+      // Its stdio are pipes, not a terminal: said in the environment.
+      env: { X: '1', SLICC_STDIN_ISATTY: '0', SLICC_STDOUT_ISATTY: '0' },
       replaceEnv: true,
       stdin: 'piped',
       stdinKind: 'bytes',
@@ -235,6 +267,118 @@ describe('WasmSession', () => {
     expect(pm.signal).toHaveBeenCalledWith(900, 'SIGTERM');
     expect(kill(900, 10)).toBe(false); // the table has no SIGUSR1
     expect(kill(901, 0)).toBe(false);
+  });
+
+  it('runs a shell child on a terminal stdin at once, with no stdin (it never ends)', async () => {
+    fakeProcesses();
+    const exec = vi.fn(async (_cmd: string, _opts: { env?: Record<string, string> }) => ({
+      stdout: 'ok\n',
+      stderr: '',
+      exitCode: 0,
+    }));
+    const { config } = processConfig();
+    const session = new WasmSession(
+      ctx(installed, exec as unknown as CommandContext['exec']),
+      config,
+      () => {}
+    );
+    const spawner = await parentSpawner(session);
+    const out: Uint8Array[] = [];
+    const fds = new FdTable();
+    const tty = new KernelTty({ write: () => {} }, () => {});
+    fds.install(tty.file());
+    fds.install(sinkFile((b) => out.push(b)));
+    fds.install(sinkFile(() => {}));
+    const child = await spawner({ file: 'which', argv: ['which', 'ls'], env: {}, cwd: '/w' }, fds);
+    expect(await child.exited).toBe(0);
+    expect(exec).toHaveBeenCalledWith('which', expect.objectContaining({ stdin: '' }));
+    // stdin is the terminal: no hint; stdout is a pipe/sink: "no terminal".
+    expect(exec.mock.calls[0]![1].env).toEqual({ SLICC_STDOUT_ISATTY: '0' });
+    expect(new TextDecoder().decode(out[0])).toBe('ok\n');
+  });
+
+  it('a shell child joins its parent’s process group and reports the signal that ended it', async () => {
+    fakeProcesses();
+    const exec = vi.fn(
+      (_cmd: string, opts: { signal: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          opts.signal.addEventListener('abort', () =>
+            resolve({ stdout: '', stderr: '', exitCode: 130 })
+          );
+        })
+    );
+    const { config } = processConfig();
+    const session = new WasmSession(
+      ctx(installed, exec as unknown as CommandContext['exec']),
+      config,
+      () => {}
+    );
+    const spawner = await parentSpawner(session);
+    const parent = spawn.mock.calls.at(-1)![0];
+    const kill = parent.kill as (pid: number, sig: number) => boolean;
+    const child = await spawner(
+      { file: 'sleep', argv: ['sleep', '9'], env: {}, cwd: '/w' },
+      stdio()
+    );
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    expect(exec.mock.calls[0]![1]).toMatchObject({
+      env: { SLICC_STDIN_ISATTY: '0', SLICC_STDOUT_ISATTY: '0' },
+    });
+    expect(kill(-parent.pid, 20)).toBe(true); // SIGTSTP to the group: a shell command cannot stop
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(kill(-parent.pid, 2)).toBe(true); // SIGINT to the group ends it
+    expect(await child.exited).toBe(130);
+    expect(child.termsig?.()).toBe(2);
+  });
+
+  it('a shell child killed through the process table reports the signal (WIFSIGNALED)', async () => {
+    fakeProcesses();
+    const exec = vi.fn(
+      (_cmd: string, opts: { signal: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          opts.signal.addEventListener('abort', () =>
+            resolve({ stdout: '', stderr: '', exitCode: 130 })
+          );
+        })
+    ) as unknown as CommandContext['exec'];
+    const { pm, config } = processConfig();
+    let listener: ((proc: { pid: number }, sig: string) => void) | undefined;
+    const unsubscribe = vi.fn();
+    pm.onSignal.mockImplementation(((l: typeof listener) => {
+      listener = l;
+      return unsubscribe;
+    }) as never);
+    const session = new WasmSession(ctx(installed, exec), config, () => {});
+    const spawner = await parentSpawner(session);
+    const child = await spawner(
+      { file: 'sleep', argv: ['sleep', '9'], env: {}, cwd: '/w' },
+      stdio()
+    );
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    // What ProcessManager.signal does: abort the record, and tell its listeners.
+    const record = pm.spawn.mock.results.at(-1)!.value as { abort: AbortController };
+    record.abort.abort();
+    listener?.({ pid: child.pid }, 'SIGTERM');
+    expect(await child.exited).toBe(130);
+    expect(child.termsig?.()).toBe(15);
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+
+  it('kill(2) of a process outside the invocation goes through the command policy', async () => {
+    fakeProcesses();
+    const { pm, config } = processConfig();
+    pm.signal.mockReturnValue(true);
+    const gate = vi.fn(async (_name: string, args: string[]) =>
+      args[1] === '900' ? { stderr: 'denied\n', exitCode: 77 } : null
+    );
+    const session = new WasmSession(ctx(installed), config, () => {}, gate);
+    await parentSpawner(session);
+    const kill = spawn.mock.calls.at(-1)![0].kill as (pid: number, sig: number) => Promise<boolean>;
+    await expect(kill(900, 15)).rejects.toMatchObject({ code: 'EPERM' });
+    expect(gate).toHaveBeenCalledWith('kill', ['-TERM', '900'], {});
+    expect(pm.signal).not.toHaveBeenCalled();
+    expect(await kill(901, 2)).toBe(true);
+    expect(pm.signal).toHaveBeenCalledWith(901, 'SIGINT');
   });
 
   it('ends a shell child on its own process signal, and on killAll', async () => {

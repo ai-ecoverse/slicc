@@ -48,6 +48,24 @@ export interface ChildHandle {
   exited: Promise<number>;
   /** The signal that ended it, if one did (reported as WIFSIGNALED). */
   termsig?: () => number | undefined;
+  /** Hear of its stops and continues (waitpid's WUNTRACED / WCONTINUED). */
+  onState?: (listener: ChildStateListener) => void;
+}
+
+/** A child stopped (by `sig`) or continued. */
+export type ChildStateListener = (state: 'stopped' | 'continued', sig: number) => void;
+
+/** waitpid options beyond WNOHANG. */
+export interface WaitFlags {
+  /** WUNTRACED: report a child that stopped. */
+  untraced?: boolean;
+  /** WCONTINUED: report a stopped child that continued. */
+  continued?: boolean;
+  /**
+   * For `pid` 0 or < -1 (a process group): whether a child is in that group.
+   * Without it, any child counts, as for -1.
+   */
+  inGroup?: (childPid: number) => boolean;
 }
 
 /** The child could not be started (`ENOENT`: nothing runs the program; `ENOSYS`: no spawner). */
@@ -71,6 +89,10 @@ interface Child {
   termsig?: () => number | undefined;
   /** Set once the child has exited. */
   code?: number;
+  /** The signal that stopped it, until a WUNTRACED wait reports it. */
+  stopReport?: number;
+  /** Continued, until a WCONTINUED wait reports it. */
+  continueReport?: boolean;
   /** Capture buffers by stdio slot. */
   captured: Map<number, Uint8Array[]>;
 }
@@ -89,6 +111,14 @@ function interrupted(signal: AbortSignal | undefined): {
   });
   return { promise, done: () => signal?.removeEventListener('abort', fail) };
 }
+
+/** The wait status of a stopped process (`WIFSTOPPED`, `WSTOPSIG`). */
+export function stoppedStatus(sig: number): number {
+  return ((sig & 0xff) << 8) | 0x7f;
+}
+
+/** The wait status of a continued process (`WIFCONTINUED`). */
+export const CONTINUED_STATUS = 0xffff;
 
 /** A wait status: the signal that ended the process (`WTERMSIG`), else its exit code (`WEXITSTATUS`). */
 export function waitStatus(code: number, termsig?: number): number {
@@ -110,8 +140,12 @@ export class ChildTable {
   /** Captured output of children already waited for, by pid. */
   private readonly leftovers = new Map<number, Map<number, Uint8Array[]>>();
 
-  /** Called when a child exits (the parent's SIGCHLD). */
-  onChildExit?: () => void;
+  /** Called when a child exits, stops or continues (the parent's SIGCHLD). */
+  onChildState?: () => void;
+  /** Wakes the waits that also take a stop or continue. */
+  private stateChanged: Array<() => void> = [];
+  /** Listeners for one child's stops and continues (an exec'd program's, mirrored by its process). */
+  private readonly watchers = new Map<number, ChildStateListener>();
 
   constructor(
     private readonly parentFds: FdTable,
@@ -154,10 +188,25 @@ export class ChildTable {
     const child: Child = { exited: handle.exited, termsig: handle.termsig, captured };
     void handle.exited.then((code) => {
       child.code = code;
-      this.onChildExit?.();
+      this.watchers.delete(handle.pid);
+      this.onChildState?.();
+    });
+    handle.onState?.((state, sig) => {
+      child.stopReport = state === 'stopped' ? sig : undefined;
+      child.continueReport = state === 'continued';
+      this.watchers.get(handle.pid)?.(state, sig);
+      const waiters = this.stateChanged;
+      this.stateChanged = [];
+      for (const wake of waiters) wake();
+      this.onChildState?.();
     });
     this.children.set(handle.pid, child);
     return handle.pid;
+  }
+
+  /** Follow child `pid`'s stops and continues (until it exits). */
+  watch(pid: number, listener: ChildStateListener): void {
+    if (this.children.has(pid)) this.watchers.set(pid, listener);
   }
 
   private openSlot(slot: ChildStdio, n: number, captured: Map<number, Uint8Array[]>): OpenFile {
@@ -174,24 +223,76 @@ export class ChildTable {
   /**
    * waitpid: `pid` > 0 waits for that child, otherwise for any. Resolves to
    * `[pid, status]`; `[0, 0]` when `nohang` and none has exited. ECHILD when
-   * there is no such child.
+   * there is no such child. With `flags`, a stop or continue not yet
+   * reported counts too (the child stays in the table).
    */
-  async wait(pid: number, nohang: boolean, signal?: AbortSignal): Promise<[number, number]> {
-    const candidates = pid > 0 ? [...this.children].filter(([p]) => p === pid) : [...this.children];
-    if (candidates.length === 0) throw new KernelError('ECHILD');
-    const done = candidates.find(([, child]) => child.code !== undefined);
-    if (done) return this.reap(done[0], done[1].code as number);
-    if (nohang) return [0, 0];
-    const interrupt = interrupted(signal);
+  async wait(
+    pid: number,
+    nohang: boolean,
+    signal?: AbortSignal,
+    flags: WaitFlags = {}
+  ): Promise<[number, number]> {
+    let interrupt: ReturnType<typeof interrupted> | undefined;
     try {
-      const [reaped, code] = await Promise.race([
-        ...candidates.map(([p, child]) => child.exited.then((c) => [p, c] as const)),
-        interrupt.promise,
-      ]);
-      return this.reap(reaped, code);
+      for (;;) {
+        const candidates = this.candidates(pid, flags);
+        if (candidates.length === 0) throw new KernelError('ECHILD');
+        const done = candidates.find(([, child]) => child.code !== undefined);
+        if (done) return this.reap(done[0], done[1].code as number);
+        const changed = this.stateReport(candidates, flags);
+        if (changed) return changed;
+        if (nohang) return [0, 0];
+        interrupt ??= interrupted(signal);
+        await this.nextChange(candidates, flags, interrupt.promise);
+      }
     } finally {
-      interrupt.done();
+      interrupt?.done();
     }
+  }
+
+  /** The children a waitpid(`pid`) is about: that one, any (-1), or those of a group (0, < -1). */
+  private candidates(pid: number, flags: WaitFlags): [number, Child][] {
+    const all = [...this.children];
+    if (pid > 0) return all.filter(([p]) => p === pid);
+    const inGroup = flags.inGroup;
+    return pid === -1 || !inGroup ? all : all.filter(([p]) => inGroup(p));
+  }
+
+  /** Until a candidate exits, stops or continues (as `flags` asks), or the wait is interrupted. */
+  private async nextChange(
+    candidates: [number, Child][],
+    flags: WaitFlags,
+    interrupt: Promise<never>
+  ): Promise<void> {
+    let wake: (() => void) | undefined;
+    const stateChange = new Promise<void>((resolve) => (wake = resolve));
+    const watching = flags.untraced || flags.continued;
+    if (watching && wake) this.stateChanged.push(wake);
+    try {
+      await Promise.race([
+        ...candidates.map(([, child]) => child.exited),
+        ...(watching ? [stateChange] : []),
+        interrupt,
+      ]);
+    } finally {
+      this.stateChanged = this.stateChanged.filter((w) => w !== wake);
+    }
+  }
+
+  /** A stop (WUNTRACED) or continue (WCONTINUED) to report, once. */
+  private stateReport(candidates: [number, Child][], flags: WaitFlags): [number, number] | null {
+    for (const [p, child] of candidates) {
+      if (flags.untraced && child.stopReport !== undefined) {
+        const sig = child.stopReport;
+        child.stopReport = undefined;
+        return [p, stoppedStatus(sig)];
+      }
+      if (flags.continued && child.continueReport) {
+        child.continueReport = false;
+        return [p, CONTINUED_STATUS];
+      }
+    }
+    return null;
   }
 
   private reap(pid: number, code: number): [number, number] {

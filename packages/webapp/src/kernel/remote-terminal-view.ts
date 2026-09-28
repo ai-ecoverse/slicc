@@ -49,12 +49,17 @@ import {
   parseSerialFilters,
 } from '../shell/supplemental-commands/serial-command.js';
 import { parseUsbArgs, parseUsbFilters } from '../shell/supplemental-commands/usb-command.js';
-import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
+import {
+  NO_LOGIN_SHELL,
+  type TerminalEventMsg,
+  type TerminalSessionId,
+} from '../shell/terminal-protocol.js';
 import {
   getSharedHidRegistry,
   type HidDevice,
   type HidDeviceFilter,
 } from './hid-device-registry.js';
+import { LoginShellMarks } from './login-shell-marks.js';
 import {
   getSharedSerialRegistry,
   type SerialFilter,
@@ -62,6 +67,7 @@ import {
 } from './serial-port-registry.js';
 import { TerminalLineEditor } from './terminal-line-editor.js';
 import {
+  type TerminalExecOptions,
   type TerminalExecResult,
   TerminalSessionClient,
   type TerminalSessionTransport,
@@ -105,6 +111,12 @@ export class RemoteTerminalView {
    * keystrokes go to it raw and its output is shown as is.
    */
   private ptyMode = false;
+  /** GNU bash, the terminal's login shell, is running (`startSession`). */
+  private loginShell = false;
+  /** The login shell took the terminal (so it was bash, whatever its exit code). */
+  private loginSawPty = false;
+  /** Its prompt marks: where a typed command's output ends, and its status. */
+  private readonly marks = new LoginShellMarks();
   private reportedSize = '';
   /**
    * When true, the `handleEvent` route swallows `terminal-output`
@@ -192,12 +204,45 @@ export class RemoteTerminalView {
     this.resizeObserver = new ResizeObserver(() => this.refit());
     this.resizeObserver.observe(this.terminalHost);
 
-    terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
-    terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
-    terminal.writeln('');
-
     await this.client.open({ cwd: this.options.cwd, env: this.options.env });
+    void this.startSession(terminal);
+  }
+
+  /**
+   * GNU bash is the terminal's shell when a package provides it (`wasm
+   * --login`); the slicc prompt takes over when bash exits, or right away
+   * when there is none.
+   */
+  private async startSession(terminal: SliccTerminal): Promise<void> {
+    const login = await this.runLoginShell();
+    if (this.disposed) return;
+    if (!login) {
+      terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
+      terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
+      terminal.writeln('');
+    }
     void this.runPromptLoop();
+  }
+
+  /**
+   * GNU bash as the terminal's login shell, until it exits (then a note
+   * says so). `null` when there is none to run: no bash installed,
+   * `SLICC_SHELL=just-bash`, no wasm realm. Both at the session's start and
+   * when `wasm --login` is typed at the slicc prompt, so "run in terminal"
+   * and the prompt marks work either way.
+   */
+  private async runLoginShell(): Promise<TerminalExecResult | null> {
+    this.loginShell = true;
+    this.loginSawPty = false;
+    // A session can last all day: stream its output, keep none of it.
+    const login = await this.runRemote('wasm --login', { discardCapturedOutput: true });
+    this.loginShell = false;
+    this.marks.end();
+    if (!this.loginSawPty && login.exitCode === NO_LOGIN_SHELL) return null;
+    this.terminal?.writeln(
+      `\x1b[90mbash exited (${login.exitCode}); this is the slicc shell. \`wasm --login\` starts bash again.\x1b[0m`
+    );
+    return login;
   }
 
   /** Re-fit the terminal to its container, and tell the worker its size. */
@@ -228,6 +273,7 @@ export class RemoteTerminalView {
   async executeCommandInTerminal(command: string): Promise<TerminalExecResult> {
     const trimmed = command.trim();
     if (!trimmed) return { stdout: '', stderr: '', exitCode: 0 };
+    if (this.loginShell && this.ptyMode) return this.typeIntoLoginShell(trimmed);
     if (!this.terminal || !this.editor) return this.client.exec(trimmed);
     if (
       this.isExecuting ||
@@ -244,6 +290,23 @@ export class RemoteTerminalView {
     });
     this.editor.setLine(trimmed);
     this.editor.accept();
+    return result;
+  }
+
+  /**
+   * A command for the login shell: typed at bash's prompt, as the user
+   * would, and resolved at the next prompt mark with its output (stdout and
+   * stderr are one terminal) and status. Without marks (the user's rc files
+   * replaced `PROMPT_COMMAND`) there is nothing to collect it by.
+   */
+  private typeIntoLoginShell(command: string): Promise<TerminalExecResult> {
+    if (this.marks.pending) {
+      return Promise.resolve({ stdout: '', stderr: 'terminal is busy\n', exitCode: 1 });
+    }
+    const result = this.marks.seen
+      ? this.marks.expect()
+      : Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    this.client.stdin(`${command}\r`);
     return result;
   }
 
@@ -436,6 +499,15 @@ export class RemoteTerminalView {
     const command = rawLine.trim();
     const noop: TerminalExecResult = { stdout: '', stderr: '', exitCode: 0 };
     if (!command) return noop;
+    if (command === 'wasm --login') {
+      return (
+        (await this.runLoginShell()) ?? {
+          stdout: '',
+          stderr: 'wasm: --login: no GNU bash to log in to (install @ai-ecoverse/wasm-bash)\n',
+          exitCode: NO_LOGIN_SHELL,
+        }
+      );
+    }
     if (!programmatic && (await this.tryRunPicker(command))) return noop;
     return this.runRemote(command);
   }
@@ -830,11 +902,14 @@ export class RemoteTerminalView {
    * `handleEvent` route; this helper only manages the `isExecuting` flag
    * (the prompt is re-rendered by the next `runPromptLoop` iteration).
    */
-  private async runRemote(command: string): Promise<TerminalExecResult> {
+  private async runRemote(
+    command: string,
+    opts?: TerminalExecOptions
+  ): Promise<TerminalExecResult> {
     this.isExecuting = true;
     this.clearMediaPreview();
     try {
-      return await this.client.exec(command);
+      return await this.client.exec(command, opts);
     } finally {
       this.isExecuting = false;
     }
@@ -857,8 +932,8 @@ export class RemoteTerminalView {
         if (this.suppressOutput) return;
         if (this.ptyMode) {
           // The TTY already did the output processing (ONLCR); stdout and
-          // stderr are one terminal.
-          this.terminal.write(event.data);
+          // stderr are one terminal. The login shell's marks are not shown.
+          this.terminal.write(this.loginShell ? this.marks.filter(event.data) : event.data);
           return;
         }
         // Stderr renders red; stdout in default. Terminals usually
@@ -882,6 +957,7 @@ export class RemoteTerminalView {
         return;
       case 'terminal-mode':
         this.ptyMode = event.mode === 'pty';
+        if (this.ptyMode && this.loginShell) this.loginSawPty = true;
         if (this.ptyMode) {
           this.reportedSize = '';
           this.reportSize();
