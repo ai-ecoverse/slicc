@@ -161,10 +161,13 @@ const GLUE_TRAILER = [
   "if (typeof sliccForkChild === 'function') __sliccTake('sliccForkChild', sliccForkChild);",
   "if (typeof PIPEFS !== 'undefined') __sliccTake('PIPEFS', PIPEFS);",
   // The toolchain's SIGPIPE disposition query (exported once instantiated).
-  "Module.sliccSigpipe ??= () => (typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
+  // Not before the runtime is up: an assertions build (-O0) aborts on an
+  // export called earlier, and the first syscall can come during init.
+  "const __sliccUp = () => typeof runtimeInitialized === 'undefined' || runtimeInitialized;",
+  "Module.sliccSigpipe ??= () => (__sliccUp() && typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
   // The toolchain's signal support (slicc_signals.c): dispositions and raise().
-  "Module.sliccSigMask ??= (w) => (typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
-  "Module.sliccRaise ??= (sig) => { if (typeof _slicc_raise === 'function') _slicc_raise(sig); };",
+  "Module.sliccSigMask ??= (w) => (__sliccUp() && typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
+  "Module.sliccRaise ??= (sig) => { if (__sliccUp() && typeof _slicc_raise === 'function') _slicc_raise(sig); };",
 ].join('\n');
 
 /**

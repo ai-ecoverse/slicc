@@ -39,7 +39,11 @@ function fakeWorker(program: Program) {
     for (const h of [...(listeners.get(type) ?? [])]) h({ data } as MessageEvent);
   };
   let seq = 0;
-  const worker: WasmWorkerLike & { terminated: boolean; fail(message: string): void } = {
+  const worker: WasmWorkerLike & {
+    terminated: boolean;
+    fail(message: string): void;
+    lastError?: { preventDefault: () => void };
+  } = {
     terminated: false,
     postMessage(message: unknown) {
       const init = message as WasmProcessInitMsg;
@@ -75,8 +79,9 @@ function fakeWorker(program: Program) {
     },
     // A real worker's `error` event is an ErrorEvent: `message` on the event.
     fail: (message) => {
-      for (const h of [...(listeners.get('error') ?? [])])
-        h({ message } as unknown as MessageEvent);
+      const event = { message, preventDefault: vi.fn() };
+      worker.lastError = event;
+      for (const h of [...(listeners.get('error') ?? [])]) h(event as unknown as MessageEvent);
     },
   };
   return worker;
@@ -276,5 +281,7 @@ describe('spawnWasmProcess', () => {
     worker.fail('boom');
     expect(await handle.exited).toBe(70);
     expect(onError).toHaveBeenCalledWith('boom');
+    // Handled here, so the crash does not propagate to the kernel worker (and the page).
+    expect(worker.lastError?.preventDefault).toHaveBeenCalled();
   });
 });

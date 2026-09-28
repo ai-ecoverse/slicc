@@ -155,6 +155,9 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     }
   };
   const onError = (event: MessageEvent): void => {
+    // Handled here: unhandled, a program's crash (an Emscripten abort, a trap)
+    // would propagate to the kernel worker's global scope and take the page down.
+    event.preventDefault();
     opts.onError?.(String((event as unknown as ErrorEvent).message ?? 'worker error'));
     finish(CRASHED);
   };
