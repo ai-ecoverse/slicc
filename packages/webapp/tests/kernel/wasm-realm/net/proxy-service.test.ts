@@ -232,9 +232,90 @@ describe('RealmProxy: refusals', () => {
     ]) {
       expect(isLoopbackHost(host)).toBe(true);
     }
-    for (const host of ['example.com', 'localhost.example.com', '128.0.0.1', '10.0.0.1']) {
+    for (const host of [
+      'example.com',
+      'localhost.example.com',
+      '128.0.0.1',
+      '10.0.0.1',
+      '[2001:db8::1]',
+      '[::ffff:8.8.8.8]',
+      '[::8.8.8.8]',
+      '169.255.0.1',
+      '8.8.8.8.',
+    ]) {
       expect(isLoopbackHost(host)).toBe(false);
     }
+  });
+
+  /** Every spelling of a local address a URL (so the fetch path) accepts. */
+  const LOCAL = [
+    'localhost',
+    'LocalHost.',
+    'api.localhost',
+    'api.localhost.',
+    '127.0.0.1',
+    '127.9.9.9',
+    '127.0.0.1.',
+    '127.1',
+    '2130706433',
+    '0x7f.1',
+    '0x7f000001',
+    '0177.0.0.1',
+    '0.0.0.0',
+    '0',
+    '169.254.169.254',
+    '[::1]',
+    '[0:0:0:0:0:0:0:1]',
+    '[::]',
+    '[::ffff:127.0.0.1]',
+    '[::ffff:7f00:1]',
+    '[::FFFF:0:0]',
+    '[::127.0.0.1]',
+    '[::7f00:1]',
+    '[fe80::1]',
+    '[febf::1]',
+  ];
+
+  it.each(LOCAL)('refuses %s as an absolute-form target', async (host) => {
+    const t = scripted(ok);
+    const { client } = start({ transport: t.transport });
+    const c = client();
+    await c.send(`GET http://${host}:5710/api/fetch-proxy HTTP/1.1\r\n\r\n`);
+    const res = await c.response();
+    expect(res.status).toBe(403);
+    expect(res.body).toContain('no_proxy');
+    expect(t.seen).toHaveLength(0);
+  });
+
+  it.each(LOCAL)('refuses %s as a CONNECT target', async (host) => {
+    const t = scripted(ok);
+    let tunneled = false;
+    const { client } = start({
+      transport: t.transport,
+      tunnel: async () => {
+        tunneled = true;
+      },
+    });
+    const c = client();
+    await c.send(`CONNECT ${host}:443 HTTP/1.1\r\n\r\n`);
+    const res = await c.response();
+    expect(res.status).toBe(403);
+    expect(tunneled).toBe(false);
+  });
+
+  it('tunnels to the canonical host a CONNECT names', async () => {
+    const t = scripted(ok);
+    const targets: string[] = [];
+    const { client } = start({
+      transport: t.transport,
+      tunnel: async (_conn, _incoming, target) => {
+        targets.push(`${target.host}:${target.port}`);
+      },
+    });
+    const c = client();
+    await c.send('CONNECT 0x08.8.8.8:443 HTTP/1.1\r\n\r\n');
+    expect((await c.response({ head: true })).status).toBe(200);
+    expect(targets).toEqual(['8.8.8.8:443']);
   });
 });
 
@@ -315,6 +396,41 @@ describe('RealmProxy: flow control and lifetime', () => {
     expect((await first.response()).status).toBe(200);
     expect((await second.response()).status).toBe(200);
     expect(t.seen).toHaveLength(2);
+  });
+
+  it('frees the slot of a client that leaves while the upstream never answers', async () => {
+    const signals: AbortSignal[] = [];
+    const t = scripted((req) => {
+      if (new URL(req.url).pathname === '/ok') return ok();
+      signals.push(req.signal);
+      return new Promise(() => undefined); // never answers, never heeds the signal
+    });
+    const { client } = start({ transport: t.transport }); // 64 slots
+    for (let i = 0; i < 64; i++) {
+      const c = client();
+      await c.send(`GET http://h.test/hang/${i} HTTP/1.1\r\n\r\n`);
+      await tick();
+      c.close();
+    }
+    await tick(10);
+    expect(signals).toHaveLength(64);
+    expect(signals.every((sig) => sig.aborted)).toBe(true);
+    const last = client();
+    await last.send('GET http://h.test/ok HTTP/1.1\r\nConnection: close\r\n\r\n');
+    expect((await last.response()).body).toBe('hello');
+  }, 10_000);
+
+  it('still answers a client that only shut down its writing side', async () => {
+    let answer: (r: ReturnType<typeof ok>) => void = () => undefined;
+    const t = scripted(() => new Promise((resolve) => (answer = resolve)));
+    const { client } = start({ transport: t.transport });
+    const c = client();
+    await c.send('GET http://h.test/ HTTP/1.0\r\n\r\n');
+    c.conn.shutdown(1); // SHUT_WR: done sending, still reading
+    await tick(10);
+    expect(t.seen[0].signal.aborted).toBe(false);
+    answer(ok());
+    expect((await c.response()).body).toBe('hello');
   });
 
   it('closes a connection that stays idle past idleMs', async () => {

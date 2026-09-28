@@ -139,17 +139,66 @@ class Budget {
   }
 }
 
-/** A loopback name: `localhost`, `*.localhost`, `127.x.x.x`, `0.0.0.0`, `[::1]`. */
+/**
+ * A host as the fetch path resolves it: WHATWG host parsing, which turns
+ * `2130706433`, `0x7f.1`, `0177.0.0.1` and `127.1` into `127.0.0.1` and
+ * writes IPv6 compressed in hex (`[::ffff:127.0.0.1]` is `[::ffff:7f00:1]`).
+ * Undefined when it is no host at all.
+ */
+export function canonicalHost(host: string): string | undefined {
+  const bare = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  try {
+    return new URL(`http://${bare}/`).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 127/8, 0/8 (0.0.0.0 among them) and link-local 169.254/16. */
+function localV4(a: number, b: number): boolean {
+  return a === 127 || a === 0 || (a === 169 && b === 254);
+}
+
+/** An IPv6 address (hex, as `canonicalHost` writes it) as eight 16-bit groups. */
+function hextets(address: string): number[] | undefined {
+  const [head, tail, extra] = address.split('::');
+  if (extra !== undefined) return undefined;
+  const part = (text: string | undefined) =>
+    text ? text.split(':').map((h) => Number.parseInt(h, 16)) : [];
+  const front = part(head);
+  const back = part(tail);
+  const groups =
+    tail === undefined
+      ? front
+      : [...front, ...new Array(8 - front.length - back.length).fill(0), ...back];
+  return groups.length === 8 && groups.every((g) => g >= 0 && g <= 0xffff) ? groups : undefined;
+}
+
+/** `::`, `::1`, link-local fe80::/10, and IPv4-mapped / -compatible forms of a local IPv4. */
+function localV6(address: string): boolean {
+  const g = hextets(address);
+  if (!g) return true; // unparseable: refuse rather than guess
+  if ((g[0] & 0xffc0) === 0xfe80) return true;
+  const zeroPrefix = g.slice(0, 5).every((x) => x === 0);
+  if (!zeroPrefix) return false;
+  if (g[5] === 0xffff || (g[5] === 0 && g[6] !== 0)) return localV4(g[6] >> 8, g[6] & 0xff);
+  // ::, ::1 (and the rest of ::/112, none of it routable)
+  return g[5] === 0 && g[6] === 0;
+}
+
+/**
+ * Whether a host names the realm's own loopback (or the host machine's, which
+ * the fetch path would reach instead): `localhost`, `*.localhost`, loopback,
+ * unspecified and link-local addresses in any spelling a URL accepts.
+ */
 export function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, '');
-  return (
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    host === '0.0.0.0' ||
-    host === '[::1]' ||
-    host === '[::]'
-  );
+  const canonical = canonicalHost(hostname);
+  if (canonical === undefined) return false;
+  const host = canonical.replace(/\.+$/, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host.startsWith('[')) return localV6(host.slice(1, -1));
+  const v4 = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
+  return v4 ? localV4(Number(v4[1]), Number(v4[2])) : false;
 }
 
 /** The fields a header list names in `Connection` plus the hop-by-hop set. */
@@ -219,7 +268,8 @@ export function tunnelTarget(req: RequestHead): TunnelTarget {
   if (!match || port < 1 || port > 65535) {
     throw new HttpError(400, 'CONNECT needs host:port');
   }
-  const host = match[1].toLowerCase();
+  const host = canonicalHost(match[1]);
+  if (host === undefined) throw new HttpError(400, 'CONNECT needs host:port');
   if (isLoopbackHost(host)) {
     throw new HttpError(
       403,
@@ -227,6 +277,41 @@ export function tunnelTarget(req: RequestHead): TunnelTarget {
     );
   }
   return { host, port };
+}
+
+/** Abort `abort` once the client's socket hangs up (it can read no response); stop with `until`. */
+export async function watchHangup(
+  conn: KernelSocket,
+  abort: AbortController,
+  until: AbortSignal
+): Promise<void> {
+  while (!until.aborted && !abort.signal.aborted) {
+    if (conn.poll().hangup) {
+      abort.abort(new KernelError('EPIPE'));
+      return;
+    }
+    try {
+      await conn.changed(until);
+    } catch {
+      return;
+    }
+  }
+}
+
+/** `response`, unless `signal` fires first; a response that arrives after that is dropped. */
+function untilAborted(
+  response: Promise<RealmTransportResponse>,
+  signal: AbortSignal
+): Promise<RealmTransportResponse> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      reject(signal.reason ?? new KernelError('EINTR'));
+      response.then((late) => late.cancel()).catch(() => undefined);
+    };
+    if (signal.aborted) return onAbort();
+    signal.addEventListener('abort', onAbort, { once: true });
+    response.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 /** A synthesized response (the proxy's own errors). */
@@ -366,7 +451,16 @@ export class RealmProxy {
     try {
       try {
         const body = await readBody(incoming, framing, this.cap());
-        response = await this.upstream(req, url, body, abort.signal);
+        // While the upstream is asked, nothing reads the client: watch for it
+        // hanging up, so a client that left does not hold a slot for as long
+        // as an upstream takes (or forever, when it never answers).
+        const waiting = new AbortController();
+        void watchHangup(conn, abort, waiting.signal);
+        try {
+          response = await this.upstream(req, url, body, abort.signal);
+        } finally {
+          waiting.abort();
+        }
       } finally {
         this.bodies.release(reserve);
       }
@@ -405,15 +499,18 @@ export class RealmProxy {
     signal: AbortSignal
   ): Promise<RealmTransportResponse> {
     try {
-      return await this.options.transport.fetch({
+      const fetching = this.options.transport.fetch({
         url,
         method: req.method.toUpperCase(),
         headers: forwardRequestHeaders(req.headers),
         body: req.method === 'GET' || req.method === 'HEAD' ? undefined : body,
         signal,
       });
+      // A transport that does not heed the signal must not hold the exchange.
+      return await untilAborted(fetching, signal);
     } catch (e) {
-      if (this.stop.signal.aborted) throw e;
+      // Stopped, or the client left: nobody to answer.
+      if (signal.aborted) throw e;
       const message = e instanceof Error ? e.message : String(e);
       return plainResponse(502, message || 'upstream request failed');
     }
