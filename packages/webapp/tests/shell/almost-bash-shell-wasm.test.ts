@@ -72,6 +72,18 @@ describe('AlmostBashShellHeadless installed wasm commands', () => {
     expect(run.mock.calls[0][2].defaults).toEqual({ MODE: 'pkg', WHO: 'frob' });
   });
 
+  it('hands the program the shell’s live catalog: a removal shows at once', async () => {
+    await installTools(fs, ['frob']);
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+    await shell.executeCommand('frob');
+    const commands = run.mock.calls[0][2].commands as () => Promise<Map<string, unknown>>;
+    expect((await commands()).has('frob')).toBe(true);
+    await fs.rm(PKG, { recursive: true });
+    await shell.syncJshCommands();
+    expect((await commands()).has('frob')).toBe(false);
+  });
+
   it('never shadows a built-in of the same name', async () => {
     await installTools(fs, ['cat']);
     await fs.writeFile('/workspace/f', 'builtin-cat\n');

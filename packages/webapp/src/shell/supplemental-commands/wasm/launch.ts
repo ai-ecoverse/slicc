@@ -35,6 +35,8 @@ export type NativeGate = (
   env: Record<string, string>
 ) => Promise<{ stderr: string; exitCode: number } | null>;
 
+export type InstalledCommandsLookup = () => Promise<Map<string, WasmCommand>>;
+
 export interface WasmTarget {
   glue: string;
   module: string;
@@ -176,12 +178,14 @@ export class WasmSession {
     private readonly ctx: CommandContext,
     private readonly processConfig: JshProcessConfig | undefined,
     private readonly onError: (message: string) => void,
-    private readonly gate?: NativeGate
+    private readonly gate?: NativeGate,
+    private readonly lookup?: InstalledCommandsLookup
   ) {
     this.net = loopbackNet(ownerKey(processConfig?.owner));
   }
 
   commands(): Promise<Map<string, WasmCommand>> {
+    if (this.lookup) return this.lookup();
     this.installed ??= installedCommands(this.ctx);
     return this.installed;
   }

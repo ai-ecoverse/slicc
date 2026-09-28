@@ -13,7 +13,13 @@ import type { JshProcessConfig } from '../../jsh-executor.js';
 import { stdinAsLatin1 } from '../../just-bash-compat.js';
 import type { TerminalLease, TerminalPort } from '../../terminal-port.js';
 import { NO_LOGIN_SHELL } from '../../terminal-protocol.js';
-import { installedCommands, modulePath, type NativeGate, WasmSession } from './launch.js';
+import {
+  type InstalledCommandsLookup,
+  installedCommands,
+  modulePath,
+  type NativeGate,
+  WasmSession,
+} from './launch.js';
 
 type Result = {
   stdout: string;
@@ -88,6 +94,15 @@ export interface RunWasmOptions {
   fds?: ReadonlyArray<readonly [number, OpenFile]>;
 
   defaults?: Readonly<Record<string, string>>;
+
+  commands?: InstalledCommandsLookup;
+}
+
+function installed(
+  ctx: CommandContext,
+  options: RunWasmOptions
+): Promise<Map<string, WasmCommand>> {
+  return options.commands?.() ?? installedCommands(ctx);
 }
 
 function teeing(onOutput: ((text: string) => void) | undefined): (bytes: Uint8Array) => void {
@@ -170,7 +185,7 @@ async function loginShell(ctx: CommandContext, options: RunWasmOptions): Promise
   if (choice === 'just-bash' || !options.terminal || typeof SharedArrayBuffer !== 'function') {
     return none;
   }
-  if (!(await installedCommands(ctx)).has('bash')) return none;
+  if (!(await installed(ctx, options)).has('bash')) return none;
 
   return runWasmCommand(['-t', '--login-prompt', 'bash', '-i'], ctx, options);
 }
@@ -232,7 +247,7 @@ export async function runWasmCommand(
   if (args[0] === '--help' || args[0] === '-h') return { stdout: USAGE, stderr: '', exitCode: 0 };
   if (args[0] === '--login' && args.length === 1) return loginShell(ctx, options);
   if (args[0] === '--list' && args.length === 1) {
-    return { stdout: listing(await installedCommands(ctx)), stderr: '', exitCode: 0 };
+    return { stdout: listing(await installed(ctx, options)), stderr: '', exitCode: 0 };
   }
   const parsed = parse(args);
   if (!parsed) return { stdout: '', stderr: USAGE, exitCode: 2 };
@@ -245,7 +260,13 @@ export async function runWasmCommand(
   let report = (message: string): void => {
     err.push(new TextEncoder().encode(`wasm: ${message}\n`));
   };
-  const session = new WasmSession(ctx, processConfig, (message) => report(message), options.gate);
+  const session = new WasmSession(
+    ctx,
+    processConfig,
+    (message) => report(message),
+    options.gate,
+    options.commands
+  );
   const call = await resolveInstalled(ctx, session, parsed);
   const gluePath = ctx.fs.resolvePath(ctx.cwd, call.program);
 
