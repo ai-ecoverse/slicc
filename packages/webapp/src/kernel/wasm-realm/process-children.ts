@@ -30,6 +30,14 @@ export interface ProcessKernel {
   wait(pid: number, nohang: boolean): [number, number] | number;
   /** fork(2) into a new worker (`slicc-fork.js` supplies the parent's state): the child's pid. */
   fork(state: ForkState): number;
+  /** kill(2): 0, or a negative WASI errno (ESRCH, EINVAL). */
+  kill(pid: number, sig: number): number;
+  /**
+   * execve(): wait for the program just spawned as this process's
+   * replacement (signals to this process go to it). Its wait status, or a
+   * negative WASI errno.
+   */
+  execWait(pid: number): number;
 }
 
 export interface ProcessKernelDeps {
@@ -43,6 +51,12 @@ export interface ProcessKernelDeps {
   afterChild(): void;
   /** Hand the open VFS files to the kernel and describe the fd table (process-fork.ts). */
   describeFork(): ForkStream[];
+  /** This process's pid: kill() of itself raises the signal in place. */
+  pid?: number;
+  /** raise(sig) in the program. */
+  raise?(sig: number): void;
+  /** Whether a waitpid a caught signal interrupted may be retried (SA_RESTART). */
+  restartable?(): boolean;
 }
 
 /** Whatever the stream holds now (a file, or a pipe its program filled). */
@@ -79,7 +93,11 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
   };
 
   const kernelWait = (pid: number, nohang: boolean): [number, number] | number => {
-    const r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+    let r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+    // Interrupted by a caught signal whose handler asked for SA_RESTART: wait on.
+    while (!r.ok && r.errno === 'EINTR' && deps.restartable?.()) {
+      r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+    }
     if (!r.ok) return -wasiErrno(r.errno);
     const waited = r.kind === 'json' ? (r.json as [number, number]) : [0, 0];
     if (waited[0] > 0) deps.afterChild();
@@ -127,6 +145,22 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
       );
       if (!r.ok) return -wasiErrno(r.errno);
       return r.kind === 'json' ? (r.json as number) : -wasiErrno('EIO');
+    },
+    execWait(pid) {
+      const r = transport.call({ op: 'proc-exec', pid }, Infinity, `exec ${pid}`);
+      if (!r.ok) return -wasiErrno(r.errno);
+      deps.afterChild();
+      return r.kind === 'json' ? (r.json as [number, number])[1] : 0;
+    },
+    kill(pid, sig) {
+      // Itself (or its own group, until process groups exist): raise in place.
+      if (pid === 0 || pid === deps.pid || pid === -(deps.pid ?? Number.NaN)) {
+        if (sig !== 0) deps.raise?.(sig);
+        return 0;
+      }
+      const target = pid < -1 ? -pid : pid;
+      const r = transport.call({ op: 'proc-kill', pid: target, sig }, Infinity, `kill ${pid}`);
+      return r.ok ? 0 : -wasiErrno(r.errno);
     },
     wait(pid, nohang) {
       const key = pid > 0 ? (reaped.has(pid) ? pid : undefined) : reaped.keys().next().value;

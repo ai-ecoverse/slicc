@@ -6,6 +6,7 @@ import {
   glueBody,
   kernelSys,
   SyscallError,
+  signalMasks,
 } from '../../../src/kernel/wasm-realm/process-runtime.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
@@ -121,5 +122,21 @@ describe('evaluateGlue', () => {
     const module: { sliccEnv: object; FS?: object } = { sliccEnv: {} };
     evaluateGlue('var ENV = {};', module);
     expect(module.FS).toBeUndefined();
+  });
+});
+
+describe('signalMasks', () => {
+  it('reads the masks, including signal 31 (a negative int32)', () => {
+    const masks = [(1 << 2) | (1 << 31), 1 << 20, 1 << 2];
+    expect(signalMasks({ sliccSigMask: (which) => masks[which]! })).toEqual({
+      caught: (1 << 2) | (1 << 31),
+      ignored: 1 << 20,
+      restart: 1 << 2,
+    });
+  });
+
+  it('is null for a program without signal support (-1, or no hook)', () => {
+    expect(signalMasks({ sliccSigMask: () => -1 })).toBeNull();
+    expect(signalMasks({})).toBeNull();
   });
 });

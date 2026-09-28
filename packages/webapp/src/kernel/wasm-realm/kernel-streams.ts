@@ -111,19 +111,26 @@ export interface ProcessPipeFs {
   createPipe(): { readable_fd: number; writable_fd: number };
 }
 
+/** How a process's streams treat interrupted and broken-pipe writes. */
+export interface KernelStreamOptions {
+  /**
+   * Whether the program ignores or handles SIGPIPE (its handler has then
+   * run): the toolchain's `slicc_sigpipe()`. Absent, or false, is SIGPIPE's
+   * default action.
+   */
+  sigpipe?: () => boolean;
+  /** Whether an EINTR just seen may be retried (SA_RESTART handlers ran). */
+  restartable?: () => boolean;
+}
+
 export class KernelStreams {
   /** Emscripten streams per kernel descriptor (dups and fork clones included). */
   private readonly refs = new Map<number, number>();
 
-  /**
-   * @param sigpipe Whether the program ignores or handles SIGPIPE (its
-   *   handler has then run): the toolchain's `slicc_sigpipe()`. Absent, or
-   *   false, is SIGPIPE's default action.
-   */
   constructor(
     private readonly Fs: ProcessFs,
     private readonly sys: ProcessSys,
-    private readonly sigpipe?: () => boolean
+    private readonly options: KernelStreamOptions = {}
   ) {}
 
   /** Back `stream` by kernel descriptor `kfd`. */
@@ -180,6 +187,19 @@ export class KernelStreams {
     };
   }
 
+  /** A syscall a caught signal interrupted runs again when its handlers asked for SA_RESTART. */
+  private restarting<T>(syscall: () => T): T {
+    for (;;) {
+      try {
+        return syscall();
+      } catch (e) {
+        if (!(e instanceof SyscallError && e.code === 'EINTR' && this.options.restartable?.())) {
+          throw e;
+        }
+      }
+    }
+  }
+
   private call<T>(syscall: () => T): T {
     try {
       return syscall();
@@ -194,17 +214,17 @@ export class KernelStreams {
       ...base,
       read: (_s, buffer, offset, length) =>
         this.call(() => {
-          const bytes = this.sys.read(kfd, length);
+          const bytes = this.restarting(() => this.sys.read(kfd, length));
           buffer.set(bytes, offset);
           return bytes.length;
         }),
       write: (_s, buffer, offset, length) => {
         try {
-          return this.sys.write(kfd, buffer.slice(offset, offset + length));
+          return this.restarting(() => this.sys.write(kfd, buffer.slice(offset, offset + length)));
         } catch (e) {
           // A pipe with no reader: SIGPIPE ends the program unless it ignores
           // or handles the signal; then the write fails with EPIPE.
-          if (e instanceof SyscallError && e.code === 'EPIPE' && !this.sigpipe?.()) {
+          if (e instanceof SyscallError && e.code === 'EPIPE' && !this.options.sigpipe?.()) {
             throw new ProcessExit(KILLED_BY_SIGPIPE);
           }
           return this.call(() => {

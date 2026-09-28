@@ -160,7 +160,7 @@ describe('KernelStreams', () => {
     };
     const { fs, streams } = fakeFs(1);
     const handled = vi.fn(() => true);
-    new KernelStreams(fs, fakeSys({ write: epipe }), handled).attach(streams[0]!, 4);
+    new KernelStreams(fs, fakeSys({ write: epipe }), { sigpipe: handled }).attach(streams[0]!, 4);
     expect(() => streams[0]!.stream_ops.write!(streams[0]!, bytes('y'), 0, 1)).toThrow(
       expect.objectContaining({ errno: 64 })
     );
@@ -191,5 +191,35 @@ describe('KernelStreams', () => {
     new KernelStreams(fs, sys).usePipes(pipefs);
     expect(() => pipefs.createPipe()).toThrow(expect.objectContaining({ errno: 33 }));
     expect(sys.closed).toEqual([5, 6]);
+  });
+
+  it('retries an interrupted read when the handlers asked for SA_RESTART', () => {
+    let calls = 0;
+    const sys = fakeSys({
+      read: () => {
+        calls += 1;
+        if (calls === 1) throw new SyscallError('EINTR');
+        return bytes('ok');
+      },
+    });
+    const { fs, streams } = fakeFs(1);
+    const restartable = vi.fn(() => true);
+    new KernelStreams(fs, sys, { restartable }).attach(streams[0]!, 0);
+    const buf = new Uint8Array(4);
+    expect(streams[0]!.stream_ops.read!(streams[0]!, buf, 0, 4)).toBe(2);
+    expect(calls).toBe(2);
+  });
+
+  it('fails an interrupted read with EINTR otherwise', () => {
+    const sys = fakeSys({
+      read: () => {
+        throw new SyscallError('EINTR');
+      },
+    });
+    const { fs, streams } = fakeFs(1);
+    new KernelStreams(fs, sys, { restartable: () => false }).attach(streams[0]!, 0);
+    expect(() => streams[0]!.stream_ops.read!(streams[0]!, new Uint8Array(1), 0, 1)).toThrow(
+      expect.objectContaining({ errno: 27 })
+    );
   });
 });

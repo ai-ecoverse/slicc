@@ -134,4 +134,54 @@ describe('createProcessKernel', () => {
     const refused = kernel(() => ({ ok: false, errno: 'ENOSYS', message: 'ENOSYS' }));
     expect(refused.k.fork(state)).toBe(-52);
   });
+
+  it('kill(): raises in place for itself, asks the kernel for another pid', () => {
+    const { t, calls } = transport(() => ({ ok: false, errno: 'ESRCH', message: 'ESRCH' }));
+    const { Fs } = fs();
+    const raise = vi.fn();
+    const k = createProcessKernel({
+      transport: t,
+      Fs,
+      env: {},
+      beforeSpawn: () => {},
+      afterChild: () => {},
+      describeFork: () => [],
+      pid: 9,
+      raise,
+    });
+    expect(k.kill(9, 15)).toBe(0);
+    expect(k.kill(0, 10)).toBe(0);
+    expect(raise.mock.calls).toEqual([[15], [10]]);
+    expect(k.kill(12, 15)).toBe(-71); // ESRCH
+    expect(k.kill(-12, 15)).toBe(-71); // a group: its leader, until process groups exist
+    expect(calls).toEqual([
+      { op: 'proc-kill', pid: 12, sig: 15 },
+      { op: 'proc-kill', pid: 12, sig: 15 },
+    ]);
+  });
+
+  it('execWait(): waits as the exec replacement and returns the wait status', () => {
+    const { k, calls, afterChild } = kernel(() => json([30, 143 << 8]));
+    expect(k.execWait(30)).toBe(143 << 8);
+    expect(calls).toEqual([{ op: 'proc-exec', pid: 30 }]);
+    expect(afterChild).toHaveBeenCalled();
+  });
+
+  it('waitpid restarts after an SA_RESTART handler, else reports EINTR', () => {
+    const answers: SyncFsResult[] = [{ ok: false, errno: 'EINTR', message: 'EINTR' }, json([5, 0])];
+    const { t } = transport(() => answers.shift()!);
+    const { Fs } = fs();
+    const k = createProcessKernel({
+      transport: t,
+      Fs,
+      env: {},
+      beforeSpawn: () => {},
+      afterChild: () => {},
+      describeFork: () => [],
+      restartable: () => true,
+    });
+    expect(k.wait(-1, false)).toEqual([5, 0]);
+    const plain = kernel(() => ({ ok: false, errno: 'EINTR', message: 'EINTR' }));
+    expect(plain.k.wait(-1, false)).toBe(-27);
+  });
 });

@@ -118,10 +118,13 @@ describe('wasm command', () => {
     compile.mockResolvedValue({});
     let settle!: (code: number) => void;
     const kill = vi.fn((code: number) => settle(code));
+    // An uncaught SIGTERM's default action: the kernel ends the process with 128 + 15.
+    const signal = vi.fn((sig: number) => settle(128 + sig));
     spawn.mockImplementation((opts) => ({
       pid: opts.pid,
       exited: new Promise<number>((resolve) => (settle = resolve)),
       kill,
+      signal,
     }));
     let listener: ((proc: { pid: number }, sig: string) => void) | undefined;
     const pm = {
@@ -147,9 +150,9 @@ describe('wasm command', () => {
     );
     expect(spawn.mock.calls[0][0].pid).toBe(777);
     listener?.({ pid: 1 }, 'SIGTERM'); // another process: ignored
-    expect(kill).not.toHaveBeenCalled();
+    expect(signal).not.toHaveBeenCalled();
     listener?.({ pid: 777 }, 'SIGTERM');
-    expect(kill).toHaveBeenCalledWith(143);
+    expect(signal).toHaveBeenCalledWith(15);
     expect((await running).exitCode).toBe(143);
     expect(pm.exit).toHaveBeenCalledWith(777, 143);
     expect(listener).toBeUndefined(); // unsubscribed
