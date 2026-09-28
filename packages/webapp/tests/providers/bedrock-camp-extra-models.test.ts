@@ -51,6 +51,27 @@ describe('BEDROCK_CAMP_EXTRA_MODELS', () => {
     expect(byId('global.anthropic.claude-opus-5-5')?.name).toBe('Claude Opus 5.5 (Global)');
   });
 
+  it('lists Sonnet 5.5 on the global profile only, at list price', () => {
+    const ids = BEDROCK_CAMP_EXTRA_MODELS.map((m) => m.id).filter((id) =>
+      id.endsWith('anthropic.claude-sonnet-5-5')
+    );
+    expect(ids).toEqual(['global.anthropic.claude-sonnet-5-5']);
+    const m = byId('global.anthropic.claude-sonnet-5-5');
+    expect(m?.name).toBe('Claude Sonnet 5.5 (Global)');
+    expect(m?.cost).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 });
+    expect(m?.contextWindow).toBe(1_000_000);
+    expect(m?.maxTokens).toBe(128_000);
+  });
+
+  it('carries the capabilities verified live for Sonnet 5.5', () => {
+    const id = 'global.anthropic.claude-sonnet-5-5';
+    expect(claudeRejectsTemperature(id)).toBe(true);
+    expect(claudeSupportsAdaptiveThinking(id)).toBe(true);
+    expect(claudeSupportsNativeXhighEffort(id)).toBe(true);
+    expect(byId(id)?.reasoning).toBe(true);
+    expect(byId(id)?.thinkingLevelMap).toEqual({ xhigh: 'xhigh', max: 'max' });
+  });
+
   it('only contains ids the picker filter accepts', () => {
     for (const m of BEDROCK_CAMP_EXTRA_MODELS) {
       expect(isBedrockCampCompatible(m), m.id).toBe(true);
