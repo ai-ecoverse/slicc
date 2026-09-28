@@ -122,6 +122,23 @@ const EXTRA_MODEL_SPECS: readonly ExtraModelSpec[] = [
     maxTokens: 128_000,
     thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
   },
+  {
+    // Released 2026-09-28; verified that day against bedrock-runtime.us-west-2.
+    // Only `global.` answers (`us.` is an invalid identifier, the bare id needs
+    // a profile), and `GET /inference-profiles` lists only `global.` in
+    // us-west-2, us-east-1 and eu-central-1. `temperature` 400s. Thinking is
+    // adaptive only: `thinking.type.enabled` 400s, and `.disabled` 400s with a
+    // pointer to a new `thinking.type.between_tools`. Effort low, medium, high,
+    // xhigh and max are all accepted. Prices, context window and max tokens are
+    // Anthropic's list prices, and pi's hosted catalogue agrees.
+    baseId: 'anthropic.claude-sonnet-5-5',
+    name: 'Claude Sonnet 5.5',
+    profiles: ['global'],
+    globalCost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+    thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+  },
   // The five below were verified 2026-09-25 against bedrock-runtime.us-west-2.
   // `GET /inference-profiles` lists only `global.` and `us.` for each, in
   // us-west-2 and us-east-1; eu-central-1, ap-northeast-1 and ap-southeast-2
