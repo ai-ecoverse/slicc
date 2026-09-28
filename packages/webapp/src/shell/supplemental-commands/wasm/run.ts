@@ -272,12 +272,13 @@ export async function runWasmCommand(
   }
 
   const err: Uint8Array[] = [];
-  const session = new WasmSession(
-    ctx,
-    processConfig,
-    (message) => err.push(new TextEncoder().encode(`wasm: ${message}\n`)),
-    options.gate
-  );
+  // A process's crash diagnostic goes with the command's stderr; on a
+  // terminal (-t) straight to the screen, since the session may run for
+  // hours and its stderr is only seen at the end, if at all.
+  let report = (message: string): void => {
+    err.push(new TextEncoder().encode(`wasm: ${message}\n`));
+  };
+  const session = new WasmSession(ctx, processConfig, (message) => report(message), options.gate);
   const call = await resolveInstalled(ctx, session, parsed);
   const gluePath = ctx.fs.resolvePath(ctx.cwd, call.program);
 
@@ -292,6 +293,7 @@ export async function runWasmCommand(
       };
     }
     stdio = terminalStdio(lease, session);
+    report = (message) => lease.write(new TextEncoder().encode(`wasm: ${message}\r\n`));
   } else {
     stdio = pipedStdio(ctx, session, err, options.onOutput);
   }
