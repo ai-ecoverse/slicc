@@ -91,6 +91,7 @@ import {
 } from './proxied-fetch.js';
 import { clearReadByteProvenance } from './request-body-provenance.js';
 import { ScriptCatalog } from './script-catalog.js';
+import { settleOnAbort } from './settle-on-abort.js';
 import {
   commandSudoSubject,
   enforceCommandSudo,
@@ -1424,7 +1425,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           (ctx as CommandContext & { writeStdout?: (chunk: string) => void }).writeStdout = tee;
         }
         try {
-          const result = await wrapped.execute(args, ctx);
+          // Settled on abort, so a slow one cannot poison its caller's scope.
+          const result = await settleOnAbort(() => wrapped.execute(args, ctx), ctx.signal);
           // Incremental tee for the agent bash tool (#2415): emit each
           // command's output as it settles so a later timeout kill still has
           // the pre-kill payload on disk. Commands that already streamed via
