@@ -62,6 +62,10 @@ func (a *allSettled) observe(typ string, raw []byte, now time.Time) {
 // any status frame of its own. A unit that left the roster stops counting: a
 // dropped scoop never sends its own `ready`. A leader without `state` leaves
 // the statuses as they are.
+//
+// The leader re-broadcasts this snapshot every 5 s, so it is state, not
+// activity: only a unit that newly turns busy restarts the quiet period.
+// Counting every snapshot kept each bench prompt open until its timeout.
 func (a *allSettled) applyRoster(raw []byte, now time.Time) {
 	var msg struct {
 		Scoops []struct {
@@ -79,7 +83,10 @@ func (a *allSettled) applyRoster(raw []byte, now time.Time) {
 		present[s.Jid] = true
 		switch s.State {
 		case "working", "initializing":
-			a.busy[s.Jid] = true
+			if !a.busy[s.Jid] {
+				a.busy[s.Jid] = true
+				a.last = now
+			}
 		case "idle", "broken":
 			delete(a.busy, s.Jid)
 		}
@@ -89,7 +96,6 @@ func (a *allSettled) applyRoster(raw []byte, now time.Time) {
 			delete(a.busy, jid)
 		}
 	}
-	a.last = now
 }
 
 // turnEnded marks the prompted turn as ended (a `turn_end` or a settled

@@ -189,6 +189,33 @@ func TestCLIPromptAllSettledCountsWorkingScoopsFromTheRoster(t *testing.T) {
 	}
 }
 
+// A live leader re-broadcasts `scoops.list` every 5 s. Those snapshots are
+// state, not activity: counting them as frames kept every bench prompt open
+// until its 60-minute timeout (stage 2 run 36359378966).
+func TestCLIPromptAllSettledIgnoresRosterHeartbeats(t *testing.T) {
+	bin := sliccBinary(t)
+	frames := []any{
+		statusFrameFor("cone-1", "processing"),
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "DONE"),
+		agentFrameFor("cone-1", protocol.AgentTurnEnd, "m1", ""),
+		statusFrameFor("cone-1", "ready"),
+	}
+	for i := 0; i < 40; i++ {
+		frames = append(frames, 100*time.Millisecond, rosterWithState("idle", "cone-1", "scout"))
+	}
+	leader := ackLeader(t, coneAck, frames)
+	stdout, stderr, took, err := runPromptArgs(t, bin, leader.joinURL, "--allsettled", "500ms")
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "DONE") {
+		t.Fatalf("stdout = %q, want the reply", stdout)
+	}
+	if took > 3*time.Second {
+		t.Fatalf("prompt took %s: idle roster heartbeats (4 s of them) held the 500ms quiet period open", took)
+	}
+}
+
 func TestParsePromptArgs(t *testing.T) {
 	cases := []struct {
 		args    []string
