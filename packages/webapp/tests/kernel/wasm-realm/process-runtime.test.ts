@@ -187,6 +187,12 @@ describe('evaluateGlue', () => {
     evaluateGlue('var ENV = {};', module);
     expect(module.FS).toBeUndefined();
   });
+
+  it('runs a glue without an environment (a program that never calls getenv)', () => {
+    const module: { sliccEnv: object; callMain?: () => number } = { sliccEnv: { A: '1' } };
+    evaluateGlue('function callMain() { return 7; }', module);
+    expect(module.callMain?.()).toBe(7);
+  });
 });
 
 describe('signalMasks', () => {

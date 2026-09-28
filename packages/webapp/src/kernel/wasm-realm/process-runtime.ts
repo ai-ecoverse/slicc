@@ -154,14 +154,16 @@ export function glueBody(glue: string): string {
 
 /**
  * Runs in the glue's scope right after its body. ENV, FS and callMain are the
- * glue's own variables: ENV is filled before the (asynchronous) instantiation
- * reads it, and FS and callMain are taken from the scope, so a program linked
- * without exporting them (`-sEXPORTED_RUNTIME_METHODS`) still runs. With
+ * glue's own variables, each absent when the program does not use it: ENV is
+ * filled before the (asynchronous) instantiation reads it, and FS and callMain
+ * are taken from the scope, so a program linked without exporting them
+ * (`-sEXPORTED_RUNTIME_METHODS`) still runs. With
  * assertions on (any `-O0` link) such a symbol is an accessor on `Module`
  * that aborts when read, so it is replaced without reading it.
  */
 const GLUE_TRAILER = [
-  'Object.assign(ENV, Module.sliccEnv);',
+  // ENV exists only when the program reads its environment (getenv pulls it in).
+  "if (typeof ENV !== 'undefined') Object.assign(ENV, Module.sliccEnv);",
   'const __sliccTake = (name, value) => {',
   '  const own = Object.getOwnPropertyDescriptor(Module, name);',
   "  if (own && 'value' in own && own.value != null) return;",
