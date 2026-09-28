@@ -277,6 +277,22 @@ before = os.read(fd, 100).decode()
     expect(py('before')).toBe('hello from the vfs\n');
   });
 
+  it('a dup keeps the file open: a redirection (open, dup2, close) survives a child running', () => {
+    py(`
+import os
+fd = os.open('/work/redir.txt', os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+os.dup2(fd, 9)
+os.close(fd)
+`);
+    // A child ran meanwhile (`cmd > file`): the shell's view is invalidated.
+    invalidateLiveVfs(FS, plugin);
+    py(`os.write(9, b'kept')`);
+    flushLiveVfs(FS, plugin);
+    expect(nodeFs.readFileSync(join(host, 'redir.txt'), 'utf8')).toBe('kept');
+    py('os.close(9)');
+    expect(nodeFs.readFileSync(join(host, 'redir.txt'), 'utf8')).toBe('kept');
+  });
+
   it('invalidateLiveVfs makes changes by another process visible', () => {
     expect(py(`__import__('os').path.exists('/work/hello.txt')`)).toBe(true);
     nodeFs.rmSync(join(host, 'hello.txt'));
