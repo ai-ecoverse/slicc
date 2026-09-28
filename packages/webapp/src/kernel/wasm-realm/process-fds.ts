@@ -43,12 +43,18 @@ export function setCloseOnExec(stream: CloexecStream, on: boolean): void {
   else delete stream.sliccCloexec;
 }
 
+const tracked = new WeakSet<ProcessFs>();
+
 /**
  * FD_CLOEXEC per fd: an open with O_CLOEXEC sets it (and leaves the
  * description's flags without it); a new fd from dup / dup2 / F_DUPFD starts
  * without it (dup3 and F_DUPFD_CLOEXEC set it after).
  */
 export function trackCloseOnExec(Fs: ProcessFs): void {
+  // Once per FS: the runtime installs it before static constructors, and again
+  // (a no-op then) once up, for a glue whose preRun did not run.
+  if (tracked.has(Fs)) return;
+  tracked.add(Fs);
   if (typeof Fs.dupStream === 'function') {
     const dupStream = Fs.dupStream.bind(Fs);
     Fs.dupStream = (stream, fd) => {

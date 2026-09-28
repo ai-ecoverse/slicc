@@ -5,7 +5,11 @@ import {
   type ProcessStream,
   type ProcessSys,
 } from '../../../src/kernel/wasm-realm/kernel-streams.js';
-import { closesOnExec, O_CLOEXEC } from '../../../src/kernel/wasm-realm/process-fds.js';
+import {
+  closesOnExec,
+  O_CLOEXEC,
+  trackCloseOnExec,
+} from '../../../src/kernel/wasm-realm/process-fds.js';
 import {
   describeForFork,
   describeInherited,
@@ -191,7 +195,50 @@ describe('describeInherited', () => {
   });
 });
 
+describe('describeInherited: file actions in order', () => {
+  it('resolves a source against the table the earlier actions left', () => {
+    const { Fs, streams, make } = fakeFs();
+    const kernel = new KernelStreams(Fs, sys());
+    streams[3] = make({ fd: 3, sliccKernelFd: 8 });
+    streams[4] = make({ fd: 4, sliccKernelFd: 9, sliccCloexec: true });
+    const actions: Array<[number, number]> = [
+      [40, 3],
+      [41, 40], // 40 exists only in the child: an alias of 3
+      [42, 4], // a close-on-exec source dups to an inherited fd
+      [43, 42],
+      [42, -1], // closing 42 later leaves 43 alone
+      [44, 42], // 42 is gone by now: 44 stays closed
+    ];
+    expect(describeInherited(Fs, sys(), kernel, () => '', actions)).toEqual([
+      { fd: 3, kernel: 8 },
+      { fd: 40, kernel: 8 },
+      { fd: 41, kernel: 8 },
+      { fd: 43, kernel: 9 },
+    ]);
+  });
+});
+
 describe('placeKernelStream', () => {
+  it('gives aliases of one description one inode: the same description id, or kernel fd', () => {
+    const { Fs } = fakeFs();
+    const kernel = new KernelStreams(Fs, sys());
+    const ino = (entry: Parameters<typeof placeKernelStream>[2]) => {
+      const s = placeKernelStream(Fs, kernel, entry);
+      return (s.stream_ops.getattr!(s) as { ino: number }).ino;
+    };
+    // Started with (init): kernel fd = program fd, so the description id tells aliases apart.
+    const a = ino({ fd: 60, kernel: 60, kind: 'stream', desc: 7 });
+    const b = ino({ fd: 61, kernel: 61, kind: 'stream', desc: 7 });
+    const c = ino({ fd: 62, kernel: 62, kind: 'stream', desc: 8 });
+    // Restored after a fork: aliases share the parent's kernel fd.
+    const d = ino({ fd: 70, kernel: 5, kind: 'stream' });
+    const e = ino({ fd: 71, kernel: 5, kind: 'stream' });
+    expect(a).toBe(b);
+    expect(c).not.toBe(a);
+    expect(d).toBe(e);
+    expect(d).not.toBe(a);
+  });
+
   it('gives each stream placeholder a FIFO identity of its own, and sets FD_CLOEXEC', () => {
     const { Fs, streams } = fakeFs();
     const getattr = vi.fn(() => ({ dev: 3, ino: 7, mode: S_IFCHR, size: 0 }));
@@ -217,6 +264,18 @@ describe('placeKernelStream', () => {
 });
 
 describe('restoreForkedStreams', () => {
+  it('keeps FD_CLOEXEC on a device reopened below its number and moved there', () => {
+    const { Fs, streams } = fakeFs();
+    trackCloseOnExec(Fs);
+    restoreForkedStreams(Fs, new KernelStreams(Fs, sys()), [
+      { fd: 5, path: '/dev/null', flags: 2 | O_CLOEXEC },
+      { fd: 6, path: '/dev/null', flags: 2 },
+    ]);
+    expect(streams[5]?.path).toBe('/dev/null');
+    expect([closesOnExec(streams[5]!), closesOnExec(streams[6]!)]).toEqual([true, false]);
+    expect(streams.filter(Boolean)).toHaveLength(2);
+  });
+
   it("replaces the runtime's streams with the parent's table", () => {
     const { Fs, streams, make, opened } = fakeFs();
     streams[0] = make({ fd: 0, path: '/dev/stdin' });

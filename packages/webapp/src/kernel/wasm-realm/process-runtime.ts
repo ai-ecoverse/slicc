@@ -311,6 +311,8 @@ export async function runWasmProcess(
     // Static constructors may read the cwd: stand it up before they run.
     preRun: [
       (m: { FS: ProcessFs }) => {
+        // Before static constructors: an open(O_CLOEXEC) of theirs counts too.
+        trackCloseOnExec(m.FS);
         try {
           m.FS.mkdirTree(init.cwd);
           m.FS.chdir(init.cwd);

@@ -53,6 +53,8 @@ export interface KernelStreamEntry {
   /** A socket's status flags (O_NONBLOCK), which the child's stream keeps. */
   flags?: number;
   cloexec?: boolean;
+  /** The kernel's id of the open file description: aliases of one stream share an inode. */
+  desc?: number;
 }
 
 /**
@@ -69,6 +71,8 @@ export interface InheritedFd {
   /** A socket's status flags (O_NONBLOCK), which its stream keeps. */
   flags?: number;
   cloexec?: boolean;
+  /** A stream's open file description, by id: fds that share one fstat as one file. */
+  desc?: number;
 }
 
 export interface WasmProcessInitMsg {

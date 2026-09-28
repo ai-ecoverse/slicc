@@ -160,6 +160,33 @@ describe('runWasmProcess', () => {
     expect(seen).not.toBe(fcntl);
   });
 
+  it('tracks FD_CLOEXEC from before static constructors (preRun)', async () => {
+    const module = await WebAssembly.compile(NEEDS_IMPORT);
+    type S = { fd: number; flags: number; sliccCloexec?: boolean };
+    let opened: S | undefined;
+    const code = await runWasmProcess(init(module), port, {
+      evaluate: (_glue, m) => {
+        const fake = m as FakeModule & { preRun?: Array<(m: object) => void> };
+        let next = 3;
+        fake.FS = {
+          getStream: () => null,
+          mkdirTree: () => {},
+          chdir: () => {},
+          open: (_path: string, flags: number): S => ({ fd: next++, flags }),
+          dupStream: (s: S) => ({ ...s, fd: next++ }),
+        };
+        for (const run of fake.preRun ?? []) run(fake);
+        // A static constructor, after preRun and before the runtime is up.
+        opened = (fake.FS as { open: (p: string, f: number) => S }).open('/etc/x', 0o2000000);
+        fake.callMain = () => 0;
+        fake.onRuntimeInitialized();
+      },
+    });
+    expect(code).toBe(0);
+    expect(opened?.sliccCloexec).toBe(true);
+    expect(opened?.flags).toBe(0); // not on the description
+  });
+
   it('opens the descriptors it starts with by kind, FD_CLOEXEC included', async () => {
     const module = await WebAssembly.compile(NEEDS_IMPORT);
     type S = { fd: number; stream_ops: object; sliccKernelFile?: boolean; sliccCloexec?: boolean };

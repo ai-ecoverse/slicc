@@ -129,15 +129,21 @@ export function describeInherited(
   livePath: (stream: ProcessStream) => string,
   actions: ReadonlyArray<readonly [number, number]> = []
 ): InheritedSlot[] {
-  const slots = new Map<number, ProcessStream>();
+  // The child's table as the actions leave it, in order (a later action may
+  // name an earlier one's target); FD_CLOEXEC applies after them, at exec.
+  const table = new Map<number, { stream: ProcessStream; cloexec: boolean }>();
   for (const stream of Fs.streams) {
-    if (stream && stream.fd > 2 && !closesOnExec(stream)) slots.set(stream.fd, stream);
+    if (stream) table.set(stream.fd, { stream, cloexec: closesOnExec(stream) });
   }
   for (const [target, source] of actions) {
     if (target <= 2) continue;
-    const from = source >= 0 ? Fs.getStream(source) : null;
-    if (from) slots.set(target, from);
-    else slots.delete(target);
+    const from = source >= 0 ? table.get(source) : undefined;
+    if (from) table.set(target, { stream: from.stream, cloexec: false });
+    else table.delete(target);
+  }
+  const slots = new Map<number, ProcessStream>();
+  for (const [fd, { stream, cloexec }] of table) {
+    if (fd > 2 && !cloexec) slots.set(fd, stream);
   }
   const promote = vfsPromoter(Fs, sys, streams, livePath);
   const out: InheritedSlot[] = [];
@@ -174,18 +180,26 @@ function placeholder(
 const FIFO_MODE = 0o010600;
 /** Inode numbers of stream placeholders: one per description, clear of the FS's own. */
 let nextStreamIno = 0x40000000;
+/** Per process (its KernelStreams): the inode of each description placed so far. */
+const streamInos = new WeakMap<KernelStreams, Map<string, number>>();
 
 /**
  * fstat of a stream placeholder: a FIFO of its own. Every one sits on
  * `/dev/null`, and two operands that stat as the same node are one file to
- * `diff <(a) <(b)`, which then compares nothing.
+ * `diff <(a) <(b)`, which then compares nothing. Aliases of one description
+ * (`identity`: the kernel's description id, else the kernel fd a fork kept)
+ * share an inode, as dups do.
  */
-function asFifo(stream: ProcessStream): void {
-  const ino = nextStreamIno++;
+function asFifo(stream: ProcessStream, streams: KernelStreams, identity: string): void {
+  let inos = streamInos.get(streams);
+  if (!inos) streamInos.set(streams, (inos = new Map()));
+  let ino = inos.get(identity);
+  if (ino === undefined) inos.set(identity, (ino = nextStreamIno++));
   const node = stream.node;
+  const fixed = ino;
   stream.stream_ops = {
     ...stream.stream_ops,
-    getattr: () => ({ ...node.node_ops?.getattr?.(node), mode: FIFO_MODE, ino, size: 0 }),
+    getattr: () => ({ ...node.node_ops?.getattr?.(node), mode: FIFO_MODE, ino: fixed, size: 0 }),
   };
 }
 
@@ -199,7 +213,9 @@ export function placeKernelStream(
   if (entry.kind === 'file') streams.attachFile(stream, entry.kernel);
   else if (entry.kind === 'socket') streams.attachSocket(stream, entry.kernel);
   else streams.attach(stream, entry.kernel, entry.kind === 'tty');
-  if (entry.kind === 'stream') asFifo(stream);
+  if (entry.kind === 'stream') {
+    asFifo(stream, streams, entry.desc !== undefined ? `d${entry.desc}` : `k${entry.kernel}`);
+  }
   setCloseOnExec(stream, entry.cloexec === true);
   return stream;
 }
@@ -216,7 +232,13 @@ export function restoreForkedStreams(
       if ('kernel' in entry) {
         placeKernelStream(Fs, streams, entry);
       } else {
-        place(Fs, Fs.open(entry.path, entry.flags & ~(O_CREAT | O_EXCL | O_TRUNC)), entry.fd);
+        const placed = place(
+          Fs,
+          Fs.open(entry.path, entry.flags & ~(O_CREAT | O_EXCL | O_TRUNC)),
+          entry.fd
+        );
+        // A move is a dup, which starts without FD_CLOEXEC: set it again.
+        setCloseOnExec(placed, (entry.flags & O_CLOEXEC) !== 0);
       }
     } catch {
       /* gone since the fork: the descriptor stays closed */

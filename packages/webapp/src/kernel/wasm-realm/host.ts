@@ -27,7 +27,7 @@ import {
   SAB_I_SIGNALS,
 } from '../realm/sync-sab-wire.js';
 import type { ChildForker, ChildSpawner } from './children.js';
-import { type FdTable, kernelFdKind } from './fd-table.js';
+import { type FdTable, kernelFdKind, type OpenFile } from './fd-table.js';
 import type { JobTable } from './jobs.js';
 import { isWasmSyscall, type StateListener, WasmProcess } from './process.js';
 import {
@@ -105,19 +105,31 @@ function defaultWorker(): WasmWorkerLike {
   }) as WasmWorkerLike;
 }
 
+/** Ids of open file descriptions, for the inodes a runtime gives stream placeholders. */
+const descIds = new WeakMap<OpenFile, number>();
+let nextDescId = 1;
+
+function descId(file: OpenFile): number {
+  let id = descIds.get(file);
+  if (id === undefined) descIds.set(file, (id = nextDescId++));
+  return id;
+}
+
 /** The descriptors beyond 0-2 a process starts with, as its runtime backs them. */
 export function inheritedFds(fds: FdTable): InheritedFd[] {
   return fds
     .numbers()
     .filter((fd) => fd > 2)
-    .map((fd) => {
-      const file = fds.get(fd).file;
+    .map((fd): InheritedFd => {
+      const open = fds.get(fd);
       const flags = fds.statusFlags(fd);
+      const kind = open.file instanceof KernelSocket ? 'socket' : kernelFdKind(open.file);
       return {
         fd,
-        kind: file instanceof KernelSocket ? 'socket' : kernelFdKind(file),
+        kind,
         ...(flags !== undefined ? { flags } : {}),
         ...(fds.closesOnExec(fd) ? { cloexec: true } : {}),
+        ...(kind === 'stream' ? { desc: descId(open) } : {}),
       };
     });
 }
