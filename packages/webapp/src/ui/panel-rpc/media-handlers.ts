@@ -8,18 +8,22 @@ import type {
   CameraCaptureResult,
 } from '../../kernel/panel-rpc-camera-types.js';
 import type { StandalonePanelRpcHandlerOptions } from '../panel-rpc-handlers.js';
+import { gestureDisplayMedia, type PermissionsSurface } from './gesture-picker.js';
 import { openOAuthPopup } from './oauth-handlers.js';
 
-async function handleScreencaptureRpc(payload: {
-  mimeType: string;
-  quality: number;
-  mode?: 'image' | 'video' | 'session';
-  durationMs?: number;
-  audio?: boolean;
-  session?: 'start' | 'frame' | 'stop' | 'record';
-  handle?: string;
-  maxWidth?: number;
-}): Promise<{
+async function handleScreencaptureRpc(
+  surface: PermissionsSurface,
+  payload: {
+    mimeType: string;
+    quality: number;
+    mode?: 'image' | 'video' | 'session';
+    durationMs?: number;
+    audio?: boolean;
+    session?: 'start' | 'frame' | 'stop' | 'record';
+    handle?: string;
+    maxWidth?: number;
+  }
+): Promise<{
   bytes: ArrayBuffer;
   width: number;
   height: number;
@@ -43,7 +47,9 @@ async function handleScreencaptureRpc(payload: {
             durationMs: durationMs ?? 5_000,
             audio: !!audio,
           }
-        : { mode: 'image', mimeType, quality }
+        : { mode: 'image', mimeType, quality },
+    // Without a user gesture the display picker opens from the permission prompt.
+    gestureDisplayMedia(surface)
   );
   const buffer = captured.bytes.buffer.slice(
     captured.bytes.byteOffset,
@@ -62,7 +68,8 @@ async function handleScreencaptureRpc(payload: {
 }
 
 /** Page identity, screen/speech/audio output. */
-export function buildPageAudioHandlers() {
+export function buildPageAudioHandlers(options: StandalonePanelRpcHandlerOptions = {}) {
+  const surface = () => options.getPermissionsSurface?.() ?? null;
   return {
     'page-info': () => ({
       origin: window.location.origin,
@@ -70,7 +77,7 @@ export function buildPageAudioHandlers() {
       title: document.title || '',
     }),
 
-    screencapture: (payload) => handleScreencaptureRpc(payload),
+    screencapture: (payload) => handleScreencaptureRpc(surface, payload),
 
     // Routed through the kokoro-aware speak helper: the on-device voice runs
     // once its chained download is ready (or when `voice` names a kokoro

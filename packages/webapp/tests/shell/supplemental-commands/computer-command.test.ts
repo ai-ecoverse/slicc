@@ -647,15 +647,54 @@ describe('computer command', () => {
     expect(typed.stderr).toContain('input is not allowed');
   });
 
-  it('add screen without a gesture or --__resolved fails', async () => {
-    const cmd = createComputerCommand({
+  it('add screen without a gesture or tool call starts the share on the page', async () => {
+    // GNU bash on the panel terminal: the page opens the picker from its
+    // permission prompt and hands back the session handle.
+    const call = vi.fn(async () => ({
+      bytes: new ArrayBuffer(0),
+      width: 1280,
+      height: 720,
+      mimeType: 'application/octet-stream',
+      handle: 'screen7',
+    }));
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({ registry, panelRpc: { call } as never });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'screen', '-n', 'Desk'], ctx);
+    expect(added.exitCode).toBe(0);
+    expect(added.stdout).toContain('screen:screen7');
+    expect(call).toHaveBeenCalledWith(
+      'screencapture',
+      expect.objectContaining({ mode: 'session', session: 'start' }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) })
+    );
+    expect(registry.get('screen:screen7')).toBeTruthy();
+  });
+
+  it('add screen fails when the page starts no share, or there is no page at all', async () => {
+    const cancelled = createComputerCommand({
       registry: new ComputerRegistry(null),
-      panelRpc: { call: vi.fn() } as never,
+      panelRpc: {
+        call: vi.fn(async () => {
+          throw new Error('screenshare request: cancelled');
+        }),
+      } as never,
     });
     const { ctx } = makeCtx();
-    const added = await cmd.execute(['add', 'screen'], ctx);
-    expect(added.exitCode).toBe(1);
-    expect(added.stderr).toContain('needs a user gesture');
+    const denied = await cancelled.execute(['add', 'screen'], ctx);
+    expect(denied.exitCode).toBe(1);
+    expect(denied.stderr).toContain('screenshare request: cancelled');
+
+    const noHandle = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      panelRpc: { call: vi.fn(async () => ({ bytes: new ArrayBuffer(0) })) } as never,
+    });
+    expect((await noHandle.execute(['add', 'screen'], ctx)).stderr).toContain('no handle');
+
+    const noPage = createComputerCommand({ registry: new ComputerRegistry(null) });
+    const failed = await noPage.execute(['add', 'screen'], ctx);
+    expect(failed.exitCode).toBe(1);
+    expect(failed.stderr).toContain('needs a user gesture');
   });
 
   it('record writes a clip for screen and encodes worker-hosted kinds via ffmpeg', async () => {

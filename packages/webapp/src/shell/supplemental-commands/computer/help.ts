@@ -12,7 +12,7 @@ Lifecycle:
                              TITLE is what the surface currently calls itself)
   add tab <targetId|url> [-n name]
                              register a browser tab (refuses SLICC app tabs)
-  add screen [-n name]       share this display (needs a user gesture)
+  add screen [-n name]       share this display (asks for permission)
   add ssh <follower> [--sim <udid>] [--display <n>] [--allow-input] [-n name]
                              follower desktop (or iOS Simulator on a Mac).
                              --allow-input needs sudo (phone can Face ID).

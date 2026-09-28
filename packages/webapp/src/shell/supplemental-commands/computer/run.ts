@@ -581,6 +581,29 @@ async function verbAddTab(
   return ok(`registered ${desc.id} (${name ?? desc.title})\n`);
 }
 
+/** The display picker can take a while; matches the serial chooser's bridge budget. */
+const SCREEN_SHARE_PICK_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * A gesture-less `computer add screen` with no cone tool call (GNU bash on the
+ * panel terminal): the page starts the share session, opening the picker from
+ * its permission prompt when it holds no gesture.
+ */
+async function startScreenShareSession(rpc: PanelRpcClient | null): Promise<string> {
+  if (!rpc) {
+    throw new Error(
+      'add screen: needs a user gesture — type `computer add screen` in the panel terminal, or run it from a cone tool call so an approval card can open the picker'
+    );
+  }
+  const started = await rpc.call(
+    'screencapture',
+    { mimeType: 'image/jpeg', quality: 0.7, mode: 'session', session: 'start' },
+    { timeoutMs: SCREEN_SHARE_PICK_TIMEOUT_MS }
+  );
+  if (!started.handle) throw new Error('add screen: screen share produced no handle');
+  return started.handle;
+}
+
 async function verbAddScreen(
   args: string[],
   ctx: CommandContext,
@@ -589,20 +612,17 @@ async function verbAddScreen(
 ): Promise<CmdResult> {
   const name = flagValue(args, ['-n', '--name']);
   const resolved = flagValue(args, ['--__resolved']);
+  const rpc = lookupRpc(deps);
   let handle = resolved;
   if (!handle) {
-    if (!getToolExecutionContext()) {
-      return fail(
-        'add screen: needs a user gesture — type `computer add screen` in the panel terminal, or run it from a cone tool call so an approval card can open the picker'
-      );
-    }
     try {
-      handle = (await runScreenShareApproval()).handle;
+      handle = getToolExecutionContext()
+        ? (await runScreenShareApproval()).handle
+        : await startScreenShareSession(rpc);
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
     }
   }
-  const rpc = lookupRpc(deps);
   if (!rpc) return fail('add screen: no panel RPC in this float');
   const { BridgedScreenComputerBackend, screenComputerId } = await import(
     '../../../computers/adapters/screen.js'

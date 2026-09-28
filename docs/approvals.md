@@ -761,9 +761,11 @@ Behavior:
 Browser device-access APIs — `showDirectoryPicker` and the WebUSB / Web Serial /
 WebHID `requestDevice` family — only run from inside a real user-gesture
 handler. The kernel worker that hosts shell commands has no `window`, so these
-APIs cannot run there directly. The panel terminal bridges the gesture; agent
-`bash` calls fall back to an in-chat approval dip (`mount`) or fail with a
-clear "needs a real user gesture" message (`usb`/`serial`/`hid`/`esptool`/`computer add screen`).
+APIs cannot run there directly. The panel terminal bridges the gesture on the
+Enter keystroke; cone tool calls get an in-chat approval dip (`mount`,
+`computer add screen`); anything else without a gesture (GNU bash on the panel
+terminal) opens the leader's `<slicc-permissions>` prompt, whose Allow click is
+the gesture (`usb`/`serial`/`hid`/`esptool`/`mount`/`computer add screen`/`screencapture`).
 `--allow-input` on `computer add ssh` is **sudo**, not a browser picker: it rides
 `sudo.approve.request` (`kind: 'command'`) so a tray phone can answer with Face ID.
 
@@ -847,6 +849,10 @@ Two gesture paths:
 - **Agent-driven** — the `mount` shell command (run via `bash`) renders a Tool
   UI approval card in chat (`packages/webapp/src/shell/tool-ui.ts`). The
   user's click is the gesture; the click handler then calls the picker.
+- **No gesture, no tool call** — `mount /<path>` run by GNU bash on the panel
+  terminal reaches the worker with neither. `mountLocal` asks the page over the
+  `permission-request` panel-RPC (kind `filesystem`); the `<slicc-permissions>`
+  Allow click opens the picker, and the handle comes back through IDB.
 
 In the **extension**, the picker additionally routes through the shared
 picker popup window (`packages/chrome-extension/picker-popup.html` —
@@ -879,9 +885,12 @@ dedicated popup window (`usb-picker-popup.html` / `serial-picker-popup.html` /
 `hid-picker-popup.html`) because the hosted leader tab cannot host
 `requestDevice` reliably across all configurations.
 
-Because the gesture must originate from a real keystroke, the picker
-subcommands do **not** work from an agent `bash` tool call or a scoop with no
-UI — only from the terminal in the leader tab (cone) or an extension popup.
+A request with no gesture behind it (GNU bash on the panel terminal, an agent
+`bash` call) reaches the page's `usb-request` / `hid-request` / `serial-request`
+handler without transient activation; the handler then opens the chooser from
+the `<slicc-permissions>` prompt (`ui/panel-rpc/gesture-picker.ts`). The same
+module routes the `screencapture` handler's `getDisplayMedia`, which a
+gesture-less `computer add screen` uses to start its share session.
 Already-granted handles (from `*-list`/`*-request`) can be operated on from
 any realm via panel-RPC. Chromium-only; unavailable in the cloud /
 hosted-leader float.

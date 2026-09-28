@@ -1,17 +1,23 @@
 /**
- * Device choosers (`requestDevice` / `requestPort`) need a user gesture.
+ * Device choosers (`requestDevice` / `requestPort`) and the display picker
+ * (`getDisplayMedia`) need a user gesture.
  *
  * A picker command typed at the panel's slicc prompt has one: the view runs
  * the chooser on the Enter keystroke. A command that arrives without one —
  * run by GNU bash on the panel terminal, or a programmatic line — used to
  * fail with "must be handling a user gesture". Such a request now opens the
  * leader's `<slicc-permissions>` prompt instead, whose Allow click is the
- * gesture that opens the chooser (with the command's filters).
+ * gesture that opens the chooser (with the command's filters or constraints).
  */
-import type { PermissionGrant, SliccPermissions } from '@slicc/webcomponents';
+import type {
+  PermissionGrant,
+  PermissionRequestOptions,
+  SliccPermissions,
+} from '@slicc/webcomponents';
 import type { HidApi, HidDevice } from '../../kernel/hid-device-registry.js';
 import type { SerialApi, SerialPort } from '../../kernel/serial-port-registry.js';
 import type { UsbApi, UsbDevice } from '../../kernel/usb-device-registry.js';
+import type { GetDisplayMedia } from '../../shell/supplemental-commands/screencapture-media.js';
 
 export type PermissionsSurface = () => SliccPermissions | null;
 
@@ -22,17 +28,20 @@ export function hasUserGesture(): boolean {
   return activation?.isActive ?? true;
 }
 
-const WHAT: Record<'usb' | 'hid' | 'serial', string> = {
-  usb: 'a USB device',
-  hid: 'a HID device',
-  serial: 'a serial port',
+type PromptedKind = 'usb' | 'hid' | 'serial' | 'screenshare';
+
+const WHAT: Record<PromptedKind, string> = {
+  usb: 'use a USB device',
+  hid: 'use a HID device',
+  serial: 'use a serial port',
+  screenshare: 'share a screen',
 };
 
 /** One grant of `kind` through the permission prompt; rejects on cancel or error. */
-async function grantThroughPrompt<K extends 'usb' | 'hid' | 'serial'>(
+async function grantThroughPrompt<K extends PromptedKind>(
   surface: PermissionsSurface,
   kind: K,
-  filters: unknown[]
+  requestOptions: PermissionRequestOptions
 ): Promise<Extract<PermissionGrant, { kind: K }>> {
   const prompt = surface();
   if (!prompt) {
@@ -40,8 +49,8 @@ async function grantThroughPrompt<K extends 'usb' | 'hid' | 'serial'>(
   }
   const result = await prompt.prompt({
     kinds: [kind],
-    description: `A command in the terminal asks to use ${WHAT[kind]}.`,
-    requestOptions: { [kind]: { filters } },
+    description: `A command in the terminal asks to ${WHAT[kind]}.`,
+    requestOptions: { [kind]: requestOptions },
   });
   const grant =
     result.status === 'granted' ? result.grants.find((g) => g.kind === kind) : undefined;
@@ -58,7 +67,7 @@ export function gestureUsb(usb: UsbApi, surface: PermissionsSurface): UsbApi {
   return {
     getDevices: () => usb.getDevices(),
     requestDevice: async ({ filters }) =>
-      (await grantThroughPrompt(surface, 'usb', filters)).device as UsbDevice,
+      (await grantThroughPrompt(surface, 'usb', { filters })).device as UsbDevice,
   };
 }
 
@@ -68,7 +77,7 @@ export function gestureHid(hid: HidApi, surface: PermissionsSurface): HidApi {
   return {
     getDevices: () => hid.getDevices(),
     requestDevice: async ({ filters }) =>
-      (await grantThroughPrompt(surface, 'hid', filters)).devices as HidDevice[],
+      (await grantThroughPrompt(surface, 'hid', { filters })).devices as HidDevice[],
   };
 }
 
@@ -78,6 +87,17 @@ export function gestureSerial(serial: SerialApi, surface: PermissionsSurface): S
   return {
     getPorts: () => serial.getPorts(),
     requestPort: async (options) =>
-      (await grantThroughPrompt(surface, 'serial', options?.filters ?? [])).port as SerialPort,
+      (await grantThroughPrompt(surface, 'serial', { filters: options?.filters ?? [] }))
+        .port as SerialPort,
   };
+}
+
+/**
+ * `getDisplayMedia`, likewise: `screencapture` and `computer add screen` run
+ * from GNU bash reach the page with no gesture and share through the prompt.
+ */
+export function gestureDisplayMedia(surface: PermissionsSurface): GetDisplayMedia {
+  if (hasUserGesture()) return (constraints) => navigator.mediaDevices.getDisplayMedia(constraints);
+  return async (constraints) =>
+    (await grantThroughPrompt(surface, 'screenshare', { constraints })).stream;
 }

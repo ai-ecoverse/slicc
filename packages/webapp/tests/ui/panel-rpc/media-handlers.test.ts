@@ -34,7 +34,10 @@ describe('screencapture panel-RPC session op', () => {
     });
     expect(started.handle).toBe('screen1');
     expect(started.width).toBe(1920);
-    expect(mockCapture).toHaveBeenCalledWith({ mode: 'session', action: 'start' });
+    expect(mockCapture).toHaveBeenCalledWith(
+      { mode: 'session', action: 'start' },
+      expect.any(Function)
+    );
 
     mockCapture.mockResolvedValueOnce({
       bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xd9),
@@ -54,14 +57,17 @@ describe('screencapture panel-RPC session op', () => {
     });
     expect(frame.width).toBe(768);
     expect(frame).toMatchObject({ nativeWidth: 5120, nativeHeight: 2880 });
-    expect(mockCapture).toHaveBeenCalledWith({
-      mode: 'session',
-      action: 'frame',
-      handle: 'screen1',
-      maxWidth: 768,
-      mimeType: 'image/jpeg',
-      quality: 0.7,
-    });
+    expect(mockCapture).toHaveBeenCalledWith(
+      {
+        mode: 'session',
+        action: 'frame',
+        handle: 'screen1',
+        maxWidth: 768,
+        mimeType: 'image/jpeg',
+        quality: 0.7,
+      },
+      expect.any(Function)
+    );
 
     mockCapture.mockResolvedValueOnce({
       bytes: new Uint8Array(0),
@@ -78,11 +84,58 @@ describe('screencapture panel-RPC session op', () => {
       handle: 'screen1',
     });
     expect(stopped.handle).toBe('screen1');
-    expect(mockCapture).toHaveBeenCalledWith({
-      mode: 'session',
-      action: 'stop',
-      handle: 'screen1',
+    expect(mockCapture).toHaveBeenCalledWith(
+      {
+        mode: 'session',
+        action: 'stop',
+        handle: 'screen1',
+      },
+      expect.any(Function)
+    );
+  });
+
+  it('opens the display picker from the permission prompt without a user gesture', async () => {
+    // `computer add screen` / `screencapture` from GNU bash reach the page
+    // with no Enter-keystroke activation.
+    vi.stubGlobal('navigator', {
+      userActivation: { isActive: false },
+      mediaDevices: { getDisplayMedia: vi.fn() },
     });
+    try {
+      const stream = { id: 'shared' };
+      const prompt = vi.fn(async () => ({
+        status: 'granted',
+        grants: [{ kind: 'screenshare', stream }],
+      }));
+      const handlers = createStandalonePanelRpcHandlers({
+        getPermissionsSurface: () => ({ prompt }) as never,
+      });
+      mockCapture.mockResolvedValueOnce({
+        bytes: new Uint8Array(0),
+        mimeType: 'application/octet-stream',
+        width: 1,
+        height: 1,
+        handle: 'screen2',
+      });
+      await handlers.screencapture!({
+        mimeType: 'image/jpeg',
+        quality: 0.7,
+        mode: 'session',
+        session: 'start',
+      });
+      const pick = mockCapture.mock.calls.at(-1)?.[1] as (
+        c: MediaStreamConstraints
+      ) => Promise<unknown>;
+      expect(await pick({ video: true, audio: false })).toBe(stream);
+      expect(prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kinds: ['screenshare'],
+          requestOptions: { screenshare: { constraints: { video: true, audio: false } } },
+        })
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('record points MediaRecorder at the live session track', async () => {
@@ -103,13 +156,16 @@ describe('screencapture panel-RPC session op', () => {
       durationMs: 1_500,
     });
     expect(result.durationMs).toBe(1_500);
-    expect(mockCapture).toHaveBeenCalledWith({
-      mode: 'session',
-      action: 'record',
-      handle: 'screen1',
-      durationMs: 1_500,
-      mimeType: 'video/webm',
-    });
+    expect(mockCapture).toHaveBeenCalledWith(
+      {
+        mode: 'session',
+        action: 'record',
+        handle: 'screen1',
+        durationMs: 1_500,
+        mimeType: 'video/webm',
+      },
+      expect.any(Function)
+    );
   });
 });
 
