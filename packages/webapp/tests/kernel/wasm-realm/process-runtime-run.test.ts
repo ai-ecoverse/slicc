@@ -34,6 +34,9 @@ type FakeModule = {
   onRuntimeInitialized: () => void;
   FS?: object;
   callMain?: () => number;
+  sliccRunMain?: (args: string[]) => number;
+  sliccForkChild?: (state: object) => number;
+  sliccPid?: number;
 };
 
 describe('runWasmProcess', () => {
@@ -79,5 +82,72 @@ describe('runWasmProcess', () => {
     });
     expect(code).toBe(3);
     expect(flush).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs main through sliccRunMain when the program has the fork emulation', async () => {
+    const module = await WebAssembly.compile(NEEDS_IMPORT);
+    let pid: number | undefined;
+    const code = await runWasmProcess(init(module), port, {
+      evaluate: (_glue, m) => {
+        const fake = m as FakeModule;
+        pid = fake.sliccPid;
+        fake.FS = { getStream: () => null };
+        fake.callMain = () => 1;
+        fake.sliccRunMain = (args) => 40 + args.length;
+        fake.onRuntimeInitialized();
+      },
+    });
+    expect(code).toBe(40);
+    expect(pid).toBe(1); // getpid() is the kernel pid
+  });
+
+  it("resumes a forked child from the parent's state on its rebuilt fd table", async () => {
+    const module = await WebAssembly.compile(NEEDS_IMPORT);
+    const fork = {
+      memory: new Uint8Array(4),
+      currData: 8,
+      forkSp: 16,
+      callStackNames: [[0, 'main']] as Array<[number, string]>,
+      ppid: 7,
+      cwd: '/w',
+      streams: [],
+    };
+    const resumed: object[] = [];
+    const closed: number[] = [];
+    const code = await runWasmProcess({ ...init(module), pid: 9, fork }, port, {
+      evaluate: (_glue, m) => {
+        const fake = m as FakeModule;
+        fake.FS = {
+          streams: [{ fd: 0 }, { fd: 1 }],
+          getStream: () => null,
+          closeStream: (fd: number) => closed.push(fd),
+        };
+        fake.callMain = () => {
+          throw new Error('a forked child never runs main');
+        };
+        fake.sliccForkChild = (state) => {
+          resumed.push(state);
+          return 5;
+        };
+        fake.onRuntimeInitialized();
+      },
+    });
+    expect(code).toBe(5);
+    expect(resumed).toEqual([{ ...fork, pid: 9 }]);
+    expect(closed).toEqual([0, 1]); // the runtime's default streams made way
+  });
+
+  it('fails a fork into a program that cannot resume one', async () => {
+    const module = await WebAssembly.compile(NEEDS_IMPORT);
+    const fork = { memory: new Uint8Array(0), currData: 0, forkSp: 0, callStackNames: [], ppid: 1 };
+    const run = runWasmProcess({ ...init(module), fork }, port, {
+      evaluate: (_glue, m) => {
+        const fake = m as FakeModule;
+        fake.FS = { streams: [], getStream: () => null, closeStream: () => {} };
+        fake.callMain = () => 0;
+        fake.onRuntimeInitialized();
+      },
+    });
+    await expect(run).rejects.toThrow(/cannot resume a fork/);
   });
 });

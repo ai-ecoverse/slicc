@@ -21,10 +21,11 @@ import {
   type SyncSabDispatchRequest,
 } from '../realm/sync-sab-responder.js';
 import { SAB_DEFAULT_WINDOW_BYTES, SAB_HEADER_BYTES } from '../realm/sync-sab-wire.js';
-import type { ChildSpawner } from './children.js';
+import type { ChildForker, ChildSpawner } from './children.js';
 import type { FdTable } from './fd-table.js';
 import { isWasmSyscall, WasmProcess } from './process.js';
 import {
+  type ForkState,
   WASM_PROCESS_ERROR,
   WASM_PROCESS_EXIT,
   WASM_PROCESS_INIT,
@@ -34,7 +35,7 @@ import {
 
 /** The worker surface the host needs (a DedicatedWorker; a fake in tests). */
 export interface WasmWorkerLike {
-  postMessage(message: unknown): void;
+  postMessage(message: unknown, transfer?: Transferable[]): void;
   addEventListener(type: 'message' | 'error', handler: (event: MessageEvent) => void): void;
   removeEventListener(type: 'message' | 'error', handler: (event: MessageEvent) => void): void;
   terminate(): void;
@@ -56,6 +57,10 @@ export interface SpawnWasmOptions {
   onError?: (message: string) => void;
   /** Starts the children the program spawns; without it `posix_spawn` fails (ENOSYS). */
   spawner?: ChildSpawner;
+  /** Starts the children the program forks; without it the toolchain emulates fork in-process. */
+  forker?: ChildForker;
+  /** A forked child: resume from the parent's state instead of running main. */
+  fork?: ForkState;
 }
 
 export interface WasmProcessHandle {
@@ -76,7 +81,11 @@ function defaultWorker(): WasmWorkerLike {
 }
 
 export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
-  const process = new WasmProcess(opts.pid, opts.fds, opts.spawner);
+  const process = new WasmProcess(opts.pid, opts.fds, {
+    spawner: opts.spawner,
+    forker: opts.forker,
+    fs: opts.fs,
+  });
   const token = mintSyncFsToken({ fs: opts.fs, cwd: opts.cwd });
   const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + SAB_DEFAULT_WINDOW_BYTES);
   const worker = (opts.createWorker ?? defaultWorker)();
@@ -97,9 +106,14 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     worker.removeEventListener('error', onError);
     responder.dispose();
     revokeSyncFsToken(token);
-    process.exit();
     worker.terminate();
-    settle(code);
+    // Await the final VFS writeback before publishing exit: waitpid / the next
+    // shell command must see what the process wrote, and a rejected write must
+    // not become an unhandled rejection after settle.
+    void process.exit().then(
+      () => settle(code),
+      () => settle(code)
+    );
   };
   const onMessage = (event: MessageEvent): void => {
     const data = event.data as { type?: string; code?: unknown; message?: unknown } | undefined;
@@ -126,7 +140,9 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     env: opts.env,
     cwd: opts.cwd,
     sab,
+    ...(opts.fork ? { fork: opts.fork } : {}),
   };
-  worker.postMessage(init);
+  // A fork's memory copy is the child's alone: hand it over instead of cloning it.
+  worker.postMessage(init, opts.fork ? [opts.fork.memory.buffer] : []);
   return { pid: opts.pid, exited, kill: (code = 137) => finish(code) };
 }

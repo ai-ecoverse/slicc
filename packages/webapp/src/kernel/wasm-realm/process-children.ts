@@ -14,6 +14,7 @@
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
 import type { ChildStdio } from './children.js';
 import type { ProcessFs, ProcessStream } from './kernel-streams.js';
+import type { ForkState, ForkStream } from './protocol.js';
 import { wasiErrno } from './wasi-errno.js';
 
 /** What the libc shims call: pids and wait statuses, or a negative WASI errno. */
@@ -27,6 +28,8 @@ export interface ProcessKernel {
   ): number;
   /** `[pid, status]`; `[0, 0]` for `nohang` with no child exited yet. */
   wait(pid: number, nohang: boolean): [number, number] | number;
+  /** fork(2) into a new worker (`slicc-fork.js` supplies the parent's state): the child's pid. */
+  fork(state: ForkState): number;
 }
 
 export interface ProcessKernelDeps {
@@ -38,6 +41,8 @@ export interface ProcessKernelDeps {
   beforeSpawn(): void;
   /** Drop the program's cached VFS view after a child may have changed it. */
   afterChild(): void;
+  /** Hand the open VFS files to the kernel and describe the fd table (process-fork.ts). */
+  describeFork(): ForkStream[];
 }
 
 /** Whatever the stream holds now (a file, or a pipe its program filled). */
@@ -111,6 +116,17 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
       for (const n of captures) deliver(pid, n, fds[n] as number);
       reaped.set(pid, waited[1]);
       return pid;
+    },
+    fork(state) {
+      deps.beforeSpawn();
+      const streams = deps.describeFork();
+      const r = transport.call(
+        { op: 'proc-fork', state: { ...state, streams, cwd: Fs.cwd() } },
+        Infinity,
+        'proc-fork'
+      );
+      if (!r.ok) return -wasiErrno(r.errno);
+      return r.kind === 'json' ? (r.json as number) : -wasiErrno('EIO');
     },
     wait(pid, nohang) {
       const key = pid > 0 ? (reaped.has(pid) ? pid : undefined) : reaped.keys().next().value;

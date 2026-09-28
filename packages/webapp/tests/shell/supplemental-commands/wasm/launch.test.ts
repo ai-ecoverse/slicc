@@ -235,4 +235,28 @@ describe('WasmSession', () => {
     session.killAll(1); // the output limit
     expect(await second.exited).toBe(130);
   });
+
+  it('forks a process into the same program, resumed from the parent state', async () => {
+    fakeProcesses();
+    const { pm, config } = processConfig();
+    const session = new WasmSession(ctx(installed), config, () => {});
+    await parentSpawner(session);
+    const parent = spawn.mock.calls.at(-1)![0];
+    const state = {
+      memory: new Uint8Array(1),
+      currData: 0,
+      forkSp: 0,
+      callStackNames: [],
+      ppid: 500,
+      cwd: '/w/sub',
+    };
+    const child = await parent.forker(state, stdio());
+    const opts = spawn.mock.calls.at(-1)![0];
+    expect(opts.fork).toBe(state);
+    expect(opts.program).toBe(parent.program);
+    expect(opts.cwd).toBe('/w/sub');
+    expect(opts.argv0).toBe('tool');
+    expect(pm.spawn).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'wasm', ppid: 500 }));
+    expect(child.pid).toBe(opts.pid);
+  });
 });

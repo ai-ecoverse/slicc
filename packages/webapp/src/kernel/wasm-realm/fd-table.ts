@@ -14,7 +14,15 @@
 import { KernelPipe, PipeError } from './pipe.js';
 
 /** POSIX errno names the kernel reports to a process. */
-export type KernelErrno = 'EBADF' | 'EPIPE' | 'EMFILE' | 'EINVAL' | 'ENOENT' | 'ECHILD' | 'ENOSYS';
+export type KernelErrno =
+  | 'EBADF'
+  | 'EPIPE'
+  | 'EMFILE'
+  | 'EINVAL'
+  | 'ENOENT'
+  | 'ECHILD'
+  | 'ENOSYS'
+  | 'ESPIPE';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {
@@ -38,10 +46,14 @@ export interface KernelFile {
   read?(max: number): Promise<Uint8Array>;
   /** Write every byte, waiting as needed. Absent: not writable. */
   write?(bytes: Uint8Array): Promise<number>;
-  /** The last reference is gone. */
-  close(): void;
+  /** The last reference is gone. May return a promise when writeback is in flight. */
+  close(): void | Promise<void>;
   /** Readiness; absent means never waits (a byte source, a sink). */
   poll?(): PollState;
+  /** lseek(2) on the shared offset; absent: not seekable (ESPIPE). */
+  seek?(offset: number, whence: number): Promise<number>;
+  /** Write back buffered content (a VFS file). */
+  flush?(): Promise<void>;
 }
 
 /** A description's readiness: its own answer, or ready in whatever direction it serves. */
@@ -60,9 +72,9 @@ export class OpenFile {
     return this;
   }
 
-  release(): void {
+  release(): void | Promise<void> {
     this.refs -= 1;
-    if (this.refs === 0) this.file.close();
+    if (this.refs === 0) return this.file.close();
   }
 }
 
@@ -149,19 +161,19 @@ export class FdTable {
         return fd;
       }
     }
-    file.release();
+    void Promise.resolve(file.release()).catch(() => undefined);
     throw new KernelError('EMFILE');
   }
 
   /** Install `file` at exactly `fd`, closing what was there. */
   installAt(fd: number, file: OpenFile): void {
     if (fd < 0 || fd >= FdTable.MAX_FDS) {
-      file.release();
+      void Promise.resolve(file.release()).catch(() => undefined);
       throw new KernelError('EBADF');
     }
     const previous = this.fds.get(fd);
     this.fds.set(fd, file);
-    previous?.release();
+    void Promise.resolve(previous?.release()).catch(() => undefined);
   }
 
   /** dup(2): a new fd, the lowest free one, sharing `fd`'s description. */
@@ -176,10 +188,10 @@ export class FdTable {
     return newFd;
   }
 
-  close(fd: number): void {
+  close(fd: number): void | Promise<void> {
     const file = this.get(fd);
     this.fds.delete(fd);
-    file.release();
+    return file.release();
   }
 
   /** The table of a forked child: every description gains a reference. */
@@ -189,10 +201,10 @@ export class FdTable {
     return child;
   }
 
-  /** Process exit: release every description. */
-  closeAll(): void {
+  /** Process exit: release every description and wait for any writeback. */
+  async closeAll(): Promise<void> {
     const files = [...this.fds.values()];
     this.fds.clear();
-    for (const file of files) file.release();
+    await Promise.all(files.map((file) => Promise.resolve(file.release())));
   }
 }

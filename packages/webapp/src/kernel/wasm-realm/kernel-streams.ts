@@ -53,9 +53,21 @@ export interface ProcessSys {
   /** A new kernel pipe: `[read end, write end]`. */
   pipe(): [number, number];
   poll(fd: number): PollState;
+  /** Hand a VFS file to the kernel as a shared description; its new kernel fd. */
+  openVfs(
+    path: string,
+    flags: number,
+    position: number,
+    opts?: { contents?: Uint8Array; orphan?: boolean }
+  ): number;
+  /** lseek(2) on a kernel description's shared offset. */
+  seek(fd: number, offset: number, whence: number): number;
+  /** fsync(2): write back a VFS file description's buffered content. */
+  flush(fd: number): void;
 }
 
 export interface StreamOps {
+  llseek?: (stream: ProcessStream, offset: number, whence: number) => number;
   read?: (stream: ProcessStream, buffer: Uint8Array, offset: number, length: number) => number;
   write?: (stream: ProcessStream, buffer: Uint8Array, offset: number, length: number) => number;
   close?: (stream: ProcessStream) => void;
@@ -66,13 +78,28 @@ export interface StreamOps {
 
 /** An open stream of the module's FS; `sliccKernelFd` marks one backed by a kernel fd. */
 export interface ProcessStream {
+  fd: number;
   stream_ops: StreamOps;
   sliccKernelFd?: number;
+  /** Backed by a kernel VFS file description (seekable, offset shared across processes). */
+  sliccKernelFile?: boolean;
+  path?: string;
+  flags: number;
+  position: number;
+  tty?: unknown;
+  node: { mode: number; mount?: { type?: unknown } };
+  /** Emscripten's per-description state (the offset), shared by dups in one worker. */
+  shared: object;
 }
 
 /** The slice of Emscripten's FS the runtime uses. */
 export interface ProcessFs extends EmscriptenFsForHook {
+  streams: (ProcessStream | null | undefined)[];
   getStream(fd: number): ProcessStream | null;
+  open(path: string, flags: number, mode?: number): ProcessStream;
+  dupStream(stream: ProcessStream, fd: number): ProcessStream;
+  closeStream(fd: number): void;
+  isFile(mode: number): boolean;
   mkdirTree(path: string): void;
   cwd(): string;
   read(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
@@ -106,6 +133,25 @@ export class KernelStreams {
     // (and the ops) follow the descriptor to whatever fd the program moves it to.
     stream.sliccKernelFd = kfd;
     stream.stream_ops = this.ops(kfd, stream.stream_ops);
+  }
+
+  /**
+   * Back `stream` by a kernel VFS file description: reads and writes go at the
+   * kernel's offset, which a forked parent and child share, and seeks move it.
+   */
+  attachFile(stream: ProcessStream, kfd: number): void {
+    this.attach(stream, kfd);
+    stream.sliccKernelFile = true;
+    stream.stream_ops = {
+      ...stream.stream_ops,
+      llseek: (_s, offset, whence) => this.call(() => this.sys.seek(kfd, offset, whence)),
+      // KernelStreams.ops leaves fsync as a no-op; a VFS description must flush.
+      fsync: () =>
+        this.call(() => {
+          this.sys.flush(kfd);
+          return 0;
+        }),
+    };
   }
 
   /** Make `pipe()` return kernel pipes. */

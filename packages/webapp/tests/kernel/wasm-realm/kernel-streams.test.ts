@@ -20,9 +20,10 @@ class ErrnoError extends Error {
 
 function fakeFs(count = 3) {
   const unset = () => -1;
-  const streams: ProcessStream[] = Array.from({ length: count }, () => ({
-    stream_ops: { read: unset, write: unset },
-  }));
+  const streams = Array.from(
+    { length: count },
+    (_, fd) => ({ fd, stream_ops: { read: unset, write: unset } }) as unknown as ProcessStream
+  );
   const fs = { getStream: (fd: number) => streams[fd] ?? null, ErrnoError } as unknown as ProcessFs;
   return { fs, streams };
 }
@@ -38,6 +39,9 @@ function fakeSys(overrides: Partial<ProcessSys> = {}): ProcessSys & { closed: nu
     },
     pipe: () => [3, 4],
     poll: () => ({ readable: true, writable: true, hangup: false }),
+    openVfs: () => 9,
+    seek: (_fd, offset) => offset,
+    flush: () => {},
     ...overrides,
   };
 }
@@ -161,6 +165,19 @@ describe('KernelStreams', () => {
       expect.objectContaining({ errno: 64 })
     );
     expect(handled).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes fsync on a promoted VFS file to the kernel flush', () => {
+    const flushed: number[] = [];
+    const sys = fakeSys({
+      flush: (fd) => {
+        flushed.push(fd);
+      },
+    });
+    const { fs, streams } = fakeFs(1);
+    new KernelStreams(fs, sys).attachFile(streams[0]!, 11);
+    expect(streams[0]!.stream_ops.fsync!()).toBe(0);
+    expect(flushed).toEqual([11]);
   });
 
   it("gives the kernel's pipe ends back when Emscripten cannot make its own pipe", () => {
