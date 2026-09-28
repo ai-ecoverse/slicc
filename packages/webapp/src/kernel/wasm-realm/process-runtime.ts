@@ -107,6 +107,18 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
   };
 }
 
+/**
+ * Open fd `fd` of the module's FS on the kernel descriptor of that number
+ * (one the process started with beyond 0-2): a stream placed there and
+ * attached, as stdio's are.
+ */
+export function wireKernelFd(Fs: ProcessFs, streams: KernelStreams, fd: number): void {
+  const placeholder = Fs.open('/dev/null', 2 /* O_RDWR */);
+  const stream = Fs.dupStream(placeholder, fd);
+  Fs.closeStream(placeholder.fd);
+  streams.attach(stream, fd, false);
+}
+
 /** Point fds 0, 1, 2 of the module's FS at the kernel descriptors of the same numbers. */
 export function wireKernelStdio(Fs: ProcessFs, streams: KernelStreams): void {
   for (const fd of [0, 1, 2]) {
@@ -284,7 +296,10 @@ export async function runWasmProcess(
     restartable: () => signals.restartable(),
   });
   if (init.fork) restoreForkedStreams(running.FS, streams, init.fork.streams ?? []);
-  else wireKernelStdio(running.FS, streams);
+  else {
+    wireKernelStdio(running.FS, streams);
+    for (const fd of init.fds ?? []) wireKernelFd(running.FS, streams, fd);
+  }
   const pipefs = ownValue<ProcessPipeFs>(running, 'PIPEFS');
   if (pipefs) streams.usePipes(pipefs);
   streams.useControllingTerminal();

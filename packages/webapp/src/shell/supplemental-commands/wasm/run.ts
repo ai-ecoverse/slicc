@@ -19,7 +19,12 @@
  */
 import type { CommandContext } from 'just-bash';
 import { LOGIN_PROMPT_COMMAND } from '../../../kernel/login-shell-marks.js';
-import { bytesSource, FdTable, sinkFile } from '../../../kernel/wasm-realm/fd-table.js';
+import {
+  bytesSource,
+  FdTable,
+  type OpenFile,
+  sinkFile,
+} from '../../../kernel/wasm-realm/fd-table.js';
 import type { WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../ipk/wasm-programs.js';
@@ -100,6 +105,8 @@ export interface RunWasmOptions {
   gate?: NativeGate;
   /** Output as it is written (piped stdio): the caller's live tee. */
   onOutput?: (text: string) => void;
+  /** Descriptors beyond 0-2 the program starts with (piped stdio), by number. */
+  fds?: ReadonlyArray<readonly [number, OpenFile]>;
 }
 
 /** A tee of the bytes written, decoded as UTF-8 per stream. */
@@ -296,6 +303,7 @@ export async function runWasmCommand(
     report = (message) => lease.write(new TextEncoder().encode(`wasm: ${message}\r\n`));
   } else {
     stdio = pipedStdio(ctx, session, err, options.onOutput);
+    for (const [fd, file] of options.fds ?? []) stdio.fds.installAt(fd, file);
   }
   const { fds } = stdio;
 

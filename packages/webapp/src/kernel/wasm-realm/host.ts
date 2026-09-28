@@ -173,7 +173,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     env: opts.env,
     cwd: opts.cwd,
     sab,
-    ...(opts.fork ? { fork: opts.fork } : {}),
+    ...(opts.fork ? { fork: opts.fork } : { fds: opts.fds.numbers().filter((fd) => fd > 2) }),
   };
   // A fork's memory copy is the child's alone: hand it over instead of cloning it.
   worker.postMessage(init, opts.fork ? [opts.fork.memory.buffer] : []);

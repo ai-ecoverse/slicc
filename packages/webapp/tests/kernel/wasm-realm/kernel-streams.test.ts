@@ -7,7 +7,7 @@ import {
   type ProcessSys,
   SyscallError,
 } from '../../../src/kernel/wasm-realm/kernel-streams.js';
-import { wireKernelStdio } from '../../../src/kernel/wasm-realm/process-runtime.js';
+import { wireKernelFd, wireKernelStdio } from '../../../src/kernel/wasm-realm/process-runtime.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -260,6 +260,32 @@ describe('KernelStreams', () => {
     expect(fs.open('/etc/passwd', 0).sliccKernelFd).toBeUndefined();
     expect(opened.map(([path]) => path)).toEqual(['/dev/tty', '/dev/tty1', '/etc/passwd']);
     void streams;
+  });
+
+  it('wireKernelFd opens a kernel descriptor beyond stdio at its own number', () => {
+    const streams: Record<number, ProcessStream> = {};
+    const closed: number[] = [];
+    const fs = {
+      ErrnoError,
+      getStream: (fd: number) => streams[fd] ?? null,
+      open: () => (streams[5] = { fd: 5, stream_ops: {} } as unknown as ProcessStream),
+      dupStream: (s: ProcessStream, fd: number) => (streams[fd] = { ...s, fd }),
+      closeStream: (fd: number) => {
+        closed.push(fd);
+        delete streams[fd];
+      },
+    } as unknown as ProcessFs;
+    const written: Array<[number, string]> = [];
+    const sys = fakeSys({
+      write: (fd, b) => (written.push([fd, text(b)]), b.length),
+      isatty: () => false,
+    });
+    wireKernelFd(fs, new KernelStreams(fs, sys), 97);
+    expect(closed).toEqual([5]); // the placeholder is gone
+    const stream = streams[97]!;
+    expect(stream.sliccKernelFd).toBe(97);
+    stream.stream_ops.write?.(stream, bytes('state'), 0, 5);
+    expect(written).toEqual([[97, 'state']]);
   });
 
   it('marks a terminal fd as a TTY (isatty, termios, window size) and nothing else', () => {

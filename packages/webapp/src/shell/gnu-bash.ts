@@ -10,45 +10,43 @@
  * shell's command registry), so every supplemental command stays reachable.
  *
  * What a run leaves behind (exit status, PIPESTATUS, `$PWD`, the exported
- * variables) comes back through a file: `BASH_ENV` names a hook that bash
- * sources before the command, and its EXIT trap writes the state. A command
- * that replaces the trap or ends in `exec` leaves none, and the shell keeps
- * its previous state. `SLICC_SHELL=just-bash` (in `~/.profile`, say) keeps a
- * shell on just-bash.
+ * variables) comes back over a private descriptor, fd {@link STATE_FD}, a
+ * sink only the runner holds: a one-line hook, prepended to the command on
+ * its first line (so line numbers stay the user's), sets an EXIT trap that
+ * writes the state there. Nothing touches the filesystem: `$TMPDIR` is under
+ * `/tmp`, which every scoop can write, so a hook or state file there could be
+ * swapped to run code, or inject a PATH, with another unit's authority. A
+ * command that replaces the trap, ends in `exec`, or has a syntax error on
+ * its first line leaves no state, and the shell keeps its previous one.
+ * `SLICC_SHELL=just-bash` (in `~/.profile`, say) keeps a shell on just-bash.
  */
+
+import { type OpenFile, sinkFile } from '../kernel/wasm-realm/fd-table.js';
 
 /** Set to `just-bash` to keep a shell on just-bash though GNU bash is installed. */
 export const SHELL_CHOICE_ENV = 'SLICC_SHELL';
 
-const STATE_ENV = 'SLICC_BASH_STATE';
+/**
+ * The descriptor the state comes back on: out of the way of scripts' own
+ * (`exec 3>file`) and of bash's saved descriptors (10 and up).
+ */
+export const STATE_FD = 97;
 
 /**
- * Sourced by bash before the command (`BASH_ENV`). Its EXIT trap writes the
- * run's state, NUL-separated: status, PIPESTATUS, `$PWD`, then `NAME=value`
- * per exported variable. Builtins only (no `compgen`: bash is built without
- * readline): names by initial, kept when the named variable's attributes
- * (`${!name@a}`) include `x`. The
- * hook takes itself out of the environment, so a nested bash does not run it.
+ * Put in front of the command, on its first line. Its EXIT trap writes the
+ * run's state to fd {@link STATE_FD}, NUL-separated: status, PIPESTATUS,
+ * `$PWD`, then `NAME=value` per exported variable. Builtins only (no
+ * `compgen`: bash is built without readline): names by initial, kept when
+ * the named variable's attributes (`${!name@a}`) include `x`.
  */
-export const STATE_HOOK = `__slicc_state=$${STATE_ENV}
-unset BASH_ENV ${STATE_ENV}
-__slicc_save() {
-  local __s=$1 __p=$2 __c __n
-  {
-    printf '%s\\0%s\\0%s\\0' "$__s" "$__p" "$PWD"
-    for __c in {A..Z} {a..z} _; do
-      eval '__slicc_names=("\${!'"$__c"'@}")'
-      for __n in "\${__slicc_names[@]}"; do
-        [[ \${!__n@a} == *x* ]] && printf '%s=%s\\0' "$__n" "\${!__n}"
-      done
-    done
-  } >"$__slicc_state" 2>/dev/null
-}
-trap '__slicc_save "$?" "\${PIPESTATUS[*]}"' EXIT
-`;
+export const STATE_HOOK =
+  '__slicc_save() { local __s=$1 __p=$2 __c __n; { printf "%s\\0%s\\0%s\\0" "$__s" "$__p" "$PWD"; ' +
+  'for __c in {A..Z} {a..z} _; do eval "__slicc_names=(\\"\\${!${__c}@}\\")"; ' +
+  'for __n in "${__slicc_names[@]}"; do [[ ${!__n@a} == *x* ]] && printf "%s=%s\\0" "$__n" "${!__n}"; done; done; ' +
+  `} >&${STATE_FD} 2>/dev/null; }; trap '__slicc_save "$?" "\${PIPESTATUS[*]}"' EXIT; `;
 
 /** Exported variables that belong to one run, never to the shell's state. */
-const RUN_ONLY = new Set(['SHLVL', '_', 'BASH_ENV', STATE_ENV]);
+const RUN_ONLY = new Set(['SHLVL', '_']);
 
 export interface BashRunState {
   status: number;
@@ -89,13 +87,6 @@ export function outputText(output: string, kind: string | undefined): string {
   return new TextDecoder().decode(bytes);
 }
 
-export interface GnuBashFs {
-  mkdir(path: string, options: { recursive: true }): Promise<void>;
-  writeFile(path: string, content: string): Promise<void>;
-  readFile(path: string, options: { encoding: 'utf-8' }): Promise<string | Uint8Array>;
-  rm(path: string): Promise<void>;
-}
-
 export interface GnuBashRunResult {
   stdout: string;
   stderr: string;
@@ -106,42 +97,36 @@ export interface GnuBashRunResult {
 
 /**
  * Run `command` on GNU bash through `run` (the `wasm` runner, handed
- * `['bash', '-c', command]` and the environment to start it with).
+ * `['bash', '-c', HOOK + command]`, the environment to start it with, and
+ * the state descriptor to give the program).
  */
 export async function runOnGnuBash(
   command: string,
   deps: {
-    fs: GnuBashFs;
-    tmpDir: string;
     env: Record<string, string>;
     run: (
       args: string[],
-      env: Record<string, string>
+      env: Record<string, string>,
+      fds: ReadonlyArray<readonly [number, OpenFile]>
     ) => Promise<{ stdout: string; stderr: string; exitCode: number; stdoutKind?: string }>;
   }
 ): Promise<GnuBashRunResult> {
-  const dir = deps.tmpDir.replace(/\/+$/, '') || '/tmp';
-  const hook = `${dir}/.slicc-bash-env.sh`;
-  const statePath = `${dir}/.slicc-bash-state-${crypto.randomUUID()}`;
-  await deps.fs.mkdir(dir, { recursive: true });
-  await deps.fs.writeFile(hook, STATE_HOOK);
-  const result = await deps.run(['bash', '-c', command], {
-    ...deps.env,
-    BASH_ENV: hook,
-    [STATE_ENV]: statePath,
-  });
-  let state: BashRunState | null = null;
-  try {
-    const raw = await deps.fs.readFile(statePath, { encoding: 'utf-8' });
-    state = parseBashState(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
-    await deps.fs.rm(statePath);
-  } catch {
-    // No state: the run replaced the trap, exec'd, or was killed.
+  const chunks: Uint8Array[] = [];
+  const state = sinkFile((bytes) => chunks.push(bytes));
+  const result = await deps.run(['bash', '-c', `${STATE_HOOK}${command}`], deps.env, [
+    [STATE_FD, state],
+  ]);
+  const size = chunks.reduce((n, c) => n + c.length, 0);
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, at);
+    at += chunk.length;
   }
   return {
     stdout: outputText(result.stdout, result.stdoutKind),
     stderr: result.stderr,
     exitCode: result.exitCode,
-    state,
+    state: size > 0 ? parseBashState(new TextDecoder().decode(all)) : null,
   };
 }

@@ -63,6 +63,8 @@ export interface WasmProcessInitMsg {
   sab: SharedArrayBuffer;
   /** A forked child: the parent's state to resume from, instead of running main. */
   fork?: ForkState;
+  /** Kernel descriptors beyond 0-2 the program starts with, open at the same numbers. */
+  fds?: number[];
 }
 
 export interface WasmProcessExitMsg {

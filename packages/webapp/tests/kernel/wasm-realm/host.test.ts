@@ -263,6 +263,33 @@ describe('spawnWasmProcess', () => {
     expect(await read.file.read!(8)).toHaveLength(0);
   });
 
+  it('announces the descriptors beyond stdio the program starts with', async () => {
+    let seen: number[] | undefined;
+    const fds = new FdTable();
+    for (const n of [0, 1, 2, 97])
+      fds.installAt(
+        n,
+        sinkFile(() => {})
+      );
+    const handle = spawnWasmProcess({
+      pid: 3006,
+      program,
+      argv0: 'x',
+      args: [],
+      env: {},
+      cwd: '/',
+      fds,
+      fs: memFs({}),
+      createWorker: () =>
+        fakeWorker(async (_call, init) => {
+          seen = init.fds;
+          return 0;
+        }),
+    });
+    expect(await handle.exited).toBe(0);
+    expect(seen).toEqual([97]);
+  });
+
   it('a worker failure resolves to 70 with a diagnostic', async () => {
     const onError = vi.fn();
     const worker = fakeWorker(() => new Promise(() => {}));

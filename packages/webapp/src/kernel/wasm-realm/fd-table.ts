@@ -172,6 +172,11 @@ export class FdTable {
     return file;
   }
 
+  /** The open descriptor numbers, lowest first. */
+  numbers(): number[] {
+    return [...this.fds.keys()].sort((a, b) => a - b);
+  }
+
   has(fd: number): boolean {
     return this.fds.has(fd);
   }

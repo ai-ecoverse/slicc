@@ -28,7 +28,11 @@ async function installBash(fs: VirtualFS): Promise<void> {
 }
 
 type RunCtx = { exportedEnv: Record<string, string>; cwd: string };
-type RunOptions = { onOutput?: (text: string) => void; gate?: NativeGate };
+type RunOptions = {
+  onOutput?: (text: string) => void;
+  gate?: NativeGate;
+  fds?: ReadonlyArray<readonly [number, { file: { write?: (b: Uint8Array) => unknown } }]>;
+};
 
 /** What the hook's EXIT trap would write. */
 function state(status: number, pipe: string, cwd: string, env: Record<string, string>): string {
@@ -52,7 +56,8 @@ describe('AlmostBashShellHeadless on GNU bash', () => {
   function fakeBash(stdout: string, leave: (ctx: RunCtx) => string | null) {
     run.mockImplementation(async (_args: string[], ctx: RunCtx, options: RunOptions) => {
       const text = leave(ctx);
-      if (text !== null) await fs.writeFile(ctx.exportedEnv.SLICC_BASH_STATE!, text);
+      // What the hook's EXIT trap writes to the state descriptor.
+      if (text !== null) await options.fds?.[0]?.[1].file.write?.(new TextEncoder().encode(text));
       options.onOutput?.('live ');
       const bytes = new TextEncoder().encode(stdout);
       return {
@@ -88,17 +93,15 @@ describe('AlmostBashShellHeadless on GNU bash', () => {
         onOutput: (chunk) => tee.push(chunk),
       }
     );
-    expect(run.mock.calls[0]![0]).toEqual([
-      'bash',
-      '-c',
-      'cd sub; export NEW; false | true | (exit 3)',
-    ]);
+    const [args] = run.mock.calls[0]!;
+    expect(args.slice(0, 2)).toEqual(['bash', '-c']);
+    expect(args[2]).toMatch(/trap .* EXIT; cd sub; export NEW; false \| true \| \(exit 3\)$/);
     const first = run.mock.calls[0]![1] as RunCtx;
-    expect(first.exportedEnv.BASH_ENV).toMatch(/\.slicc-bash-env\.sh$/);
+    expect(first.exportedEnv.BASH_ENV).toBeUndefined();
     expect(first.exportedEnv.__SLICC_RUN_PID).toBe('7');
     expect(res).toMatchObject({ stdout: 'café\n', exitCode: 3, pipeStatus: [1, 0, 3] });
     expect(tee).toEqual(['live ']);
-    expect(await fs.exists(first.exportedEnv.SLICC_BASH_STATE!)).toBe(false); // cleaned up
+    expect(await fs.exists('/tmp')).toBe(false); // nothing written to the (shared) filesystem
 
     fakeBash('', () => null); // a run that leaves no state keeps the shell's
     await shell.executeCommand('pwd');
@@ -148,7 +151,7 @@ describe('AlmostBashShellHeadless on GNU bash', () => {
     const shell = new AlmostBashShellHeadless({ fs, gnuBash: true, allowedCommands: ['echo'] });
     fakeBash('', () => null);
     await shell.executeCommand('echo hi; rm -rf /');
-    expect(run.mock.calls[0]![0]).toEqual(['bash', '-c', 'echo hi; rm -rf /']);
+    expect(run.mock.calls[0]![0][2]).toMatch(/ EXIT; echo hi; rm -rf \/$/);
     const gate = (run.mock.calls[0]![2] as RunOptions).gate!;
     expect(await gate('rm', ['-rf', '/'], {})).toEqual({
       stderr: 'bash: rm: command not found\n',
