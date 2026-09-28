@@ -7,8 +7,9 @@
  * packument has no usable SRI hash. Like ssri, only the strongest algorithm
  * present is checked, and any hash of that algorithm may match.
  *
- * This fails closed: a mismatch, an SRI string with no supported algorithm,
- * and a packument carrying neither field all reject with `EINTEGRITY`. The
+ * This fails closed: a mismatch, an SRI string with no supported algorithm
+ * and no `dist.shasum` to fall back to, and a packument carrying neither field
+ * all reject with `EINTEGRITY`. The
  * npm registry publishes both fields for every version, so a missing hash
  * means something between the registry and ipk rewrote the metadata.
  * Digests use WebCrypto, which exists in every float's worker realm.
