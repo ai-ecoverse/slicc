@@ -1,7 +1,12 @@
 import { unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { bytesAsStdout, stdinAsBytes } from '../../../src/shell/just-bash-compat.js';
-import { stdinIsTty, stdoutIsTty } from '../../../src/shell/supplemental-commands/stdio-tty.js';
+import {
+  STDIN_ISATTY_ENV,
+  STDOUT_ISATTY_ENV,
+  stdinIsTty,
+  stdoutIsTty,
+} from '../../../src/shell/supplemental-commands/stdio-tty.js';
 
 describe('stdio TTY hints', () => {
   it('defaults stdout to a TTY and honours an explicit flag', () => {
@@ -25,6 +30,22 @@ describe('stdio TTY hints', () => {
   it('lets an explicit stdinIsTTY override the buffer heuristic', () => {
     expect(stdinIsTty({ stdin: unsafeBytesFromLatin1(''), stdinIsTTY: false })).toBe(false);
     expect(stdinIsTty({ stdin: unsafeBytesFromLatin1('RIFF'), stdinIsTTY: true })).toBe(true);
+  });
+});
+
+describe('stdio TTY hints from the environment (the wasm realm)', () => {
+  it('a 0 in the environment means a pipe; an explicit flag still wins', () => {
+    const empty = unsafeBytesFromLatin1('');
+    const env = new Map([
+      [STDIN_ISATTY_ENV, '0'],
+      [STDOUT_ISATTY_ENV, '0'],
+    ]);
+    expect(stdoutIsTty({ stdin: empty, env })).toBe(false);
+    expect(stdinIsTty({ stdin: empty, env })).toBe(false); // empty, yet a pipe
+    expect(stdinIsTty({ stdin: empty, env, stdinIsTTY: true })).toBe(true);
+    const tty = new Map([[STDIN_ISATTY_ENV, '1']]);
+    expect(stdinIsTty({ stdin: unsafeBytesFromLatin1('x'), env: tty }, 1)).toBe(true);
+    expect(stdoutIsTty({ stdin: empty, env: new Map([[STDOUT_ISATTY_ENV, 'junk']]) })).toBe(true);
   });
 });
 

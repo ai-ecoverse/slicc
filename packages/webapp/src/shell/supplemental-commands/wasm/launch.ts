@@ -31,6 +31,7 @@ import type { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
 import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
+import { STDIN_ISATTY_ENV, STDOUT_ISATTY_ENV } from '../stdio-tty.js';
 
 /** Compiled modules, keyed by path, size and mtime: a rebuilt program recompiles. */
 const modules = new Map<string, Promise<WebAssembly.Module>>();
@@ -148,6 +149,18 @@ async function writeAll(fds: FdTable, fd: number, bytes: Uint8Array): Promise<vo
   }
 }
 
+function isTerminal(fds: FdTable, fd: number): boolean {
+  return fds.has(fd) && fds.get(fd).file.tty !== undefined;
+}
+
+/** What a shell command learns of its stdio: `0` for a stdin / stdout that is no terminal. */
+function ttyHints(fds: FdTable): Record<string, string> {
+  return {
+    ...(isTerminal(fds, 0) ? {} : { [STDIN_ISATTY_ENV]: '0' }),
+    ...(isTerminal(fds, 1) ? {} : { [STDOUT_ISATTY_ENV]: '0' }),
+  };
+}
+
 /** A wasm process as its parent's child table sees it. */
 function childHandle(handle: WasmProcessHandle): ChildHandle {
   return {
@@ -164,7 +177,8 @@ export class WasmSession {
   private readonly shellChildren = new Set<AbortController>();
   /** The session's processes by pid: kill(2) between them. */
   private readonly wasmByPid = new Map<number, WasmProcessHandle>();
-  private readonly shellByPid = new Map<number, AbortController>();
+  /** Signal a shell child: every signal whose default action ends a process ends it. */
+  private readonly shellByPid = new Map<number, (sig: number) => void>();
   private installed: Promise<Map<string, WasmCommand>> | undefined;
   /** Process groups and sessions of the invocation's wasm processes (job control). */
   private readonly jobs = new JobTable();
@@ -251,8 +265,7 @@ export class WasmSession {
     }
     const shell = this.shellByPid.get(pid);
     if (shell) {
-      // It has no handlers of its own: every signal whose default action ends a process ends it.
-      if (sig !== 0 && defaultAction(sig) === 'terminate') shell.abort();
+      if (sig !== 0) shell(sig);
       return true;
     }
     const pm = this.processConfig?.processManager;
@@ -340,18 +353,30 @@ export class WasmSession {
     const onAbort = () => controller.abort();
     this.ctx.signal?.addEventListener('abort', onAbort, { once: true });
     if (this.ctx.signal?.aborted) onAbort();
+    // It has no handlers of its own: a signal whose default action ends a
+    // process ends it (reported as WIFSIGNALED); stop and continue cannot
+    // pause a shell command, so they do nothing.
+    let endedBy: number | undefined;
+    const signal = (sig: number): void => {
+      if (defaultAction(sig) !== 'terminate') return;
+      endedBy ??= sig;
+      controller.abort();
+    };
     this.shellChildren.add(controller);
-    this.shellByPid.set(pid, controller);
+    this.shellByPid.set(pid, signal);
+    // A member of its parent's process group: `kill -- -pgid` and the
+    // terminal's ^C reach it.
+    this.jobs.add(pid, ppid, signal);
     const exited = (async () => {
       try {
         // A shell command takes its stdin whole, read to the end first; a
         // terminal never ends (until ^D), so on one it gets none.
-        const onTerminal = fds.has(0) && fds.get(0).file.tty !== undefined;
+        const onTerminal = isTerminal(fds, 0);
         const stdin = fds.has(0) && !onTerminal ? await readAll(fds.get(0)) : new Uint8Array(0);
         const r = await exec(req.file, {
           args: req.argv.slice(1),
           cwd: req.cwd,
-          env: req.env,
+          env: { ...req.env, ...ttyHints(fds) },
           replaceEnv: true,
           stdin: latin1(stdin),
           stdinKind: 'bytes',
@@ -373,13 +398,14 @@ export class WasmSession {
         await fds.closeAll();
         this.shellChildren.delete(controller);
         this.shellByPid.delete(pid);
+        this.jobs.remove(pid);
         this.ctx.signal?.removeEventListener('abort', onAbort);
       }
     })();
     if (this.processConfig) {
       void exited.then((code) => this.processConfig?.processManager.exit(pid, code));
     }
-    return { pid, exited };
+    return { pid, exited, termsig: () => endedBy };
   }
 
   /**

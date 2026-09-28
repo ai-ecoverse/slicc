@@ -62,7 +62,13 @@ function fakeProcesses() {
     let end!: (code: number) => void;
     const exited = new Promise<number>((resolve) => (end = resolve));
     ends.set(opts.pid, end);
-    return { pid: opts.pid, exited, kill: vi.fn((code: number) => end(code)) };
+    return {
+      pid: opts.pid,
+      exited,
+      kill: vi.fn((code: number) => end(code)),
+      signal: vi.fn(),
+      onState: vi.fn(),
+    };
   });
   return ends;
 }
@@ -167,7 +173,8 @@ describe('WasmSession', () => {
     expect(exec).toHaveBeenCalledWith('sed', {
       args: ['s/a/b/'],
       cwd: '/d',
-      env: { X: '1' },
+      // Its stdio are pipes, not a terminal: said in the environment.
+      env: { X: '1', SLICC_STDIN_ISATTY: '0', SLICC_STDOUT_ISATTY: '0' },
       replaceEnv: true,
       stdin: 'piped',
       stdinKind: 'bytes',
@@ -240,7 +247,11 @@ describe('WasmSession', () => {
 
   it('runs a shell child on a terminal stdin at once, with no stdin (it never ends)', async () => {
     fakeProcesses();
-    const exec = vi.fn(async () => ({ stdout: 'ok\n', stderr: '', exitCode: 0 }));
+    const exec = vi.fn(async (_cmd: string, _opts: { env?: Record<string, string> }) => ({
+      stdout: 'ok\n',
+      stderr: '',
+      exitCode: 0,
+    }));
     const { config } = processConfig();
     const session = new WasmSession(
       ctx(installed, exec as unknown as CommandContext['exec']),
@@ -257,7 +268,43 @@ describe('WasmSession', () => {
     const child = await spawner({ file: 'which', argv: ['which', 'ls'], env: {}, cwd: '/w' }, fds);
     expect(await child.exited).toBe(0);
     expect(exec).toHaveBeenCalledWith('which', expect.objectContaining({ stdin: '' }));
+    // stdin is the terminal: no hint; stdout is a pipe/sink: "no terminal".
+    expect(exec.mock.calls[0]![1].env).toEqual({ SLICC_STDOUT_ISATTY: '0' });
     expect(new TextDecoder().decode(out[0])).toBe('ok\n');
+  });
+
+  it('a shell child joins its parent’s process group and reports the signal that ended it', async () => {
+    fakeProcesses();
+    const exec = vi.fn(
+      (_cmd: string, opts: { signal: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          opts.signal.addEventListener('abort', () =>
+            resolve({ stdout: '', stderr: '', exitCode: 130 })
+          );
+        })
+    );
+    const { config } = processConfig();
+    const session = new WasmSession(
+      ctx(installed, exec as unknown as CommandContext['exec']),
+      config,
+      () => {}
+    );
+    const spawner = await parentSpawner(session);
+    const parent = spawn.mock.calls.at(-1)![0];
+    const kill = parent.kill as (pid: number, sig: number) => boolean;
+    const child = await spawner(
+      { file: 'sleep', argv: ['sleep', '9'], env: {}, cwd: '/w' },
+      stdio()
+    );
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    expect(exec.mock.calls[0]![1]).toMatchObject({
+      env: { SLICC_STDIN_ISATTY: '0', SLICC_STDOUT_ISATTY: '0' },
+    });
+    expect(kill(-parent.pid, 20)).toBe(true); // SIGTSTP to the group: a shell command cannot stop
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(kill(-parent.pid, 2)).toBe(true); // SIGINT to the group ends it
+    expect(await child.exited).toBe(130);
+    expect(child.termsig?.()).toBe(2);
   });
 
   it('ends a shell child on its own process signal, and on killAll', async () => {
