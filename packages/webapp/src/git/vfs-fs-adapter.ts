@@ -199,7 +199,7 @@ export function createIsomorphicGitFs(
 
   const fanoutNames = (active: ObjectScope, objectsDir: string): Promise<Set<string>> => {
     const hit = active.fanouts.get(objectsDir);
-    if (hit) return hit;
+    if (hit != null) return hit;
     const pending = listNames(objectsDir).then((names) => new Set(names));
     active.fanouts.set(objectsDir, pending);
     return pending;
@@ -261,7 +261,7 @@ export function createIsomorphicGitFs(
     async readdir(path) {
       if (!scope || !path.endsWith(PACK_DIR_SUFFIX)) return await listNames(path);
       const hit = scope.packDirs.get(path);
-      if (hit) return [...(await hit)];
+      if (hit != null) return [...(await hit)];
       const pending = listNames(path);
       scope.packDirs.set(path, pending);
 

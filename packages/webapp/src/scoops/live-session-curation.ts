@@ -133,7 +133,7 @@ export function scheduleLiveDeltaCuration(
   }
   const scheduled = { ...request, cone };
   const existing = inflight.get(folder);
-  if (existing) {
+  if (existing != null) {
     rerun.set(folder, scheduled);
     return existing;
   }
@@ -146,7 +146,7 @@ export function curateLiveSessionDelta(opts: CurateLiveDeltaOptions): Promise<Li
   const next = { ...opts, cone };
   if (opts.hold === 'held') return runLiveDelta(next);
   const existing = inflight.get(folder);
-  if (existing) return existing.then(() => curateLiveSessionDelta(next));
+  if (existing != null) return existing.then(() => curateLiveSessionDelta(next));
   const job = runLiveDelta(next);
   return track(folder, job);
 }

@@ -177,7 +177,7 @@ function shareOnFs<T>(
     slots.set(fs, byKey);
   }
   const existing = byKey.get(key);
-  if (existing) return existing;
+  if (existing != null) return existing;
   let promise!: Promise<T>;
   promise = run().finally(() => {
     if (byKey.get(key) === promise) byKey.delete(key);

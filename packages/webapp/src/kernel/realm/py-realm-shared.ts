@@ -328,7 +328,7 @@ function ensureMicropipWheelStaged(
   lockfilePath: string
 ): Promise<void> {
   const cached = micropipStagingCache.get(rpc);
-  if (cached) return cached;
+  if (cached != null) return cached;
   const promise = stageMicropipWheel(rpc, pushWarning, lockfilePath);
   micropipStagingCache.set(rpc, promise);
   return promise;

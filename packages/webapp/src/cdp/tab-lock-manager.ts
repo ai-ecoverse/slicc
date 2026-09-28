@@ -119,7 +119,7 @@ export class TabLockManager {
       if (this.tabLocks.get(targetId) === next) this.tabLocks.delete(targetId);
       release();
     };
-    if (prev) {
+    if (prev != null) {
       const waitStart = Date.now();
       try {
         await raceAbort(prev, signal, `queued for the lock on tab ${targetId}`);

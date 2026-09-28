@@ -109,7 +109,7 @@ export class JshdSupervisor {
     unit.stopRequested = true;
     unit.backoffAbort?.abort();
     if (unit.pid !== null) this.deps.processManager.signal(unit.pid, 'SIGTERM');
-    if (unit.loop) await unit.loop.catch(() => undefined);
+    if (unit.loop != null) await unit.loop.catch(() => undefined);
     unit.state = 'stopped';
     unit.pid = null;
     this.syncJob(unit);

@@ -259,7 +259,7 @@ export function makeBulkOpfsProbe(root: FileSystemDirectoryHandle): SidecarProbe
   const listings = new Map<string, Promise<Map<string, FileSystemHandle>>>();
   const childrenOf = (dir: FileSystemDirectoryHandle, key: string) => {
     const pending = listings.get(key);
-    if (pending) return pending;
+    if (pending != null) return pending;
     const listed = listChildren(dir).catch((err: unknown) => {
       listings.delete(key);
       throw err;

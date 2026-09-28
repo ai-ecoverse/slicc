@@ -218,7 +218,7 @@ export class GitCommands {
 
   private getGlobalFs(): Promise<VirtualFS> {
     const existing = GitCommands.globalFsByDbName.get(this.globalDbName);
-    if (existing) return existing;
+    if (existing != null) return existing;
     const created = VirtualFS.create({ dbName: this.globalDbName });
     GitCommands.globalFsByDbName.set(this.globalDbName, created);
     return created;

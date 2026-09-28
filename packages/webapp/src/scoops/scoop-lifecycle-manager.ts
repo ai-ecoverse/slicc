@@ -307,7 +307,7 @@ export class ScoopLifecycleManager {
 
   createTab(jid: string): Promise<void> {
     const inflight = this.tabCreates.get(jid);
-    if (inflight) return inflight;
+    if (inflight != null) return inflight;
     let run!: Promise<void>;
     run = this.openTab(jid).finally(() => {
       if (this.tabCreates.get(jid) === run) this.tabCreates.delete(jid);
