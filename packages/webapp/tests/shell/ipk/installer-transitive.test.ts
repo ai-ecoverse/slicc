@@ -15,6 +15,7 @@ import type { SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { installPackage, installPackages } from '../../../src/shell/ipk/installer.js';
+import { trackInFlight } from './helpers/in-flight.js';
 import { withTarballIntegrity } from './helpers/tarball-integrity.js';
 
 /** just-bash does not re-export SecureFetchOptions from its root entry. */
@@ -422,5 +423,77 @@ describe('installer transitive resolution (M2)', () => {
     const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
     expect(Object.keys(root.dependencies).sort()).toEqual(['is-number', 'is-odd']);
     expect(root.dependencies['bogus-xyz']).toBeUndefined();
+  });
+});
+
+describe('installer: concurrent tarball fetching', () => {
+  let fs: VirtualFS;
+  beforeEach(async () => {
+    fs = await newFs();
+  });
+
+  const LEAVES = ['l1', 'l2', 'l3', 'l4', 'l5', 'l6'];
+
+  function wideRegistry(): FakeRegistry {
+    return makeRegistry([
+      {
+        name: 'root',
+        version: '1.0.0',
+        dependencies: Object.fromEntries(LEAVES.map((n) => [n, '^1.0.0'])),
+      },
+      ...LEAVES.map((name) => ({ name, version: '1.0.0' })),
+    ]);
+  }
+
+  /** Delays tarball responses only, and tracks how many overlap. */
+  function tarballTracking(reg: FakeRegistry) {
+    const inner = fakeFetch(reg) as unknown as (url: string, o?: unknown) => Promise<FetchResult>;
+    const tracked = trackInFlight(inner, 10);
+    const fetch = (async (url: string, o?: unknown) =>
+      url.endsWith('.tgz') ? tracked.fn(url, o) : inner(url, o)) as unknown as SecureFetch;
+    return { fetch, stats: tracked.stats };
+  }
+
+  it('downloads tarballs concurrently, at most `concurrency` at a time', async () => {
+    const reg = wideRegistry();
+    const { fetch, stats } = tarballTracking(reg);
+    await installPackage('root', { fs, fetch, cwd: '/work', concurrency: 4 });
+    expect(stats.max).toBe(4);
+    for (const name of ['root', ...LEAVES]) {
+      expect(await fs.exists(`/work/node_modules/${name}/package.json`)).toBe(true);
+    }
+  });
+
+  it('starts no further tarballs once one has failed', async () => {
+    const reg = wideRegistry();
+    reg.tarballs[tarballUrl('root', '1.0.0')] = bytes('not gzip');
+    const { fetch } = tarballTracking(reg);
+    await expect(
+      installPackage('root', { fs, fetch, cwd: '/work', concurrency: 1 })
+    ).rejects.toThrow();
+    const tarballCalls = reg.calls.filter((c) => c.url.endsWith('.tgz'));
+    expect(tarballCalls.map((c) => c.url)).toEqual([tarballUrl('root', '1.0.0')]);
+  });
+
+  it('extracts a package before the dependencies nested inside it', async () => {
+    // root@2 needs shared@2 while top-level shared stays at 1, so shared@2
+    // nests under root. root's extraction replaces its directory, so the
+    // nested copy must land after it, however fast its own tarball is.
+    const reg = makeRegistry([
+      { name: 'other', version: '1.0.0', dependencies: { shared: '^1.0.0' } },
+      { name: 'root', version: '2.0.0', dependencies: { shared: '^2.0.0' } },
+      { name: 'shared', version: '1.0.0' },
+      { name: 'shared', version: '2.0.0' },
+    ]);
+    const inner = fakeFetch(reg) as unknown as (url: string, o?: unknown) => Promise<FetchResult>;
+    const slowRoot = (async (url: string, o?: unknown) => {
+      if (url === tarballUrl('root', '2.0.0')) await new Promise((r) => setTimeout(r, 30));
+      return inner(url, o);
+    }) as unknown as SecureFetch;
+    await installPackages(['other', 'root'], { fs, fetch: slowRoot, cwd: '/work' });
+    const nested = JSON.parse(
+      (await fs.readFile('/work/node_modules/root/node_modules/shared/package.json')) as string
+    );
+    expect(nested.version).toBe('2.0.0');
   });
 });

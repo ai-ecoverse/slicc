@@ -38,6 +38,7 @@
 
 import { joinPath, splitPath } from '../../fs/path-utils.js';
 import { NODE_BUILTINS } from '../../kernel/realm/node-builtins.js';
+import { createLimiter, DEFAULT_FETCH_CONCURRENCY } from './concurrency.js';
 import { GLOBAL_NODE_MODULES } from './global-prefix.js';
 import type { Packument, PackumentVersion } from './registry.js';
 import { resolveVersion } from './registry.js';
@@ -64,6 +65,8 @@ export type PackumentSupplier = (name: string) => Promise<Packument> | Packument
 export interface ResolveDependencyTreeOptions {
   rootDependencies: Record<string, string>;
   fetchPackument: PackumentSupplier;
+  /** Packument fetches in flight at once (default {@link DEFAULT_FETCH_CONCURRENCY}). */
+  concurrency?: number;
 }
 
 /**
@@ -76,21 +79,51 @@ export interface ResolveDependencyTreeOptions {
  *     nested under the dependent's `node_modules`;
  *   - if no copy is reachable, a fresh node is hoisted to the top level.
  *
- * Packuments are fetched on demand via the supplied `fetchPackument` and
- * memoized so each name is queried at most once.
+ * Packuments are fetched via the supplied `fetchPackument` and memoized so
+ * each name is queried at most once. Placement walks the graph depth-first
+ * and in order, so the plan is the same whatever order fetches finish in;
+ * to overlap round trips, every edge also PREFETCHES ahead of the walk: once
+ * a packument arrives, the version its range would pick has its dependency
+ * packuments requested too, at most `concurrency` at a time. A prefetch is
+ * only a cache warm-up: a failed or unneeded one is ignored, and a needed
+ * one's error surfaces when placement awaits it.
  */
 export async function resolveDependencyTree(
   options: ResolveDependencyTreeOptions
 ): Promise<InstallPlan> {
   const top: Record<string, InstallNode> = {};
-  const packumentCache = new Map<string, Packument>();
+  const packumentCache = new Map<string, Promise<Packument>>();
+  const limit = createLimiter(options.concurrency ?? DEFAULT_FETCH_CONCURRENCY);
+  const prefetched = new Set<string>();
+  let settled = false;
 
-  async function getPackument(name: string): Promise<Packument> {
+  function getPackument(name: string): Promise<Packument> {
     let cached = packumentCache.get(name);
-    if (cached) return cached;
-    cached = await options.fetchPackument(name);
-    packumentCache.set(name, cached);
+    if (!cached) {
+      cached = limit(async () => options.fetchPackument(name));
+      packumentCache.set(name, cached);
+    }
     return cached;
+  }
+
+  function prefetch(name: string, range: string): void {
+    const key = `${name}@${range}`;
+    if (settled || prefetched.has(key)) return;
+    prefetched.add(key);
+    getPackument(name).then(
+      (packument) => {
+        let entry: PackumentVersion | undefined;
+        try {
+          entry = packument.versions[resolveVersion(packument, range)];
+        } catch {
+          return;
+        }
+        for (const [depName, depRange] of Object.entries(entry?.dependencies ?? {})) {
+          prefetch(depName, depRange);
+        }
+      },
+      () => undefined
+    );
   }
 
   async function place(name: string, range: string, ancestors: InstallNode[]): Promise<void> {
@@ -117,13 +150,21 @@ export async function resolveDependencyTree(
 
     const childAncestors: InstallNode[] = [node, ...ancestors];
     const deps = resolved.entry.dependencies ?? {};
+    for (const [depName, depRange] of Object.entries(deps)) prefetch(depName, depRange);
     for (const [depName, depRange] of Object.entries(deps)) {
       await place(depName, depRange, childAncestors);
     }
   }
 
-  for (const [name, range] of Object.entries(options.rootDependencies)) {
-    await place(name, range, []);
+  const roots = Object.entries(options.rootDependencies);
+  for (const [name, range] of roots) prefetch(name, range);
+  try {
+    for (const [name, range] of roots) {
+      await place(name, range, []);
+    }
+  } finally {
+    // Stop speculating; fetches already in flight just land in a dead cache.
+    settled = true;
   }
 
   return { root: top };

@@ -19,6 +19,12 @@
 import type { SecureFetch } from 'just-bash';
 import { type DirEntry, FsError, type VirtualFS } from '../../fs/index.js';
 import {
+  allSettledOrThrow,
+  createLimiter,
+  DEFAULT_FETCH_CONCURRENCY,
+  type Limiter,
+} from './concurrency.js';
+import {
   preflightGlobalBinDelegators,
   reconcileGlobalBinDelegators,
 } from './global-bin-delegators.js';
@@ -42,6 +48,8 @@ export interface InstallOptions {
   global?: boolean;
   /** Record named installs in `devDependencies` (npm `--save-dev` / `-D`). */
   saveDev?: boolean;
+  /** Packument and tarball fetches in flight at once (default 8). */
+  concurrency?: number;
 }
 
 export interface InstallResult {
@@ -273,19 +281,34 @@ interface InstalledPackageManifest {
   [key: string]: unknown;
 }
 
-function buildPackumentSupplier(
-  fetch: SecureFetch,
-  timeoutMs?: number
-): { supplier: PackumentSupplier; cache: Map<string, Packument> } {
-  const cache = new Map<string, Packument>();
-  const supplier: PackumentSupplier = async (name: string) => {
+/**
+ * Memoized packument fetcher shared by root staging and tree resolution.
+ * Caches the in-flight promise, so concurrent requests for one name share a
+ * fetch; a failed fetch is forgotten so a later request can retry it.
+ */
+function buildPackumentSupplier(fetch: SecureFetch, timeoutMs?: number): PackumentSupplier {
+  const cache = new Map<string, Promise<Packument>>();
+  return (name: string) => {
     let cached = cache.get(name);
-    if (cached) return cached;
-    cached = await fetchPackument(name, fetch, { timeoutMs });
-    cache.set(name, cached);
+    if (!cached) {
+      cached = fetchPackument(name, fetch, { timeoutMs });
+      cache.set(name, cached);
+      cached.catch(() => cache.delete(name));
+    }
     return cached;
   };
-  return { supplier, cache };
+}
+
+/**
+ * Start fetching `names` in the background, at most `concurrency` at a time,
+ * so the sequential validation loops that follow find them cached. Errors are
+ * left for those loops to report.
+ */
+function warmPackuments(supplier: PackumentSupplier, names: string[], concurrency?: number): void {
+  const limit = createLimiter(concurrency ?? DEFAULT_FETCH_CONCURRENCY);
+  for (const name of new Set(names)) {
+    limit(async () => supplier(name)).catch(() => undefined);
+  }
 }
 
 interface ResolvedDirect {
@@ -296,11 +319,21 @@ interface ResolvedDirect {
 async function stageResolveRoots(
   specs: string[],
   supplier: PackumentSupplier,
-  existingManifest?: ProjectManifest
+  existingManifest?: ProjectManifest,
+  concurrency?: number
 ): Promise<{ directs: ResolvedDirect[]; errors: InstallFailure[] }> {
   const directs: ResolvedDirect[] = [];
   const errors: InstallFailure[] = [];
   const seen = new Set<string>();
+  const names: string[] = [];
+  for (const spec of specs) {
+    try {
+      names.push(parseInstallSpec(spec).name);
+    } catch {
+      // Reported by the loop below.
+    }
+  }
+  warmPackuments(supplier, names, concurrency);
 
   for (const spec of specs) {
     let parsed: ParsedSpec;
@@ -336,50 +369,77 @@ function toError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err));
 }
 
-async function materializeNode(
-  fs: VirtualFS,
-  parentModulesDir: string,
-  node: InstallNode,
-  fetch: SecureFetch,
-  timeoutMs: number | undefined
+interface MaterializeContext {
+  fs: VirtualFS;
+  fetch: SecureFetch;
+  timeoutMs: number | undefined;
+  /** Bounds tarballs in flight (and so in memory) at once. */
+  limit: Limiter;
+  /** Set on the first failure so queued packages are skipped, not started. */
+  failed: boolean;
+}
+
+/** Fetch, verify and extract `node` into `installDir` unless that version is already there. */
+async function installNodeFiles(
+  ctx: MaterializeContext,
+  installDir: string,
+  node: InstallNode
 ): Promise<void> {
-  const installDir = packageDirIn(parentModulesDir, node.name);
+  const { fs } = ctx;
   const installedManifestPath = joinPath(installDir, 'package.json');
-  let alreadySatisfied = false;
   if (await fs.exists(installedManifestPath)) {
     const installed = await readInstalledJsonOr<InstalledPackageManifest | null>(
       fs,
       installedManifestPath,
       null
     );
-    if (installed?.version === node.version) {
-      alreadySatisfied = true;
-    }
+    if (installed?.version === node.version) return;
   }
 
-  if (!alreadySatisfied) {
-    const tarballBytes = await fetchTarball(node.resolved, fetch, { timeoutMs });
-    await verifyTarballIntegrity(tarballBytes, node, `${node.name}@${node.version}`);
-    const entries = readTar(gunzip(tarballBytes));
+  const tarballBytes = await fetchTarball(node.resolved, ctx.fetch, { timeoutMs: ctx.timeoutMs });
+  await verifyTarballIntegrity(tarballBytes, node, `${node.name}@${node.version}`);
+  const entries = readTar(gunzip(tarballBytes));
 
+  await removeIfExists(fs, installDir);
+  await ensureDir(fs, installDir);
+  try {
+    await writeEntries(fs, installDir, entries);
+  } catch (err) {
     await removeIfExists(fs, installDir);
-    await ensureDir(fs, installDir);
+    throw err;
+  }
+}
+
+/**
+ * Materialize `node`, then its nested dependencies. A package is extracted
+ * before anything nested inside it, because extracting replaces its whole
+ * directory; siblings (disjoint directories) proceed concurrently.
+ */
+async function materializeNode(
+  ctx: MaterializeContext,
+  parentModulesDir: string,
+  node: InstallNode
+): Promise<void> {
+  const installDir = packageDirIn(parentModulesDir, node.name);
+  await ctx.limit(async () => {
+    if (ctx.failed) return;
     try {
-      await writeEntries(fs, installDir, entries);
+      await installNodeFiles(ctx, installDir, node);
     } catch (err) {
-      await removeIfExists(fs, installDir);
+      ctx.failed = true;
       throw err;
     }
-  }
+  });
 
   const nestedNames = Object.keys(node.dependencies);
-  if (nestedNames.length > 0) {
-    const childModulesDir = joinPath(installDir, 'node_modules');
-    await ensureDir(fs, childModulesDir);
-    for (const childName of nestedNames) {
-      await materializeNode(fs, childModulesDir, node.dependencies[childName], fetch, timeoutMs);
-    }
-  }
+  if (nestedNames.length === 0 || ctx.failed) return;
+  const childModulesDir = joinPath(installDir, 'node_modules');
+  await ensureDir(ctx.fs, childModulesDir);
+  await allSettledOrThrow(
+    nestedNames.map((childName) =>
+      materializeNode(ctx, childModulesDir, node.dependencies[childName])
+    )
+  );
 }
 
 async function materializePlan(
@@ -387,14 +447,22 @@ async function materializePlan(
   modulesDir: string,
   plan: InstallPlan,
   fetch: SecureFetch,
-  timeoutMs: number | undefined
+  timeoutMs: number | undefined,
+  concurrency?: number
 ): Promise<void> {
   const topNames = Object.keys(plan.root);
   if (topNames.length === 0) return;
   await ensureDir(fs, modulesDir);
-  for (const name of topNames) {
-    await materializeNode(fs, modulesDir, plan.root[name], fetch, timeoutMs);
-  }
+  const ctx: MaterializeContext = {
+    fs,
+    fetch,
+    timeoutMs,
+    limit: createLimiter(concurrency ?? DEFAULT_FETCH_CONCURRENCY),
+    failed: false,
+  };
+  await allSettledOrThrow(
+    topNames.map((name) => materializeNode(ctx, modulesDir, plan.root[name]))
+  );
 }
 
 function unscopedName(pkgName: string): string {
@@ -601,7 +669,15 @@ export async function installPackages(
   specs: string[],
   options: InstallOptions
 ): Promise<InstallPackagesResult> {
-  const { fs, fetch, cwd, timeoutMs, global: globalInstall = false, saveDev = false } = options;
+  const {
+    fs,
+    fetch,
+    cwd,
+    timeoutMs,
+    global: globalInstall = false,
+    saveDev = false,
+    concurrency,
+  } = options;
   if (specs.length === 0) {
     return { results: [], errors: [] };
   }
@@ -613,11 +689,12 @@ export async function installPackages(
     {}
   );
 
-  const { supplier } = buildPackumentSupplier(fetch, timeoutMs);
+  const supplier = buildPackumentSupplier(fetch, timeoutMs);
   const { directs, errors: stageErrors } = await stageResolveRoots(
     specs,
     supplier,
-    existingManifest
+    existingManifest,
+    concurrency
   );
   if (directs.length === 0) {
     return { results: [], errors: stageErrors };
@@ -636,6 +713,7 @@ export async function installPackages(
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
+    concurrency,
   });
 
   const modulesDir = globalInstall ? GLOBAL_NODE_MODULES : joinPath(cwd, 'node_modules');
@@ -643,7 +721,7 @@ export async function installPackages(
     await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));
     await preflightGlobalBinDelegators(fs, predictGlobalBinNames(plan, modulesDir));
   }
-  await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
+  await materializePlan(fs, modulesDir, plan, fetch, timeoutMs, concurrency);
   await reconcileRootBinShims(fs, modulesDir);
   if (globalInstall) {
     const installed = await collectInstalledBins(fs, modulesDir);
@@ -751,7 +829,7 @@ function collectManagedEntries(manifest: ProjectManifest): ManifestEntry[] {
 export async function installFromManifest(
   options: InstallOptions
 ): Promise<InstallFromManifestResult> {
-  const { fs, fetch, cwd, timeoutMs } = options;
+  const { fs, fetch, cwd, timeoutMs, concurrency } = options;
   const manifestPath = joinPath(cwd, 'package.json');
   if (!(await fs.exists(manifestPath))) {
     throw new ManifestNotFoundError(manifestPath);
@@ -762,10 +840,15 @@ export async function installFromManifest(
     return { results: [], errors: [], empty: true };
   }
 
-  const { supplier } = buildPackumentSupplier(fetch, timeoutMs);
+  const supplier = buildPackumentSupplier(fetch, timeoutMs);
 
   const validated: ManifestEntry[] = [];
   const errors: InstallFailure[] = [];
+  warmPackuments(
+    supplier,
+    entries.map((entry) => entry.name),
+    concurrency
+  );
   for (const entry of entries) {
     try {
       const packument = await supplier(entry.name);
@@ -788,10 +871,11 @@ export async function installFromManifest(
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
+    concurrency,
   });
 
   const modulesDir = joinPath(cwd, 'node_modules');
-  await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
+  await materializePlan(fs, modulesDir, plan, fetch, timeoutMs, concurrency);
   await reconcileRootBinShims(fs, modulesDir);
 
   const results: InstallResult[] = validated
@@ -900,7 +984,7 @@ export async function syncGlobalInstallTree(
     return;
   }
 
-  const { supplier } = buildPackumentSupplier(fetch, timeoutMs);
+  const supplier = buildPackumentSupplier(fetch, timeoutMs);
   const rootDependencies: Record<string, string> = {};
   for (const entry of entries) {
     rootDependencies[entry.name] = entry.range;
@@ -1005,7 +1089,7 @@ async function syncLocalInstallTree(
     return;
   }
 
-  const { supplier } = buildPackumentSupplier(fetch, timeoutMs);
+  const supplier = buildPackumentSupplier(fetch, timeoutMs);
   const rootDependencies: Record<string, string> = {};
   for (const entry of entries) {
     rootDependencies[entry.name] = entry.range;
