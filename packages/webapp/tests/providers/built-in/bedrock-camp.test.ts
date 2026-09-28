@@ -483,13 +483,22 @@ describe('bedrock-camp built-in provider', () => {
     expect(result.errorMessage).toContain('Unsupported image MIME type');
   });
 
-  it.each(['luna', 'sol', 'astra'])(
+  it.each([
+    ['Luna', 'global.openai.gpt-6-luna', 'GPT-6 Luna (Global)'],
+    ['Sol', 'global.openai.gpt-6-sol', 'GPT-6 Sol (Global)'],
+    ['Astra', 'global.openai.gpt-6-astra', 'GPT-6 Astra (Global)'],
+    [
+      'opaque Luna profile',
+      'arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/opaque',
+      'GPT-6 Luna',
+    ],
+  ])(
     'sends GPT-6 %s tool images beside the tool result as user images',
-    async (variant) => {
+    async (_label, id, name) => {
       const fetchMock = mockOkResponse();
       vi.stubGlobal('fetch', fetchMock);
       const stream = streamBedrockCamp(
-        baseModel({ id: `global.openai.gpt-6-${variant}`, input: ['text', 'image'] }),
+        baseModel({ id, name, input: ['text', 'image'] }),
         {
           messages: [
             { role: 'user', content: 'Look at the tool image.' },

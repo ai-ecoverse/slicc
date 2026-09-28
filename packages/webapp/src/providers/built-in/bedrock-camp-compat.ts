@@ -142,10 +142,27 @@ export const BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP: BedrockCampEffortMap = Object.f
   off: null,
 });
 
-const BEDROCK_CAMP_GPT6_RE = /\.openai\.gpt-6-(sol|luna|astra)$/;
+/** Opaque application inference profiles identify the underlying model by name. */
+export function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
+  const values = modelName ? [modelId, modelName] : [modelId];
+  return values.flatMap((value) => {
+    const lower = value.toLowerCase();
+    return [lower, lower.replace(/[\s_.:]+/g, '-')];
+  });
+}
 
-export function isBedrockCampGpt6Model(model: { id: string }): boolean {
-  return BEDROCK_CAMP_GPT6_RE.test(model.id);
+const BEDROCK_CAMP_GPT6_RE = /(?:^|[.-]openai[.-])gpt-6-(sol|luna|astra)(?:-\([^)]+\))?$/;
+
+function bedrockCampGpt6Variant(model: { id: string; name?: string }): string | undefined {
+  for (const candidate of getModelMatchCandidates(model.id, model.name)) {
+    const variant = BEDROCK_CAMP_GPT6_RE.exec(candidate)?.[1];
+    if (variant) return variant;
+  }
+  return undefined;
+}
+
+export function isBedrockCampGpt6Model(model: { id: string; name?: string }): boolean {
+  return bedrockCampGpt6Variant(model) !== undefined;
 }
 
 /**
@@ -153,8 +170,11 @@ export function isBedrockCampGpt6Model(model: { id: string }): boolean {
  * (GPT-6), or null. gpt-5.6 is deliberately not covered: it rejects every
  * `additionalModelRequestFields` thinking shape, `reasoning` included.
  */
-export function bedrockCampOpenAIEffortMap(model: { id: string }): BedrockCampEffortMap | null {
-  const variant = BEDROCK_CAMP_GPT6_RE.exec(model.id)?.[1];
+export function bedrockCampOpenAIEffortMap(model: {
+  id: string;
+  name?: string;
+}): BedrockCampEffortMap | null {
+  const variant = bedrockCampGpt6Variant(model);
   if (!variant) return null;
   return variant === 'astra' ? BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP : BEDROCK_CAMP_GPT6_EFFORT_MAP;
 }

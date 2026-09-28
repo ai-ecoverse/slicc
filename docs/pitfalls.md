@@ -2280,8 +2280,10 @@ Consequences of that gating, easy to miss:
   `bedrock-camp.ts` therefore keeps user attachments as ordinary user images,
   while moving image blocks from GPT-6 tool results beside the `toolResult`
   block in the enclosing user message. A text marker remains in the tool result
-  at each image's original position. Keep GPT-6's image input modality in the
-  catalogue; it can see images when they use the supported placement. A tool
+  at each image's original position. For opaque application inference profile
+  ARNs, the GPT-6 capability check uses the model name as the existing Claude
+  checks do. Keep GPT-6's image input modality in the catalogue; it can see
+  images when they use the supported placement. A tool
   result image can come from a browser screenshot or `open --view` through
   `core/tool-adapter.ts`. Benchmark task files are staged in the VFS and are
   not themselves inline image messages.

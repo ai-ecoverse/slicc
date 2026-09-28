@@ -51,6 +51,7 @@ import type { ProviderConfig } from '../types.js';
 import {
   type BedrockCampEffortMap,
   bedrockCampOpenAIEffortMap,
+  getModelMatchCandidates,
   isBedrockCampGpt6Model,
 } from './bedrock-camp-compat.js';
 
@@ -392,20 +393,6 @@ function pickCampExtras(
     requestMetadata: options.requestMetadata,
     effort: options.effort,
   };
-}
-
-// ── Model-name aware matching ───────────────────────────────────────
-// Application inference profiles use opaque ARNs whose id does not contain
-// the underlying model name. We check both `model.id` and `model.name`
-// (when present), normalizing separators so e.g. "Claude Opus 4.6" matches
-// "opus-4-6".
-
-function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
-  const values = modelName ? [modelId, modelName] : [modelId];
-  return values.flatMap((value) => {
-    const lower = value.toLowerCase();
-    return [lower, lower.replace(/[\s_.:]+/g, '-')];
-  });
 }
 
 // ── Message conversion ──────────────────────────────────────────────
