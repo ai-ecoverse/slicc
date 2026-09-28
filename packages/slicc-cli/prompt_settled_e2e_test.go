@@ -189,6 +189,61 @@ func TestCLIPromptAllSettledCountsWorkingScoopsFromTheRoster(t *testing.T) {
 	}
 }
 
+// A live leader re-broadcasts `scoops.list` every 5 s. Those snapshots are
+// state, not activity: counting them as frames kept every bench prompt open
+// until its 60-minute timeout (stage 2 run 36359378966).
+func TestCLIPromptAllSettledIgnoresRosterHeartbeats(t *testing.T) {
+	bin := sliccBinary(t)
+	frames := []any{
+		statusFrameFor("cone-1", "processing"),
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "DONE"),
+		agentFrameFor("cone-1", protocol.AgentTurnEnd, "m1", ""),
+		statusFrameFor("cone-1", "ready"),
+	}
+	for i := 0; i < 40; i++ {
+		frames = append(frames, 100*time.Millisecond, rosterWithState("idle", "cone-1", "scout"))
+	}
+	leader := ackLeader(t, coneAck, frames)
+	stdout, stderr, took, err := runPromptArgs(t, bin, leader.joinURL, "--allsettled", "500ms")
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "DONE") {
+		t.Fatalf("stdout = %q, want the reply", stdout)
+	}
+	if took > 3*time.Second {
+		t.Fatalf("prompt took %s: idle roster heartbeats (4 s of them) held the 500ms quiet period open", took)
+	}
+}
+
+// A scoop known busy only from the roster, and later reported idle only by a
+// roster snapshot, finishes at that snapshot: the quiet period starts there,
+// not when the scoop first turned busy.
+func TestCLIPromptAllSettledQuietStartsWhenARosterScoopGoesIdle(t *testing.T) {
+	bin := sliccBinary(t)
+	frames := []any{
+		rosterWithState("working", "cone-1", "scout"),
+		statusFrameFor("cone-1", "processing"),
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "DONE"),
+		agentFrameFor("cone-1", protocol.AgentTurnEnd, "m1", ""),
+		statusFrameFor("cone-1", "ready"),
+	}
+	for i := 0; i < 30; i++ {
+		frames = append(frames, 100*time.Millisecond, rosterWithState("working", "cone-1", "scout"))
+	}
+	frames = append(frames, rosterWithState("idle", "cone-1", "scout"))
+	leader := ackLeader(t, coneAck, frames)
+	_, stderr, took, err := runPromptArgs(t, bin, leader.joinURL, "--allsettled", "2500ms")
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	// 3 s of working heartbeats, then 2.5 s of quiet after the idle snapshot.
+	// Without that quiet the prompt exits right at the snapshot, about 3 s in.
+	if took < 5500*time.Millisecond {
+		t.Fatalf("prompt exited after %s, without a quiet period after the scoop went idle", took)
+	}
+}
+
 func TestParsePromptArgs(t *testing.T) {
 	cases := []struct {
 		args    []string
