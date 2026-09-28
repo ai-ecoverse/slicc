@@ -364,6 +364,23 @@ describe('WasmSession', () => {
     expect(unsubscribe).toHaveBeenCalled();
   });
 
+  it('kill(2) of a process outside the invocation goes through the command policy', async () => {
+    fakeProcesses();
+    const { pm, config } = processConfig();
+    pm.signal.mockReturnValue(true);
+    const gate = vi.fn(async (_name: string, args: string[]) =>
+      args[1] === '900' ? { stderr: 'denied\n', exitCode: 77 } : null
+    );
+    const session = new WasmSession(ctx(installed), config, () => {}, gate);
+    await parentSpawner(session);
+    const kill = spawn.mock.calls.at(-1)![0].kill as (pid: number, sig: number) => Promise<boolean>;
+    await expect(kill(900, 15)).rejects.toMatchObject({ code: 'EPERM' });
+    expect(gate).toHaveBeenCalledWith('kill', ['-TERM', '900'], {});
+    expect(pm.signal).not.toHaveBeenCalled();
+    expect(await kill(901, 2)).toBe(true);
+    expect(pm.signal).toHaveBeenCalledWith(901, 'SIGINT');
+  });
+
   it('ends a shell child on its own process signal, and on killAll', async () => {
     fakeProcesses();
     // An exec that runs until its signal aborts, like `sleep 100`.

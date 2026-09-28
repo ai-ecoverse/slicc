@@ -1281,10 +1281,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           onOutput: tee,
         }),
     });
+    const pathBefore = this.lastEnv.PATH;
     if (run.state) {
       this.cwd = run.state.cwd;
       this.lastEnv = carriedEnv(run.state.env, [RUN_PID_ENV, SUDO_REASON_ENV, OUTPUT_TEE_ENV]);
     }
+    // As on just-bash (#2085): a new PATH can hold `.jsh` commands to register.
+    if (this.lastEnv.PATH !== pathBefore) await this.syncJshCommands().catch(() => undefined);
     await this.flushPendingCommandGrants();
     this.applyPendingEnvWrites();
     return {

@@ -113,6 +113,21 @@ describe('AlmostBashShellHeadless on GNU bash', () => {
     expect((run.mock.calls[2]![1] as RunCtx).cwd).toBe('/workspace/sub');
   });
 
+  it('registers the .jsh commands of a PATH a run exported', async () => {
+    await installBash(fs);
+    await fs.mkdir('/tools', { recursive: true });
+    await fs.writeFile('/tools/frob.jsh', "console.log('frob');");
+    const shell = new AlmostBashShellHeadless({ fs, gnuBash: true });
+    const sync = vi.spyOn(shell, 'syncJshCommands');
+    fakeBash('', (ctx) => state(0, '0', '/', { ...ctx.exportedEnv, PATH: '/tools:/usr/bin' }));
+    await shell.executeCommand('export PATH=/tools:$PATH');
+    expect(sync).toHaveBeenCalled();
+    sync.mockClear();
+    fakeBash('', (ctx) => state(0, '0', '/', ctx.exportedEnv));
+    await shell.executeCommand('true');
+    expect(sync).not.toHaveBeenCalled(); // PATH unchanged
+  });
+
   it('stays on just-bash without the option, without bash installed, or when opted out', async () => {
     const plain = new AlmostBashShellHeadless({ fs, gnuBash: true });
     expect((await plain.executeCommand('echo just')).stdout).toBe('just\n');

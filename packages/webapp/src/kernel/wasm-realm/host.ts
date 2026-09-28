@@ -69,7 +69,7 @@ export interface SpawnWasmOptions {
   /** A forked child: resume from the parent's state instead of running main. */
   fork?: ForkState;
   /** kill(2) the program sends another process (a negative pid: a group): false when there is none (ESRCH). */
-  kill?: (pid: number, sig: number) => boolean;
+  kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
   /** Process groups and sessions of its invocation. */
   jobs?: JobTable;
 }

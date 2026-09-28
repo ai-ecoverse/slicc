@@ -155,7 +155,7 @@ export interface WasmProcessOptions {
   /** The filesystem its VFS file descriptions read and write. */
   fs?: VfsFileFs;
   /** kill(2) of another process: false when there is no such process (ESRCH). */
-  kill?: (pid: number, sig: number) => boolean;
+  kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
   /** A caught signal is pending: publish it where the worker looks after each syscall. */
   onPending?: (sig: number) => void;
   /** Whether a published signal still waits for the worker (it interrupts the next blocking call). */
@@ -215,7 +215,8 @@ export class WasmProcess {
    */
   signal(sig: number): SignalOutcome {
     if (this.execChild !== undefined) {
-      this.options.kill?.(this.execChild, sig);
+      // The program is of this invocation: its kill never waits on the policy.
+      void Promise.resolve(this.options.kill?.(this.execChild, sig)).catch(() => undefined);
       return sig === SIG.KILL ? 'terminate' : 'forward';
     }
     if (sig === SIG.KILL) return 'terminate';
@@ -505,7 +506,7 @@ export class WasmProcess {
       case 'proc-kill':
         if (req.sig !== 0 && !isSignal(req.sig)) throw new KernelError('EINVAL');
         // kill(0, sig): the caller's own group; a negative pid names a group.
-        if (!this.options.kill?.(req.pid === 0 ? -this.pgid() : req.pid, req.sig)) {
+        if (!(await this.options.kill?.(req.pid === 0 ? -this.pgid() : req.pid, req.sig))) {
           throw new KernelError('ESRCH');
         }
         return { ok: true, kind: 'void' };

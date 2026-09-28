@@ -22,7 +22,7 @@ import {
   type ChildSpawnRequest,
   SpawnError,
 } from '../../../kernel/wasm-realm/children.js';
-import type { FdTable, OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
+import { type FdTable, KernelError, type OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import { JobTable } from '../../../kernel/wasm-realm/jobs.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
@@ -274,7 +274,7 @@ export class WasmSession {
    * negative pid names a process group of the session. Signal 0 only asks
    * whether the process exists.
    */
-  private kill(pid: number, sig: number): boolean {
+  private kill(pid: number, sig: number): boolean | Promise<boolean> {
     if (pid < 0) return this.jobs.killGroup(-pid, sig);
     const wasm = this.wasmByPid.get(pid);
     if (wasm) {
@@ -290,7 +290,20 @@ export class WasmSession {
     if (!pm) return false;
     if (sig === 0) return pm.get(pid) !== null;
     const name = SIGNAL_NAME.get(sig);
-    return name !== undefined && pm.signal(pid, name);
+    if (name === undefined) return false;
+    if (!this.gate) return pm.signal(pid, name);
+    return this.killOutside(pid, name);
+  }
+
+  /**
+   * A signal to a process outside the invocation goes through the shell's
+   * command policy as `kill -SIG PID` would: bash's `kill` is a builtin, so
+   * no command dispatch gates it otherwise. A denial is EPERM.
+   */
+  private async killOutside(pid: number, name: keyof typeof SIGNAL_BY_NAME): Promise<boolean> {
+    const denial = await this.gate?.('kill', [`-${name.slice(3)}`, String(pid)], {});
+    if (denial) throw new KernelError('EPERM');
+    return this.processConfig?.processManager.signal(pid, name) ?? false;
   }
 
   /** Signal every process of the invocation. */
