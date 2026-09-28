@@ -61,6 +61,11 @@ function makePackument(
   } as Packument;
 }
 
+function withDeprecated(pk: Packument, deprecated: Record<string, string>): Packument {
+  for (const [v, message] of Object.entries(deprecated)) pk.versions[v].deprecated = message;
+  return pk;
+}
+
 describe('registryUrl', () => {
   it('builds a registry URL with the registry.npmjs.org host', () => {
     const url = registryUrl('lodash');
@@ -344,23 +349,89 @@ describe('resolveVersion', () => {
     expect(() => resolveVersion(broken, 'latest')).toThrow();
   });
 
-  // Regression: * must resolve via maxSatisfying (highest stable), NOT the latest dist-tag
-  it('resolves "*" to the highest stable version when latest dist-tag is an older stable', () => {
+  // "*" follows pnpm and npm-pick-manifest: it takes the `latest` dist-tag.
+  // This reverses f697409e4, which routed "*" through maxSatisfying on the
+  // mistaken belief that doing so preserved npm's defaults.
+  it('resolves "*" to the latest dist-tag even when a higher stable version exists', () => {
     const pkg = makePackument('old-latest', ['1.0.0', '1.2.0', '2.0.0', '2.1.0'], {
       latest: '1.2.0',
     });
-    expect(resolveVersion(pkg, '*')).toBe('2.1.0');
+    expect(resolveVersion(pkg, '*')).toBe('1.2.0');
+    expect(resolveVersion(pkg, 'x')).toBe('1.2.0');
     expect(resolveVersion(pkg, '')).toBe('1.2.0');
     expect(resolveVersion(pkg, 'latest')).toBe('1.2.0');
   });
 
-  it('resolves "*" to the highest stable version when latest dist-tag is a prerelease', () => {
+  it('resolves "*" to a prerelease latest dist-tag, but "X" and ">=0" to the highest stable', () => {
     const pkg = makePackument('prerelease-latest', ['1.0.0', '1.2.0', '2.0.0', '3.0.0-beta.1'], {
       latest: '3.0.0-beta.1',
     });
-    expect(resolveVersion(pkg, '*')).toBe('2.0.0');
+    expect(resolveVersion(pkg, '*')).toBe('3.0.0-beta.1');
+    expect(resolveVersion(pkg, 'X')).toBe('2.0.0');
+    expect(resolveVersion(pkg, '>=0.0.0')).toBe('2.0.0');
     expect(resolveVersion(pkg, '')).toBe('3.0.0-beta.1');
-    expect(resolveVersion(pkg, 'latest')).toBe('3.0.0-beta.1');
+  });
+
+  it('prefers the latest dist-tag over a higher version when it satisfies the range', () => {
+    const pkg = makePackument('lbm', ['1.0.0', '1.5.0', '2.0.0'], { latest: '1.0.0' });
+    expect(resolveVersion(pkg, '^1.0.0')).toBe('1.0.0');
+    // latest outside the range: highest satisfying, as before.
+    expect(resolveVersion(pkg, '^1.1.0')).toBe('1.5.0');
+  });
+
+  it('passes over deprecated versions unless nothing else satisfies', () => {
+    const pkg = withDeprecated(makePackument('dep', ['1.0.0', '1.1.0', '1.2.0', '2.0.0']), {
+      '1.2.0': 'broken',
+      '2.0.0': 'broken',
+    });
+    expect(resolveVersion(pkg, '^1.0.0')).toBe('1.1.0');
+    // A deprecated latest gives way under "*"...
+    expect(resolveVersion(pkg, '*')).toBe('1.1.0');
+    // ...but stands when it is all the range admits, or is asked for by name.
+    expect(resolveVersion(pkg, '^2.0.0')).toBe('2.0.0');
+    expect(resolveVersion(pkg, '1.2.0')).toBe('1.2.0');
+    expect(resolveVersion(pkg, 'latest')).toBe('2.0.0');
+  });
+
+  it('treats an empty deprecation message as live, as npm does (pnpm 12 does not)', () => {
+    const pkg = withDeprecated(
+      makePackument('ud', ['0.9.0', '1.0.0', '1.1.0'], { latest: '0.9.0' }),
+      { '1.1.0': '' }
+    );
+    expect(resolveVersion(pkg, '^1.0.0')).toBe('1.1.0');
+  });
+
+  it('resolves @ai-ecoverse/wasm-zlib "*" to the live 1.3.1-2 latest, not a stable 0.0.x', () => {
+    const pkg = withDeprecated(
+      makePackument(
+        '@ai-ecoverse/wasm-zlib',
+        ['0.0.0', '0.0.1', '0.0.2', '1.3.1', '1.3.1-1', '1.3.1-2'],
+        { latest: '1.3.1-2' }
+      ),
+      { '1.3.1': 'superseded by packaging rev (-N)' }
+    );
+    expect(resolveVersion(pkg, '*')).toBe('1.3.1-2');
+    expect(resolveVersion(pkg, '^1.3.1-1')).toBe('1.3.1-2');
+    expect(resolveVersion(pkg, '1.3.1')).toBe('1.3.1');
+  });
+
+  it('keeps a deprecated prerelease latest\'s release line under "*"', () => {
+    const pkg = withDeprecated(
+      makePackument('dpl', ['0.0.2', '1.3.1-1', '1.3.1-2'], { latest: '1.3.1-2' }),
+      { '1.3.1-2': 'bad build' }
+    );
+    expect(resolveVersion(pkg, '*')).toBe('1.3.1-1');
+  });
+
+  it('ignores build metadata in an exact version request', () => {
+    expect(resolveVersion(packument, '1.2.0+build.7')).toBe('1.2.0');
+    expect(() => resolveVersion(packument, '9.9.9')).toThrow(/no version satisfies/);
+  });
+
+  it('throws for an empty spec when there is no latest dist-tag', () => {
+    const pkg = makePackument('nl', ['1.0.0'], {});
+    expect(() => resolveVersion(pkg, '')).toThrow(/no 'latest' dist-tag/);
+    expect(resolveVersion(pkg, '*')).toBe('1.0.0');
   });
 
   it('preserves unknown dist-tag error even when latest is a prerelease', () => {
