@@ -32,7 +32,13 @@ import type { JshProcessConfig } from '../../jsh-executor.js';
 import { stdinAsLatin1 } from '../../just-bash-compat.js';
 import type { TerminalLease, TerminalPort } from '../../terminal-port.js';
 import { NO_LOGIN_SHELL } from '../../terminal-protocol.js';
-import { installedCommands, modulePath, type NativeGate, WasmSession } from './launch.js';
+import {
+  type InstalledCommandsLookup,
+  installedCommands,
+  modulePath,
+  type NativeGate,
+  WasmSession,
+} from './launch.js';
 
 type Result = {
   stdout: string;
@@ -111,6 +117,8 @@ export interface RunWasmOptions {
   fds?: ReadonlyArray<readonly [number, OpenFile]>;
   /** The installed command's env defaults, when the shell dispatched it by name. */
   defaults?: Readonly<Record<string, string>>;
+  /** The installed commands as the shell's catalog knows them (else scanned per invocation). */
+  commands?: InstalledCommandsLookup;
 }
 
 /** A tee of the bytes written, decoded as UTF-8 per stream. */
@@ -214,7 +222,7 @@ async function loginShell(ctx: CommandContext, options: RunWasmOptions): Promise
   if (choice === 'just-bash' || !options.terminal || typeof SharedArrayBuffer !== 'function') {
     return none;
   }
-  if (!(await installedCommands(ctx)).has('bash')) return none;
+  if (!(await (options.commands?.() ?? installedCommands(ctx))).has('bash')) return none;
   // Not a login bash (-l): the environment is already the slicc shell's,
   // which sourced ~/.profile; reading it again would repeat its effects.
   return runWasmCommand(['-t', '--login-prompt', 'bash', '-i'], ctx, options);
@@ -298,7 +306,13 @@ export async function runWasmCommand(
   let report = (message: string): void => {
     err.push(new TextEncoder().encode(`wasm: ${message}\n`));
   };
-  const session = new WasmSession(ctx, processConfig, (message) => report(message), options.gate);
+  const session = new WasmSession(
+    ctx,
+    processConfig,
+    (message) => report(message),
+    options.gate,
+    options.commands
+  );
   const call = await resolveInstalled(ctx, session, parsed);
   const gluePath = ctx.fs.resolvePath(ctx.cwd, call.program);
 

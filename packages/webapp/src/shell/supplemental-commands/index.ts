@@ -275,6 +275,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       buildProcessConfig: options.buildProcessConfig,
       terminal: options.terminal,
       gate: options.gateNativeCommand,
+      commands: options.scriptCatalog && (() => options.scriptCatalog!.getWasmCommands()),
     }),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),

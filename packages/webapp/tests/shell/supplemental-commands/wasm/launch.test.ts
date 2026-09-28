@@ -11,6 +11,7 @@ import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js
 import { bytesSource, FdTable, sinkFile } from '../../../../src/kernel/wasm-realm/fd-table.js';
 import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
+import type { WasmCommand } from '../../../../src/shell/ipk/wasm-programs.js';
 import { WasmSession } from '../../../../src/shell/supplemental-commands/wasm/launch.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
@@ -186,6 +187,29 @@ describe('WasmSession', () => {
     };
     const own = new WasmSession(ctx(withSh), undefined, () => {});
     expect((await own.resolve('/bin/sh', 'sh', '/w'))?.glue).toBe(`${DASH}/bin/dash`);
+  });
+
+  it('asks the shell’s catalog on every lookup: an install or removal mid-session counts', async () => {
+    const known = new Map<string, WasmCommand>();
+    const session = new WasmSession(
+      ctx(installed),
+      undefined,
+      () => {},
+      undefined,
+      async () => known
+    );
+    // The catalog, not a scan: a package on disk it does not list is not there yet.
+    expect(await session.resolve('tac', 'tac', '/w')).toBeUndefined();
+    known.set('tac', {
+      name: 'tac',
+      glue: `${PKG}/bin/core`,
+      wasm: `${PKG}/bin/core.wasm`,
+      argv0: 'tac',
+      pkg: 'gnu',
+    });
+    expect((await session.resolve('/usr/bin/tac', 'tac', '/w'))?.glue).toBe(`${PKG}/bin/core`);
+    known.delete('tac');
+    expect(await session.resolve('/usr/bin/tac', 'tac', '/w')).toBeUndefined();
   });
 
   it('asks the gate before a program runs natively; a denied one reports and exits', async () => {

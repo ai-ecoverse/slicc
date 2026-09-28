@@ -60,6 +60,9 @@ export type NativeGate = (
   env: Record<string, string>
 ) => Promise<{ stderr: string; exitCode: number } | null>;
 
+/** The installed wasm commands by name, as the shell's catalog knows them now. */
+export type InstalledCommandsLookup = () => Promise<Map<string, WasmCommand>>;
+
 /** A wasm program to start: its glue and module paths and `argv[0]`. */
 export interface WasmTarget {
   glue: string;
@@ -218,13 +221,19 @@ export class WasmSession {
     private readonly ctx: CommandContext,
     private readonly processConfig: JshProcessConfig | undefined,
     private readonly onError: (message: string) => void,
-    private readonly gate?: NativeGate
+    private readonly gate?: NativeGate,
+    private readonly lookup?: InstalledCommandsLookup
   ) {
     this.net = loopbackNet(ownerKey(processConfig?.owner));
   }
 
-  /** The installed commands, scanned once per invocation. */
+  /**
+   * The installed commands: the shell's catalog, which a package install or
+   * removal refreshes (the terminal's login shell outlives both), else
+   * scanned once per invocation.
+   */
   commands(): Promise<Map<string, WasmCommand>> {
+    if (this.lookup) return this.lookup();
     this.installed ??= installedCommands(this.ctx);
     return this.installed;
   }

@@ -1318,6 +1318,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           gate: this.gateNativeCommand,
           onOutput: tee,
           fds,
+          commands: () => this.scriptCatalog.getWasmCommands(),
         }),
     });
     const pathBefore = this.lastEnv.PATH;
@@ -1749,6 +1750,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
             processConfig: this.buildJshProcessConfig(runPidFromEnv(ctx.env)),
             gate: this.gateNativeCommand,
             defaults: wasm.env,
+            commands: () => catalog.getWasmCommands(),
           }
         );
       }
