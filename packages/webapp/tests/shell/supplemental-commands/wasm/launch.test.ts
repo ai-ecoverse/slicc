@@ -156,6 +156,38 @@ describe('WasmSession', () => {
     expect(await launch(scoop)).not.toBe(first); // a scoop: its own
   });
 
+  it('runs an installed GNU bash as a program’s /bin/sh, unless a package provides sh', async () => {
+    const BASH = '/shared/lib/node_modules/@ai-ecoverse/wasm-bash';
+    const withBash = {
+      ...installed,
+      [`${BASH}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-bash',
+        slicc: { commands: { bash: { glue: 'bin/bash', wasm: 'bin/bash.wasm' } } },
+      }),
+    };
+    expect(
+      await new WasmSession(ctx(installed), undefined, () => {}).resolve('/bin/sh', 'sh', '/w')
+    ).toBeUndefined();
+    const session = new WasmSession(ctx(withBash), undefined, () => {});
+    // As `sh`: bash's POSIX mode.
+    expect(await session.resolve('/bin/sh', 'sh', '/w')).toEqual({
+      glue: `${BASH}/bin/bash`,
+      module: `${BASH}/bin/bash.wasm`,
+      argv0: 'sh',
+    });
+    expect((await session.resolve('sh', 'sh', '/w'))?.glue).toBe(`${BASH}/bin/bash`);
+    const DASH = '/shared/lib/node_modules/@ai-ecoverse/wasm-dash';
+    const withSh = {
+      ...withBash,
+      [`${DASH}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-dash',
+        slicc: { commands: { sh: { glue: 'bin/dash', wasm: 'bin/dash.wasm' } } },
+      }),
+    };
+    const own = new WasmSession(ctx(withSh), undefined, () => {});
+    expect((await own.resolve('/bin/sh', 'sh', '/w'))?.glue).toBe(`${DASH}/bin/dash`);
+  });
+
   it('asks the gate before a program runs natively; a denied one reports and exits', async () => {
     fakeProcesses();
     const { config } = processConfig();
