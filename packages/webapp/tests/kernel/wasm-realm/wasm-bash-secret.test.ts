@@ -19,7 +19,7 @@ import { createSecretCommand } from '../../../src/shell/supplemental-commands/se
 import {
   SECRET_FUNCTION,
   SECRET_FUNCTION_ENV,
-} from '../../../src/shell/supplemental-commands/wasm/run.js';
+} from '../../../src/shell/supplemental-commands/wasm/launch.js';
 import { mockCommandContext } from '../../shell/helpers/mock-command-context.js';
 import { bundleProcessWorker, loadProgram, nodeWorker } from './helpers/node-wasm-process.js';
 

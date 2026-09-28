@@ -35,6 +35,32 @@ import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wa
 import type { JshProcessConfig } from '../../jsh-executor.js';
 import { STDIN_ISATTY_ENV, STDOUT_ISATTY_ENV } from '../stdio-tty.js';
 
+/**
+ * GNU bash's `secret`: the slicc command, then (when it succeeded) the line
+ * `secret shell-env` gives for it, so a `secret set` / `secret delete` keeps
+ * `$NAME` in step in the running shell itself, as `export` would, not only in
+ * slicc's shell, which a bash that is already running never hears from. It is
+ * an exported function (bash imports `BASH_FUNC_<name>%%` from its
+ * environment), so the panel's login shell, the agent's `bash -c` and a bash
+ * a script starts all have it; `command secret` is the plain command. In a
+ * pipeline stage (`echo v | secret set …`) it runs in a subshell, as any
+ * function does, and the export ends with it.
+ */
+export const SECRET_FUNCTION_ENV = 'BASH_FUNC_secret%%';
+export const SECRET_FUNCTION =
+  '() { command secret "$@" || return; local __slicc_env; ' +
+  'if __slicc_env=$(command secret shell-env "$@" 2>/dev/null); then eval "$__slicc_env"; fi; return 0; }';
+
+/**
+ * A process's environment, with GNU bash's `secret` function when the
+ * process is bash (as `bash` or `sh`): every one, the command's own or one a
+ * program starts (make's recipe shell), unless its environment has one.
+ */
+function withSecretFunction(argv0: string, env: Record<string, string>): Record<string, string> {
+  if (!/^(ba)?sh$/.test(baseName(argv0)) || SECRET_FUNCTION_ENV in env) return env;
+  return { ...env, [SECRET_FUNCTION_ENV]: SECRET_FUNCTION };
+}
+
 /** Compiled modules, keyed by path, size and mtime: a rebuilt program recompiles. */
 const modules = new Map<string, Promise<WebAssembly.Module>>();
 
@@ -253,7 +279,10 @@ export class WasmSession {
       await req.fds.closeAll();
       throw e;
     }
-    const env = req.defaults ? { ...req.defaults, ...req.env } : req.env;
+    const env = withSecretFunction(
+      req.argv0,
+      req.defaults ? { ...req.defaults, ...req.env } : req.env
+    );
     return this.start({ ...req, env, program: { glue, module } });
   }
 

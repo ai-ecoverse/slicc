@@ -10,9 +10,10 @@ import { LOGIN_RC, LOGIN_RC_FD } from '../../../src/kernel/login-shell-marks.js'
 import { sinkFile } from '../../../src/kernel/wasm-realm/fd-table.js';
 import { realmNetworkEnv } from '../../../src/kernel/wasm-realm/net/realm-network.js';
 import {
-  runWasmCommand,
+  SECRET_FUNCTION,
   SECRET_FUNCTION_ENV,
-} from '../../../src/shell/supplemental-commands/wasm/run.js';
+} from '../../../src/shell/supplemental-commands/wasm/launch.js';
+import { runWasmCommand } from '../../../src/shell/supplemental-commands/wasm/run.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 
@@ -490,9 +491,6 @@ describe('wasm command', () => {
 
 describe('GNU bash’s secret function', () => {
   it('reaches bash (and sh) through its environment, and no other program', async () => {
-    const { SECRET_FUNCTION, SECRET_FUNCTION_ENV } = await import(
-      '../../../src/shell/supplemental-commands/wasm/run.js'
-    );
     compile.mockResolvedValue({});
     const envs: Array<Record<string, string>> = [];
     spawn.mockImplementation((opts) => {
