@@ -229,8 +229,10 @@ describe('spawnWasmProcess', () => {
     await reported;
     handle.signal(10); // caught: pending for the worker, the process lives on
     expect(Atomics.load(header, 8)).toBe(1 << 10);
+    expect(handle.termsig()).toBeUndefined();
     handle.signal(15); // uncaught SIGTERM: default action
     expect(await handle.exited).toBe(143);
+    expect(handle.termsig()).toBe(15); // its parent sees WIFSIGNALED
     expect(worker.terminated).toBe(true);
   });
 

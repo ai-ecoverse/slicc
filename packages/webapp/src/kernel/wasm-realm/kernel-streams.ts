@@ -13,6 +13,7 @@
  */
 import type { EmscriptenFsForHook } from '../realm/emscripten-vfs-hook.js';
 import type { PollState } from './fd-table.js';
+import type { Termios } from './tty.js';
 import { wasiErrno } from './wasi-errno.js';
 
 /** musl's poll(2) bits. */
@@ -64,6 +65,12 @@ export interface ProcessSys {
   seek(fd: number, offset: number, whence: number): number;
   /** fsync(2): write back a VFS file description's buffered content. */
   flush(fd: number): void;
+  /** Whether the descriptor is a terminal. */
+  isatty?(fd: number): boolean;
+  /** A terminal's termios / window size (`[rows, cols]`). */
+  tcgets?(fd: number): Termios;
+  tcsets?(fd: number, termios: Termios): void;
+  winsize?(fd: number): [number, number];
 }
 
 export interface StreamOps {
@@ -133,13 +140,35 @@ export class KernelStreams {
     private readonly options: KernelStreamOptions = {}
   ) {}
 
-  /** Back `stream` by kernel descriptor `kfd`. */
-  attach(stream: ProcessStream, kfd: number): void {
+  /**
+   * Back `stream` by kernel descriptor `kfd`. It is a terminal (`stream.tty`,
+   * which isatty and the termios ioctls go by) only when the kernel says so:
+   * `terminal` true / false when the caller knows, else the kernel is asked.
+   */
+  attach(stream: ProcessStream, kfd: number, terminal?: boolean): void {
     this.refs.set(kfd, (this.refs.get(kfd) ?? 0) + 1);
     // Emscripten copies a stream's own properties on dup / dup2, so the mark
     // (and the ops) follow the descriptor to whatever fd the program moves it to.
     stream.sliccKernelFd = kfd;
     stream.stream_ops = this.ops(kfd, stream.stream_ops);
+    if (terminal ?? this.sys.isatty?.(kfd) ?? false) stream.tty = this.ttyOps(kfd);
+    else delete stream.tty;
+  }
+
+  /** Emscripten's TTY hooks, answered by the kernel's terminal. */
+  private ttyOps(kfd: number): object {
+    return {
+      ops: {
+        ioctl_tcgets: () => this.call(() => this.sys.tcgets?.(kfd)),
+        ioctl_tcsets: (_tty: unknown, _op: number, termios: Termios) =>
+          this.call(() => {
+            this.sys.tcsets?.(kfd, termios);
+            return 0;
+          }),
+        ioctl_tiocgwinsz: () => this.call(() => this.sys.winsize?.(kfd) ?? [24, 80]),
+        fsync: () => {},
+      },
+    };
   }
 
   /**
@@ -147,7 +176,7 @@ export class KernelStreams {
    * kernel's offset, which a forked parent and child share, and seeks move it.
    */
   attachFile(stream: ProcessStream, kfd: number): void {
-    this.attach(stream, kfd);
+    this.attach(stream, kfd, false);
     stream.sliccKernelFile = true;
     stream.stream_ops = {
       ...stream.stream_ops,
@@ -181,8 +210,8 @@ export class KernelStreams {
         }
         throw e;
       }
-      this.attach(this.Fs.getStream(fds.readable_fd) as ProcessStream, read);
-      this.attach(this.Fs.getStream(fds.writable_fd) as ProcessStream, write);
+      this.attach(this.Fs.getStream(fds.readable_fd) as ProcessStream, read, false);
+      this.attach(this.Fs.getStream(fds.writable_fd) as ProcessStream, write, false);
       return fds;
     };
   }
@@ -247,7 +276,12 @@ export class KernelStreams {
         this.refs.set(kfd, (this.refs.get(kfd) ?? 0) + 1);
       },
       close: (stream) => {
-        base.close?.(stream);
+        try {
+          base.close?.(stream);
+        } catch {
+          // Emscripten's TTY close flushes through `stream.tty`, which a
+          // kernel descriptor that is no terminal no longer has.
+        }
         const left = (this.refs.get(kfd) ?? 1) - 1;
         if (left > 0) {
           this.refs.set(kfd, left);

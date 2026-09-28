@@ -12,6 +12,7 @@
  * (every description gains a reference), `closeAll` is exit.
  */
 import { KernelPipe, PipeError } from './pipe.js';
+import type { KernelTty } from './tty.js';
 
 /** POSIX errno names the kernel reports to a process. */
 export type KernelErrno =
@@ -24,7 +25,8 @@ export type KernelErrno =
   | 'ENOSYS'
   | 'ESPIPE'
   | 'EINTR'
-  | 'ESRCH';
+  | 'ESRCH'
+  | 'ENOTTY';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {
@@ -61,6 +63,8 @@ export interface KernelFile {
   seek?(offset: number, whence: number): Promise<number>;
   /** Write back buffered content (a VFS file). */
   flush?(): Promise<void>;
+  /** A terminal: its termios and window size (isatty, tcgetattr, TIOCGWINSZ). */
+  tty?: KernelTty;
 }
 
 /** A description's readiness: its own answer, or ready in whatever direction it serves. */

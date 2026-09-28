@@ -46,6 +46,8 @@ export interface ChildHandle {
   pid: number;
   /** Resolves to the exit code. */
   exited: Promise<number>;
+  /** The signal that ended it, if one did (reported as WIFSIGNALED). */
+  termsig?: () => number | undefined;
 }
 
 /** The child could not be started (`ENOENT`: nothing runs the program; `ENOSYS`: no spawner). */
@@ -66,6 +68,7 @@ export type ChildForker = (state: ForkState, fds: FdTable) => Promise<ChildHandl
 
 interface Child {
   exited: Promise<number>;
+  termsig?: () => number | undefined;
   /** Set once the child has exited. */
   code?: number;
   /** Capture buffers by stdio slot. */
@@ -87,9 +90,9 @@ function interrupted(signal: AbortSignal | undefined): {
   return { promise, done: () => signal?.removeEventListener('abort', fail) };
 }
 
-/** Encode an exit code as a wait status (`WEXITSTATUS`). */
-export function waitStatus(code: number): number {
-  return (code & 0xff) << 8;
+/** A wait status: the signal that ended the process (`WTERMSIG`), else its exit code (`WEXITSTATUS`). */
+export function waitStatus(code: number, termsig?: number): number {
+  return termsig ? termsig & 0x7f : (code & 0xff) << 8;
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array {
@@ -148,7 +151,7 @@ export class ChildTable {
       await fds.closeAll();
       throw e;
     }
-    const child: Child = { exited: handle.exited, captured };
+    const child: Child = { exited: handle.exited, termsig: handle.termsig, captured };
     void handle.exited.then((code) => {
       child.code = code;
       this.onChildExit?.();
@@ -195,7 +198,7 @@ export class ChildTable {
     const child = this.children.get(pid);
     this.children.delete(pid);
     if (child && child.captured.size > 0) this.leftovers.set(pid, child.captured);
-    return [pid, waitStatus(code)];
+    return [pid, waitStatus(code, child?.termsig?.())];
   }
 
   /** What a waited-for child wrote to its capture slot `slot` (once). */

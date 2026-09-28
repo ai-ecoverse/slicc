@@ -201,7 +201,12 @@ export class TerminalSessionClient {
     this.send({ type: 'terminal-signal', sid: this.sid, signal: sig });
   }
 
-  /** Send a resize hint. Reserved on the wire today. */
+  /** Raw keystrokes for a program that leased the terminal (`terminal-mode: pty`). */
+  stdin(data: string): void {
+    this.send({ type: 'terminal-stdin', sid: this.sid, data });
+  }
+
+  /** The terminal's size: a program holding the terminal sees it (TIOCGWINSZ, SIGWINCH). */
   resize(cols: number, rows: number): void {
     this.send({ type: 'terminal-resize', sid: this.sid, cols, rows });
   }
@@ -286,6 +291,7 @@ export class TerminalSessionClient {
         return;
       case 'terminal-cleared':
       case 'terminal-media-preview':
+      case 'terminal-mode':
         // Surfaced via onEvent already; no client-side state change.
         return;
     }

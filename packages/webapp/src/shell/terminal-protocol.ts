@@ -181,6 +181,17 @@ export interface TerminalExitMsg {
   exitCode: number;
 }
 
+/**
+ * Worker telling the panel who owns the keyboard. `pty`: a program leased the
+ * terminal (`wasm -t`) — send every keystroke raw as `terminal-stdin`, show
+ * output unaltered; `line`: back to the panel's own line editing.
+ */
+export interface TerminalModeMsg {
+  type: 'terminal-mode';
+  sid: TerminalSessionId;
+  mode: 'pty' | 'line';
+}
+
 /** Worker telling the panel to wipe scrollback (e.g. on `clear`). */
 export interface TerminalClearedMsg {
   type: 'terminal-cleared';
@@ -204,6 +215,7 @@ export type TerminalEventMsg =
   | TerminalMediaPreviewMsg
   | TerminalExitMsg
   | TerminalClearedMsg
+  | TerminalModeMsg
   | TerminalStatusMsg;
 
 // ---------------------------------------------------------------------------
@@ -231,6 +243,7 @@ export function isTerminalEventMsg(msg: unknown): msg is TerminalEventMsg {
     t === 'terminal-media-preview' ||
     t === 'terminal-exit' ||
     t === 'terminal-cleared' ||
+    t === 'terminal-mode' ||
     t === 'terminal-status'
   );
 }

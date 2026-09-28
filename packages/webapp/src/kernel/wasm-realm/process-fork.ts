@@ -111,7 +111,7 @@ export function restoreForkedStreams(
       if ('kernel' in entry) {
         const stream = place(Fs, placeholder(Fs, entry), entry.fd);
         if (entry.kind === 'file') streams.attachFile(stream, entry.kernel);
-        else streams.attach(stream, entry.kernel);
+        else streams.attach(stream, entry.kernel, entry.kind === 'tty');
       } else {
         place(Fs, Fs.open(entry.path, entry.flags & ~(O_CREAT | O_EXCL | O_TRUNC)), entry.fd);
       }

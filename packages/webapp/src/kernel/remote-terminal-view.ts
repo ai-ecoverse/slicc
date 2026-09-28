@@ -101,6 +101,12 @@ export class RemoteTerminalView {
   private programmaticResolve: ((result: TerminalExecResult) => void) | null = null;
   private isExecuting = false;
   /**
+   * A program holds the terminal (`terminal-mode: pty`, e.g. `wasm -t bash`):
+   * keystrokes go to it raw and its output is shown as is.
+   */
+  private ptyMode = false;
+  private reportedSize = '';
+  /**
    * When true, the `handleEvent` route swallows `terminal-output`
    * events so they don't render in the visible buffer. Used by
    * `handleTab()` to run `compgen` silently — the `client.exec`
@@ -194,9 +200,19 @@ export class RemoteTerminalView {
     void this.runPromptLoop();
   }
 
-  /** Re-fit the terminal to its container. */
+  /** Re-fit the terminal to its container, and tell the worker its size. */
   refit(): void {
     this.terminal?.fit();
+    this.reportSize();
+  }
+
+  private reportSize(): void {
+    const term = this.terminal?.terminal;
+    if (!term) return;
+    const size = `${term.cols}x${term.rows}`;
+    if (size === this.reportedSize) return;
+    this.reportedSize = size;
+    this.client.resize(term.cols, term.rows);
   }
 
   /** Clear the terminal screen. */
@@ -389,6 +405,11 @@ export class RemoteTerminalView {
   }
 
   private handleTerminalData(data: string): void {
+    if (this.ptyMode) {
+      // The program's TTY does the line discipline (echo, ^C, ^D).
+      this.client.stdin(data);
+      return;
+    }
     if (data === '\t') {
       if (!this.tabBusy) void this.handleTab();
     } else if (data === '\x03' && this.isExecuting) {
@@ -834,6 +855,12 @@ export class RemoteTerminalView {
         // active `execId`, so `client.exec(...)` resolves with the
         // captured stdout/stderr.
         if (this.suppressOutput) return;
+        if (this.ptyMode) {
+          // The TTY already did the output processing (ONLCR); stdout and
+          // stderr are one terminal.
+          this.terminal.write(event.data);
+          return;
+        }
         // Stderr renders red; stdout in default. Terminals usually
         // don't distinguish, but tinting stderr makes errors obvious
         // in the panel.
@@ -852,6 +879,13 @@ export class RemoteTerminalView {
         return;
       case 'terminal-cleared':
         this.terminal.clear();
+        return;
+      case 'terminal-mode':
+        this.ptyMode = event.mode === 'pty';
+        if (this.ptyMode) {
+          this.reportedSize = '';
+          this.reportSize();
+        }
         return;
       case 'terminal-status':
         if (event.state === 'error') {
