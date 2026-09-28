@@ -56,10 +56,9 @@ export const RAW_FETCH_REQUEST_HEADER = 'X-Slicc-Raw-Request';
 export const RAW_FETCH_CONTENT_TYPE = 'application/vnd.slicc.raw-fetch';
 
 /**
- * Request-body ceiling on the node-server hop (CLI and cloud). Chromium will
- * not stream a request body over HTTP/1.1, and the page → bridge hop is
- * HTTP/1.1, so the upload is buffered on both ends; past this size the bridge
- * answers 413 and the webapp refuses before sending.
+ * Request-body ceiling on the node-server hop (CLI and cloud). This hop
+ * buffers the upload on both ends for now; past this size the bridge answers
+ * 413 and the webapp refuses before sending.
  */
 export const RAW_FETCH_BRIDGE_REQUEST_BODY_CAP = 256 * 1024 * 1024;
 

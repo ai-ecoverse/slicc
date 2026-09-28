@@ -11,9 +11,8 @@
  *
  * Float support:
  *   - CLI and cloud (node-server `/api/fetch-proxy`, raw handler in
- *     `routes/fetch-proxy-raw.ts`): supported. The upload is buffered, since
- *     Chromium will not stream a request body over the HTTP/1.1 bridge hop;
- *     {@link RAW_FETCH_BRIDGE_REQUEST_BODY_CAP} bounds it.
+ *     `routes/fetch-proxy-raw.ts`): supported. The upload is buffered for
+ *     now; {@link RAW_FETCH_BRIDGE_REQUEST_BODY_CAP} bounds it.
  *   - Chrome extension: not yet; calls fail with `unsupported`.
  *
  * Secret handling is the float's usual one: masked values are unmasked for
