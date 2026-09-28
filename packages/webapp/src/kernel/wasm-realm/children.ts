@@ -15,6 +15,12 @@ export type ChildStdio =
   | { capture: true }
   | { none: true };
 
+export interface InheritedSlot {
+  fd: number;
+  kernel: number;
+  flags?: number;
+}
+
 export interface ChildSpawnRequest {
   file: string;
 
@@ -122,12 +128,22 @@ export class ChildTable {
     return this.track(state, this.parentFds.fork(), new Map(), this.forker);
   }
 
-  async spawn(req: ChildSpawnRequest, stdio: readonly ChildStdio[]): Promise<number> {
+  async spawn(
+    req: ChildSpawnRequest,
+    stdio: readonly ChildStdio[],
+    inherit: readonly InheritedSlot[] = []
+  ): Promise<number> {
     if (!this.spawner) throw new SpawnError('ENOSYS');
     const fds = new FdTable();
     const captured = new Map<number, Uint8Array[]>();
     try {
       for (const [n, slot] of stdio.entries()) fds.installAt(n, this.openSlot(slot, n, captured));
+
+      for (const { fd, kernel, flags } of inherit) {
+        if (fd <= 2) continue;
+        fds.installAt(fd, this.parentFds.get(kernel).retain());
+        if (flags !== undefined) fds.setStatusFlags(fd, flags);
+      }
     } catch (e) {
       await fds.closeAll();
       throw e;

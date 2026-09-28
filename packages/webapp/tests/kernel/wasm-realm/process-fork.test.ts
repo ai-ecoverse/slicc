@@ -6,7 +6,14 @@ import {
   type ProcessSys,
 } from '../../../src/kernel/wasm-realm/kernel-streams.js';
 import {
+  closesOnExec,
+  O_CLOEXEC,
+  trackCloseOnExec,
+} from '../../../src/kernel/wasm-realm/process-fds.js';
+import {
   describeForFork,
+  describeInherited,
+  placeKernelStream,
   restoreForkedStreams,
 } from '../../../src/kernel/wasm-realm/process-fork.js';
 
@@ -107,6 +114,18 @@ describe('describeForFork', () => {
     expect(streams[3]!.stream_ops.fsync).toBeDefined();
   });
 
+  it("carries FD_CLOEXEC to the child: on kernel descriptors, and in a device's flags", () => {
+    const { Fs, streams, make } = fakeFs();
+    streams[3] = make({ fd: 3, sliccKernelFd: 3, sliccCloexec: true });
+    streams[4] = make({ fd: 4, path: '/dev/null', flags: 2, sliccCloexec: true });
+    streams[5] = make({ fd: 5, sliccKernelFd: 6 });
+    expect(describeForFork(Fs, sys(), new KernelStreams(Fs, sys()), () => '')).toEqual([
+      { fd: 3, kernel: 3, kind: 'stream', cloexec: true },
+      { fd: 4, path: '/dev/null', flags: 2 | O_CLOEXEC },
+      { fd: 5, kernel: 6, kind: 'stream' },
+    ]);
+  });
+
   it('hands the live buffer of an unlinked-while-open file (mkstemp)', () => {
     const { Fs, streams, make } = fakeFs();
     const s = sys();
@@ -135,7 +154,127 @@ describe('describeForFork', () => {
   });
 });
 
+describe('describeInherited', () => {
+  it('passes every fd beyond 2 not close-on-exec, VFS files through the kernel', () => {
+    const { Fs, streams, make } = fakeFs();
+    const s = sys();
+    const kernel = new KernelStreams(Fs, s);
+    const vfs = { mode: S_IFREG, live: {} } as never;
+    streams[0] = make({ fd: 0, sliccKernelFd: 0, tty: {} });
+    streams[3] = make({ fd: 3, sliccKernelFd: 8 });
+    streams[4] = make({ fd: 4, sliccKernelFd: 9, sliccCloexec: true });
+    streams[5] = make({ fd: 5, flags: 0, position: 2, node: vfs });
+    streams[6] = make({ fd: 6, path: '/dev/null' });
+    streams[7] = make({ fd: 7, node: vfs, sliccCloexec: true });
+    expect(describeInherited(Fs, s, kernel, () => '/w/in.txt')).toEqual([
+      { fd: 3, kernel: 8 },
+      { fd: 5, kernel: 10 },
+    ]);
+    expect(s.opened).toEqual([['/w/in.txt', 0, 2, undefined]]);
+    expect(streams[5]!.sliccKernelFile).toBe(true);
+  });
+
+  it("applies posix_spawn's file actions beyond fd 2: dup2 to a number, close", () => {
+    const { Fs, streams, make } = fakeFs();
+    const kernel = new KernelStreams(Fs, sys());
+    streams[1] = make({ fd: 1, sliccKernelFd: 1 });
+    streams[3] = make({ fd: 3, sliccKernelFd: 8 });
+    streams[4] = make({ fd: 4, sliccKernelFd: 9, sliccCloexec: true });
+    const actions: Array<[number, number]> = [
+      [40, 4],
+      [41, 1],
+      [3, -1],
+      [42, 99],
+      [2, 3],
+    ];
+    expect(describeInherited(Fs, sys(), kernel, () => '', actions)).toEqual([
+      { fd: 40, kernel: 9 },
+      { fd: 41, kernel: 1 },
+    ]);
+  });
+});
+
+describe('describeInherited: file actions in order', () => {
+  it('resolves a source against the table the earlier actions left', () => {
+    const { Fs, streams, make } = fakeFs();
+    const kernel = new KernelStreams(Fs, sys());
+    streams[3] = make({ fd: 3, sliccKernelFd: 8 });
+    streams[4] = make({ fd: 4, sliccKernelFd: 9, sliccCloexec: true });
+    const actions: Array<[number, number]> = [
+      [40, 3],
+      [41, 40],
+      [42, 4],
+      [43, 42],
+      [42, -1],
+      [44, 42],
+    ];
+    expect(describeInherited(Fs, sys(), kernel, () => '', actions)).toEqual([
+      { fd: 3, kernel: 8 },
+      { fd: 40, kernel: 8 },
+      { fd: 41, kernel: 8 },
+      { fd: 43, kernel: 9 },
+    ]);
+  });
+});
+
+describe('placeKernelStream', () => {
+  it('gives aliases of one description one inode: the same description id, or kernel fd', () => {
+    const { Fs } = fakeFs();
+    const kernel = new KernelStreams(Fs, sys());
+    const ino = (entry: Parameters<typeof placeKernelStream>[2]) => {
+      const s = placeKernelStream(Fs, kernel, entry);
+      return (s.stream_ops.getattr!(s) as { ino: number }).ino;
+    };
+
+    const a = ino({ fd: 60, kernel: 60, kind: 'stream', desc: 7 });
+    const b = ino({ fd: 61, kernel: 61, kind: 'stream', desc: 7 });
+    const c = ino({ fd: 62, kernel: 62, kind: 'stream', desc: 8 });
+
+    const d = ino({ fd: 70, kernel: 5, kind: 'stream' });
+    const e = ino({ fd: 71, kernel: 5, kind: 'stream' });
+    expect(a).toBe(b);
+    expect(c).not.toBe(a);
+    expect(d).toBe(e);
+    expect(d).not.toBe(a);
+  });
+
+  it('gives each stream placeholder a FIFO identity of its own, and sets FD_CLOEXEC', () => {
+    const { Fs, streams } = fakeFs();
+    const getattr = vi.fn(() => ({ dev: 3, ino: 7, mode: S_IFCHR, size: 0 }));
+    const open = Fs.open.bind(Fs);
+    Fs.open = (path, flags) => {
+      const stream = open(path, flags);
+      stream.node = { mode: S_IFCHR, node_ops: { getattr } };
+      return stream;
+    };
+    const kernel = new KernelStreams(Fs, sys());
+    const a = placeKernelStream(Fs, kernel, { fd: 62, kernel: 62, kind: 'stream' });
+    const b = placeKernelStream(Fs, kernel, { fd: 63, kernel: 63, kind: 'stream', cloexec: true });
+    const statA = a.stream_ops.getattr!(a) as { mode: number; ino: number; dev: number };
+    const statB = b.stream_ops.getattr!(b) as { mode: number; ino: number };
+    expect(statA.mode & 0o170000).toBe(0o010000);
+    expect(statA.dev).toBe(3);
+    expect(statA.ino).not.toBe(statB.ino);
+    expect([closesOnExec(a), closesOnExec(b)]).toEqual([false, true]);
+    expect(streams[62]!.sliccKernelFd).toBe(62);
+    const tty = placeKernelStream(Fs, kernel, { fd: 70, kernel: 0, kind: 'tty' });
+    expect(tty.stream_ops.getattr).toBeUndefined();
+  });
+});
+
 describe('restoreForkedStreams', () => {
+  it('keeps FD_CLOEXEC on a device reopened below its number and moved there', () => {
+    const { Fs, streams } = fakeFs();
+    trackCloseOnExec(Fs);
+    restoreForkedStreams(Fs, new KernelStreams(Fs, sys()), [
+      { fd: 5, path: '/dev/null', flags: 2 | O_CLOEXEC },
+      { fd: 6, path: '/dev/null', flags: 2 },
+    ]);
+    expect(streams[5]?.path).toBe('/dev/null');
+    expect([closesOnExec(streams[5]!), closesOnExec(streams[6]!)]).toEqual([true, false]);
+    expect(streams.filter(Boolean)).toHaveLength(2);
+  });
+
   it("replaces the runtime's streams with the parent's table", () => {
     const { Fs, streams, make, opened } = fakeFs();
     streams[0] = make({ fd: 0, path: '/dev/stdin' });

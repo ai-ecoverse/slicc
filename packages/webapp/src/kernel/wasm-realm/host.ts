@@ -15,11 +15,12 @@ import {
   SAB_I_SIGNALS,
 } from '../realm/sync-sab-wire.js';
 import type { ChildForker, ChildSpawner } from './children.js';
-import type { FdTable } from './fd-table.js';
+import { type FdTable, kernelFdKind, type OpenFile } from './fd-table.js';
 import type { JobTable } from './jobs.js';
 import { isWasmSyscall, type StateListener, WasmProcess } from './process.js';
 import {
   type ForkState,
+  type InheritedFd,
   WASM_PROCESS_ERROR,
   WASM_PROCESS_EXIT,
   WASM_PROCESS_INIT,
@@ -27,7 +28,7 @@ import {
   type WasmProgram,
 } from './protocol.js';
 import { SIG, sigbit } from './signals.js';
-import type { LoopbackNet } from './socket.js';
+import { KernelSocket, type LoopbackNet } from './socket.js';
 
 export interface WasmWorkerLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -84,6 +85,33 @@ function defaultWorker(): WasmWorkerLike {
   return new Worker(new URL('./process-worker.ts', import.meta.url), {
     type: 'module',
   }) as WasmWorkerLike;
+}
+
+const descIds = new WeakMap<OpenFile, number>();
+let nextDescId = 1;
+
+function descId(file: OpenFile): number {
+  let id = descIds.get(file);
+  if (id === undefined) descIds.set(file, (id = nextDescId++));
+  return id;
+}
+
+export function inheritedFds(fds: FdTable): InheritedFd[] {
+  return fds
+    .numbers()
+    .filter((fd) => fd > 2)
+    .map((fd): InheritedFd => {
+      const open = fds.get(fd);
+      const flags = fds.statusFlags(fd);
+      const kind = open.file instanceof KernelSocket ? 'socket' : kernelFdKind(open.file);
+      return {
+        fd,
+        kind,
+        ...(flags !== undefined ? { flags } : {}),
+        ...(fds.closesOnExec(fd) ? { cloexec: true } : {}),
+        ...(kind === 'stream' ? { desc: descId(open) } : {}),
+      };
+    });
 }
 
 export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
@@ -155,7 +183,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     env: opts.env,
     cwd: opts.cwd,
     sab,
-    ...(opts.fork ? { fork: opts.fork } : { fds: opts.fds.numbers().filter((fd) => fd > 2) }),
+    ...(opts.fork ? { fork: opts.fork } : { fds: inheritedFds(opts.fds) }),
   };
 
   worker.postMessage(init, opts.fork ? [opts.fork.memory.buffer] : []);

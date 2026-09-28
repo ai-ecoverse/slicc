@@ -6,6 +6,7 @@ vi.mock('../../../src/kernel/wasm-realm/host.js', () => ({ spawnWasmProcess: spa
 const compile = vi.hoisted(() => vi.fn());
 vi.mock('../../../src/kernel/realm/wasm-compiler.js', () => ({ compileWasmFromVfs: compile }));
 
+import { sinkFile } from '../../../src/kernel/wasm-realm/fd-table.js';
 import { runWasmCommand } from '../../../src/shell/supplemental-commands/wasm/run.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
@@ -78,6 +79,19 @@ describe('wasm command', () => {
     expect(opts.cwd).toBe('/w');
     expect(compile.mock.calls[0][1]).toBe('/w/bin/coreutils.wasm');
     expect(r).toEqual({ stdout: '\xff\x00A', stderr: 'warn\n', exitCode: 4, stdoutKind: 'bytes' });
+  });
+
+  it('starts the program with the extra descriptors close-on-exec: its own, not its children', async () => {
+    compile.mockResolvedValue({});
+    let cloexec: boolean[] = [];
+    spawn.mockImplementation((opts) => {
+      cloexec = [1, 97].map((fd) => opts.fds.closesOnExec(fd));
+      return { pid: opts.pid, exited: Promise.resolve(0), kill: vi.fn() };
+    });
+    const state = sinkFile(() => {});
+    const files = { '/w/bash.js': 'G', '/w/bash.wasm': 'W' };
+    await runWasmCommand(['bash.js'], ctx(files), { fds: [[97, state]] });
+    expect(cloexec).toEqual([false, true]);
   });
 
   it("defaults argv0 to the program's base name and feeds stdin to fd 0", async () => {

@@ -147,9 +147,19 @@ export function nullFile(): OpenFile {
   });
 }
 
+export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket';
+
+export function kernelFdKind(file: KernelFile): Exclude<KernelFdKind, 'socket'> {
+  if (file.tty) return 'tty';
+  return file.seek ? 'file' : 'stream';
+}
+
 export class FdTable {
   static readonly MAX_FDS = 1024;
   private fds = new Map<number, OpenFile>();
+  private readonly cloexec = new Set<number>();
+
+  private readonly status = new Map<number, number>();
 
   get(fd: number): OpenFile {
     const file = this.fds.get(fd);
@@ -163,6 +173,24 @@ export class FdTable {
 
   has(fd: number): boolean {
     return this.fds.has(fd);
+  }
+
+  setCloseOnExec(fd: number): void {
+    this.get(fd);
+    this.cloexec.add(fd);
+  }
+
+  closesOnExec(fd: number): boolean {
+    return this.cloexec.has(fd);
+  }
+
+  setStatusFlags(fd: number, flags: number): void {
+    this.get(fd);
+    this.status.set(fd, flags);
+  }
+
+  statusFlags(fd: number): number | undefined {
+    return this.status.get(fd);
   }
 
   install(file: OpenFile, min = 0): number {
@@ -183,6 +211,8 @@ export class FdTable {
     }
     const previous = this.fds.get(fd);
     this.fds.set(fd, file);
+    this.cloexec.delete(fd);
+    this.status.delete(fd);
     void Promise.resolve(previous?.release()).catch(() => undefined);
   }
 
@@ -199,18 +229,24 @@ export class FdTable {
   close(fd: number): void | Promise<void> {
     const file = this.get(fd);
     this.fds.delete(fd);
+    this.cloexec.delete(fd);
+    this.status.delete(fd);
     return file.release();
   }
 
   fork(): FdTable {
     const child = new FdTable();
     for (const [fd, file] of this.fds) child.fds.set(fd, file.retain());
+    for (const fd of this.cloexec) child.cloexec.add(fd);
+    for (const [fd, flags] of this.status) child.status.set(fd, flags);
     return child;
   }
 
   async closeAll(): Promise<void> {
     const files = [...this.fds.values()];
     this.fds.clear();
+    this.cloexec.clear();
+    this.status.clear();
     await Promise.all(files.map((file) => Promise.resolve(file.release())));
   }
 }

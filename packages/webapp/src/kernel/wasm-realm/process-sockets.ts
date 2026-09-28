@@ -9,6 +9,7 @@ import {
   type ProcessSys,
   SyscallError,
 } from './kernel-streams.js';
+import { setCloseOnExec } from './process-fds.js';
 import type { SockAddr, SocketDomain } from './socket.js';
 import type { SocketSyscall } from './socket-syscalls.js';
 import { wasiErrno } from './wasi-errno.js';
@@ -18,13 +19,13 @@ const O_RDWR = 2;
 const KILLED_BY_SIGPIPE = 128 + 13;
 
 export interface SocketKernel {
-  socket(domain: SocketDomain, nonblock: boolean): number;
+  socket(domain: SocketDomain, nonblock: boolean, cloexec?: boolean): number;
 
-  socketpair(domain: SocketDomain, nonblock: boolean): [number, number] | number;
+  socketpair(domain: SocketDomain, nonblock: boolean, cloexec?: boolean): [number, number] | number;
   bind(fd: number, addr: SockAddr): number;
   listen(fd: number, backlog: number): number;
 
-  accept(fd: number, nonblock: boolean): { fd: number; peer: SockAddr } | number;
+  accept(fd: number, nonblock: boolean, cloexec?: boolean): { fd: number; peer: SockAddr } | number;
 
   connect(fd: number, addr: SockAddr): number;
   shutdown(fd: number, how: number): number;
@@ -95,7 +96,7 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
   };
   const kfd = (fd: number): number => socketAt(fd).sliccKernelFd;
 
-  const install = (k: number, nonblock: boolean): number => {
+  const install = (k: number, nonblock: boolean, cloexec = false): number => {
     let stream: ProcessStream;
     try {
       stream = streams.socketStream(O_RDWR | (nonblock ? O_NONBLOCK : 0));
@@ -104,24 +105,25 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
       throw e;
     }
     streams.attachSocket(stream, k);
+    setCloseOnExec(stream, cloexec);
     return stream.fd;
   };
 
   return {
-    socket: (domain, nonblock) =>
-      guard(() => install(json({ op: 'sock-open', domain }) as number, nonblock)),
-    socketpair: (domain, nonblock) =>
+    socket: (domain, nonblock, cloexec) =>
+      guard(() => install(json({ op: 'sock-open', domain }) as number, nonblock, cloexec)),
+    socketpair: (domain, nonblock, cloexec) =>
       guard(() => {
         const [a, b] = json({ op: 'sock-pair', domain }) as [number, number];
         let first: number;
         try {
-          first = install(a, nonblock);
+          first = install(a, nonblock, cloexec);
         } catch (e) {
           sys.close(b);
           throw e;
         }
         try {
-          return [first, install(b, nonblock)] as [number, number];
+          return [first, install(b, nonblock, cloexec)] as [number, number];
         } catch (e) {
           const stream = Fs.getStream(first);
           if (stream) stream.stream_ops.close?.(stream);
@@ -131,7 +133,7 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
       }),
     bind: (fd, addr) => guard(() => done({ op: 'sock-bind', fd: kfd(fd), addr })),
     listen: (fd, backlog) => guard(() => done({ op: 'sock-listen', fd: kfd(fd), backlog })),
-    accept: (fd, nonblock) =>
+    accept: (fd, nonblock, cloexec) =>
       guard(() => {
         const listener = socketAt(fd);
         const req = {
@@ -140,7 +142,7 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
           nonblock: (listener.flags & O_NONBLOCK) !== 0,
         };
         const got = json(req) as { fd: number; peer: SockAddr };
-        return { fd: install(got.fd, nonblock), peer: got.peer };
+        return { fd: install(got.fd, nonblock, cloexec), peer: got.peer };
       }),
     connect: (fd, addr) =>
       guard(() => {

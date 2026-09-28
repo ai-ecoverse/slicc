@@ -277,10 +277,13 @@ describe('KernelStreams', () => {
     } as unknown as ProcessFs;
     const written: Array<[number, string]> = [];
     const sys = fakeSys({
-      write: (fd, b) => (written.push([fd, text(b)]), b.length),
+      write: (fd, b) => {
+        written.push([fd, text(b)]);
+        return b.length;
+      },
       isatty: () => false,
     });
-    wireKernelFd(fs, new KernelStreams(fs, sys), 97);
+    wireKernelFd(fs, new KernelStreams(fs, sys), { fd: 97, kind: 'stream' });
     expect(closed).toEqual([5]);
     const stream = streams[97]!;
     expect(stream.sliccKernelFd).toBe(97);

@@ -1,6 +1,6 @@
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
-import type { ChildStdio } from './children.js';
+import type { ChildStdio, InheritedSlot } from './children.js';
 import type { ProcessFs, ProcessStream } from './kernel-streams.js';
 import type { WasmSyscall } from './process.js';
 import type { SocketKernel } from './process-sockets.js';
@@ -25,7 +25,8 @@ export interface ProcessKernel {
     argv: string[],
     env: Record<string, string> | null,
     cwd: string | null,
-    stdio: number[]
+    stdio: number[],
+    actions?: ReadonlyArray<readonly [number, number]>
   ): number;
 
   wait(pid: number, nohang: boolean, options?: number): [number, number] | number;
@@ -66,6 +67,8 @@ export interface ProcessKernelDeps {
   afterChild(): void;
 
   describeFork(): ForkStream[];
+
+  inherit?(actions?: ReadonlyArray<readonly [number, number]>): InheritedSlot[];
 
   pid?: number;
 
@@ -139,11 +142,20 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
   };
 
   return {
-    spawn(file, argv, env, cwd, fds) {
+    spawn(file, argv, env, cwd, fds, actions) {
       const stdio = [0, 1, 2].map((n) => slot(fds[n] ?? -1, n));
       deps.beforeSpawn();
+      const inherit = deps.inherit?.(actions) ?? [];
       const r = transport.call(
-        { op: 'proc-spawn', file, argv, env: env ?? deps.env, cwd: cwd ?? Fs.cwd(), stdio },
+        {
+          op: 'proc-spawn',
+          file,
+          argv,
+          env: env ?? deps.env,
+          cwd: cwd ?? Fs.cwd(),
+          stdio,
+          ...(inherit.length > 0 ? { inherit } : {}),
+        },
         Infinity,
         `proc-spawn ${file}`
       );

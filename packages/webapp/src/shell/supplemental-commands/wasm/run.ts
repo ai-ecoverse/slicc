@@ -263,7 +263,10 @@ export async function runWasmCommand(
     report = (message) => lease.write(new TextEncoder().encode(`wasm: ${message}\r\n`));
   } else {
     stdio = pipedStdio(ctx, session, err, options.onOutput);
-    for (const [fd, file] of options.fds ?? []) stdio.fds.installAt(fd, file);
+    for (const [fd, file] of options.fds ?? []) {
+      stdio.fds.installAt(fd, file);
+      stdio.fds.setCloseOnExec(fd);
+    }
   }
   const { fds } = stdio;
 

@@ -14,14 +14,27 @@ import {
   KernelStreams,
   type ProcessFs,
   type ProcessPipeFs,
+  type ProcessStream,
   type ProcessSys,
   SyscallError,
 } from './kernel-streams.js';
 import { createProcessKernel, type ProcessKernel } from './process-children.js';
-import { describeForFork, restoreForkedStreams } from './process-fork.js';
+import {
+  type GlueSyscalls,
+  trackCloseOnExec,
+  useDevFd,
+  wasmMemory,
+  wrapCloexecSyscalls,
+} from './process-fds.js';
+import {
+  describeForFork,
+  describeInherited,
+  placeKernelStream,
+  restoreForkedStreams,
+} from './process-fork.js';
 import { SignalGate } from './process-signals.js';
 import { createSocketKernel } from './process-sockets.js';
-import type { ForkState, WasmProcessInitMsg } from './protocol.js';
+import type { ForkState, InheritedFd, WasmProcessInitMsg } from './protocol.js';
 import type { Termios } from './tty.js';
 
 export {
@@ -104,11 +117,8 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
   };
 }
 
-export function wireKernelFd(Fs: ProcessFs, streams: KernelStreams, fd: number): void {
-  const placeholder = Fs.open('/dev/null', 2);
-  const stream = Fs.dupStream(placeholder, fd);
-  Fs.closeStream(placeholder.fd);
-  streams.attach(stream, fd, false);
+export function wireKernelFd(Fs: ProcessFs, streams: KernelStreams, entry: InheritedFd): void {
+  placeKernelStream(Fs, streams, { ...entry, kernel: entry.fd });
 }
 
 export function wireKernelStdio(Fs: ProcessFs, streams: KernelStreams): void {
@@ -132,6 +142,8 @@ interface RunningModule {
   sliccRaise?: (sig: number) => void;
 
   sliccKernel?: ProcessKernel;
+
+  sliccSyscalls?: GlueSyscalls;
 }
 
 export type GlueEvaluator = (glue: string, module: object) => void;
@@ -152,6 +164,14 @@ const GLUE_TRAILER = [
   "if (typeof sliccRunMain === 'function') __sliccTake('sliccRunMain', sliccRunMain);",
   "if (typeof sliccForkChild === 'function') __sliccTake('sliccForkChild', sliccForkChild);",
   "if (typeof PIPEFS !== 'undefined') __sliccTake('PIPEFS', PIPEFS);",
+
+  'Module.sliccSyscalls ??= {',
+  "  fcntl: typeof ___syscall_fcntl64 === 'function' ? ___syscall_fcntl64 : undefined,",
+  "  pipe2: typeof ___syscall_pipe2 === 'function' ? ___syscall_pipe2 : undefined,",
+  "  dup3: typeof ___syscall_dup3 === 'function' ? ___syscall_dup3 : undefined,",
+  "  socket: typeof ___syscall_socket === 'function' ? ___syscall_socket : undefined,",
+  "  accept4: typeof ___syscall_accept4 === 'function' ? ___syscall_accept4 : undefined,",
+  '};',
 
   "const __sliccUp = () => typeof runtimeInitialized === 'undefined' || runtimeInitialized;",
   "Module.sliccSigpipe ??= () => (__sliccUp() && typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
@@ -207,6 +227,7 @@ export async function runWasmProcess(
   const say = (fd: number) => (text: string) => sys.write(fd, encoder.encode(`${text}\n`));
   let ready!: () => void;
   let failed!: (error: unknown) => void;
+  let memory: WebAssembly.Memory | undefined;
   const initialized = new Promise<void>((resolve, reject) => {
     ready = resolve;
     failed = reject;
@@ -222,15 +243,24 @@ export async function runWasmProcess(
       imports: WebAssembly.Imports,
       done: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void
     ): object {
-      WebAssembly.instantiate(init.program.module, imports).then(
-        (instance) => done(instance, init.program.module),
-        failed
-      );
+      Promise.resolve()
+        .then(() => {
+          wrapCloexecSyscalls(imports, ownValue<GlueSyscalls>(module, 'sliccSyscalls'), {
+            fs: () => ownValue<ProcessFs>(module, 'FS'),
+            heap: () => (memory ? new Int32Array(memory.buffer) : undefined),
+          });
+          return WebAssembly.instantiate(init.program.module, imports);
+        })
+        .then((instance) => {
+          memory = wasmMemory(instance, imports);
+          done(instance, init.program.module);
+        }, failed);
       return {};
     },
 
     preRun: [
       (m: { FS: ProcessFs }) => {
+        trackCloseOnExec(m.FS);
         try {
           m.FS.mkdirTree(init.cwd);
           m.FS.chdir(init.cwd);
@@ -255,14 +285,17 @@ export async function runWasmProcess(
   const sigpipe = (): boolean => running.sliccSigpipe?.() === 1;
   const restartable = (): boolean => signals.restartable();
   const streams = new KernelStreams(running.FS, sys, { sigpipe, restartable });
+  trackCloseOnExec(running.FS);
   if (init.fork) restoreForkedStreams(running.FS, streams, init.fork.streams ?? []);
   else {
     wireKernelStdio(running.FS, streams);
-    for (const fd of init.fds ?? []) wireKernelFd(running.FS, streams, fd);
+    for (const entry of init.fds ?? []) wireKernelFd(running.FS, streams, entry);
   }
   const pipefs = ownValue<ProcessPipeFs>(running, 'PIPEFS');
   if (pipefs) streams.usePipes(pipefs);
   streams.useControllingTerminal();
+  useDevFd(running.FS);
+  const livePath = (s: ProcessStream) => liveNodePath(s.node as unknown as LiveFsNode);
   running.sliccKernel = createProcessKernel({
     transport,
     Fs: running.FS,
@@ -272,10 +305,8 @@ export async function runWasmProcess(
     pid: init.pid,
     raise: (sig) => running.sliccRaise?.(sig),
     restartable,
-    describeFork: () =>
-      describeForFork(running.FS, sys, streams, (s) =>
-        liveNodePath(s.node as unknown as LiveFsNode)
-      ),
+    describeFork: () => describeForFork(running.FS, sys, streams, livePath),
+    inherit: (actions) => describeInherited(running.FS, sys, streams, livePath, actions),
   });
   running.sliccKernel.net = createSocketKernel({
     transport,

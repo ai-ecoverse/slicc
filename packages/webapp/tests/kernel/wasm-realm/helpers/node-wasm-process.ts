@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { build } from 'esbuild';
+import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
 import { FdTable, nullFile, sinkFile } from '../../../../src/kernel/wasm-realm/fd-table.js';
 import {
   type SpawnWasmOptions,
@@ -100,19 +101,26 @@ export function runProgram(
     2,
     sinkFile((bytes) => err.push(decoder.decode(bytes)))
   );
-  const handle = spawnWasmProcess({
-    pid: nextPid++,
-    program,
-    argv0,
-    args,
-    env: {},
-    cwd: '/',
-    fds,
-    fs: emptyFs,
-    net,
-    createWorker: () => nodeWorker(workerFile),
-    onError: (message) => err.push(message),
-  });
+  const start = (argv: string[], table: FdTable) =>
+    spawnWasmProcess({
+      pid: nextPid++,
+      program,
+      argv0,
+      args: argv,
+      env: {},
+      cwd: '/',
+      fds: table,
+      fs: emptyFs,
+      net,
+      createWorker: () => nodeWorker(workerFile),
+      onError: (message) => err.push(message),
+      spawner,
+    });
+  const spawner: ChildSpawner = async (req, table) => {
+    const child = start(req.argv.slice(1), table);
+    return { pid: child.pid, exited: child.exited, termsig: child.termsig };
+  };
+  const handle = start(args, fds);
   const stdout = () => out.join('');
   let ended = false;
   void handle.exited.then(() => {

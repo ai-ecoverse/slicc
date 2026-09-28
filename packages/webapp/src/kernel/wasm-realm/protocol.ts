@@ -1,3 +1,5 @@
+import type { KernelFdKind } from './fd-table.js';
+
 export const WASM_PROCESS_INIT = 'wasm-process-init';
 export const WASM_PROCESS_EXIT = 'wasm-process-exit';
 export const WASM_PROCESS_ERROR = 'wasm-process-error';
@@ -23,15 +25,28 @@ export interface ForkState {
   cwd?: string;
 }
 
-export type ForkStream =
-  | {
-      fd: number;
-      kernel: number;
-      kind: 'tty' | 'stream' | 'file' | 'socket';
+export interface KernelStreamEntry {
+  fd: number;
+  kernel: number;
+  kind: KernelFdKind;
 
-      flags?: number;
-    }
-  | { fd: number; path: string; flags: number };
+  flags?: number;
+  cloexec?: boolean;
+
+  desc?: number;
+}
+
+export type ForkStream = KernelStreamEntry | { fd: number; path: string; flags: number };
+
+export interface InheritedFd {
+  fd: number;
+  kind: KernelFdKind;
+
+  flags?: number;
+  cloexec?: boolean;
+
+  desc?: number;
+}
 
 export interface WasmProcessInitMsg {
   type: typeof WASM_PROCESS_INIT;
@@ -47,7 +62,7 @@ export interface WasmProcessInitMsg {
 
   fork?: ForkState;
 
-  fds?: number[];
+  fds?: InheritedFd[];
 }
 
 export interface WasmProcessExitMsg {

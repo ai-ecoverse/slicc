@@ -3,6 +3,7 @@ import {
   bytesSource,
   FdTable,
   KernelError,
+  kernelFdKind,
   nullFile,
   openPipe,
   sinkFile,
@@ -12,6 +13,36 @@ const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
 
 describe('FdTable', () => {
+  it('keeps FD_CLOEXEC per fd: set on an open fd, dropped when the fd is reused, copied on fork', async () => {
+    const t = new FdTable();
+    expect(() => t.setCloseOnExec(4)).toThrow(expect.objectContaining({ code: 'EBADF' }));
+    t.installAt(4, nullFile());
+    t.installAt(5, nullFile());
+    t.setCloseOnExec(4);
+    t.setCloseOnExec(5);
+    expect([t.closesOnExec(4), t.closesOnExec(5), t.closesOnExec(6)]).toEqual([true, true, false]);
+    expect(t.fork().closesOnExec(4)).toBe(true);
+    t.installAt(4, nullFile());
+    await t.close(5);
+    expect(t.install(nullFile(), 5)).toBe(5);
+    expect([t.closesOnExec(4), t.closesOnExec(5)]).toEqual([false, false]);
+    t.setStatusFlags(4, 0o4000);
+    expect(t.fork().statusFlags(4)).toBe(0o4000);
+    t.installAt(4, nullFile());
+    expect(t.statusFlags(4)).toBeUndefined();
+    t.setCloseOnExec(4);
+    t.setStatusFlags(4, 0o4000);
+    await t.closeAll();
+    t.installAt(4, nullFile());
+    expect([t.closesOnExec(4), t.statusFlags(4)]).toEqual([false, undefined]);
+  });
+
+  it('names how a runtime backs a descriptor', () => {
+    expect(kernelFdKind(nullFile().file)).toBe('stream');
+    expect(kernelFdKind({ seek: async () => 0, close() {} })).toBe('file');
+    expect(kernelFdKind({ tty: {} as never, seek: async () => 0, close() {} })).toBe('tty');
+  });
+
   it('installs at the lowest free fd', async () => {
     const t = new FdTable();
     expect(t.install(nullFile())).toBe(0);

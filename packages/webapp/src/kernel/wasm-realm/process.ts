@@ -4,6 +4,7 @@ import {
   type ChildSpawner,
   type ChildStdio,
   ChildTable,
+  type InheritedSlot,
   SpawnError,
 } from './children.js';
 import { type FdTable, KernelError, openPipe, pollFile } from './fd-table.js';
@@ -54,6 +55,8 @@ export type WasmSyscall =
       env: Record<string, string>;
       cwd: string;
       stdio: ChildStdio[];
+
+      inherit?: InheritedSlot[];
     }
   | {
       op: 'proc-wait';
@@ -453,8 +456,8 @@ export class WasmProcess {
       case 'proc-fork':
         return { ok: true, kind: 'json', json: await this.children.fork(req.state) };
       case 'proc-spawn': {
-        const { file, argv, env, cwd, stdio } = req;
-        const pid = await this.children.spawn({ file, argv, env, cwd }, stdio);
+        const { file, argv, env, cwd, stdio, inherit } = req;
+        const pid = await this.children.spawn({ file, argv, env, cwd }, stdio, inherit);
         return { ok: true, kind: 'json', json: pid };
       }
       case 'proc-wait': {

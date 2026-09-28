@@ -136,6 +136,93 @@ describe('runWasmProcess', () => {
     expect(closed).toEqual([0, 1]);
   });
 
+  it("wraps the glue's syscalls in the imports before instantiating, though the glue asks first", async () => {
+    const module = await WebAssembly.compile(NEEDS_IMPORT);
+    const fcntl = () => 0;
+    const imports = { env: { f: fcntl } };
+    let seen: unknown;
+    const run = runWasmProcess(init(module), port, {
+      evaluate: (_glue, m) => {
+        const fake = m as FakeModule & { sliccSyscalls?: object };
+
+        fake.instantiateWasm(imports, () => {
+          seen = imports.env.f;
+          fake.FS = { getStream: () => null };
+          fake.callMain = () => 0;
+          fake.onRuntimeInitialized();
+        });
+        fake.sliccSyscalls = { fcntl };
+      },
+    });
+    expect(await run).toBe(0);
+    expect(seen).toBeTypeOf('function');
+    expect(seen).not.toBe(fcntl);
+  });
+
+  it('tracks FD_CLOEXEC from before static constructors (preRun)', async () => {
+    const module = await WebAssembly.compile(NEEDS_IMPORT);
+    type S = { fd: number; flags: number; sliccCloexec?: boolean };
+    let opened: S | undefined;
+    const code = await runWasmProcess(init(module), port, {
+      evaluate: (_glue, m) => {
+        const fake = m as FakeModule & { preRun?: Array<(m: object) => void> };
+        let next = 3;
+        fake.FS = {
+          getStream: () => null,
+          mkdirTree: () => {},
+          chdir: () => {},
+          open: (_path: string, flags: number): S => ({ fd: next++, flags }),
+          dupStream: (s: S) => ({ ...s, fd: next++ }),
+        };
+        for (const run of fake.preRun ?? []) run(fake);
+
+        opened = (fake.FS as { open: (p: string, f: number) => S }).open('/etc/x', 0o2000000);
+        fake.callMain = () => 0;
+        fake.onRuntimeInitialized();
+      },
+    });
+    expect(code).toBe(0);
+    expect(opened?.sliccCloexec).toBe(true);
+    expect(opened?.flags).toBe(0);
+  });
+
+  it('opens the descriptors it starts with by kind, FD_CLOEXEC included', async () => {
+    const module = await WebAssembly.compile(NEEDS_IMPORT);
+    type S = { fd: number; stream_ops: object; sliccKernelFile?: boolean; sliccCloexec?: boolean };
+    const streams: Record<number, S> = {};
+    let next = 10;
+    const code = await runWasmProcess(
+      {
+        ...init(module),
+        fds: [
+          { fd: 5, kind: 'file' },
+          { fd: 97, kind: 'stream', cloexec: true },
+        ],
+      },
+      port,
+      {
+        evaluate: (_glue, m) => {
+          const fake = m as FakeModule;
+          fake.FS = {
+            streams: [],
+            getStream: (fd: number) => streams[fd] ?? null,
+            mkdirTree: () => {},
+            cwd: () => '/',
+            open: (path: string) =>
+              (streams[next] = { fd: next++, path, stream_ops: {}, node: { mode: 0 } } as S),
+            dupStream: (s: S, fd: number) => (streams[fd] = { ...s, fd }),
+            closeStream: (fd: number) => delete streams[fd],
+          };
+          fake.callMain = () => 0;
+          fake.onRuntimeInitialized();
+        },
+      }
+    );
+    expect(code).toBe(0);
+    expect(streams[5]?.sliccKernelFile).toBe(true);
+    expect([streams[5]?.sliccCloexec, streams[97]?.sliccCloexec]).toEqual([undefined, true]);
+  });
+
   it('fails a fork into a program that cannot resume one', async () => {
     const module = await WebAssembly.compile(NEEDS_IMPORT);
     const fork = { memory: new Uint8Array(0), currData: 0, forkSp: 0, callStackNames: [], ppid: 1 };

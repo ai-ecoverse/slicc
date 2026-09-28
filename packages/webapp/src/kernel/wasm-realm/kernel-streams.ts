@@ -61,6 +61,7 @@ export interface ProcessSys {
 }
 
 export interface StreamOps {
+  getattr?: (stream: ProcessStream) => object;
   llseek?: (stream: ProcessStream, offset: number, whence: number) => number;
   read?: (stream: ProcessStream, buffer: Uint8Array, offset: number, length: number) => number;
   write?: (stream: ProcessStream, buffer: Uint8Array, offset: number, length: number) => number;
@@ -78,11 +79,17 @@ export interface ProcessStream {
   sliccKernelFile?: boolean;
 
   sliccKernelSocket?: boolean;
+
+  sliccCloexec?: boolean;
   path?: string;
   flags: number;
   position: number;
   tty?: unknown;
-  node: { mode: number; mount?: { type?: unknown } };
+  node: {
+    mode: number;
+    mount?: { type?: unknown };
+    node_ops?: { getattr?: (node: ProcessStream['node']) => object };
+  };
 
   shared: object;
 }
@@ -109,6 +116,11 @@ export interface ProcessFs extends EmscriptenFsForHook {
   cwd(): string;
   read(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
   write(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
+
+  stat?(path: string, dontFollow?: boolean): object;
+  fstat?(fd: number): object;
+  symlink?(target: string, path: string): void;
+  lookupPath?(path: string, opts?: { follow?: boolean }): { node: object };
 }
 
 export interface ProcessPipeFs {

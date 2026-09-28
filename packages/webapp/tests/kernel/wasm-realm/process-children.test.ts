@@ -66,6 +66,34 @@ const json = (value: unknown): SyncFsResult => ({ ok: true, kind: 'json', json: 
 const void0: SyncFsResult = { ok: true, kind: 'void' };
 
 describe('createProcessKernel', () => {
+  it("sends the fds a child inherits beyond 0-2, after posix_spawn's file actions", () => {
+    const { t, calls } = transport(() => json(8));
+    const { Fs } = fs();
+    const inherit = vi.fn((actions?: ReadonlyArray<readonly [number, number]>) =>
+      (actions ?? []).length ? [{ fd: 40, kernel: 12 }] : []
+    );
+    const order: string[] = [];
+    const k = createProcessKernel({
+      transport: t,
+      Fs,
+      env: {},
+      beforeSpawn: () => order.push('flush'),
+      afterChild: vi.fn(),
+      describeFork: () => [],
+      inherit: (actions) => {
+        order.push('inherit');
+        return inherit(actions);
+      },
+    });
+    expect(k.spawn('diff', ['diff'], null, null, [0, 1, 2])).toBe(8);
+    expect(calls[0]).not.toHaveProperty('inherit');
+    expect(k.spawn('cat', ['cat'], null, null, [0, 1, 2], [[40, 9]])).toBe(8);
+    expect(inherit).toHaveBeenLastCalledWith([[40, 9]]);
+    expect(calls[1]).toMatchObject({ op: 'proc-spawn', inherit: [{ fd: 40, kernel: 12 }] });
+
+    expect(order).toEqual(['flush', 'inherit', 'flush', 'inherit']);
+  });
+
   it('hands kernel descriptors to the kernel and returns at once', () => {
     const { k, calls, beforeSpawn } = kernel(() => json(7));
     expect(k.spawn('make', ['make', '-j'], null, null, [0, 1, 2])).toBe(7);
