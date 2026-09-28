@@ -278,6 +278,14 @@ describe('wasm command', () => {
       });
     });
 
+    it('lists what the shell’s catalog knows when it gives one', async () => {
+      const catalog = new Map([
+        ['frob', { name: 'frob', glue: '/p/frob', wasm: '/p/frob.wasm', argv0: 'frob', pkg: 'p' }],
+      ]);
+      const r = await runWasmCommand(['--list'], ctx(installed), { commands: async () => catalog });
+      expect(r.stdout).toBe('frob  p\n');
+    });
+
     it('runs a bare name with its glue, module and argv0', async () => {
       await runWasmCommand(['tac', '-s', 'x'], ctx(installed));
       const opts = spawn.mock.calls[0][0];
