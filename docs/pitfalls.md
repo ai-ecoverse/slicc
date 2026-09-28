@@ -2270,6 +2270,23 @@ reject-list, previously Claude-only, also had to grow.
 
 Consequences of that gating, easy to miss:
 
+- **GPT-6 vision depends on where the image sits in Converse.** Live probes
+  on `bedrock-runtime` with Luna, Sol and Astra returned `200` for a top-level
+  user `image` block, but `400` ("This model doesn't support the image field
+  for user messages") for the same valid PNG inside `toolResult.content`.
+  [AWS's API reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultContentBlock.html)
+  also documents that nested tool-result images have narrower model support.
+  Converse also rejects OpenAI-style `image_url` as an unknown content block.
+  `bedrock-camp.ts` therefore keeps user attachments as ordinary user images,
+  while moving image blocks from GPT-6 tool results beside the `toolResult`
+  block in the enclosing user message. A text marker remains in the tool result
+  at each image's original position. For opaque application inference profile
+  ARNs, the GPT-6 capability check uses the model name as the existing Claude
+  checks do. Keep GPT-6's image input modality in the catalogue; it can see
+  images when they use the supported placement. A tool
+  result image can come from a browser screenshot or `open --view` through
+  `core/tool-adapter.ts`. Benchmark task files are staged in the VFS and are
+  not themselves inline image messages.
 - **Effort control is Claude and gpt-6 only.** gpt-6 gets
   `additionalModelRequestFields.reasoning.effort` from
   `BEDROCK_CAMP_GPT6_EFFORT_MAP` (`bedrock-camp-compat.ts`): off → `none`,
