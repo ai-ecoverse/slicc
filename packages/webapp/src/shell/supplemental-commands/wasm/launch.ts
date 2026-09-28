@@ -367,6 +367,11 @@ export class WasmSession {
     // A member of its parent's process group: `kill -- -pgid` and the
     // terminal's ^C reach it.
     this.jobs.add(pid, ppid, signal);
+    // `kill <pid>` through the process table aborts the record's controller
+    // itself; hear which signal it was, so the end reports as WIFSIGNALED.
+    const unsubscribe = this.processConfig?.processManager.onSignal((signaled, sig) => {
+      if (signaled.pid === pid) signal(SIGNAL_BY_NAME[sig]);
+    });
     const exited = (async () => {
       try {
         // A shell command takes its stdin whole, read to the end first; a
@@ -399,6 +404,7 @@ export class WasmSession {
         this.shellChildren.delete(controller);
         this.shellByPid.delete(pid);
         this.jobs.remove(pid);
+        unsubscribe?.();
         this.ctx.signal?.removeEventListener('abort', onAbort);
       }
     })();

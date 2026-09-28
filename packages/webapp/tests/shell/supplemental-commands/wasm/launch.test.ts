@@ -307,6 +307,39 @@ describe('WasmSession', () => {
     expect(child.termsig?.()).toBe(2);
   });
 
+  it('a shell child killed through the process table reports the signal (WIFSIGNALED)', async () => {
+    fakeProcesses();
+    const exec = vi.fn(
+      (_cmd: string, opts: { signal: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          opts.signal.addEventListener('abort', () =>
+            resolve({ stdout: '', stderr: '', exitCode: 130 })
+          );
+        })
+    ) as unknown as CommandContext['exec'];
+    const { pm, config } = processConfig();
+    let listener: ((proc: { pid: number }, sig: string) => void) | undefined;
+    const unsubscribe = vi.fn();
+    pm.onSignal.mockImplementation(((l: typeof listener) => {
+      listener = l;
+      return unsubscribe;
+    }) as never);
+    const session = new WasmSession(ctx(installed, exec), config, () => {});
+    const spawner = await parentSpawner(session);
+    const child = await spawner(
+      { file: 'sleep', argv: ['sleep', '9'], env: {}, cwd: '/w' },
+      stdio()
+    );
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    // What ProcessManager.signal does: abort the record, and tell its listeners.
+    const record = pm.spawn.mock.results.at(-1)!.value as { abort: AbortController };
+    record.abort.abort();
+    listener?.({ pid: child.pid }, 'SIGTERM');
+    expect(await child.exited).toBe(130);
+    expect(child.termsig?.()).toBe(15);
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+
   it('ends a shell child on its own process signal, and on killAll', async () => {
     fakeProcesses();
     // An exec that runs until its signal aborts, like `sleep 100`.
