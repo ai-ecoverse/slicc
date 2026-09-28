@@ -225,7 +225,7 @@ describe('resolveDependencyTree', () => {
     expect(plan.root['is-number']?.version).toBe('7.0.0');
   });
 
-  it('propagates dist.integrity onto each install node when present', async () => {
+  it('propagates dist.integrity and dist.shasum onto each install node when present', async () => {
     const packument: Packument = {
       name: 'pkg',
       'dist-tags': { latest: '1.0.0' },
@@ -236,6 +236,7 @@ describe('resolveDependencyTree', () => {
           dist: {
             tarball: 'https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz',
             integrity: 'sha512-abc',
+            shasum: 'deadbeef',
           },
         },
       },
@@ -246,6 +247,7 @@ describe('resolveDependencyTree', () => {
       fetchPackument: supplier,
     });
     expect(plan.root.pkg?.integrity).toBe('sha512-abc');
+    expect(plan.root.pkg?.shasum).toBe('deadbeef');
   });
 
   it('throws a clear error when a packument fetch fails', async () => {
