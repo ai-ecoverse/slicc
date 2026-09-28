@@ -37,6 +37,23 @@ function setup(login: (resolve: (r: Result) => void) => void) {
 }
 
 describe('RemoteTerminalView login shell', () => {
+  it('a programmatic command during the login probe waits for the prompt, not "busy"', async () => {
+    let answer!: (r: Result) => void;
+    const s = setup((resolve) => (answer = resolve));
+    const editor = { isReading: true, text: '', setLine: vi.fn(), accept: vi.fn(), abort: vi.fn() };
+    (s.view as unknown as { editor: object }).editor = editor;
+    const started = s.start();
+    const typed = s.view.executeCommandInTerminal('echo hi');
+    await Promise.resolve();
+    expect(editor.setLine).not.toHaveBeenCalled(); // still probing
+    answer({ stdout: '', stderr: '', exitCode: NO_LOGIN_SHELL });
+    await started;
+    await vi.waitFor(() => expect(editor.setLine).toHaveBeenCalledWith('echo hi'));
+    expect(editor.accept).toHaveBeenCalled();
+    s.view.dispose();
+    void typed;
+  });
+
   it('`wasm --login` typed at the slicc prompt runs bash as the login shell again', async () => {
     let finish!: (r: Result) => void;
     const s = setup((resolve) => (finish = resolve));

@@ -39,7 +39,11 @@ function fakeWorker(program: Program) {
     for (const h of [...(listeners.get(type) ?? [])]) h({ data } as MessageEvent);
   };
   let seq = 0;
-  const worker: WasmWorkerLike & { terminated: boolean; fail(message: string): void } = {
+  const worker: WasmWorkerLike & {
+    terminated: boolean;
+    fail(message: string): void;
+    lastError?: { preventDefault: () => void };
+  } = {
     terminated: false,
     postMessage(message: unknown) {
       const init = message as WasmProcessInitMsg;
@@ -75,8 +79,9 @@ function fakeWorker(program: Program) {
     },
     // A real worker's `error` event is an ErrorEvent: `message` on the event.
     fail: (message) => {
-      for (const h of [...(listeners.get('error') ?? [])])
-        h({ message } as unknown as MessageEvent);
+      const event = { message, preventDefault: vi.fn() };
+      worker.lastError = event;
+      for (const h of [...(listeners.get('error') ?? [])]) h(event as unknown as MessageEvent);
     },
   };
   return worker;
@@ -258,6 +263,33 @@ describe('spawnWasmProcess', () => {
     expect(await read.file.read!(8)).toHaveLength(0);
   });
 
+  it('announces the descriptors beyond stdio the program starts with', async () => {
+    let seen: number[] | undefined;
+    const fds = new FdTable();
+    for (const n of [0, 1, 2, 97])
+      fds.installAt(
+        n,
+        sinkFile(() => {})
+      );
+    const handle = spawnWasmProcess({
+      pid: 3006,
+      program,
+      argv0: 'x',
+      args: [],
+      env: {},
+      cwd: '/',
+      fds,
+      fs: memFs({}),
+      createWorker: () =>
+        fakeWorker(async (_call, init) => {
+          seen = init.fds;
+          return 0;
+        }),
+    });
+    expect(await handle.exited).toBe(0);
+    expect(seen).toEqual([97]);
+  });
+
   it('a worker failure resolves to 70 with a diagnostic', async () => {
     const onError = vi.fn();
     const worker = fakeWorker(() => new Promise(() => {}));
@@ -276,5 +308,7 @@ describe('spawnWasmProcess', () => {
     worker.fail('boom');
     expect(await handle.exited).toBe(70);
     expect(onError).toHaveBeenCalledWith('boom');
+    // Handled here, so the crash does not propagate to the kernel worker (and the page).
+    expect(worker.lastError?.preventDefault).toHaveBeenCalled();
   });
 });

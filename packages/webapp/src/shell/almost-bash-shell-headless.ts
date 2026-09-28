@@ -1310,14 +1310,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     };
     const tee = outputTeeId === undefined ? undefined : this.outputTees.get(outputTeeId);
     const run = await runOnGnuBash(command, {
-      fs: this.options.fs,
-      tmpDir: this.lastEnv.TMPDIR ?? '/tmp',
       env,
-      run: (args, runEnv) =>
+      run: (args, runEnv, fds) =>
         runWasmCommand(args, this.wasmContext(runEnv, signal, stdin), {
           processConfig: this.buildJshProcessConfig(runPid),
           gate: this.gateNativeCommand,
           onOutput: tee,
+          fds,
         }),
     });
     const pathBefore = this.lastEnv.PATH;

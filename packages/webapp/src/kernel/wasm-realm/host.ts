@@ -155,6 +155,9 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     }
   };
   const onError = (event: MessageEvent): void => {
+    // Handled here: unhandled, a program's crash (an Emscripten abort, a trap)
+    // would propagate to the kernel worker's global scope and take the page down.
+    event.preventDefault();
     opts.onError?.(String((event as unknown as ErrorEvent).message ?? 'worker error'));
     finish(CRASHED);
   };
@@ -170,7 +173,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     env: opts.env,
     cwd: opts.cwd,
     sab,
-    ...(opts.fork ? { fork: opts.fork } : {}),
+    ...(opts.fork ? { fork: opts.fork } : { fds: opts.fds.numbers().filter((fd) => fd > 2) }),
   };
   // A fork's memory copy is the child's alone: hand it over instead of cloning it.
   worker.postMessage(init, opts.fork ? [opts.fork.memory.buffer] : []);
