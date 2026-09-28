@@ -136,6 +136,25 @@ describe('evaluateGlue', () => {
     expect(ownValue(module, 'nothing')).toBeUndefined();
   });
 
+  it('calls no program export before the runtime is up (an assertions build would abort)', () => {
+    const glue = [
+      "var Module = typeof Module != 'undefined' ? Module : {};",
+      'var ENV = {};',
+      'var runtimeInitialized = false;',
+      "function _slicc_sig_mask(w) { if (!runtimeInitialized) throw new Error('assert'); return 7; }",
+      'Module.up = () => { runtimeInitialized = true; };',
+    ].join('\n');
+    const module = { sliccEnv: {} } as {
+      sliccEnv: object;
+      sliccSigMask?: (w: number) => number;
+      up?: () => void;
+    };
+    evaluateGlue(glue, module);
+    expect(module.sliccSigMask?.(0)).toBe(-1);
+    module.up?.();
+    expect(module.sliccSigMask?.(0)).toBe(7);
+  });
+
   it('keeps what the program exported', () => {
     const exported = { exported: true };
     const module = { sliccEnv: {}, FS: exported } as { sliccEnv: object; FS?: object };

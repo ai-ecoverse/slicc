@@ -40,6 +40,8 @@ export interface WasmProcessInitMsg {
   sab: SharedArrayBuffer;
 
   fork?: ForkState;
+
+  fds?: number[];
 }
 
 export interface WasmProcessExitMsg {

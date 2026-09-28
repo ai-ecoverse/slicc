@@ -368,6 +368,28 @@ describe('wasm command', () => {
       expect(envs[1]).toEqual({ A: '1' });
     });
 
+    it('shows a process crash on the terminal at once, not only in the final stderr', async () => {
+      compile.mockResolvedValue({});
+      const screen: string[] = [];
+      spawn.mockImplementation((opts) => {
+        opts.onError?.('RuntimeError: unreachable');
+        return { pid: opts.pid, exited: Promise.resolve(70), kill: vi.fn(), signal: vi.fn() };
+      });
+      const lease = {
+        cols: 80,
+        rows: 24,
+        write: (b: Uint8Array) => void screen.push(new TextDecoder().decode(b)),
+        onInput: () => {},
+        onResize: () => {},
+        release: () => {},
+      };
+      const r = await runWasmCommand(['-t', 'sh.js'], ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }), {
+        terminal: { lease: () => lease },
+      });
+      expect(screen.join('')).toBe('wasm: RuntimeError: unreachable\r\n');
+      expect(r).toMatchObject({ exitCode: 70, stderr: '' });
+    });
+
     it('fails without a terminal to lease', async () => {
       const r = await runWasmCommand(['-t', 'sh.js'], ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }), {
         terminal: { lease: () => null },

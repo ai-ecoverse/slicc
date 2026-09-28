@@ -135,6 +135,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     }
   };
   const onError = (event: MessageEvent): void => {
+    event.preventDefault();
     opts.onError?.(String((event as unknown as ErrorEvent).message ?? 'worker error'));
     finish(CRASHED);
   };
@@ -150,7 +151,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     env: opts.env,
     cwd: opts.cwd,
     sab,
-    ...(opts.fork ? { fork: opts.fork } : {}),
+    ...(opts.fork ? { fork: opts.fork } : { fds: opts.fds.numbers().filter((fd) => fd > 2) }),
   };
 
   worker.postMessage(init, opts.fork ? [opts.fork.memory.buffer] : []);

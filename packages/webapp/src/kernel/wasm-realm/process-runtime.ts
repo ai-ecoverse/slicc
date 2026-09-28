@@ -93,6 +93,13 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
   };
 }
 
+export function wireKernelFd(Fs: ProcessFs, streams: KernelStreams, fd: number): void {
+  const placeholder = Fs.open('/dev/null', 2);
+  const stream = Fs.dupStream(placeholder, fd);
+  Fs.closeStream(placeholder.fd);
+  streams.attach(stream, fd, false);
+}
+
 export function wireKernelStdio(Fs: ProcessFs, streams: KernelStreams): void {
   for (const fd of [0, 1, 2]) {
     const stream = Fs.getStream(fd);
@@ -135,10 +142,11 @@ const GLUE_TRAILER = [
   "if (typeof sliccForkChild === 'function') __sliccTake('sliccForkChild', sliccForkChild);",
   "if (typeof PIPEFS !== 'undefined') __sliccTake('PIPEFS', PIPEFS);",
 
-  "Module.sliccSigpipe ??= () => (typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
+  "const __sliccUp = () => typeof runtimeInitialized === 'undefined' || runtimeInitialized;",
+  "Module.sliccSigpipe ??= () => (__sliccUp() && typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
 
-  "Module.sliccSigMask ??= (w) => (typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
-  "Module.sliccRaise ??= (sig) => { if (typeof _slicc_raise === 'function') _slicc_raise(sig); };",
+  "Module.sliccSigMask ??= (w) => (__sliccUp() && typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
+  "Module.sliccRaise ??= (sig) => { if (__sliccUp() && typeof _slicc_raise === 'function') _slicc_raise(sig); };",
 ].join('\n');
 
 export function ownValue<T>(module: object, name: string): T | undefined {
@@ -238,7 +246,10 @@ export async function runWasmProcess(
     restartable: () => signals.restartable(),
   });
   if (init.fork) restoreForkedStreams(running.FS, streams, init.fork.streams ?? []);
-  else wireKernelStdio(running.FS, streams);
+  else {
+    wireKernelStdio(running.FS, streams);
+    for (const fd of init.fds ?? []) wireKernelFd(running.FS, streams, fd);
+  }
   const pipefs = ownValue<ProcessPipeFs>(running, 'PIPEFS');
   if (pipefs) streams.usePipes(pipefs);
   streams.useControllingTerminal();

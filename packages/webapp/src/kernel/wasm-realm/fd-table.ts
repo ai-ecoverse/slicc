@@ -143,6 +143,10 @@ export class FdTable {
     return file;
   }
 
+  numbers(): number[] {
+    return [...this.fds.keys()].sort((a, b) => a - b);
+  }
+
   has(fd: number): boolean {
     return this.fds.has(fd);
   }

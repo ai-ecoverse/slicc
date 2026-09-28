@@ -1,25 +1,16 @@
+import { type OpenFile, sinkFile } from '../kernel/wasm-realm/fd-table.js';
+
 export const SHELL_CHOICE_ENV = 'SLICC_SHELL';
 
-const STATE_ENV = 'SLICC_BASH_STATE';
+export const STATE_FD = 97;
 
-export const STATE_HOOK = `__slicc_state=$${STATE_ENV}
-unset BASH_ENV ${STATE_ENV}
-__slicc_save() {
-  local __s=$1 __p=$2 __c __n
-  {
-    printf '%s\\0%s\\0%s\\0' "$__s" "$__p" "$PWD"
-    for __c in {A..Z} {a..z} _; do
-      eval '__slicc_names=("\${!'"$__c"'@}")'
-      for __n in "\${__slicc_names[@]}"; do
-        [[ \${!__n@a} == *x* ]] && printf '%s=%s\\0' "$__n" "\${!__n}"
-      done
-    done
-  } >"$__slicc_state" 2>/dev/null
-}
-trap '__slicc_save "$?" "\${PIPESTATUS[*]}"' EXIT
-`;
+export const STATE_HOOK =
+  '__slicc_save() { local __s=$1 __p=$2 __c __n; { printf "%s\\0%s\\0%s\\0" "$__s" "$__p" "$PWD"; ' +
+  'for __c in {A..Z} {a..z} _; do eval "__slicc_names=(\\"\\${!${__c}@}\\")"; ' +
+  'for __n in "${__slicc_names[@]}"; do [[ ${!__n@a} == *x* ]] && printf "%s=%s\\0" "$__n" "${!__n}"; done; done; ' +
+  `} >&${STATE_FD} 2>/dev/null; }; trap '__slicc_save "$?" "\${PIPESTATUS[*]}"' EXIT; `;
 
-const RUN_ONLY = new Set(['SHLVL', '_', 'BASH_ENV', STATE_ENV]);
+const RUN_ONLY = new Set(['SHLVL', '_']);
 
 export interface BashRunState {
   status: number;
@@ -57,13 +48,6 @@ export function outputText(output: string, kind: string | undefined): string {
   return new TextDecoder().decode(bytes);
 }
 
-export interface GnuBashFs {
-  mkdir(path: string, options: { recursive: true }): Promise<void>;
-  writeFile(path: string, content: string): Promise<void>;
-  readFile(path: string, options: { encoding: 'utf-8' }): Promise<string | Uint8Array>;
-  rm(path: string): Promise<void>;
-}
-
 export interface GnuBashRunResult {
   stdout: string;
   stderr: string;
@@ -75,35 +59,30 @@ export interface GnuBashRunResult {
 export async function runOnGnuBash(
   command: string,
   deps: {
-    fs: GnuBashFs;
-    tmpDir: string;
     env: Record<string, string>;
     run: (
       args: string[],
-      env: Record<string, string>
+      env: Record<string, string>,
+      fds: ReadonlyArray<readonly [number, OpenFile]>
     ) => Promise<{ stdout: string; stderr: string; exitCode: number; stdoutKind?: string }>;
   }
 ): Promise<GnuBashRunResult> {
-  const dir = deps.tmpDir.replace(/\/+$/, '') || '/tmp';
-  const hook = `${dir}/.slicc-bash-env.sh`;
-  const statePath = `${dir}/.slicc-bash-state-${crypto.randomUUID()}`;
-  await deps.fs.mkdir(dir, { recursive: true });
-  await deps.fs.writeFile(hook, STATE_HOOK);
-  const result = await deps.run(['bash', '-c', command], {
-    ...deps.env,
-    BASH_ENV: hook,
-    [STATE_ENV]: statePath,
-  });
-  let state: BashRunState | null = null;
-  try {
-    const raw = await deps.fs.readFile(statePath, { encoding: 'utf-8' });
-    state = parseBashState(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
-    await deps.fs.rm(statePath);
-  } catch {}
+  const chunks: Uint8Array[] = [];
+  const state = sinkFile((bytes) => chunks.push(bytes));
+  const result = await deps.run(['bash', '-c', `${STATE_HOOK}${command}`], deps.env, [
+    [STATE_FD, state],
+  ]);
+  const size = chunks.reduce((n, c) => n + c.length, 0);
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, at);
+    at += chunk.length;
+  }
   return {
     stdout: outputText(result.stdout, result.stdoutKind),
     stderr: result.stderr,
     exitCode: result.exitCode,
-    state,
+    state: size > 0 ? parseBashState(new TextDecoder().decode(all)) : null,
   };
 }
