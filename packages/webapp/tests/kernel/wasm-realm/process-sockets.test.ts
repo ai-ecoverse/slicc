@@ -32,10 +32,11 @@ class ErrnoError extends Error {
 type Node = { mode: number; node_ops: { getattr?: () => { mode: number; ino: number } } };
 
 /** An Emscripten-like FS that can make socket nodes (mount, createNode, createStream). */
-function fakeFs(opts: { full?: boolean } = {}) {
+function fakeFs(opts: { full?: boolean; room?: number } = {}) {
   const streams: (ProcessStream | null)[] = [];
+  let room = opts.room ?? Number.POSITIVE_INFINITY;
   const place = (stream: object, fd = -1): ProcessStream => {
-    if (opts.full) throw new ErrnoError(33); // EMFILE
+    if (opts.full || room-- <= 0) throw new ErrnoError(33); // EMFILE
     let at = fd;
     if (at < 0) for (at = 0; streams[at]; at++);
     const s = { shared: {}, position: 0, ...stream, fd: at } as ProcessStream;
@@ -232,6 +233,21 @@ describe('createSocketKernel', () => {
     const fd = net.socket('inet', false);
     expect(() => net.send(fd, bytes('x'), {})).toThrow(ProcessExit);
     expect(net.send(fd, bytes('x'), { nosignal: true })).toBe(-64); // EPIPE
+  });
+
+  it('closes the first end when the second finds the program’s table full (no fd leaks)', () => {
+    const closed: number[] = [];
+    const { Fs, streams } = fakeFs({ room: 1 });
+    const sys = { close: (fd: number) => void closed.push(fd) } as unknown as ProcessSys;
+    const net = createSocketKernel({
+      transport: { call: () => json([7, 8]) } as unknown as SyncSabTransport,
+      Fs,
+      sys,
+      streams: new KernelStreams(Fs, sys),
+    });
+    expect(net.socketpair('unix', false)).toBe(-33); // EMFILE
+    expect(closed.sort()).toEqual([7, 8]); // both kernel descriptors go back
+    expect(streams.filter(Boolean)).toEqual([]); // and no program fd is left open
   });
 
   it('answers an FS error (a full fd table) with its errno and gives the kernel fd back', () => {

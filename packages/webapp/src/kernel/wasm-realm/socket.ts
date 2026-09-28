@@ -155,13 +155,13 @@ export class KernelSocket implements KernelFile {
 
   async read(max: number, signal?: AbortSignal): Promise<Uint8Array> {
     const { rx } = this.connection();
-    if (this.readShut) return new Uint8Array(0);
+    if (this.readShut || max <= 0) return new Uint8Array(0);
     return pipeCall(() => rx.read(max, signal));
   }
 
   async peek(max: number, signal?: AbortSignal): Promise<Uint8Array> {
     const { rx } = this.connection();
-    if (this.readShut) return new Uint8Array(0);
+    if (this.readShut || max <= 0) return new Uint8Array(0);
     return pipeCall(() => rx.peek(max, signal));
   }
 

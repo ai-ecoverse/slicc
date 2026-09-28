@@ -141,7 +141,15 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
           sys.close(b);
           throw e;
         }
-        return [first, install(b, nonblock)] as [number, number];
+        try {
+          return [first, install(b, nonblock)] as [number, number];
+        } catch (e) {
+          // No room for the second end: the first goes too (its close releases kernel fd `a`).
+          const stream = Fs.getStream(first);
+          if (stream) stream.stream_ops.close?.(stream);
+          Fs.closeStream(first);
+          throw e;
+        }
       }),
     bind: (fd, addr) => guard(() => done({ op: 'sock-bind', fd: kfd(fd), addr })),
     listen: (fd, backlog) => guard(() => done({ op: 'sock-listen', fd: kfd(fd), backlog })),

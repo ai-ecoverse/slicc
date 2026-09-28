@@ -168,6 +168,12 @@ describe('KernelSocket', () => {
     server.close(); // twice: nothing more happens
   });
 
+  it('reads and peeks zero bytes at once, with nothing buffered', async () => {
+    const { server } = await connected();
+    expect(await server.read(0)).toEqual(new Uint8Array(0));
+    expect(await server.peek(0)).toEqual(new Uint8Array(0));
+  });
+
   it('peeks without consuming', async () => {
     const { client, server } = await connected();
     await client.write(bytes('ab'));

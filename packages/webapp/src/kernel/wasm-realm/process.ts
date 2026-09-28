@@ -328,6 +328,8 @@ export class WasmProcess {
     const read = req.peek ? file.peek : file.read;
     if (!read) throw new KernelError(req.peek && file.read ? 'EOPNOTSUPP' : 'EBADF');
     if (file.tty) this.checkForeground(file.tty);
+    // read(fd, buf, 0) / recv(..., 0): nothing to wait for, blocking or not.
+    if (req.max <= 0) return new Uint8Array(0);
     const ready = pollFile(file).readable;
     if (!ready && req.nonblock) throw new KernelError('EAGAIN');
     const signal = ready ? this.interrupt.signal : this.blockingSignal();

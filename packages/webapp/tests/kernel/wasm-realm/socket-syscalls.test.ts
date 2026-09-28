@@ -95,6 +95,28 @@ describe('socket syscalls', () => {
     expect(await sys(p, { op: 'fd-write', fd, body: big, nonblock: true })).toBe('EAGAIN');
   });
 
+  it('reads zero bytes at once, blocking or not, with nothing buffered', async () => {
+    const net = new LoopbackNet();
+    const p = proc(net);
+    await listen(p, 9005);
+    const fd = (await sys(p, { op: 'sock-open', domain: 'inet' })) as number;
+    await sys(p, { op: 'sock-connect', fd, addr: inet(9005), nonblock: false });
+    expect(await sys(p, { op: 'fd-read', fd, max: 0, nonblock: true })).toBe('');
+    expect(await sys(p, { op: 'fd-read', fd, max: 0 })).toBe('');
+    expect(await sys(p, { op: 'fd-read', fd, max: 0, peek: true })).toBe('');
+  });
+
+  it('closes a dequeued connection it cannot install (EMFILE): the client reads EOF', async () => {
+    const net = new LoopbackNet();
+    const p = proc(net);
+    const lfd = await listen(p, 9006);
+    const client = net.connect(inet(9006));
+    for (let fd = 0; fd < FdTable.MAX_FDS; fd++)
+      if (!p.fds.has(fd)) p.fds.installAt(fd, openPipe().read);
+    expect(await sys(p, { op: 'sock-accept', fd: lfd, nonblock: false })).toBe('EMFILE');
+    expect(await client.read(10)).toEqual(new Uint8Array(0));
+  });
+
   it('a pending caught signal interrupts a blocking accept (EINTR)', async () => {
     const p = proc(new LoopbackNet(), true);
     const lfd = await listen(p, 9003);
