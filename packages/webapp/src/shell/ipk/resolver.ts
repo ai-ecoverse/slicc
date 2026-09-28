@@ -48,6 +48,8 @@ export interface InstallNode {
   version: string;
   resolved: string;
   integrity?: string;
+  /** Legacy hex SHA-1 from `dist.shasum`; the integrity check's fallback. */
+  shasum?: string;
   /** From the packument version; used to predict PATH bins before materialization. */
   bin?: string | Record<string, string>;
   dependencies: Record<string, InstallNode>;
@@ -184,6 +186,9 @@ function buildNode(name: string, version: string, entry: PackumentVersion): Inst
   };
   if (typeof entry.dist.integrity === 'string') {
     node.integrity = entry.dist.integrity;
+  }
+  if (typeof entry.dist.shasum === 'string') {
+    node.shasum = entry.dist.shasum;
   }
   if (entry.bin !== undefined && entry.bin !== null) {
     node.bin = entry.bin;

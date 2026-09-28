@@ -576,6 +576,18 @@ file. These lines are not repeated in the result, which keeps its per-file lines
 and ends with the elapsed time and average rate. The human terminal has no live
 sink and shows the result when the command exits.
 
+### `ipk install`: tarball integrity
+
+Every tarball `ipk install` downloads is checked against its packument's
+`dist.integrity` (SRI; only the strongest algorithm present counts, as in ssri)
+before anything is extracted, falling back to the hex `dist.shasum` (SHA-1) when
+there is no usable SRI hash (`shell/ipk/integrity.ts`). It fails closed: a
+mismatch, an SRI string with no supported algorithm, or a version with neither
+field aborts the install with `EINTEGRITY: <name>@<version> …`, leaving any
+previously installed copy in place. npm and pnpm skip the check when the
+metadata has no hash; ipk refuses instead, since the npm registry publishes
+both fields for every version.
+
 ### `ipk install -g` / `npm install -g`
 
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared
