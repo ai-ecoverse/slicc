@@ -156,6 +156,35 @@ describe('WasmSession', () => {
     expect(spawn.mock.calls.length).toBe(launched); // no worker started
   });
 
+  it('starts a program with its package’s env defaults; the caller’s env wins', async () => {
+    fakeProcesses();
+    const files = {
+      ...installed,
+      [`${PKG}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-gnu',
+        slicc: {
+          env: { CONF: 'etc/conf', MODE: 'default' },
+          commands: { tac: { glue: 'bin/core', wasm: 'bin/core.wasm', argv0: 'tac' } },
+        },
+      }),
+    };
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    await session.launch({
+      glue: `${PKG}/bin/core`,
+      module: `${PKG}/bin/core.wasm`,
+      argv0: 'tac',
+      args: [],
+      env: { MODE: 'mine', A: '1' },
+      cwd: '/w',
+      fds: stdio(),
+    });
+    expect(spawn.mock.calls.at(-1)![0].env).toEqual({
+      CONF: `${PKG}/etc/conf`,
+      MODE: 'mine',
+      A: '1',
+    });
+  });
+
   it('starts a wasm child as a process parented to its spawner', async () => {
     const ends = fakeProcesses();
     const { pm, config } = processConfig();
