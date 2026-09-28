@@ -76,7 +76,7 @@ Options:
   --erase         write_flash: erase the whole chip before writing
   -h, --help
 
-Without --port, the Web Serial picker opens (needs a user gesture).
+Without --port, the Web Serial picker opens (asks for permission).
 `;
 
 /** Resolve the serial handle to operate on: explicit --port or the picker. */
