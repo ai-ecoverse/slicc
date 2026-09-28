@@ -47,7 +47,22 @@ describe('JobTable', () => {
     expect(() => jobs.setpgid(11, 0, -1)).toThrow(expect.objectContaining({ code: 'EINVAL' }));
     add(20);
     add(21, 20);
-    expect(() => jobs.setpgid(10, 21, 10)).toThrow(expect.objectContaining({ code: 'EPERM' }));
+    expect(() => jobs.setpgid(10, 21, 10)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
+  });
+
+  it('setpgid moves only the caller or a child of it that has not exec’d', () => {
+    const { jobs, add } = table();
+    add(10);
+    add(11, 10);
+    add(12, 10);
+    // A sibling is out of reach.
+    expect(() => jobs.setpgid(11, 12, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
+    add(13, 11);
+    jobs.exec(11, 13); // 11 exec'd a program: its parent may no longer move it
+    expect(() => jobs.setpgid(10, 11, 0)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    jobs.setpgid(11, 0, 0); // it may still move itself
+    expect(jobs.pgidOf(11)).toBe(11);
+    expect(jobs.pgidOf(99)).toBeUndefined();
   });
 
   it('setsid: a new session, not for a group leader', () => {
@@ -226,6 +241,43 @@ describe('WasmProcess stop and continue', () => {
     end(0);
     expect(await execing).toMatchObject({ ok: true });
     expect(states).toEqual(['stopped', 'continued']);
+  });
+});
+
+describe('waitpid by process group', () => {
+  it('waits for the caller’s group (0), a named group (-pgid), or any child (-1)', async () => {
+    const jobs = new JobTable();
+    const ends = new Map<number, (code: number) => void>();
+    let next = 20;
+    const spawner = async () => {
+      const pid = next++;
+      jobs.add(pid, 10, () => {});
+      return { pid, exited: new Promise<number>((resolve) => ends.set(pid, resolve)) };
+    };
+    jobs.add(10, undefined, () => {});
+    const p = new WasmProcess(10, new FdTable(), { spawner, jobs });
+    const spawn = () =>
+      p.syscall({ op: 'proc-spawn', file: 'x', argv: ['x'], env: {}, cwd: '/', stdio: [] });
+    await spawn(); // 20, in 10's group
+    await spawn(); // 21, moved into a job of its own
+    jobs.setpgid(10, 21, 0);
+    ends.get(21)!(4);
+    await tick();
+    // The background job's exit is not the caller's group's business.
+    expect(await p.syscall({ op: 'proc-wait', pid: 0, nohang: true })).toMatchObject({
+      json: [0, 0],
+    });
+    expect(await p.syscall({ op: 'proc-wait', pid: -21, nohang: true })).toMatchObject({
+      json: [21, 4 << 8],
+    });
+    expect(await p.syscall({ op: 'proc-wait', pid: -21, nohang: true })).toMatchObject({
+      errno: 'ECHILD',
+    });
+    ends.get(20)!(0);
+    await tick();
+    expect(await p.syscall({ op: 'proc-wait', pid: -1, nohang: true })).toMatchObject({
+      json: [20, 0],
+    });
   });
 });
 

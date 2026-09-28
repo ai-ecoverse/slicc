@@ -418,6 +418,15 @@ export class WasmProcess {
     throw new KernelError('EINTR');
   }
 
+  /** waitpid(0) waits for the caller's group, waitpid(-pgid) for that group. */
+  private waitGroup(pid: number): ((child: number) => boolean) | undefined {
+    const jobs = this.options.jobs;
+    if (!jobs || pid > 0 || pid === -1) return undefined;
+    const group = pid === 0 ? this.pgid() : -pid;
+    // A child the table does not know started in this process's group.
+    return (child) => (jobs.pgidOf(child) ?? this.pgid()) === group;
+  }
+
   private pgid(): number {
     return this.options.jobs?.getpgid(this.pid, 0) ?? this.pid;
   }
@@ -468,7 +477,11 @@ export class WasmProcess {
       }
       case 'proc-wait': {
         const signal = req.nohang ? this.interrupt.signal : this.blockingSignal();
-        const flags = { untraced: req.untraced, continued: req.continued };
+        const flags = {
+          untraced: req.untraced,
+          continued: req.continued,
+          inGroup: this.waitGroup(req.pid),
+        };
         const waited = await this.children.wait(req.pid, req.nohang, signal, flags);
         return { ok: true, kind: 'json', json: waited };
       }

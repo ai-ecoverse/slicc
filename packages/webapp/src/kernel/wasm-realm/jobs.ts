@@ -19,6 +19,10 @@ export interface JobMember {
   signal(sig: number): void;
   /** The process that exec'd it: that one forwards its signals, so a group signal skips it. */
   execParent?: number;
+  /** Its parent, when that is a process of the table. */
+  ppid?: number;
+  /** It exec'd a program: its parent may no longer move it (setpgid's EACCES). */
+  execed?: boolean;
 }
 
 export class JobTable {
@@ -30,6 +34,7 @@ export class JobTable {
     const parent = parentPid === undefined ? undefined : this.members.get(parentPid);
     const member: JobMember = {
       pid,
+      ppid: parent?.pid,
       pgid: parent?.pgid ?? pid,
       sid: parent?.sid ?? pid,
       signal,
@@ -46,6 +51,13 @@ export class JobTable {
   exec(pid: number, child: number): void {
     const member = this.members.get(child);
     if (member) member.execParent = pid;
+    const execer = this.members.get(pid);
+    if (execer) execer.execed = true;
+  }
+
+  /** The group of `pid`, if it is a process of the table. */
+  pgidOf(pid: number): number | undefined {
+    return this.members.get(pid)?.pgid;
   }
 
   private member(pid: number): JobMember {
@@ -54,12 +66,19 @@ export class JobTable {
     return member;
   }
 
-  /** setpgid(2) by `caller`: `pid` 0 is the caller, `pgid` 0 is `pid`. */
+  /**
+   * setpgid(2) by `caller`: `pid` 0 is the caller, `pgid` 0 is `pid`. Only
+   * the caller itself or a child of it that has not exec'd yet can move.
+   */
   setpgid(caller: number, pid: number, pgid: number): void {
     const target = this.member(pid || caller);
     const group = pgid || target.pid;
     if (group < 0) throw new KernelError('EINVAL');
     const self = this.member(caller);
+    if (target.pid !== caller) {
+      if (target.ppid !== caller) throw new KernelError('ESRCH');
+      if (target.execed) throw new KernelError('EACCES');
+    }
     if (target.sid !== self.sid) throw new KernelError('EPERM');
     if (target.pid === target.sid) throw new KernelError('EPERM'); // a session leader stays put
     // Joining another group needs a member of it in the same session.

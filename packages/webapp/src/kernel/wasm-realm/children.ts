@@ -61,6 +61,11 @@ export interface WaitFlags {
   untraced?: boolean;
   /** WCONTINUED: report a stopped child that continued. */
   continued?: boolean;
+  /**
+   * For `pid` 0 or < -1 (a process group): whether a child is in that group.
+   * Without it, any child counts, as for -1.
+   */
+  inGroup?: (childPid: number) => boolean;
 }
 
 /** The child could not be started (`ENOENT`: nothing runs the program; `ENOSYS`: no spawner). */
@@ -230,8 +235,7 @@ export class ChildTable {
     let interrupt: ReturnType<typeof interrupted> | undefined;
     try {
       for (;;) {
-        const candidates =
-          pid > 0 ? [...this.children].filter(([p]) => p === pid) : [...this.children];
+        const candidates = this.candidates(pid, flags);
         if (candidates.length === 0) throw new KernelError('ECHILD');
         const done = candidates.find(([, child]) => child.code !== undefined);
         if (done) return this.reap(done[0], done[1].code as number);
@@ -244,6 +248,14 @@ export class ChildTable {
     } finally {
       interrupt?.done();
     }
+  }
+
+  /** The children a waitpid(`pid`) is about: that one, any (-1), or those of a group (0, < -1). */
+  private candidates(pid: number, flags: WaitFlags): [number, Child][] {
+    const all = [...this.children];
+    if (pid > 0) return all.filter(([p]) => p === pid);
+    const inGroup = flags.inGroup;
+    return pid === -1 || !inGroup ? all : all.filter(([p]) => inGroup(p));
   }
 
   /** Until a candidate exits, stops or continues (as `flags` asks), or the wait is interrupted. */

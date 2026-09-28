@@ -28,7 +28,8 @@ export type KernelErrno =
   | 'ESRCH'
   | 'ENOTTY'
   | 'EPERM'
-  | 'EIO';
+  | 'EIO'
+  | 'EACCES';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {

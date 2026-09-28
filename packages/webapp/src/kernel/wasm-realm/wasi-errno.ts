@@ -1,5 +1,6 @@
 /** Emscripten's (WASI) errno numbers for the kernel errors a syscall returns. */
 const WASI_ERRNO: Readonly<Partial<Record<string, number>>> = {
+  EACCES: 2,
   EBADF: 8,
   ECHILD: 12,
   EINTR: 27,
