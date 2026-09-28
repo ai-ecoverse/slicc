@@ -31,9 +31,21 @@ export interface ProcessSys {
 
   pipe(): [number, number];
   poll(fd: number): PollState;
+
+  openVfs(
+    path: string,
+    flags: number,
+    position: number,
+    opts?: { contents?: Uint8Array; orphan?: boolean }
+  ): number;
+
+  seek(fd: number, offset: number, whence: number): number;
+
+  flush(fd: number): void;
 }
 
 export interface StreamOps {
+  llseek?: (stream: ProcessStream, offset: number, whence: number) => number;
   read?: (stream: ProcessStream, buffer: Uint8Array, offset: number, length: number) => number;
   write?: (stream: ProcessStream, buffer: Uint8Array, offset: number, length: number) => number;
   close?: (stream: ProcessStream) => void;
@@ -43,12 +55,27 @@ export interface StreamOps {
 }
 
 export interface ProcessStream {
+  fd: number;
   stream_ops: StreamOps;
   sliccKernelFd?: number;
+
+  sliccKernelFile?: boolean;
+  path?: string;
+  flags: number;
+  position: number;
+  tty?: unknown;
+  node: { mode: number; mount?: { type?: unknown } };
+
+  shared: object;
 }
 
 export interface ProcessFs extends EmscriptenFsForHook {
+  streams: (ProcessStream | null | undefined)[];
   getStream(fd: number): ProcessStream | null;
+  open(path: string, flags: number, mode?: number): ProcessStream;
+  dupStream(stream: ProcessStream, fd: number): ProcessStream;
+  closeStream(fd: number): void;
+  isFile(mode: number): boolean;
   mkdirTree(path: string): void;
   cwd(): string;
   read(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
@@ -73,6 +100,21 @@ export class KernelStreams {
 
     stream.sliccKernelFd = kfd;
     stream.stream_ops = this.ops(kfd, stream.stream_ops);
+  }
+
+  attachFile(stream: ProcessStream, kfd: number): void {
+    this.attach(stream, kfd);
+    stream.sliccKernelFile = true;
+    stream.stream_ops = {
+      ...stream.stream_ops,
+      llseek: (_s, offset, whence) => this.call(() => this.sys.seek(kfd, offset, whence)),
+
+      fsync: () =>
+        this.call(() => {
+          this.sys.flush(kfd);
+          return 0;
+        }),
+    };
   }
 
   usePipes(pipefs: ProcessPipeFs): void {

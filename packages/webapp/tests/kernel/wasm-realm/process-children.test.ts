@@ -3,6 +3,7 @@ import type { SyncFsResult } from '../../../src/kernel/realm/sync-fs-wire.js';
 import type { SyncSabTransport } from '../../../src/kernel/realm/sync-sab-bridge.js';
 import { createProcessKernel } from '../../../src/kernel/wasm-realm/process-children.js';
 import type { ProcessFs, ProcessStream } from '../../../src/kernel/wasm-realm/process-runtime.js';
+import type { ForkStream } from '../../../src/kernel/wasm-realm/protocol.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -23,12 +24,14 @@ function transport(answer: (req: Req) => SyncFsResult) {
 function fs(data = 'file-data') {
   const written: string[] = [];
   let offset = 0;
+  const stream = (fd: number, kernel?: number) =>
+    ({ fd, stream_ops: {}, sliccKernelFd: kernel }) as unknown as ProcessStream;
   const streams: Record<number, ProcessStream> = {
-    0: { stream_ops: {}, sliccKernelFd: 0 },
-    1: { stream_ops: {}, sliccKernelFd: 1 },
-    2: { stream_ops: {}, sliccKernelFd: 2 },
-    5: { stream_ops: {} },
-    6: { stream_ops: {} },
+    0: stream(0, 0),
+    1: stream(1, 1),
+    2: stream(2, 2),
+    5: stream(5),
+    6: stream(6),
   };
   const Fs = {
     getStream: (fd: number) => streams[fd] ?? null,
@@ -50,7 +53,11 @@ function fs(data = 'file-data') {
 function kernel(answer: (req: Req) => SyncFsResult, data?: string) {
   const { t, calls } = transport(answer);
   const { Fs, written } = fs(data);
-  const deps = { beforeSpawn: vi.fn(), afterChild: vi.fn() };
+  const deps = {
+    beforeSpawn: vi.fn(),
+    afterChild: vi.fn(),
+    describeFork: vi.fn((): ForkStream[] => []),
+  };
   const k = createProcessKernel({ transport: t, Fs, env: { HOME: '/' }, ...deps });
   return { k, calls, written, ...deps };
 }
@@ -106,5 +113,23 @@ describe('createProcessKernel', () => {
     expect(afterChild).not.toHaveBeenCalled();
     expect(k.wait(-1, false)).toEqual([4, 0]);
     expect(afterChild).toHaveBeenCalledTimes(1);
+  });
+
+  it('forks: pushes buffered writes, describes the fd table, and returns the child pid', () => {
+    const { k, calls, beforeSpawn, describeFork } = kernel(() => json(21));
+    const table = [{ fd: 1, kernel: 1, kind: 'stream' as const }];
+    describeFork.mockReturnValue(table);
+    const state = {
+      memory: new Uint8Array(2),
+      currData: 4,
+      forkSp: 8,
+      callStackNames: [],
+      ppid: 3,
+    };
+    expect(k.fork(state)).toBe(21);
+    expect(beforeSpawn).toHaveBeenCalled();
+    expect(calls).toEqual([{ op: 'proc-fork', state: { ...state, streams: table, cwd: '/work' } }]);
+    const refused = kernel(() => ({ ok: false, errno: 'ENOSYS', message: 'ENOSYS' }));
+    expect(refused.k.fork(state)).toBe(-52);
   });
 });

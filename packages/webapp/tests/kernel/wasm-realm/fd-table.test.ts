@@ -12,11 +12,11 @@ const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
 
 describe('FdTable', () => {
-  it('installs at the lowest free fd', () => {
+  it('installs at the lowest free fd', async () => {
     const t = new FdTable();
     expect(t.install(nullFile())).toBe(0);
     expect(t.install(nullFile())).toBe(1);
-    t.close(0);
+    await t.close(0);
     expect(t.install(nullFile())).toBe(0);
     expect(t.install(nullFile(), 10)).toBe(10);
   });
@@ -33,10 +33,10 @@ describe('FdTable', () => {
     const r = t.install(read, 3);
     const w = t.install(write, 3);
     t.dup2(w, 1);
-    t.close(w);
+    await t.close(w);
     await t.get(1).file.write?.(bytes('via fd 1'));
     expect(text(await t.get(r).file.read!(64))).toBe('via fd 1');
-    t.close(1);
+    await t.close(1);
     expect(await t.get(r).file.read!(64)).toHaveLength(0);
   });
 
@@ -55,9 +55,9 @@ describe('FdTable', () => {
     const r = parent.install(read);
     const w = parent.install(write);
     const child = parent.fork();
-    parent.close(w);
+    await parent.close(w);
     await child.get(w).file.write?.(bytes('from child'));
-    child.closeAll();
+    await child.closeAll();
     expect(text(await parent.get(r).file.read!(64))).toBe('from child');
     expect(await parent.get(r).file.read!(64)).toHaveLength(0);
   });
@@ -67,7 +67,7 @@ describe('FdTable', () => {
     const { read, write } = openPipe();
     const r = t.install(read);
     const w = t.install(write);
-    t.close(r);
+    await t.close(r);
     await expect(t.get(w).file.write!(bytes('x'))).rejects.toMatchObject({ code: 'EPIPE' });
   });
 
@@ -89,7 +89,7 @@ describe('FdTable', () => {
     const r = other.install(read);
     t.install(write);
     t.dup(0);
-    t.closeAll();
+    await t.closeAll();
     expect(await other.get(r).file.read!(8)).toHaveLength(0);
   });
 });

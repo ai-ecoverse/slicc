@@ -7,6 +7,7 @@ import {
   type OpenFile,
   sinkFile,
 } from './fd-table.js';
+import type { ForkState } from './protocol.js';
 
 export type ChildStdio =
   | { fd: number }
@@ -35,6 +36,8 @@ export class SpawnError extends Error {
 }
 
 export type ChildSpawner = (req: ChildSpawnRequest, fds: FdTable) => Promise<ChildHandle>;
+
+export type ChildForker = (state: ForkState, fds: FdTable) => Promise<ChildHandle>;
 
 interface Child {
   exited: Promise<number>;
@@ -65,8 +68,14 @@ export class ChildTable {
 
   constructor(
     private readonly parentFds: FdTable,
-    private readonly spawner: ChildSpawner | undefined
+    private readonly spawner: ChildSpawner | undefined,
+    private readonly forker?: ChildForker
   ) {}
+
+  async fork(state: ForkState): Promise<number> {
+    if (!this.forker) throw new SpawnError('ENOSYS');
+    return this.track(state, this.parentFds.fork(), new Map(), this.forker);
+  }
 
   async spawn(req: ChildSpawnRequest, stdio: readonly ChildStdio[]): Promise<number> {
     if (!this.spawner) throw new SpawnError('ENOSYS');
@@ -75,14 +84,23 @@ export class ChildTable {
     try {
       for (const [n, slot] of stdio.entries()) fds.installAt(n, this.openSlot(slot, n, captured));
     } catch (e) {
-      fds.closeAll();
+      await fds.closeAll();
       throw e;
     }
+    return this.track(req, fds, captured, this.spawner);
+  }
+
+  private async track<R>(
+    req: R,
+    fds: FdTable,
+    captured: Map<number, Uint8Array[]>,
+    start: (req: R, fds: FdTable) => Promise<ChildHandle>
+  ): Promise<number> {
     let handle: ChildHandle;
     try {
-      handle = await this.spawner(req, fds);
+      handle = await start(req, fds);
     } catch (e) {
-      fds.closeAll();
+      await fds.closeAll();
       throw e;
     }
     const child: Child = { exited: handle.exited, captured };

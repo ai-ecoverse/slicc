@@ -1,6 +1,14 @@
 import { KernelPipe, PipeError } from './pipe.js';
 
-export type KernelErrno = 'EBADF' | 'EPIPE' | 'EMFILE' | 'EINVAL' | 'ENOENT' | 'ECHILD' | 'ENOSYS';
+export type KernelErrno =
+  | 'EBADF'
+  | 'EPIPE'
+  | 'EMFILE'
+  | 'EINVAL'
+  | 'ENOENT'
+  | 'ECHILD'
+  | 'ENOSYS'
+  | 'ESPIPE';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {
@@ -21,9 +29,13 @@ export interface KernelFile {
 
   write?(bytes: Uint8Array): Promise<number>;
 
-  close(): void;
+  close(): void | Promise<void>;
 
   poll?(): PollState;
+
+  seek?(offset: number, whence: number): Promise<number>;
+
+  flush?(): Promise<void>;
 }
 
 export function pollFile(file: KernelFile): PollState {
@@ -40,9 +52,9 @@ export class OpenFile {
     return this;
   }
 
-  release(): void {
+  release(): void | Promise<void> {
     this.refs -= 1;
-    if (this.refs === 0) this.file.close();
+    if (this.refs === 0) return this.file.close();
   }
 }
 
@@ -122,18 +134,18 @@ export class FdTable {
         return fd;
       }
     }
-    file.release();
+    void Promise.resolve(file.release()).catch(() => undefined);
     throw new KernelError('EMFILE');
   }
 
   installAt(fd: number, file: OpenFile): void {
     if (fd < 0 || fd >= FdTable.MAX_FDS) {
-      file.release();
+      void Promise.resolve(file.release()).catch(() => undefined);
       throw new KernelError('EBADF');
     }
     const previous = this.fds.get(fd);
     this.fds.set(fd, file);
-    previous?.release();
+    void Promise.resolve(previous?.release()).catch(() => undefined);
   }
 
   dup(fd: number, min = 0): number {
@@ -146,10 +158,10 @@ export class FdTable {
     return newFd;
   }
 
-  close(fd: number): void {
+  close(fd: number): void | Promise<void> {
     const file = this.get(fd);
     this.fds.delete(fd);
-    file.release();
+    return file.release();
   }
 
   fork(): FdTable {
@@ -158,9 +170,9 @@ export class FdTable {
     return child;
   }
 
-  closeAll(): void {
+  async closeAll(): Promise<void> {
     const files = [...this.fds.values()];
     this.fds.clear();
-    for (const file of files) file.release();
+    await Promise.all(files.map((file) => Promise.resolve(file.release())));
   }
 }

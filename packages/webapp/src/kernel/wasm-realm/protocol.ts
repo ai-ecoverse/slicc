@@ -8,6 +8,25 @@ export interface WasmProgram {
   module: WebAssembly.Module;
 }
 
+export interface ForkState {
+  memory: Uint8Array;
+
+  currData: number;
+  forkSp: number;
+
+  callStackNames: Array<[number, string]>;
+
+  ppid: number;
+
+  streams?: ForkStream[];
+
+  cwd?: string;
+}
+
+export type ForkStream =
+  | { fd: number; kernel: number; kind: 'tty' | 'stream' | 'file' }
+  | { fd: number; path: string; flags: number };
+
 export interface WasmProcessInitMsg {
   type: typeof WASM_PROCESS_INIT;
   pid: number;
@@ -19,6 +38,8 @@ export interface WasmProcessInitMsg {
   cwd: string;
 
   sab: SharedArrayBuffer;
+
+  fork?: ForkState;
 }
 
 export interface WasmProcessExitMsg {

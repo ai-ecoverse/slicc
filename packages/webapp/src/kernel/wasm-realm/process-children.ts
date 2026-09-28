@@ -1,6 +1,7 @@
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
 import type { ChildStdio } from './children.js';
 import type { ProcessFs, ProcessStream } from './kernel-streams.js';
+import type { ForkState, ForkStream } from './protocol.js';
 import { wasiErrno } from './wasi-errno.js';
 
 export interface ProcessKernel {
@@ -13,6 +14,8 @@ export interface ProcessKernel {
   ): number;
 
   wait(pid: number, nohang: boolean): [number, number] | number;
+
+  fork(state: ForkState): number;
 }
 
 export interface ProcessKernelDeps {
@@ -24,6 +27,8 @@ export interface ProcessKernelDeps {
   beforeSpawn(): void;
 
   afterChild(): void;
+
+  describeFork(): ForkStream[];
 }
 
 function drain(Fs: ProcessFs, stream: ProcessStream): Uint8Array {
@@ -94,6 +99,17 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
       for (const n of captures) deliver(pid, n, fds[n] as number);
       reaped.set(pid, waited[1]);
       return pid;
+    },
+    fork(state) {
+      deps.beforeSpawn();
+      const streams = deps.describeFork();
+      const r = transport.call(
+        { op: 'proc-fork', state: { ...state, streams, cwd: Fs.cwd() } },
+        Infinity,
+        'proc-fork'
+      );
+      if (!r.ok) return -wasiErrno(r.errno);
+      return r.kind === 'json' ? (r.json as number) : -wasiErrno('EIO');
     },
     wait(pid, nohang) {
       const key = pid > 0 ? (reaped.has(pid) ? pid : undefined) : reaped.keys().next().value;

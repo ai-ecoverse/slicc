@@ -49,7 +49,7 @@ describe('WasmProcess syscalls', () => {
     const t = new FdTable();
     const { read, write } = openPipe();
     t.install(write);
-    read.release();
+    await Promise.resolve(read.release());
     const p = new WasmProcess(2002, t);
     expect(await p.syscall({ op: 'fd-write', fd: 0, body: bytes('y\n') })).toMatchObject({
       ok: false,
@@ -63,8 +63,8 @@ describe('WasmProcess syscalls', () => {
     writerFds.install(write);
     const writer = new WasmProcess(2003, writerFds);
     await writer.syscall({ op: 'fd-write', fd: 0, body: bytes('last') });
-    writer.exit();
-    writer.exit();
+    await writer.exit();
+    await writer.exit();
     expect(text(await read.file.read!(64))).toBe('last');
     expect(await read.file.read!(64)).toHaveLength(0);
   });

@@ -96,7 +96,7 @@ describe('ChildTable', () => {
     await expect(failing.spawn(REQ, [{ none: true }, { fd: 1 }])).rejects.toMatchObject({
       code: 'ENOENT',
     });
-    parent.closeAll();
+    await parent.closeAll();
     expect(close).toHaveBeenCalledTimes(1);
   });
 
@@ -110,7 +110,7 @@ describe('ChildTable', () => {
 describe('WasmProcess child syscalls', () => {
   it('spawns, waits and collects captured output; errors are errnos', async () => {
     const { spawner, ends, tables } = controllable();
-    const p = new WasmProcess(1, new FdTable(), spawner);
+    const p = new WasmProcess(1, new FdTable(), { spawner });
     const spawned = await p.syscall({
       op: 'proc-spawn',
       ...REQ,
@@ -135,5 +135,124 @@ describe('WasmProcess child syscalls', () => {
       ok: false,
       errno: 'ENOSYS',
     });
+  });
+});
+
+describe('fork', () => {
+  const state = { memory: new Uint8Array(0), currData: 0, forkSp: 0, callStackNames: [], ppid: 1 };
+
+  it("gives the child a copy of the parent's descriptor table and tracks it like a spawn", async () => {
+    const out: string[] = [];
+    const parent = new FdTable();
+    parent.installAt(
+      1,
+      sinkFile((b) => out.push(text(b)))
+    );
+    parent.installAt(
+      7,
+      sinkFile((b) => out.push(`7:${text(b)}`))
+    );
+    let childFds!: FdTable;
+    let end!: (code: number) => void;
+    const forker = vi.fn(async (_state, fds: FdTable) => {
+      childFds = fds;
+      return { pid: 50, exited: new Promise<number>((resolve) => (end = resolve)) };
+    });
+    const p = new WasmProcess(1, parent, { forker });
+    expect(await p.syscall({ op: 'proc-fork', state })).toEqual({
+      ok: true,
+      kind: 'json',
+      json: 50,
+    });
+    expect(forker.mock.calls[0]![0]).toBe(state);
+    await childFds.get(1).file.write!(bytes('from child'));
+    await childFds.get(7).file.write!(bytes('x'));
+    expect(out).toEqual(['from child', '7:x']);
+    end(0);
+    expect(await p.syscall({ op: 'proc-wait', pid: 50, nohang: false })).toEqual({
+      ok: true,
+      kind: 'json',
+      json: [50, 0],
+    });
+  });
+
+  it('fails with ENOSYS without a forker, and releases the copy when forking fails', async () => {
+    expect(
+      await new WasmProcess(1, new FdTable()).syscall({ op: 'proc-fork', state })
+    ).toMatchObject({
+      ok: false,
+      errno: 'ENOSYS',
+    });
+    const close = vi.fn();
+    const parent = new FdTable();
+    parent.installAt(3, new OpenFile({ read: async () => new Uint8Array(0), close }));
+    const failing = new WasmProcess(1, parent, {
+      forker: async () => {
+        throw new SpawnError('ENOENT');
+      },
+    });
+    expect(await failing.syscall({ op: 'proc-fork', state })).toMatchObject({ errno: 'ENOENT' });
+    await parent.closeAll();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('VFS file syscalls', () => {
+  it('hands a VFS file to the kernel and seeks its shared offset', async () => {
+    const fs = {
+      readFileBuffer: async () => bytes('0123456789'),
+      writeFile: async () => {},
+    };
+    const p = new WasmProcess(1, new FdTable(), { fs });
+    const opened = await p.syscall({ op: 'fd-open-vfs', path: '/f', flags: 0, position: 4 });
+    expect(opened).toEqual({ ok: true, kind: 'json', json: 3 });
+    const r = await p.syscall({ op: 'fd-read', fd: 3, max: 2 });
+    expect(r.ok && r.kind === 'bytes' && text(r.bytes)).toBe('45');
+    expect(await p.syscall({ op: 'fd-seek', fd: 3, offset: -1, whence: 2 })).toEqual({
+      ok: true,
+      kind: 'json',
+      json: 9,
+    });
+    const none = new WasmProcess(2, new FdTable());
+    expect(
+      await none.syscall({ op: 'fd-open-vfs', path: '/f', flags: 0, position: 0 })
+    ).toMatchObject({ errno: 'ENOSYS' });
+    const pipe = await p.syscall({ op: 'fd-pipe' });
+    const [readEnd] = (pipe.ok && pipe.kind === 'json' ? pipe.json : []) as number[];
+    expect(await p.syscall({ op: 'fd-seek', fd: readEnd!, offset: 0, whence: 0 })).toMatchObject({
+      errno: 'ESPIPE',
+    });
+  });
+
+  it('keeps orphan contents across open-vfs and flushes writable files', async () => {
+    const writes: string[] = [];
+    const fs = {
+      readFileBuffer: async () => {
+        throw new Error('ENOENT');
+      },
+      writeFile: async (_p: string, content: Uint8Array) => {
+        writes.push(text(content));
+      },
+    };
+    const p = new WasmProcess(1, new FdTable(), { fs });
+    const opened = await p.syscall({
+      op: 'fd-open-vfs',
+      path: '/tmp/gone',
+      flags: 2,
+      position: 0,
+      contents: bytes('live'),
+      orphan: true,
+    });
+    expect(opened).toEqual({ ok: true, kind: 'json', json: 3 });
+    const r = await p.syscall({ op: 'fd-read', fd: 3, max: 4 });
+    expect(r.ok && r.kind === 'bytes' && text(r.bytes)).toBe('live');
+    await p.exit();
+    expect(writes).toEqual([]);
+
+    const w = new WasmProcess(2, new FdTable(), { fs });
+    await w.syscall({ op: 'fd-open-vfs', path: '/out', flags: 1, position: 0 });
+    await w.syscall({ op: 'fd-write', fd: 3, body: bytes('done') });
+    expect(await w.syscall({ op: 'fd-flush', fd: 3 })).toEqual({ ok: true, kind: 'void' });
+    expect(writes).toEqual(['done']);
   });
 });
