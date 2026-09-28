@@ -89,8 +89,8 @@ export interface RunningProgram {
 }
 
 /**
- * Start `program` with `args` on the loopback network `net`; stdin is
- * /dev/null. Every child it spawns runs `program` again (with the argv it
+ * Start `program` with `args` and `env` on the loopback network `net`; stdin
+ * is /dev/null. Every child it spawns runs `program` again (with the argv it
  * asked for) on the descriptors the kernel built for it, and writes where
  * those lead: stdout / stderr here, unless redirected.
  */
@@ -99,7 +99,8 @@ export function runProgram(
   program: WasmProgram,
   args: string[],
   net: LoopbackNet,
-  argv0 = 'socktest'
+  argv0 = 'socktest',
+  env: Record<string, string> = {}
 ): RunningProgram {
   const out: string[] = [];
   const err: string[] = [];
@@ -124,7 +125,7 @@ export function runProgram(
       program,
       argv0,
       args: argv,
-      env: {},
+      env,
       cwd: '/',
       fds: table,
       fs: emptyFs,

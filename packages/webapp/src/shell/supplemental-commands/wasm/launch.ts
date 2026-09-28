@@ -25,6 +25,7 @@ import {
 import { type FdTable, KernelError, type OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import { JobTable } from '../../../kernel/wasm-realm/jobs.js';
+import { enableRealmNetwork } from '../../../kernel/wasm-realm/net/realm-network.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
 import { type LoopbackNet, loopbackNet, ownerKey } from '../../../kernel/wasm-realm/socket.js';
@@ -221,6 +222,8 @@ export class WasmSession {
     private readonly gate?: NativeGate
   ) {
     this.net = loopbackNet(ownerKey(processConfig?.owner));
+    // The owner's HTTP proxy, started by a program's first connection to it.
+    enableRealmNetwork(this.net, { process: processConfig });
   }
 
   /** The installed commands, scanned once per invocation. */

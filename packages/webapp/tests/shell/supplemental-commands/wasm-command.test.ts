@@ -7,6 +7,7 @@ const compile = vi.hoisted(() => vi.fn());
 vi.mock('../../../src/kernel/realm/wasm-compiler.js', () => ({ compileWasmFromVfs: compile }));
 
 import { sinkFile } from '../../../src/kernel/wasm-realm/fd-table.js';
+import { realmNetworkEnv } from '../../../src/kernel/wasm-realm/net/realm-network.js';
 import { runWasmCommand } from '../../../src/shell/supplemental-commands/wasm/run.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
@@ -76,10 +77,27 @@ describe('wasm command', () => {
     expect(opts.program).toEqual({ glue: 'GLUE', module: { compiled: true } });
     expect(opts.argv0).toBe('sort');
     expect(opts.args).toEqual(['-r']);
-    expect(opts.env).toEqual({ A: '1' });
+    // The realm's proxy settings, under the shell's exports.
+    expect(opts.env).toEqual({ ...realmNetworkEnv(), A: '1' });
     expect(opts.cwd).toBe('/w');
     expect(compile.mock.calls[0][1]).toBe('/w/bin/coreutils.wasm');
     expect(r).toEqual({ stdout: '\xff\x00A', stderr: 'warn\n', exitCode: 4, stdoutKind: 'bytes' });
+  });
+
+  it('lets a proxy setting the shell exports win over the realm default, even an empty one', async () => {
+    compile.mockResolvedValue({});
+    spawn.mockImplementation((opts) => ({
+      pid: opts.pid,
+      exited: Promise.resolve(0),
+      kill: vi.fn(),
+    }));
+    const c = ctx({ '/w/curl.js': 'G', '/w/curl.wasm': 'W' });
+    c.exportedEnv = { https_proxy: 'http://corp:8080', http_proxy: '' };
+    await runWasmCommand(['curl.js'], c);
+    const env = spawn.mock.calls[0][0].env;
+    expect(env.https_proxy).toBe('http://corp:8080');
+    expect(env.http_proxy).toBe('');
+    expect(env.no_proxy).toBe(realmNetworkEnv().no_proxy);
   });
 
   it('starts the program with the extra descriptors close-on-exec: its own, not its children', async () => {
@@ -379,8 +397,8 @@ describe('wasm command', () => {
       screen.exportedEnv = { TERM: 'screen-256color' };
       await runWasmCommand(['-t', 'sh.js'], screen, { terminal: { lease: () => lease } });
       await runWasmCommand(['sh.js'], ctx(files));
-      expect(envs[0]).toEqual({ TERM: 'screen-256color' });
-      expect(envs[1]).toEqual({ A: '1' });
+      expect(envs[0]).toEqual({ ...realmNetworkEnv(), TERM: 'screen-256color' });
+      expect(envs[1]).toEqual({ ...realmNetworkEnv(), A: '1' });
     });
 
     it('shows a process crash on the terminal at once, not only in the final stderr', async () => {
