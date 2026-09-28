@@ -10,8 +10,8 @@
  */
 import type { ProcessManager, ProcessOwner } from '../../process-manager.js';
 import type { LoopbackNet } from '../socket.js';
-import { proxiedFetchTransport } from './fetch-transport.js';
 import { REALM_PROXY_PORT, RealmProxy, type RealmProxyOptions } from './proxy-service.js';
+import { realmFetchTransport } from './raw-transport.js';
 import { realmCa } from './realm-ca.js';
 import { loadTlsEngine } from './tls-engine.js';
 import { TlsTerminator, type TlsTerminatorOptions } from './tls-tunnel.js';
@@ -51,7 +51,7 @@ export interface RealmNetworkProcess {
 export interface RealmNetworkOptions {
   /** Registers the running proxy as a `net` process of its owner. */
   process?: RealmNetworkProcess;
-  /** The way out; the float's fetch path by default. */
+  /** The way out; the float's fetch path by default (raw mode where it has one). */
   transport?: () => RealmTransport;
   /** Extra proxy options (limits). */
   proxy?: Pick<RealmProxyOptions, 'limits'>;
@@ -148,7 +148,7 @@ export function enableRealmNetwork(net: LoopbackNet, options: RealmNetworkOption
   running.set(net, state);
   let transport: RealmTransport | undefined;
   net.activate({ family: 'inet', host: '127.0.0.1', port: REALM_PROXY_PORT }, () => {
-    transport ??= (options.transport ?? proxiedFetchTransport)();
+    transport ??= (options.transport ?? realmFetchTransport)();
     const tls = terminator(options.tls);
     const proxy = new RealmProxy({ net, transport, tunnel: tls?.handler, ...options.proxy });
     state.proxy = proxy;
