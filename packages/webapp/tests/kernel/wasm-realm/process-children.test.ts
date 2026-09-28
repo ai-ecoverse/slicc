@@ -182,4 +182,13 @@ describe('createProcessKernel', () => {
     const plain = kernel(() => ({ ok: false, errno: 'EINTR', message: 'EINTR' }));
     expect(plain.k.wait(-1, false)).toBe(-27);
   });
+
+  it('select(): kernel fds go to the kernel and map back; others fall back (null)', () => {
+    const { k, calls } = kernel(() => json({ read: [1], write: [] }));
+    expect(k.select([0, 1], [2], 100)).toEqual({ read: [1], write: [] });
+    expect(calls).toEqual([{ op: 'fd-select', read: [0, 1], write: [2], timeoutMs: 100 }]);
+    expect(k.select([5], [], 0)).toBeNull();
+    const refused = kernel(() => ({ ok: false, errno: 'EINTR', message: 'EINTR' }));
+    expect(refused.k.select([0], [], -1)).toBe(-27);
+  });
 });

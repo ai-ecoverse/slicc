@@ -20,6 +20,12 @@ export interface ProcessKernel {
   kill(pid: number, sig: number): number;
 
   execWait(pid: number): number;
+
+  select(
+    read: number[],
+    write: number[],
+    timeoutMs: number
+  ): { read: number[]; write: number[] } | number | null;
 }
 
 export interface ProcessKernelDeps {
@@ -124,6 +130,26 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
       );
       if (!r.ok) return -wasiErrno(r.errno);
       return r.kind === 'json' ? (r.json as number) : -wasiErrno('EIO');
+    },
+    select(read, write, timeoutMs) {
+      const kernel = (fd: number) => Fs.getStream(fd)?.sliccKernelFd;
+      const kr = read.map(kernel);
+      const kw = write.map(kernel);
+      if ([...kr, ...kw].some((k) => k === undefined)) return null;
+      const r = transport.call(
+        { op: 'fd-select', read: kr as number[], write: kw as number[], timeoutMs },
+        Infinity,
+        'select'
+      );
+      if (!r.ok) return -wasiErrno(r.errno);
+      const got = (r.kind === 'json' ? r.json : { read: [], write: [] }) as {
+        read: number[];
+        write: number[];
+      };
+      return {
+        read: read.filter((_, i) => got.read.includes(kr[i] as number)),
+        write: write.filter((_, i) => got.write.includes(kw[i] as number)),
+      };
     },
     execWait(pid) {
       const r = transport.call({ op: 'proc-exec', pid }, Infinity, `exec ${pid}`);

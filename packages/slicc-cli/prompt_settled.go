@@ -62,6 +62,11 @@ func (a *allSettled) observe(typ string, raw []byte, now time.Time) {
 
 
 
+
+
+
+
+
 func (a *allSettled) applyRoster(raw []byte, now time.Time) {
 	var msg struct {
 		Scoops []struct {
@@ -79,17 +84,23 @@ func (a *allSettled) applyRoster(raw []byte, now time.Time) {
 		present[s.Jid] = true
 		switch s.State {
 		case "working", "initializing":
-			a.busy[s.Jid] = true
+			if !a.busy[s.Jid] {
+				a.busy[s.Jid] = true
+				a.last = now
+			}
 		case "idle", "broken":
-			delete(a.busy, s.Jid)
+			if a.busy[s.Jid] {
+				delete(a.busy, s.Jid)
+				a.last = now
+			}
 		}
 	}
 	for jid := range a.busy {
 		if jid != "" && !present[jid] {
 			delete(a.busy, jid)
+			a.last = now
 		}
 	}
-	a.last = now
 }
 
 

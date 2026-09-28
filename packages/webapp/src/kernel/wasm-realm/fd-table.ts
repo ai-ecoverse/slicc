@@ -35,6 +35,8 @@ export interface KernelFile {
 
   poll?(): PollState;
 
+  changed?(signal?: AbortSignal): Promise<void>;
+
   seek?(offset: number, whence: number): Promise<number>;
 
   flush?(): Promise<void>;
@@ -76,6 +78,7 @@ export function openPipe(capacity?: number): { read: OpenFile; write: OpenFile }
       },
       close: () => pipe.closeRead(),
       poll: () => ({ readable: pipe.readReady, writable: false, hangup: pipe.writersGone }),
+      changed: (signal) => pipe.changed(signal),
     }),
     write: new OpenFile({
       write: async (bytes, signal) => {
@@ -88,6 +91,7 @@ export function openPipe(capacity?: number): { read: OpenFile; write: OpenFile }
       },
       close: () => pipe.closeWrite(),
       poll: () => ({ readable: false, writable: pipe.writeReady, hangup: pipe.readersGone }),
+      changed: (signal) => pipe.changed(signal),
     }),
   };
 }
