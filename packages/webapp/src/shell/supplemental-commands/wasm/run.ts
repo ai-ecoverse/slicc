@@ -18,7 +18,7 @@
  * An abort or the output limit ends the whole process tree.
  */
 import type { CommandContext } from 'just-bash';
-import { LOGIN_PROMPT_COMMAND } from '../../../kernel/login-shell-marks.js';
+import { LOGIN_PROMPT_COMMAND, LOGIN_RC, LOGIN_RC_FD } from '../../../kernel/login-shell-marks.js';
 import {
   bytesSource,
   FdTable,
@@ -108,7 +108,7 @@ export interface RunWasmOptions {
   /** Output as it is written (piped stdio): the caller's live tee. */
   onOutput?: (text: string) => void;
   /**
-   * Descriptors beyond 0-2 the program starts with (piped stdio), by number:
+   * Descriptors beyond 0-2 the program starts with, by number:
    * close-on-exec, so they stay the program's own and never reach what it runs.
    */
   fds?: ReadonlyArray<readonly [number, OpenFile]>;
@@ -220,7 +220,11 @@ async function loginShell(ctx: CommandContext, options: RunWasmOptions): Promise
   if (!(await installedCommands(ctx)).has('bash')) return none;
   // Not a login bash (-l): the environment is already the slicc shell's,
   // which sourced ~/.profile; reading it again would repeat its effects.
-  return runWasmCommand(['-t', '--login-prompt', 'bash', '-i'], ctx, options);
+  // Its rc comes on a private descriptor, not from a file: any file bash
+  // could read, another scoop could write (`/tmp`).
+  const rc = bytesSource(new TextEncoder().encode(LOGIN_RC));
+  const args = ['-t', '--login-prompt', 'bash', '--rcfile', `/dev/fd/${LOGIN_RC_FD}`, '-i'];
+  return runWasmCommand(args, ctx, { ...options, fds: [[LOGIN_RC_FD, rc]] });
 }
 
 function listing(commands: Map<string, WasmCommand>): string {
@@ -319,10 +323,10 @@ export async function runWasmCommand(
     report = (message) => lease.write(new TextEncoder().encode(`wasm: ${message}\r\n`));
   } else {
     stdio = pipedStdio(ctx, session, err, options.onOutput);
-    for (const [fd, file] of options.fds ?? []) {
-      stdio.fds.installAt(fd, file);
-      stdio.fds.setCloseOnExec(fd);
-    }
+  }
+  for (const [fd, file] of options.fds ?? []) {
+    stdio.fds.installAt(fd, file);
+    stdio.fds.setCloseOnExec(fd);
   }
   const { fds } = stdio;
 
