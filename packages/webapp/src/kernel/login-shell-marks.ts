@@ -5,6 +5,14 @@ const MARKS = /\x1b\]7777;(\d+)\x07/g;
 
 export const LOGIN_PROMPT_COMMAND = String.raw`printf '\033]7777;%s\007' "$?"`;
 
+export const LOGIN_RC_FD = 98;
+
+export const LOGIN_RC = [
+  'if [ -f ~/.bashrc ]; then . ~/.bashrc; fi',
+  `exec ${LOGIN_RC_FD}<&-`,
+  '',
+].join('\n');
+
 interface Capture {
   out: string;
   resolve: (result: TerminalExecResult) => void;

@@ -1,5 +1,5 @@
 import type { CommandContext } from 'just-bash';
-import { LOGIN_PROMPT_COMMAND } from '../../../kernel/login-shell-marks.js';
+import { LOGIN_PROMPT_COMMAND, LOGIN_RC, LOGIN_RC_FD } from '../../../kernel/login-shell-marks.js';
 import {
   bytesSource,
   FdTable,
@@ -187,7 +187,9 @@ async function loginShell(ctx: CommandContext, options: RunWasmOptions): Promise
   }
   if (!(await installed(ctx, options)).has('bash')) return none;
 
-  return runWasmCommand(['-t', '--login-prompt', 'bash', '-i'], ctx, options);
+  const rc = bytesSource(new TextEncoder().encode(LOGIN_RC));
+  const args = ['-t', '--login-prompt', 'bash', '--rcfile', `/dev/fd/${LOGIN_RC_FD}`, '-i'];
+  return runWasmCommand(args, ctx, { ...options, fds: [[LOGIN_RC_FD, rc]] });
 }
 
 function listing(commands: Map<string, WasmCommand>): string {
@@ -284,10 +286,10 @@ export async function runWasmCommand(
     report = (message) => lease.write(new TextEncoder().encode(`wasm: ${message}\r\n`));
   } else {
     stdio = pipedStdio(ctx, session, err, options.onOutput);
-    for (const [fd, file] of options.fds ?? []) {
-      stdio.fds.installAt(fd, file);
-      stdio.fds.setCloseOnExec(fd);
-    }
+  }
+  for (const [fd, file] of options.fds ?? []) {
+    stdio.fds.installAt(fd, file);
+    stdio.fds.setCloseOnExec(fd);
   }
   const { fds } = stdio;
 
