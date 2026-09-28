@@ -960,14 +960,14 @@ describe('runTask', () => {
     expect(Object.keys(result.phases)).toEqual(['setupMs', 'promptMs', 'collectMs']);
     expect(result.health.before).toMatchObject({ ok: true, leaderDown: false });
     expect(result.health.after).toMatchObject({ ok: true });
-    // Tabs are closed right after the prompt, before the cost reading and the export.
+    // Keep tabs available while export checks for a late continuation.
     const promptAt = calls.indexOf(prompt);
     const closeAt = calls.findIndex(
       (c, i) => i > promptAt && label(c) === 'playwright-cli tab-close'
     );
     const exportAt = calls.findIndex((c) => c.command?.startsWith('session export'));
     expect(closeAt).toBeGreaterThan(promptAt);
-    expect(closeAt).toBeLessThan(exportAt);
+    expect(closeAt).toBeGreaterThan(exportAt);
   });
 
   it('parses alias@thinking and leaves a plain alias at default', () => {
@@ -1365,10 +1365,10 @@ describe('a prompt that returns while the agent still works', () => {
     expect(await stillWorking(leader, quiet, { sleep: noSleep })).toBe(false);
   });
 
-  it('records the run as an error before closing its tabs or collecting anything', async () => {
+  it('does not collect when an early prompt return never settles again', async () => {
     let spent = 0.1;
     const { leader, calls } = fakeLeader({
-      verbs: { model: ok('m\n'), prompt: ok('') },
+      verbs: { model: ok('m\n'), prompt: ok(''), wait: fail('did not settle') },
       commands: [[/^cost --json --all$/, () => costOf((spent += 0.5), Math.round(spent * 100))]],
     });
     const sleep = vi.fn(async () => {});
@@ -1382,11 +1382,10 @@ describe('a prompt that returns while the agent still works', () => {
       capture: { pollMs: 5 },
     }).catch((e) => e);
     expect(err).toBeInstanceOf(Error);
-    expect(err.message).toMatch(
-      /^slicc prompt returned after \d+ s while the agent was still working/
-    );
+    expect(err.message).toMatch(/agent resumed after settle and did not settle/);
     expect(err.stillWorking).toBe(true);
     expect(sleep).toHaveBeenCalledWith(7);
+    expect(calls.some((c) => c.kind === 'cli' && c.args[0] === 'wait')).toBe(true);
     expect(calls.some((c) => /session export/.test(c.command ?? ''))).toBe(false);
   });
 
@@ -1513,6 +1512,78 @@ describe('a prompt that returns while the agent still works', () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.stillWorking).toBe(true);
     expect(err.message).toMatch(/session export timed out/);
+  });
+
+  it('waits for a resumed agent, re-exports, and uses the cone transcript final answer', async () => {
+    const dir = '/tmp/bench/recovered';
+    const files = leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT)), TRANSCRIPT_PART_BYTES, dir);
+    let exports = 0;
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: ok('The scoops are working.'),
+        wait: ok('settled\n'),
+      },
+      commands: [
+        [/^cost --json --all$/, () => costOf(1 + exports, 10 + exports, 1 + exports)],
+        [
+          /^session export/,
+          () =>
+            exports++ === 0
+              ? { stdout: '', stderr: 'timed out', status: 1, timedOut: true }
+              : files.list(),
+        ],
+        [/^base64 '\/[^']*\/transcript\/parts\/x[a-z]+'$/, files.read],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x', slicc: { timeoutSeconds: 900 } },
+      runId: 'recovered',
+      model: 'm',
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    });
+    expect(calls.find((c) => c.kind === 'cli' && c.args[0] === 'wait')?.args).toEqual([
+      'wait',
+      '--allsettled',
+      PROMPT_ALL_SETTLED,
+    ]);
+    expect(exports).toBe(2);
+    expect(result.finalText).toBe('FINAL ANSWER: done');
+    expect(traceFromResult(result).metrics.resumed_after_settle).toBe(true);
+  });
+
+  it('recognizes a continuation when export succeeds after waiting for the cone', async () => {
+    const dir = '/tmp/bench/recovered-on-export';
+    const files = leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT)), TRANSCRIPT_PART_BYTES, dir);
+    let exports = 0;
+    const { leader, calls } = fakeLeader({
+      verbs: { model: ok('m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
+      commands: [
+        [/^cost --json --all$/, () => costOf(1 + exports, 10 + exports, 1 + exports)],
+        [
+          /^session export/,
+          () => {
+            exports += 1;
+            return files.list();
+          },
+        ],
+        files.commands[1],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x', slicc: { timeoutSeconds: 900 } },
+      runId: 'recovered-on-export',
+      model: 'm',
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    });
+    expect(calls.filter((c) => c.kind === 'cli' && c.args[0] === 'wait')).toHaveLength(1);
+    expect(exports).toBe(2);
+    expect(result.finalText).toBe('FINAL ANSWER: done');
+    expect(traceFromResult(result).metrics.resumed_after_settle).toBe(true);
   });
 
   it('collects as usual when spend has stopped', async () => {

@@ -681,6 +681,22 @@ export function transcriptSteps(doc) {
   return { steps, models: [...models].sort(), assistantTurns };
 }
 
+/** The cone's last assistant text, after any scoop-triggered continuation. */
+export function lastConeAssistantText(doc) {
+  const conversations = (doc?.conversations ?? []).filter((c) => c.kind === 'cone');
+  for (const conversation of conversations.reverse()) {
+    for (const message of [...(conversation.messages ?? [])].reverse()) {
+      if (message.role !== 'assistant') continue;
+      return (message.content ?? [])
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text ?? '')
+        .join('')
+        .trim();
+    }
+  }
+  return '';
+}
+
 /** What a tool call did, as a coarse category: the command or path itself is never kept. */
 export function toolKind(part) {
   const target = String(part.input?.command ?? part.input?.path ?? part.input?.file ?? '');
@@ -762,6 +778,7 @@ export function traceFromResult(result) {
       exitCode: result.exitCode,
       timedOut: Boolean(result.timedOut),
       ...(result.costCapped ? { cost_capped: true } : {}),
+      ...(result.resumedAfterSettle ? { resumed_after_settle: true } : {}),
       tabs: result.tabs ?? [],
       model: result.modelId ?? null,
       modelsUsed: t.models,
@@ -888,6 +905,80 @@ export function watchSpend(leader, before, maxCost, abort, pollMs = COST_POLL_MS
   };
 }
 
+async function waitForResumedAgent(leader, deadline, now) {
+  const remaining = deadline - now();
+  if (remaining <= 0) {
+    const err = new Error('agent resumed after settle, but the task timeout expired');
+    err.stillWorking = true;
+    throw err;
+  }
+  const settled = await leader.cli(['wait', '--allsettled', PROMPT_ALL_SETTLED], {
+    timeoutMs: remaining,
+  });
+  if (settled.status !== 0 || settled.timedOut) {
+    const err = new Error('agent resumed after settle and did not settle before the task timeout');
+    err.stillWorking = true;
+    err.leaderDown = Boolean(settled.leaderDown);
+    throw err;
+  }
+  return spend(leader);
+}
+
+async function collectAfterPrompt({
+  leader,
+  dir,
+  reply,
+  after,
+  checkPrompt,
+  busyProbeMs,
+  sleep,
+  deadline,
+  now,
+}) {
+  let resumedAfterSettle = false;
+  if (checkPrompt && (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep }))) {
+    after = await waitForResumedAgent(leader, deadline, now);
+    resumedAfterSettle = true;
+  }
+  if (!after) after = await spend(leader);
+  let { doc: transcript, info: transcriptExport } = await exportTranscript(leader, dir, { now });
+  // Export waits for processing scoops. A late tool result or lick can wake
+  // the cone after prompt's quiet window. It may succeed after that work
+  // finishes; a final cone message absent from prompt stdout reveals the
+  // continuation even without an export timeout.
+  const unseenFinal = lastConeAssistantText(transcript);
+  const absentFromPrompt = unseenFinal && !String(reply.stdout ?? '').includes(unseenFinal);
+  const observedAfterExport =
+    checkPrompt && !resumedAfterSettle && absentFromPrompt ? await spend(leader) : null;
+  const continuedDuringExport =
+    checkPrompt &&
+    !resumedAfterSettle &&
+    absentFromPrompt &&
+    (!after || !observedAfterExport || spendRising(after, observedAfterExport));
+  if (observedAfterExport) after = observedAfterExport;
+  if ((!transcriptExport.ok && transcriptExport.reason === 'timeout') || continuedDuringExport) {
+    after = await waitForResumedAgent(leader, deadline, now);
+    resumedAfterSettle = true;
+    ({ doc: transcript, info: transcriptExport } = await exportTranscript(leader, dir, {
+      now,
+      budgetMs: Math.min(TRANSCRIPT_BUDGET_MS, Math.max(0, deadline - now())),
+    }));
+    if (!transcriptExport.ok && transcriptExport.reason === 'timeout') {
+      const err = new Error('session export timed out again after the agent settled');
+      err.stillWorking = true;
+      throw err;
+    }
+  }
+  if (resumedAfterSettle && !transcript) {
+    const err = new Error(
+      `agent settled but its final transcript could not be exported: ${transcriptExport.stage ?? 'unknown'} ${transcriptExport.reason ?? 'unknown'}`
+    );
+    err.stillWorking = true;
+    throw err;
+  }
+  return { after, transcript, transcriptExport, resumedAfterSettle };
+}
+
 /**
  * Run one task on the leader through the `slicc` CLI. Setup failures throw (the run never
  * happened), and so does a prompt that never reached the leader: both carry `leaderDown` when
@@ -970,39 +1061,22 @@ export async function runTask({
         throw err;
       }
       after = quiet.spend;
-    } else if (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep })) {
-      const err = new Error(
-        `slicc prompt returned after ${Math.round(durationMs / 1000)} s while the agent was still working (its spend kept rising)`
-      );
-      err.stillWorking = true;
-      throw err;
     }
     const openTabs = (await tabs(leader)).map((t) => t.url);
-    // Close what the cone left open before the slower collection: a live page left running
-    // keeps the leader busy.
-    await closeTabs(leader).catch(() => {});
-
-    if (!after) after = await spend(leader);
-    const { doc: transcript, info: transcriptExport } = await exportTranscript(leader, dir, {
+    const collected = await collectAfterPrompt({
+      leader,
+      dir,
+      reply,
+      after,
+      checkPrompt: !interrupted,
+      busyProbeMs,
+      sleep,
+      deadline: started + timeout * 1000,
       now,
     });
-    // session export waits while any scoop is processing. A timeout after the
-    // spend looked flat can still be that wait — the agent resumed. A lost
-    // transcript of a run that is still busy is not scored.
-    if (!transcriptExport.ok && transcriptExport.reason === 'timeout') {
-      const tail = await awaitQuiescent(leader, {
-        probeMs: busyProbeMs,
-        sleep,
-        maxIntervals: 1,
-      });
-      if (!tail.stopped) {
-        const err = new Error(
-          'session export timed out while the agent was still working (its spend kept rising)'
-        );
-        err.stillWorking = true;
-        throw err;
-      }
-    }
+    after = collected.after;
+    const { transcript, transcriptExport, resumedAfterSettle } = collected;
+    await closeTabs(leader).catch(() => {});
     const { taken, images } = await readShots(leader, shots);
     health.after = await leaderHealth(leader, now);
     const done = now();
@@ -1015,12 +1089,13 @@ export async function runTask({
       exitCode: reply.status,
       timedOut: Boolean(reply.timedOut),
       costCapped: Boolean(reply.aborted),
-      finalText: reply.stdout,
+      finalText: resumedAfterSettle ? lastConeAssistantText(transcript) : reply.stdout,
       stderr: reply.stderr.slice(-4000),
-      durationMs,
+      durationMs: resumedAfterSettle ? done - started : durationMs,
       ...spendDelta(before, after),
       transcript,
       transcriptExport,
+      resumedAfterSettle,
       tabs: openTabs,
       screenshots: images,
       screenshotsTaken: taken,
