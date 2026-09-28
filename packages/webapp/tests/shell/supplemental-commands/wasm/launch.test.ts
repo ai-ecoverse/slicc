@@ -156,7 +156,7 @@ describe('WasmSession', () => {
     expect(spawn.mock.calls.length).toBe(launched); // no worker started
   });
 
-  it('starts a program with its package’s env defaults; the caller’s env wins', async () => {
+  it('starts a program with its own command’s env defaults; the caller’s env wins', async () => {
     fakeProcesses();
     const files = {
       ...installed,
@@ -164,15 +164,18 @@ describe('WasmSession', () => {
         name: '@ai-ecoverse/wasm-gnu',
         slicc: {
           env: { CONF: 'etc/conf', MODE: 'default' },
-          commands: { tac: { glue: 'bin/core', wasm: 'bin/core.wasm', argv0: 'tac' } },
+          // One multi-call glue, two commands with their own defaults.
+          commands: {
+            tac: { glue: 'bin/core', wasm: 'bin/core.wasm', argv0: 'tac', env: { WHO: 'tac' } },
+            rev: { glue: 'bin/core', wasm: 'bin/core.wasm', argv0: 'rev', env: { WHO: 'rev' } },
+          },
         },
       }),
     };
     const session = new WasmSession(ctx(files), undefined, () => {});
+    const target = await session.resolve('tac', 'tac', '/w');
     await session.launch({
-      glue: `${PKG}/bin/core`,
-      module: `${PKG}/bin/core.wasm`,
-      argv0: 'tac',
+      ...target!,
       args: [],
       env: { MODE: 'mine', A: '1' },
       cwd: '/w',
@@ -180,6 +183,7 @@ describe('WasmSession', () => {
     });
     expect(spawn.mock.calls.at(-1)![0].env).toEqual({
       CONF: `${PKG}/etc/conf`,
+      WHO: 'tac',
       MODE: 'mine',
       A: '1',
     });

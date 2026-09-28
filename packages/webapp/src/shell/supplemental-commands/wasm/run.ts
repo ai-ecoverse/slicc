@@ -59,6 +59,8 @@ interface Invocation {
   login?: boolean;
   program: string;
   args: string[];
+  /** The installed command's environment defaults (its manifest's `env`). */
+  defaults?: Readonly<Record<string, string>>;
 }
 
 function parse(args: string[]): Invocation | undefined {
@@ -240,6 +242,7 @@ async function resolveInstalled(
     argv0: call.argv0 ?? command.argv0,
     module: call.module ?? command.wasm,
     program: command.glue,
+    defaults: command.env,
   };
 }
 
@@ -315,6 +318,7 @@ export async function runWasmCommand(
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
       env: programEnv(ctx, call),
+      defaults: call.defaults,
       cwd: ctx.cwd,
       fds,
       signal: ctx.signal,
