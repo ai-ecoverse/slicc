@@ -17,6 +17,22 @@ const MARKS = /\x1b\]7777;(\d+)\x07/g;
 /** What the login shell's `PROMPT_COMMAND` defaults to: the mark, with `$?`. */
 export const LOGIN_PROMPT_COMMAND = String.raw`printf '\033]7777;%s\007' "$?"`;
 
+/** The descriptor the login shell's rc arrives on (`bash --rcfile /dev/fd/98`). */
+export const LOGIN_RC_FD = 98;
+
+/**
+ * The login shell's rc: ~/.bashrc, as bash reads it without one, then the
+ * descriptor closed. Its first command runs before the first prompt, which
+ * bash needs: without one, the save of PIPESTATUS around the first
+ * `PROMPT_COMMAND` finds no array, and restoring that leaves PIPESTATUS dead
+ * for the session (`false | true; echo ${PIPESTATUS[@]}` prints nothing).
+ */
+export const LOGIN_RC = [
+  'if [ -f ~/.bashrc ]; then . ~/.bashrc; fi',
+  `exec ${LOGIN_RC_FD}<&-`,
+  '',
+].join('\n');
+
 interface Capture {
   out: string;
   resolve: (result: TerminalExecResult) => void;

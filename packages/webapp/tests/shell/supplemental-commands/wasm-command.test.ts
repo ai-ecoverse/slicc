@@ -6,6 +6,7 @@ vi.mock('../../../src/kernel/wasm-realm/host.js', () => ({ spawnWasmProcess: spa
 const compile = vi.hoisted(() => vi.fn());
 vi.mock('../../../src/kernel/realm/wasm-compiler.js', () => ({ compileWasmFromVfs: compile }));
 
+import { LOGIN_RC, LOGIN_RC_FD } from '../../../src/kernel/login-shell-marks.js';
 import { sinkFile } from '../../../src/kernel/wasm-realm/fd-table.js';
 import { runWasmCommand } from '../../../src/shell/supplemental-commands/wasm/run.js';
 
@@ -266,10 +267,45 @@ describe('wasm command', () => {
       expect(r.exitCode).toBe(0);
       const opts = spawn.mock.calls.at(-1)![0];
       expect(opts.program.glue).toBe('BASH');
-      expect(opts.args).toEqual(['-i']); // not -l: the slicc shell already sourced ~/.profile
+      // Not -l: the slicc shell already sourced ~/.profile. Its rc arrives on a private fd.
+      expect(opts.args).toEqual(['--rcfile', `/dev/fd/${LOGIN_RC_FD}`, '-i']);
       expect(opts.env).toMatchObject({ PS1: '\\w $ ', TERM: 'xterm-256color' });
       expect(opts.env.PROMPT_COMMAND).toContain('7777');
       expect(lease.release).toHaveBeenCalled();
+    });
+
+    it("--login gives bash an rc that reads ~/.bashrc, on an fd its children don't inherit", async () => {
+      // Without a command before the first prompt, bash's save/restore of
+      // PIPESTATUS around PROMPT_COMMAND leaves the array dead for the session.
+      const bashPkg = '/shared/lib/node_modules/@ai-ecoverse/wasm-bash';
+      const files = {
+        [`${bashPkg}/package.json`]: JSON.stringify({
+          name: '@ai-ecoverse/wasm-bash',
+          slicc: { commands: { bash: { glue: 'bin/bash', wasm: 'bin/bash.wasm' } } },
+        }),
+        [`${bashPkg}/bin/bash`]: 'BASH',
+        [`${bashPkg}/bin/bash.wasm`]: 'W',
+      };
+      let rc = '';
+      let cloexec = false;
+      spawn.mockImplementation(async (opts) => {
+        rc = new TextDecoder().decode(await opts.fds.get(LOGIN_RC_FD).file.read(4096));
+        cloexec = opts.fds.closesOnExec(LOGIN_RC_FD);
+        return { pid: opts.pid, exited: Promise.resolve(0), kill: vi.fn() };
+      });
+      const lease = {
+        cols: 80,
+        rows: 24,
+        write: () => {},
+        onInput: () => {},
+        onResize: () => {},
+        release: vi.fn(),
+      };
+      await runWasmCommand(['--login'], ctx(files), { terminal: { lease: () => lease } });
+      expect(rc).toBe(LOGIN_RC);
+      expect(rc).toContain('if [ -f ~/.bashrc ]; then . ~/.bashrc; fi');
+      expect(rc).toContain(`exec ${LOGIN_RC_FD}<&-`);
+      expect(cloexec).toBe(true);
     });
 
     it('--login answers 125 silently without bash, a terminal, or when opted out', async () => {
