@@ -131,7 +131,7 @@ export class LinkPreviewFetcher {
   /** Preview `url`. Never rejects: a failure is an `error`-state preview. */
   preview(url: string): Promise<LinkPreview> {
     const cached = this.#cache.get(url);
-    if (cached) return cached;
+    if (cached != null) return cached;
     const pending = this.#build(url).catch((): LinkPreview => ({ url, state: 'error' }));
     this.#cache.set(url, pending);
     if (this.#cache.size > this.#maxEntries) {

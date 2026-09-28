@@ -245,7 +245,7 @@ export class FileMentionResolver {
   /** The hint-free answer, memoized. Hinted answers are layered on top of it. */
   #baseAnswer(normalized: string): Promise<ResolvedMention> {
     const cached = this.#answers.get(normalized);
-    if (cached) return cached;
+    if (cached != null) return cached;
 
     const pending = this.#resolveUncached(normalized).catch(
       (): ResolvedMention => ({ query: normalized, matches: [] })
@@ -299,7 +299,7 @@ export class FileMentionResolver {
 
   #hintIsFile(path: string): Promise<boolean> {
     const cached = this.#hintChecks.get(path);
-    if (cached) return cached;
+    if (cached != null) return cached;
     const pending = this.#isFile(path);
     this.#hintChecks.set(path, pending);
     return pending;
