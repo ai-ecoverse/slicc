@@ -140,6 +140,8 @@ export interface LiveNodeOps {
 
 export interface LiveStreamOps {
   open(stream: LiveFsStream): void;
+  /** Emscripten's `FS.dupStream` calls it for the copy (dup, dup2, fcntl F_DUPFD). */
+  dup(stream: LiveFsStream): void;
   close(stream: LiveFsStream): void;
   read(
     stream: LiveFsStream,
@@ -483,6 +485,15 @@ function createStreamOps(h: LiveHelpers): LiveStreamOps {
   const { Fs, statOf, ensureLoaded, ensureCapacity, flushNode } = h;
   return {
     open(stream) {
+      if (!Fs.isFile(stream.node.mode)) return;
+      stream.node.live.openCount++;
+    },
+    // dup / dup2 is one more open of the same buffer. A shell's redirection
+    // opens a file, dup2s it onto fd 1 and closes the original: uncounted,
+    // that close took the count to 0 while fd 1 still wrote, and the next
+    // invalidate (after a child ran) dropped the node, whose writes then
+    // never reached the VFS (`cmd > file` in a forked bash came out empty).
+    dup(stream) {
       if (!Fs.isFile(stream.node.mode)) return;
       stream.node.live.openCount++;
     },
