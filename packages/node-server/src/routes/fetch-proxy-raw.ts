@@ -20,6 +20,7 @@
  * text bodies are scrubbed, including `Location`.
  */
 
+import { Readable } from 'node:stream';
 import {
   decodeRawRequestHead,
   encodeRawResponseFrame,
@@ -38,6 +39,7 @@ import {
   rawAcceptEncoding,
   rawResponseHasBody,
   rawResponseHeaders,
+  rawUploadStreams,
   stripRawRequestHeaders,
 } from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
@@ -99,10 +101,33 @@ type PreparedUpstream =
   | { url: string; init: RequestInit };
 
 /** Build the upstream request with secrets injected, or name the forbidden one. */
+/** The upload as received: buffered whole, or streamed through untouched. */
+type Upload = { buffered: Buffer } | { streamed: ReadableStream<Uint8Array> };
+
+/**
+ * A chunked upload (the webapp streams large non-text bodies) that the
+ * shared policy lets through without buffering. Text and HMAC-signed bodies
+ * are buffered even when they arrive chunked, so they can be unmasked and
+ * signed.
+ */
+function isStreamedUpload(req: Request, head: RawFetchRequestHead): boolean {
+  if (req.headers['content-length'] !== undefined) return false;
+  if (req.headers['transfer-encoding'] === undefined) return false;
+  const method = head.method.toUpperCase();
+  if (method === 'GET' || method === 'HEAD') return false;
+  return rawUploadStreams({ headers: head.headers, bodyLength: undefined, canStream: true });
+}
+
+/** The caller's own `Content-Length`, forwarded when its body streams. */
+function declaredLength(head: RawFetchRequestHead): string | undefined {
+  const value = head.headers.find(([name]) => name.toLowerCase() === 'content-length')?.[1];
+  return value !== undefined && /^\d+$/.test(value.trim()) ? value.trim() : undefined;
+}
+
 async function prepareUpstream(
   secretProxy: SecretProxyManager,
   head: RawFetchRequestHead,
-  rawBody: Buffer
+  upload: Upload
 ): Promise<PreparedUpstream> {
   const headers = foldRawRequestHeaders(stripRawRequestHeaders(head.headers));
   const hmacSpec = headers[HMAC_SIGN_HEADER];
@@ -119,15 +144,26 @@ async function prepareUpstream(
   const injection = injectRequestSecrets(secretProxy, headers, head.url, hostname);
   if ('forbidden' in injection) return injection;
 
+  const init: RequestInit & { duplex?: 'half' } = {
+    method: head.method,
+    headers,
+    redirect: 'manual',
+  };
+  if ('streamed' in upload) {
+    const length = declaredLength(head);
+    if (length !== undefined) headers['content-length'] = length;
+    init.body = upload.streamed as unknown as RequestInit['body'];
+    init.duplex = 'half';
+    return { url: injection.cleanedUrl, init };
+  }
+
   const method = head.method.toUpperCase();
   let body: Buffer | undefined;
-  if (rawBody.length > 0 && method !== 'GET' && method !== 'HEAD') {
-    body = unmaskRequestBody(secretProxy, headers, rawBody, hostname);
+  if (upload.buffered.length > 0 && method !== 'GET' && method !== 'HEAD') {
+    body = unmaskRequestBody(secretProxy, headers, upload.buffered, hostname);
   }
   const signing = await applyHmacSigning(secretProxy, headers, hmacSpec, body, hostname);
   if (signing) return signing;
-
-  const init: RequestInit = { method: head.method, headers, redirect: 'manual' };
   if (body) init.body = body as unknown as RequestInit['body'];
   return { url: injection.cleanedUrl, init };
 }
@@ -185,7 +221,8 @@ export function isRawFetchProbe(req: Request): boolean {
 export function answerRawFetchProbe(res: Response, maxRequestBodyBytes: number): void {
   const reply: RawFetchProbeReply = {
     rawFetch: RAW_FETCH_PROTOCOL_VERSION,
-    requestBodyStreaming: false,
+    // Chunked non-text uploads stream upstream (`isStreamedUpload`).
+    requestBodyStreaming: true,
     maxRequestBodyBytes,
   };
   res.setHeader('Cache-Control', 'no-store');
@@ -204,9 +241,11 @@ export async function handleRawFetchProxy(
     sendProxyError(res, 400, `Malformed ${RAW_FETCH_REQUEST_HEADER} header`);
     return;
   }
-  let rawBody: Buffer;
+  let upload: Upload;
   try {
-    rawBody = await readBoundedBody(req, limit);
+    upload = isStreamedUpload(req, head)
+      ? { streamed: Readable.toWeb(req) as unknown as ReadableStream<Uint8Array> }
+      : { buffered: await readBoundedBody(req, limit) };
   } catch (err) {
     if (!(err instanceof RequestBodyTooLargeError)) throw err;
     logger.warn(`[fetch-proxy:raw] ${head.method} ${head.url} → 413`);
@@ -216,7 +255,7 @@ export async function handleRawFetchProxy(
   }
   logger.log(`[fetch-proxy:raw] ${head.method} ${head.url}`);
 
-  const prepared = await prepareUpstream(secretProxy, head, rawBody);
+  const prepared = await prepareUpstream(secretProxy, head, upload);
   if ('forbidden' in prepared) {
     const { secretName, hostname } = prepared.forbidden;
     logger.warn(`[fetch-proxy:raw] ${head.method} ${head.url} → 403 (secret "${secretName}")`);
