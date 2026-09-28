@@ -55,34 +55,6 @@ export function degradeOversizeAgentEvent(event: AgentEvent): AgentEvent | null 
   }
 }
 
-/**
- * First tray-sync protocol version whose peers derive a unit's role from
- * `ScoopSummary.parentId` alone, so the leader may drop the derived `isCone`
- * flag when talking to them (#2358 stage 2).
- *
- * Everything below — including a peer that never sent `hello` — keeps
- * receiving it. That is not hypothetical politeness: every iOS / Sliccstart
- * build shipped before the optional-decode change decodes `isCone` as a
- * REQUIRED `Bool`, and a `scoops.list` without it fails to decode outright,
- * costing those followers the whole roster.
- */
-export const PARENT_ID_ONLY_PROTOCOL_VERSION_MIN = 8;
-
-/**
- * Strip the deprecated `isCone` flag for a peer that does not need it (#2358).
- *
- * The projection (`toScoopSummaries`) keeps emitting the flag so the leader has
- * ONE summary shape; the gate lives here, at the only place that knows which
- * peer a payload is headed for.
- */
-export function scoopsListForPeer(
-  scoops: readonly ScoopSummary[],
-  peerProtocolVersion: number | undefined
-): ScoopSummary[] {
-  if ((peerProtocolVersion ?? 0) < PARENT_ID_ONLY_PROTOCOL_VERSION_MIN) return [...scoops];
-  return scoops.map(({ isCone: _isCone, ...rest }) => rest);
-}
-
 export class BroadcastManager {
   constructor(private readonly context: LeaderSyncContext) {}
 
@@ -330,7 +302,7 @@ export class BroadcastManager {
     try {
       follower.sync.send({
         type: 'scoops.list',
-        scoops: scoopsListForPeer(getScoops(), follower.peerProtocolVersion),
+        scoops: getScoops(),
         activeScoopJid: this.context.options.getScoopJid(),
       });
     } catch (err) {
@@ -369,16 +341,14 @@ export class BroadcastManager {
       });
       return;
     }
-    // Per-follower, not one `broadcast()`: the `isCone` gate is keyed on each
-    // peer's own `hello` version, so the payload differs per follower (#2358).
-    // Biscotto seats need no check here — `scoops.list` is withheld at their
-    // channel, which is where the one guest boundary lives.
-    const activeScoopJid = this.context.options.getScoopJid();
-    this.context.followers.broadcastPerFollower((follower) => ({
+    // One payload for every peer: the ownership edge is the sole role source
+    // (#2358 stage 3). Biscotto seats need no check here — `scoops.list` is
+    // withheld at their channel, which is where the one guest boundary lives.
+    this.broadcast({
       type: 'scoops.list',
-      scoops: scoopsListForPeer(scoops, follower.peerProtocolVersion),
-      activeScoopJid,
-    }));
+      scoops,
+      activeScoopJid: this.context.options.getScoopJid(),
+    });
   }
 
   broadcastSprinklesList(): void {

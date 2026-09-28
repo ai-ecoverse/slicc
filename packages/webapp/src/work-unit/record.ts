@@ -4,10 +4,9 @@
  *
  * The record no longer carries a role: `parentJid === null` (`isRootUnit`)
  * IS the root test and the compiler enforces it, because the field a branch
- * would read is gone. `isCone` survives only on the TRAY wire
- * (`ScoopSummary`), projected from `isRootUnit` by `toScoopSummaries` and
- * stripped per peer at protocol version 8 (#2358). Records persisted before
- * #2279 still carry `isCone` / `type` on disk;
+ * would read is gone. The tray wire's `ScoopSummary` carries the same edge as
+ * `parentId` (#2358 stage 3 deleted the derived `isCone` flag). Records
+ * persisted before #2279 still carry `isCone` / `type` on disk;
  * {@link normalizeScoopRecord} tolerates and strips them on restore.
  */
 

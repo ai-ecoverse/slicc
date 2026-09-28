@@ -1,7 +1,6 @@
 import type { ScoopSummary } from '../../scoops/tray-sync-protocol.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
-import { isRootUnit } from '../../work-unit/policy.js';
 import { modelFor } from '../../work-unit/record.js';
 import type { SwitcherScoop } from './wc-shell.js';
 import type { UnitRole } from './wc-unit-context.js';
@@ -106,10 +105,7 @@ export function toScoopSummaries(
       jid: scoop.jid,
       name: scoop.name,
       folder: scoop.folder,
-      // The wire keeps `isCone` for followers below protocol version 8; it is
-      // projected from the ownership edge, never read off the record (#2279).
-      // `BroadcastManager` strips it again per peer (#2358 stage 2).
-      isCone: isRootUnit(scoop),
+      // The ownership edge is the sole role source on the wire (#2358 stage 3).
       parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
       // Strip ordering input, so a follower orders cones the way the leader
@@ -132,27 +128,16 @@ export function toScoopSummaries(
 /**
  * `true` when a wire summary describes a root (cone).
  *
- * The ownership edge decides wherever the leader sends it: `null` is a root,
- * a jid is owned. An ABSENT edge falls back to the deprecated `isCone` flag,
- * and only that case does — the exact mirror of the Swift rule
- * (`ScoopSummary.isRootUnit`, `parentId == nil && (isCone ?? true)`), so the
- * two follower families never disagree about the same payload.
- *
- * The fallback is not hypothetical: a hosted leader tab opened before
- * `parentId` landed and never reloaded still sends `{ isCone }` alone. Without
- * it such a roster has ZERO roots, every unit reads as owned, and the follower
- * composer unmounts silently while iOS on the same bytes still finds its cone.
- *
- * **This is the last `.isCone` read in TypeScript.** Stage 3 of
- * [#2358](https://github.com/ai-ecoverse/slicc/issues/2358) deletes the
- * fallback and the wire field together.
+ * The ownership edge is the sole role source (#2358 stage 3): `null` is a
+ * root, a jid is owned. An ABSENT edge is unknown — never invent a root.
+ * Mirrors Swift's `ScoopSummary.isRootUnit`.
  */
-export function summaryIsRoot(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): boolean {
-  return scoop.parentId === undefined ? scoop.isCone === true : scoop.parentId === null;
+export function summaryIsRoot(scoop: Pick<ScoopSummary, 'parentId'>): boolean {
+  return scoop.parentId === null;
 }
 
 /** The switcher descriptor's role for a wire summary — the follower's half of `unitRoleFor`. */
-export function summaryRole(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): UnitRole {
+export function summaryRole(scoop: Pick<ScoopSummary, 'parentId'>): UnitRole {
   return summaryIsRoot(scoop) ? 'cone' : 'scoop';
 }
 
@@ -161,9 +146,7 @@ export function summaryRole(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): U
  *
  * `parentId` stays possibly-`undefined` on purpose: a leader that omits the
  * edge leaves the owner UNKNOWN, and inventing one would turn a scoop into a
- * root. `role` still answers what the unit is, through `summaryIsRoot` — which
- * for that one case reads the deprecated `isCone` flag the same leader does
- * send.
+ * root. `role` answers what the unit is through `summaryIsRoot` (`null` only).
  */
 export function summaryToWorkUnit(scoop: ScoopSummary): WorkUnitSummary {
   const expanded = expandWireState(scoop);

@@ -60,11 +60,8 @@ export interface WorkUnitSummary {
    * Presentation role. CARRIED rather than derived by the reader, because the
    * two transports answer it from different fields on different record
    * shapes. Each adapter resolves it once — `isRootUnit` on a record,
-   * `summaryIsRoot` on a wire summary — so nothing downstream branches on the
-   * transport's shape. `summaryIsRoot` reads the ownership edge wherever the
-   * remote sends it and falls back to the deprecated `ScoopSummary.isCone`
-   * flag only when the edge is absent entirely — the one case #2358 stage 3
-   * will delete along with the field.
+   * `summaryIsRoot` on a wire summary (`parentId === null` alone since
+   * #2358 stage 3) — so nothing downstream branches on the transport's shape.
    */
   role: WorkUnitRole;
   name: string;

@@ -8,20 +8,16 @@ import XCTest
 /// selected scoop is the cone's work, not a conversation of its own, so the
 /// composer and every interactive card belong to the cone that owns it.
 final class ReadOnlyScoopTests: XCTestCase {
-    private func cone(
-        jid: String = "cone", parentId: String? = nil, isCone: Bool? = true
-    ) -> ScoopSummary {
+    private func cone(jid: String = "cone", parentId: String? = nil) -> ScoopSummary {
         ScoopSummary(
-            jid: jid, name: "cone", folder: "/workspace", isCone: isCone,
-            assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil, parentId: parentId)
+            jid: jid, name: "cone", folder: "/workspace", parentId: parentId, assistantLabel: "sliccy", trigger: nil,
+            state: nil, fill: nil)
     }
 
-    private func scoop(
-        jid: String = "reviewer", parentId: String? = "cone", isCone: Bool? = false
-    ) -> ScoopSummary {
+    private func scoop(jid: String = "reviewer", parentId: String? = "cone") -> ScoopSummary {
         ScoopSummary(
-            jid: jid, name: jid, folder: "/scoops/\(jid)", isCone: isCone,
-            assistantLabel: jid, trigger: nil, state: nil, fill: nil, parentId: parentId)
+            jid: jid, name: jid, folder: "/scoops/\(jid)", parentId: parentId, assistantLabel: jid, trigger: nil,
+            state: nil, fill: nil)
     }
 
     // MARK: - The rule
@@ -40,28 +36,13 @@ final class ReadOnlyScoopTests: XCTestCase {
         XCTAssertFalse(root.isReadOnly)
     }
 
-    /// A leader that predates `parentId` sends no edge at all, so the legacy
-    /// `isCone` flag settles that one case — and only that one.
-    func testLegacyLeaderWithoutParentIdFallsBackToIsCone() {
-        XCTAssertEqual(cone(parentId: nil, isCone: true).role, .cone)
-        XCTAssertEqual(scoop(parentId: nil, isCone: false).role, .scoop)
-        XCTAssertTrue(scoop(parentId: nil, isCone: false).isReadOnly)
-    }
-
-    /// The edge outranks the flag: anything owned is a scoop even if a leader
-    /// contradicts itself, which is what makes `isCone` removable (#2358).
-    func testOwnershipEdgeOutranksTheLegacyFlag() {
-        XCTAssertEqual(scoop(parentId: "cone", isCone: true).role, .scoop)
-    }
-
-    /// #2358: a leader that saw this app announce protocol version 8 stops
-    /// sending `isCone` altogether. The edge alone must still answer the role —
-    /// and the decoded wire, not just a hand-built struct, must reach it.
-    func testRoleResolvesFromTheEdgeWhenIsConeIsAbsent() throws {
-        XCTAssertEqual(cone(parentId: nil, isCone: nil).role, .cone)
-        XCTAssertFalse(cone(parentId: nil, isCone: nil).isReadOnly)
-        XCTAssertEqual(scoop(parentId: "cone", isCone: nil).role, .scoop)
-        XCTAssertTrue(scoop(parentId: "cone", isCone: nil).isReadOnly)
+    /// #2358 stage 3: the ownership edge alone answers the role — including
+    /// on a decoded wire payload, not just a hand-built struct.
+    func testRoleResolvesFromTheOwnershipEdge() throws {
+        XCTAssertEqual(cone(parentId: nil).role, .cone)
+        XCTAssertFalse(cone(parentId: nil).isReadOnly)
+        XCTAssertEqual(scoop(parentId: "cone").role, .scoop)
+        XCTAssertTrue(scoop(parentId: "cone").isReadOnly)
 
         let decoder = JSONDecoder()
         let root = try decoder.decode(
@@ -108,14 +89,6 @@ final class ReadOnlyScoopTests: XCTestCase {
 
         state.selectedScoopJid = nil
         XCTAssertFalse(state.selectedUnitIsReadOnly)
-    }
-
-    @MainActor
-    func testLegacyRosterWithoutParentIdStillHidesTheComposerForAScoop() {
-        let state = AppState()
-        state.scoops = [cone(parentId: nil), scoop(parentId: nil, isCone: false)]
-        state.selectedScoopJid = "reviewer"
-        XCTAssertTrue(state.selectedUnitIsReadOnly)
     }
 
     // MARK: - Sending

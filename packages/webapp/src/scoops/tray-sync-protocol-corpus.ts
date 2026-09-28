@@ -276,7 +276,6 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           jid: 'cone',
           name: 'sliccy',
           folder: '/workspace',
-          isCone: true,
           parentId: null,
           assistantLabel: 'Sliccy',
         },
@@ -288,7 +287,6 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           jid: 'thinker',
           name: 'thinker',
           folder: '/scoops/thinker',
-          isCone: false,
           parentId: 'cone',
           assistantLabel: 'Thinker',
           state: 'working',
@@ -299,7 +297,6 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           jid: 'tooler',
           name: 'tooler',
           folder: '/scoops/tooler',
-          isCone: false,
           parentId: 'cone',
           assistantLabel: 'Tooler',
           state: 'working',
@@ -310,7 +307,6 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           jid: 'waiter',
           name: 'waiter',
           folder: '/scoops/waiter',
-          isCone: false,
           parentId: 'cone',
           assistantLabel: 'Waiter',
           state: 'idle',
@@ -321,7 +317,6 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           jid: 'resting',
           name: 'resting',
           folder: '/scoops/resting',
-          isCone: false,
           parentId: 'cone',
           assistantLabel: 'Resting',
           state: 'idle',
@@ -331,7 +326,6 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           jid: 'tester',
           name: 'tester',
           folder: '/scoops/tester',
-          isCone: false,
           parentId: 'cone',
           assistantLabel: 'Tester',
           state: 'broken',
@@ -341,7 +335,6 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           jid: 'booting',
           name: 'booting',
           folder: '/scoops/booting',
-          isCone: false,
           parentId: 'cone',
           assistantLabel: 'Booting',
           state: 'initializing',
@@ -1263,14 +1256,7 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     jid: 'mirrored',
     name: 'mirrored',
     folder: 'mirrored',
-    // Still mirrored, but DEPRECATED: a leader that saw the peer announce
-    // protocol version 8 already omits it (#2358 stage 2), and stage 3 drops
-    // it from the wire. The fixture keeps it because the leader still sends it
-    // to every native build shipped before the optional-decode change; the
-    // "absent is decodable" half is proved in Swift
-    // (`ProtocolValueTypesTests.testScoopSummaryDecodesWithoutIsCone`), which a
-    // single golden sample cannot express.
-    isCone: 'mirrored',
+    // Ownership edge — sole role source since #2358 stage 3 deleted `isCone`.
     parentId: 'mirrored',
     assistantLabel: 'mirrored',
     // Strip-ordering input for the web follower (#2274). iOS builds its own
@@ -1293,7 +1279,6 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     name: 'reviewer',
     folder: '/scoops/reviewer',
     addedAt: '2026-08-24T10:00:00.000Z',
-    isCone: false,
     parentId: 'cone',
     assistantLabel: 'Reviewer',
     trigger: 'on-push',

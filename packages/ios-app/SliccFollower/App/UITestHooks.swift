@@ -77,8 +77,7 @@ import UIKit
         /// Seed one cone with one scoop it owns, so the read-only scoop view
         /// (#2367) is reachable without a leader: the composer belongs to the
         /// cone and must be gone while the scoop is selected. The scoop
-        /// carries `parentId`, which is what makes it a scoop — `isCone` only
-        /// settles the legacy case (see `ScoopSummary.isRootUnit`).
+        /// carries `parentId`, which is what makes it a scoop (#2358 stage 3).
         ///
         /// `-uiTestUnitRoleFixture scoop` starts on the scoop, so the
         /// read-only screen is reachable in one launch (screenshots, and a
@@ -95,12 +94,11 @@ import UIKit
                 return false
             }
             let cone = ScoopSummary(
-                jid: "fixture-cone", name: "cone", folder: "/workspace", isCone: true,
-                assistantLabel: "sliccy", trigger: nil, state: "idle", fill: 20)
+                jid: "fixture-cone", name: "cone", folder: "/workspace", parentId: nil, assistantLabel: "sliccy", trigger: nil, state: "idle", fill: 20)
             let scoop = ScoopSummary(
                 jid: "fixture-owned-scoop", name: "reviewer", folder: "/scoops/reviewer",
-                isCone: false, assistantLabel: "reviewer", trigger: nil, state: "working",
-                fill: 40, parentId: "fixture-cone")
+                parentId: "fixture-cone", assistantLabel: "reviewer", trigger: nil, state: "working",
+                fill: 40)
             appState.scoops = [cone, scoop]
             // `-uiTestTranscriptRepeat <n>` gives the cone a long transcript
             // beside the scoop's single row: switching between two units of
@@ -156,8 +154,7 @@ import UIKit
             jid: String, label: String, state: String?, fill: Double?
         ) -> ScoopSummary {
             ScoopSummary(
-                jid: jid, name: jid, folder: "/scoops/\(jid)", isCone: false,
-                assistantLabel: label, trigger: nil, state: state, fill: fill)
+                jid: jid, name: jid, folder: "/scoops/\(jid)", parentId: "cone", assistantLabel: label, trigger: nil, state: state, fill: fill)
         }
 
         /// Force the avatar/composer connection treatment into a given state. The stalled and

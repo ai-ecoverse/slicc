@@ -11,7 +11,6 @@ final class ScoopSummaryWidgetUnitTests: XCTestCase {
     private func summary(
         jid: String = "j1",
         name: String = "boy-scout",
-        isCone: Bool = false,
         parentId: String? = "cone",
         assistantLabel: String = "boy-scout",
         state: String? = "working",
@@ -21,18 +20,16 @@ final class ScoopSummaryWidgetUnitTests: XCTestCase {
         model: ScoopSummaryModel? = nil
     ) -> ScoopSummary {
         ScoopSummary(
-            jid: jid, name: name, folder: "/x", isCone: isCone,
-            assistantLabel: assistantLabel, trigger: trigger, state: state,
-            activity: activity, fill: fill, parentId: parentId, model: model)
+            jid: jid, name: name, folder: "/x", parentId: parentId, assistantLabel: assistantLabel, trigger: trigger,
+            state: state, activity: activity, fill: fill, model: model)
     }
 
     func testTheOwnershipEdgeDecidesTheRole() {
         XCTAssertEqual(summary(parentId: "cone").widgetUnit(isActive: false).role, .scoop)
+        XCTAssertEqual(summary(parentId: nil).widgetUnit(isActive: false).role, .cone)
         XCTAssertEqual(
-            summary(isCone: true, parentId: nil).widgetUnit(isActive: false).role, .cone)
-        XCTAssertEqual(
-            summary(isCone: false, parentId: nil).widgetUnit(isActive: false).role, .scoop,
-            "a leader that predates the edge falls back to isCone, and this one says false")
+            summary(parentId: "cone").widgetUnit(isActive: false).role, .scoop,
+            "an owned unit is a scoop even when the edge is the only signal")
     }
 
     func testLifecycleAndActivityCrossTheBoundaryIntact() {
@@ -94,11 +91,11 @@ final class AppStateWidgetSnapshotTests: XCTestCase {
         let state = AppState()
         state.scoops = [
             ScoopSummary(
-                jid: "cone", name: "cone", folder: "/", isCone: true, assistantLabel: "Sliccy",
-                state: "working", activity: "thinking", fill: 12, parentId: nil),
+                jid: "cone", name: "cone", folder: "/", parentId: nil, assistantLabel: "Sliccy",
+                state: "working", activity: "thinking", fill: 12),
             ScoopSummary(
-                jid: "s1", name: "s1", folder: "/s", isCone: false, assistantLabel: "boy-scout",
-                state: "broken", fill: 3, parentId: "cone"),
+                jid: "s1", name: "s1", folder: "/s", parentId: "cone", assistantLabel: "boy-scout",
+                state: "broken", fill: 3),
         ]
         state.leaderActiveScoopJid = "cone"
         state.selectedScoopJid = "cone"

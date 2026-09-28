@@ -439,15 +439,13 @@ func (p *promptTurn) ingestWireError(raw []byte) (int, bool) {
 
 // soleConeJid returns the only root in a `scoops.list` frame.
 //
-// A root is `parentId: null`. An absent `parentId` is not a root unless the
-// old `isCone` flag says so: a v10 leader always sends `parentId`, and a
-// follower must not invent one. Two roots is not a guess.
+// A root is `parentId: null`. An absent `parentId` is not a root: a follower
+// must not invent one (#2358 stage 3). Two roots is not a guess.
 func soleConeJid(raw []byte) (string, bool) {
 	var msg struct {
 		Scoops []struct {
 			Jid    string          `json:"jid"`
 			Parent json.RawMessage `json:"parentId"`
-			IsCone *bool           `json:"isCone"`
 		} `json:"scoops"`
 	}
 	if json.Unmarshal(raw, &msg) != nil {
@@ -455,7 +453,7 @@ func soleConeJid(raw []byte) (string, bool) {
 	}
 	cone := ""
 	for _, scoop := range msg.Scoops {
-		if scoop.Jid == "" || !rosterRoot(scoop.Parent, scoop.IsCone) {
+		if scoop.Jid == "" || !rosterRoot(scoop.Parent) {
 			continue
 		}
 		if cone != "" && cone != scoop.Jid {
@@ -469,11 +467,8 @@ func soleConeJid(raw []byte) (string, bool) {
 	return cone, true
 }
 
-func rosterRoot(parent json.RawMessage, isCone *bool) bool {
-	if len(parent) > 0 {
-		return string(parent) == "null"
-	}
-	return isCone != nil && *isCone
+func rosterRoot(parent json.RawMessage) bool {
+	return len(parent) > 0 && string(parent) == "null"
 }
 
 func quotedScoop(jid string) string {

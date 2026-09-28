@@ -62,7 +62,7 @@ CI-gated (`lint:layer-back-edges`; never grow baselines): webapp `fs/base → sh
 Flag new `Record<string, unknown>` in source. Require a named type,
 boundary validation, or a justified suppression; never grow the frozen baseline.
 Cone/scoop are roles over one `WorkUnit`; records have no role field. Route on policy /
-`isRootUnit` / `getWorkUnits()`. `isCone` is tray-wire write-only; flag every read.
+`isRootUnit` / `getWorkUnits()`. Tray role = `ScoopSummary.parentId` (#2358); `.isCone` is a type error.
 
 ## 12. Agent skill freshness
 

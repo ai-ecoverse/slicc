@@ -19,10 +19,10 @@ import "encoding/json"
 // assuming an un-advertised follower can serve one.
 //
 // v8 says this peer derives a unit's role from `ScoopSummary.parentId` alone
-// and does not need the deprecated `isCone` flag, so a leader may stop
-// projecting it for us (#2358). Safe to announce unconditionally here: the CLI
-// is exec-only and decodes no `ScoopSummary` at all — it has neither field, so
-// the roster shape cannot reach it. Bookkeeping again, not new surface.
+// (#2358). Stage 3 deleted the deprecated `isCone` flag from the wire;
+// announcing 8 is how a peer said it no longer needed that flag. Safe to
+// announce unconditionally here: the CLI is exec-only and decodes no
+// `ScoopSummary` at all — bookkeeping, not new surface.
 //
 // v9 is a LEADER capability (`request_snapshot.peek`, a snapshot that does not
 // move the peer's selection). The CLI never requests a snapshot of a unit it is

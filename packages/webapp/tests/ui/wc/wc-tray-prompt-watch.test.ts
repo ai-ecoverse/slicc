@@ -110,7 +110,7 @@ describe('tray role-switch follower: prompt silence hint', () => {
     handle.sendMessage('for cone 1', 'm1');
     // The view moves on: a roster that no longer carries cone_1 re-selects.
     role.options.onScoopsList?.(
-      [{ jid: 'cone_2', name: 'other', isCone: true, parentId: null }] as never,
+      [{ jid: 'cone_2', name: 'other', parentId: null }] as never,
       'cone_2'
     );
     await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS);
