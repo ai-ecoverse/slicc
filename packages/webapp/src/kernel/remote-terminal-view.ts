@@ -117,6 +117,15 @@ export class RemoteTerminalView {
   private loginSawPty = false;
   /** Its prompt marks: where a typed command's output ends, and its status. */
   private readonly marks = new LoginShellMarks();
+  private settleSession: () => void = () => {};
+  /**
+   * The session has started: the login probe answered (the prompt loop runs)
+   * or bash took the terminal. A programmatic command waits for it instead
+   * of finding the terminal "busy" with the probe.
+   */
+  private readonly sessionSettled = new Promise<void>((resolve) => {
+    this.settleSession = resolve;
+  });
   private reportedSize = '';
   /**
    * When true, the `handleEvent` route swallows `terminal-output`
@@ -222,6 +231,7 @@ export class RemoteTerminalView {
       terminal.writeln('');
     }
     void this.runPromptLoop();
+    this.settleSession();
   }
 
   /**
@@ -273,6 +283,8 @@ export class RemoteTerminalView {
   async executeCommandInTerminal(command: string): Promise<TerminalExecResult> {
     const trimmed = command.trim();
     if (!trimmed) return { stdout: '', stderr: '', exitCode: 0 };
+    // A mounted terminal first finishes starting its session (the login probe).
+    if (this.editor && !(this.loginShell && this.ptyMode)) await this.sessionSettled;
     if (this.loginShell && this.ptyMode) return this.typeIntoLoginShell(trimmed);
     if (!this.terminal || !this.editor) return this.client.exec(trimmed);
     if (
@@ -318,6 +330,7 @@ export class RemoteTerminalView {
   /** Tear down the view + close the worker session. */
   dispose(): void {
     this.disposed = true;
+    this.settleSession();
     this.rejectTerminalReady?.(new Error('terminal disposed'));
     this.editor?.abort(new Error('terminal disposed'));
     this.clearMediaPreview();
@@ -957,7 +970,10 @@ export class RemoteTerminalView {
         return;
       case 'terminal-mode':
         this.ptyMode = event.mode === 'pty';
-        if (this.ptyMode && this.loginShell) this.loginSawPty = true;
+        if (this.ptyMode && this.loginShell) {
+          this.loginSawPty = true;
+          this.settleSession();
+        }
         if (this.ptyMode) {
           this.reportedSize = '';
           this.reportSize();
