@@ -136,6 +136,8 @@ The benchmark runner uses `--allsettled 2m` (`PROMPT_ALL_SETTLED` in `packages/b
 
 `slicc <join-url> wait --allsettled <duration>` observes the same statuses, roster, and pending tools without sending a prompt. It starts a fresh quiet period when it connects, prints `settled` on success, and exits 130 on Ctrl+C without aborting the leader. Bench uses it if the cone resumes after its first settled prompt, including while `session export` waits for a working scoop. The runner requires this verb in the CLI help before starting.
 
+`slicc <join-url> abort` sends the same `abort` frame as an interrupted `prompt`. It prints `stopped` and exits 0 only after `abort_ack` confirms the cone and its scoops stopped; a missing confirmation exits 1 after `SLICC_ABORT_CONFIRM` (12 s by default). The bench uses this after a passive wait reaches the task timeout or cost cap. `abort --help` prints usage without stopping the leader.
+
 ## `thinking`
 
 `slicc <join-url> thinking [--json] [--allow-downgrade] [<level>]`, in `session.go`.

@@ -2,6 +2,8 @@
 // WebRTC and offers these verbs:
 //
 //	slicc <join-url> prompt "text"   stream one assistant turn, then exit
+//	slicc <join-url> wait --allsettled 2m  observe until the cone and scoops settle
+//	slicc <join-url> abort           stop the cone and scoops after confirmation
 //	slicc <join-url> exec "command"  run a command in the leader's shell, stream output
 //	slicc <join-url> new-session     start a fresh cone conversation ("New chat")
 //	slicc <join-url> model [id]      list the leader's models, or switch the cone's
@@ -97,6 +99,8 @@ func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) i
 		return runPromptVerb(ctx, joinURL, "prompt", rest)
 	case "wait":
 		return runWaitVerb(ctx, joinURL, rest)
+	case "abort":
+		return runAbortVerb(ctx, joinURL, rest)
 	case "exec":
 		if len(rest) == 0 {
 			fmt.Fprintln(os.Stderr, "slicc exec: missing command")
@@ -184,6 +188,7 @@ Usage:
   slicc <join-url> wait --allsettled <dur>
                                       Observe the leader without sending a prompt; exit once
                                       all units and tools are idle for the quiet period.
+  slicc <join-url> abort                 Stop the cone and its scoops; exit after abort_ack.
   slicc <join-url> exec "<command>"   Run a command in the leader's shell, stream stdout/stderr
   slicc <join-url> new-session [--save|--skip|--erase] [--timeout 30s]
                                       Start a fresh conversation on the cone, like "New chat":
