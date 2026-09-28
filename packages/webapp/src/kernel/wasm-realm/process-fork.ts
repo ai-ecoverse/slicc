@@ -12,10 +12,16 @@
  * The child: drop the runtime's default streams and rebuild the parent's
  * table — kernel-backed streams on placeholder nodes (a terminal, a pipe, or a
  * regular file for a VFS description, so fstat keeps its type), devices and
- * directories reopened by path.
+ * directories reopened by path. FD_CLOEXEC goes along.
+ *
+ * posix_spawn / execve hand a child the same kind of kernel descriptors: every
+ * fd beyond 0-2 that is not close-on-exec ({@link describeInherited}), which
+ * the child opens at the same numbers ({@link placeKernelStream}).
  */
+import type { InheritedSlot } from './children.js';
 import type { KernelStreams, ProcessFs, ProcessStream, ProcessSys } from './kernel-streams.js';
-import type { ForkStream } from './protocol.js';
+import { closesOnExec, O_CLOEXEC, setCloseOnExec } from './process-fds.js';
+import type { ForkStream, KernelStreamEntry } from './protocol.js';
 
 const O_RDWR = 0o2;
 const O_CREAT = 0o100;
@@ -47,6 +53,34 @@ function orphanContents(stream: ProcessStream): Uint8Array | undefined {
 }
 
 /**
+ * Hands the program's open VFS files to the kernel as shared descriptions,
+ * one per Emscripten description (`shared`): dups stay one description.
+ */
+function vfsPromoter(
+  Fs: ProcessFs,
+  sys: ProcessSys,
+  streams: KernelStreams,
+  livePath: (stream: ProcessStream) => string
+): (stream: ProcessStream) => void {
+  const promoted = new Map<object, number>();
+  return (stream) => {
+    if (stream.sliccKernelFd !== undefined || !isVfsFile(Fs, stream)) return;
+    let kfd = promoted.get(stream.shared);
+    if (kfd === undefined) {
+      const contents = orphanContents(stream);
+      kfd = sys.openVfs(
+        livePath(stream),
+        stream.flags,
+        stream.position,
+        contents !== undefined ? { contents, orphan: true } : undefined
+      );
+      promoted.set(stream.shared, kfd);
+    }
+    streams.attachFile(stream, kfd);
+  };
+}
+
+/**
  * Hand every open VFS file to the kernel and describe the fd table for the
  * child. Dups of one description (Emscripten's `shared`) stay one description.
  */
@@ -56,28 +90,16 @@ export function describeForFork(
   streams: KernelStreams,
   livePath: (stream: ProcessStream) => string
 ): ForkStream[] {
-  const promoted = new Map<object, number>();
+  const promote = vfsPromoter(Fs, sys, streams, livePath);
   const out: ForkStream[] = [];
   for (const stream of Fs.streams) {
     if (!stream) continue;
-    if (stream.sliccKernelFd === undefined && isVfsFile(Fs, stream)) {
-      let kfd = promoted.get(stream.shared);
-      if (kfd === undefined) {
-        const contents = orphanContents(stream);
-        kfd = sys.openVfs(
-          livePath(stream),
-          stream.flags,
-          stream.position,
-          contents !== undefined ? { contents, orphan: true } : undefined
-        );
-        promoted.set(stream.shared, kfd);
-      }
-      streams.attachFile(stream, kfd);
-    }
+    promote(stream);
     if (stream.sliccKernelFd !== undefined) {
       out.push(kernelEntry(stream, stream.sliccKernelFd));
     } else if (stream.path) {
-      out.push({ fd: stream.fd, path: stream.path, flags: stream.flags });
+      const flags = stream.flags | (closesOnExec(stream) ? O_CLOEXEC : 0);
+      out.push({ fd: stream.fd, path: stream.path, flags });
     }
   }
   return out;
@@ -85,10 +107,47 @@ export function describeForFork(
 
 /** A kernel-backed stream as the child rebuilds it (a socket keeps its O_NONBLOCK). */
 function kernelEntry(stream: ProcessStream, kernel: number): ForkStream {
-  if (stream.sliccKernelSocket)
-    return { fd: stream.fd, kernel, kind: 'socket', flags: stream.flags };
+  const cloexec = closesOnExec(stream) ? { cloexec: true } : {};
+  if (stream.sliccKernelSocket) {
+    return { fd: stream.fd, kernel, kind: 'socket', flags: stream.flags, ...cloexec };
+  }
   const kind = stream.sliccKernelFile ? 'file' : stream.tty ? 'tty' : 'stream';
-  return { fd: stream.fd, kernel, kind };
+  return { fd: stream.fd, kernel, kind, ...cloexec };
+}
+
+/**
+ * The fds beyond 0-2 a child the program spawns or execs inherits, at the
+ * same numbers: each one not close-on-exec, then `actions` (posix_spawn's
+ * file actions on fds beyond 2: `[target, source]`, source -1 closes). A VFS
+ * file is handed to the kernel first; a device or a file of the program's own
+ * memory FS has no kernel descriptor and stays behind.
+ */
+export function describeInherited(
+  Fs: ProcessFs,
+  sys: ProcessSys,
+  streams: KernelStreams,
+  livePath: (stream: ProcessStream) => string,
+  actions: ReadonlyArray<readonly [number, number]> = []
+): InheritedSlot[] {
+  const slots = new Map<number, ProcessStream>();
+  for (const stream of Fs.streams) {
+    if (stream && stream.fd > 2 && !closesOnExec(stream)) slots.set(stream.fd, stream);
+  }
+  for (const [target, source] of actions) {
+    if (target <= 2) continue;
+    const from = source >= 0 ? Fs.getStream(source) : null;
+    if (from) slots.set(target, from);
+    else slots.delete(target);
+  }
+  const promote = vfsPromoter(Fs, sys, streams, livePath);
+  const out: InheritedSlot[] = [];
+  for (const [fd, stream] of slots) {
+    promote(stream);
+    if (stream.sliccKernelFd === undefined) continue;
+    const flags = stream.sliccKernelSocket ? { flags: stream.flags } : {};
+    out.push({ fd, kernel: stream.sliccKernelFd, ...flags });
+  }
+  return out;
 }
 
 /** Move `stream` to exactly `fd`. */
@@ -111,6 +170,40 @@ function placeholder(
   return Fs.open(`${PLACEHOLDER_DIR}/${entry.fd}`, O_RDWR | O_CREAT);
 }
 
+/** st_mode of a FIFO (S_IFIFO | 0600). */
+const FIFO_MODE = 0o010600;
+/** Inode numbers of stream placeholders: one per description, clear of the FS's own. */
+let nextStreamIno = 0x40000000;
+
+/**
+ * fstat of a stream placeholder: a FIFO of its own. Every one sits on
+ * `/dev/null`, and two operands that stat as the same node are one file to
+ * `diff <(a) <(b)`, which then compares nothing.
+ */
+function asFifo(stream: ProcessStream): void {
+  const ino = nextStreamIno++;
+  const node = stream.node;
+  stream.stream_ops = {
+    ...stream.stream_ops,
+    getattr: () => ({ ...node.node_ops?.getattr?.(node), mode: FIFO_MODE, ino, size: 0 }),
+  };
+}
+
+/** Open program fd `entry.fd` on kernel descriptor `entry.kernel`, backed as `entry.kind` says. */
+export function placeKernelStream(
+  Fs: ProcessFs,
+  streams: KernelStreams,
+  entry: KernelStreamEntry
+): ProcessStream {
+  const stream = place(Fs, placeholder(Fs, streams, entry), entry.fd);
+  if (entry.kind === 'file') streams.attachFile(stream, entry.kernel);
+  else if (entry.kind === 'socket') streams.attachSocket(stream, entry.kernel);
+  else streams.attach(stream, entry.kernel, entry.kind === 'tty');
+  if (entry.kind === 'stream') asFifo(stream);
+  setCloseOnExec(stream, entry.cloexec === true);
+  return stream;
+}
+
 /** Rebuild the parent's fd table in the child. A device that no longer opens stays closed. */
 export function restoreForkedStreams(
   Fs: ProcessFs,
@@ -121,10 +214,7 @@ export function restoreForkedStreams(
   for (const entry of table) {
     try {
       if ('kernel' in entry) {
-        const stream = place(Fs, placeholder(Fs, streams, entry), entry.fd);
-        if (entry.kind === 'file') streams.attachFile(stream, entry.kernel);
-        else if (entry.kind === 'socket') streams.attachSocket(stream, entry.kernel);
-        else streams.attach(stream, entry.kernel, entry.kind === 'tty');
+        placeKernelStream(Fs, streams, entry);
       } else {
         place(Fs, Fs.open(entry.path, entry.flags & ~(O_CREAT | O_EXCL | O_TRUNC)), entry.fd);
       }

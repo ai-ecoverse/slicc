@@ -14,8 +14,11 @@ import {
   type ProcessSys,
   SyscallError,
 } from '../../../src/kernel/wasm-realm/kernel-streams.js';
+import { closesOnExec } from '../../../src/kernel/wasm-realm/process-fds.js';
 import {
   describeForFork,
+  describeInherited,
+  placeKernelStream,
   restoreForkedStreams,
 } from '../../../src/kernel/wasm-realm/process-fork.js';
 import { createSocketKernel } from '../../../src/kernel/wasm-realm/process-sockets.js';
@@ -170,6 +173,46 @@ describe('createSocketKernel', () => {
     expect(Fs.getStream(r.fd)?.sliccKernelFd).toBe(6);
     expect((Fs.getStream(r.fd)?.flags ?? 0) & O_NONBLOCK).toBe(0);
     expect(calls[1]).toEqual({ op: 'sock-accept', fd: 5, nonblock: true });
+  });
+
+  it('sets FD_CLOEXEC on the fds of a SOCK_CLOEXEC socket, socketpair and accept4 only', () => {
+    let next = 20;
+    const { net, Fs } = setup((req) => {
+      if (req.op === 'sock-pair') return json([next++, next++]);
+      if (req.op === 'sock-accept') return json({ fd: next++, peer: null });
+      return json(next++);
+    });
+    const cloexec = (fd: number) => closesOnExec(Fs.getStream(fd)!);
+    const s = net.socket('unix', false, true) as number;
+    const plain = net.socket('unix', false) as number;
+    const [a, b] = net.socketpair('unix', false, true) as [number, number];
+    const [c] = net.socketpair('unix', false) as [number, number];
+    const conn = (net.accept(s, false, true) as { fd: number }).fd;
+    const conn2 = (net.accept(s, false) as { fd: number }).fd;
+    expect([s, a, b, conn].map(cloexec)).toEqual([true, true, true, true]);
+    expect([plain, c, conn2].map(cloexec)).toEqual([false, false, false]);
+  });
+
+  it('hands a spawned child its inherited socket with O_NONBLOCK, and none that is close-on-exec', () => {
+    const { net, Fs, kstreams, sys } = setup((req) => json(req.op === 'sock-open' ? 30 : 0));
+    for (const n of [0, 1, 2]) Fs.open(`/dev/std${n}`, 2); // stdio is not what a child inherits here
+    const nb = net.socket('inet', true) as number;
+    expect(nb).toBe(3);
+    const closing = net.socket('inet', false, true) as number;
+    const slots = describeInherited(Fs, sys, kstreams, () => '');
+    expect(slots).toEqual([{ fd: nb, kernel: 30, flags: Fs.getStream(nb)!.flags }]);
+    expect(Fs.getStream(closing)?.sliccKernelSocket).toBe(true);
+    // The child's runtime: a socket stream at the same number, still non-blocking.
+    const { Fs: childFs } = fakeFs();
+    const child = placeKernelStream(childFs, new KernelStreams(childFs, sys), {
+      fd: 9,
+      kernel: 9,
+      kind: 'socket',
+      flags: slots[0]!.flags,
+    });
+    expect(child.fd).toBe(9);
+    expect(child.sliccKernelSocket).toBe(true);
+    expect(child.flags & O_NONBLOCK).toBe(O_NONBLOCK);
   });
 
   it('retries a call a caught signal interrupted when its handlers asked for SA_RESTART', () => {

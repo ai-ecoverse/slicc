@@ -8,6 +8,7 @@
  * blocking round trip over the Atomics/SAB bridge on the same port
  * (`sync-sab-req` / `sync-sab-next`, see `realm/sync-sab-wire.ts`).
  */
+import type { KernelFdKind } from './fd-table.js';
 
 export const WASM_PROCESS_INIT = 'wasm-process-init';
 export const WASM_PROCESS_EXIT = 'wasm-process-exit';
@@ -42,19 +43,33 @@ export interface ForkState {
 }
 
 /**
+ * A program fd backed by kernel descriptor `kernel`, and how to back it (a
+ * terminal, a seekable VFS file, a stream). `cloexec`: FD_CLOEXEC is set.
+ */
+export interface KernelStreamEntry {
+  fd: number;
+  kernel: number;
+  kind: KernelFdKind;
+  /** A socket's status flags (O_NONBLOCK), which the child's stream keeps. */
+  flags?: number;
+  cloexec?: boolean;
+}
+
+/**
  * One descriptor of a forked parent: backed by a kernel descriptor of the same
  * number in the child's table (the fork copied it), or a device the child
- * reopens by path.
+ * reopens by path (its flags carry O_CLOEXEC).
  */
-export type ForkStream =
-  | {
-      fd: number;
-      kernel: number;
-      kind: 'tty' | 'stream' | 'file' | 'socket';
-      /** A socket's status flags (O_NONBLOCK), which the child's stream keeps. */
-      flags?: number;
-    }
-  | { fd: number; path: string; flags: number };
+export type ForkStream = KernelStreamEntry | { fd: number; path: string; flags: number };
+
+/** A kernel descriptor beyond 0-2 a process starts with, open at the same number. */
+export interface InheritedFd {
+  fd: number;
+  kind: KernelFdKind;
+  /** A socket's status flags (O_NONBLOCK), which its stream keeps. */
+  flags?: number;
+  cloexec?: boolean;
+}
 
 export interface WasmProcessInitMsg {
   type: typeof WASM_PROCESS_INIT;
@@ -69,8 +84,12 @@ export interface WasmProcessInitMsg {
   sab: SharedArrayBuffer;
   /** A forked child: the parent's state to resume from, instead of running main. */
   fork?: ForkState;
-  /** Kernel descriptors beyond 0-2 the program starts with, open at the same numbers. */
-  fds?: number[];
+  /**
+   * Kernel descriptors beyond 0-2 the program starts with, open at the same
+   * numbers: what its spawner inherited to it (execve / posix_spawn), or a
+   * runner's private descriptor (close-on-exec).
+   */
+  fds?: InheritedFd[];
 }
 
 export interface WasmProcessExitMsg {

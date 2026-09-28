@@ -47,6 +47,54 @@ describe('ChildTable', () => {
     expect(await readAll(child!, 2)).toBe(''); // /dev/null
   });
 
+  it("inherits the parent's descriptors beyond 0-2 at the numbers asked for", async () => {
+    const out: string[] = [];
+    const parent = new FdTable();
+    parent.installAt(
+      7,
+      sinkFile((b) => out.push(text(b)))
+    );
+    const { spawner, tables } = controllable();
+    const children = new ChildTable(parent, spawner);
+    // A slot for 0-2 is the stdio's to decide; an inherited 1 is ignored.
+    await children.spawn(
+      REQ,
+      [{ none: true }],
+      [
+        { fd: 63, kernel: 7 },
+        { fd: 1, kernel: 7 },
+      ]
+    );
+    const [child] = tables;
+    expect(child!.numbers()).toEqual([0, 63]);
+    await child!.get(63).file.write!(bytes('via 63'));
+    expect(out).toEqual(['via 63']);
+    // The child holds its own reference: the parent's close leaves it open.
+    await parent.close(7);
+    await child!.get(63).file.write!(bytes(' still'));
+    expect(out).toEqual(['via 63', ' still']);
+  });
+
+  it('fails an inherited slot naming a closed parent descriptor with EBADF, releasing the rest', async () => {
+    const { spawner } = controllable();
+    const parent = new FdTable();
+    const closed = vi.fn();
+    parent.installAt(3, new OpenFile({ close: closed }));
+    const children = new ChildTable(parent, spawner);
+    await expect(
+      children.spawn(
+        REQ,
+        [],
+        [
+          { fd: 3, kernel: 3 },
+          { fd: 4, kernel: 9 },
+        ]
+      )
+    ).rejects.toMatchObject({ code: 'EBADF' });
+    await parent.close(3);
+    expect(closed).toHaveBeenCalledTimes(1); // the child's copy was released too
+  });
+
   it('waits for a given child or any, and honors nohang', async () => {
     const { spawner, ends } = controllable();
     const children = new ChildTable(new FdTable(), spawner);

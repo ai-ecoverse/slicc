@@ -13,7 +13,9 @@
  * runs concurrently and writes where the parent would), `/dev/null`, bytes the
  * parent hands over as its stdin, or a capture buffer the parent collects
  * after waiting — for a descriptor that lives only inside the parent's
- * program (a file or pipe of its Emscripten FS).
+ * program (a file or pipe of its Emscripten FS). Beyond 0-2, the child
+ * inherits the parent's descriptors that are not close-on-exec, at the same
+ * numbers ({@link InheritedSlot}): how `diff <(a) <(b)` hands diff its pipes.
  */
 import {
   bytesSource,
@@ -32,6 +34,16 @@ export type ChildStdio =
   | { input: Uint8Array }
   | { capture: true }
   | { none: true };
+
+/**
+ * A program fd beyond 0-2 the child inherits: the parent's kernel descriptor
+ * `kernel`, and for a socket its status flags (O_NONBLOCK).
+ */
+export interface InheritedSlot {
+  fd: number;
+  kernel: number;
+  flags?: number;
+}
 
 export interface ChildSpawnRequest {
   /** The program: a name or a path, as the parent passed it. */
@@ -159,12 +171,22 @@ export class ChildTable {
     return this.track(state, this.parentFds.fork(), new Map(), this.forker);
   }
 
-  async spawn(req: ChildSpawnRequest, stdio: readonly ChildStdio[]): Promise<number> {
+  async spawn(
+    req: ChildSpawnRequest,
+    stdio: readonly ChildStdio[],
+    inherit: readonly InheritedSlot[] = []
+  ): Promise<number> {
     if (!this.spawner) throw new SpawnError('ENOSYS');
     const fds = new FdTable();
     const captured = new Map<number, Uint8Array[]>();
     try {
       for (const [n, slot] of stdio.entries()) fds.installAt(n, this.openSlot(slot, n, captured));
+      // stdio is the file actions' to decide; an inherited 0-2 is already a slot.
+      for (const { fd, kernel, flags } of inherit) {
+        if (fd <= 2) continue;
+        fds.installAt(fd, this.parentFds.get(kernel).retain());
+        if (flags !== undefined) fds.setStatusFlags(fd, flags);
+      }
     } catch (e) {
       await fds.closeAll();
       throw e;

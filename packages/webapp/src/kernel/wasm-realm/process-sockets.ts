@@ -8,8 +8,9 @@
  * the program's FS, attached like a pipe end: `read` / `write` / `close` /
  * `dup` / `poll` / `select` work on it as on any kernel stream, and a forked
  * child shares it. `send` / `recv` add their flags (MSG_DONTWAIT, MSG_PEEK,
- * MSG_NOSIGNAL). Every call answers a value or a negative WASI errno, which
- * the shim hands to libc as `errno`.
+ * MSG_NOSIGNAL). SOCK_CLOEXEC (socket, socketpair, accept4) sets the new
+ * fd's FD_CLOEXEC (`process-fds.ts`). Every call answers a value or a
+ * negative WASI errno, which the shim hands to libc as `errno`.
  */
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
@@ -22,6 +23,7 @@ import {
   type ProcessSys,
   SyscallError,
 } from './kernel-streams.js';
+import { setCloseOnExec } from './process-fds.js';
 import type { SockAddr, SocketDomain } from './socket.js';
 import type { SocketSyscall } from './socket-syscalls.js';
 import { wasiErrno } from './wasi-errno.js';
@@ -32,14 +34,14 @@ const KILLED_BY_SIGPIPE = 128 + 13;
 
 /** What `slicc_socket.c` calls: results, or a negative WASI errno. */
 export interface SocketKernel {
-  /** socket(2): the program's new fd. */
-  socket(domain: SocketDomain, nonblock: boolean): number;
+  /** socket(2): the program's new fd (FD_CLOEXEC when `cloexec`: SOCK_CLOEXEC). */
+  socket(domain: SocketDomain, nonblock: boolean, cloexec?: boolean): number;
   /** socketpair(2): the two fds. */
-  socketpair(domain: SocketDomain, nonblock: boolean): [number, number] | number;
+  socketpair(domain: SocketDomain, nonblock: boolean, cloexec?: boolean): [number, number] | number;
   bind(fd: number, addr: SockAddr): number;
   listen(fd: number, backlog: number): number;
-  /** accept4(2): the new fd (O_NONBLOCK when `nonblock`) and the peer. */
-  accept(fd: number, nonblock: boolean): { fd: number; peer: SockAddr } | number;
+  /** accept4(2): the new fd (O_NONBLOCK when `nonblock`, FD_CLOEXEC when `cloexec`) and the peer. */
+  accept(fd: number, nonblock: boolean, cloexec?: boolean): { fd: number; peer: SockAddr } | number;
   /** connect(2): 0; -EINPROGRESS on a non-blocking socket (connected already all the same). */
   connect(fd: number, addr: SockAddr): number;
   shutdown(fd: number, how: number): number;
@@ -116,7 +118,7 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
   const kfd = (fd: number): number => socketAt(fd).sliccKernelFd;
 
   /** A program fd for kernel socket `k`; the kernel descriptor goes back if the FS is full. */
-  const install = (k: number, nonblock: boolean): number => {
+  const install = (k: number, nonblock: boolean, cloexec = false): number => {
     let stream: ProcessStream;
     try {
       stream = streams.socketStream(O_RDWR | (nonblock ? O_NONBLOCK : 0));
@@ -125,24 +127,25 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
       throw e;
     }
     streams.attachSocket(stream, k);
+    setCloseOnExec(stream, cloexec);
     return stream.fd;
   };
 
   return {
-    socket: (domain, nonblock) =>
-      guard(() => install(json({ op: 'sock-open', domain }) as number, nonblock)),
-    socketpair: (domain, nonblock) =>
+    socket: (domain, nonblock, cloexec) =>
+      guard(() => install(json({ op: 'sock-open', domain }) as number, nonblock, cloexec)),
+    socketpair: (domain, nonblock, cloexec) =>
       guard(() => {
         const [a, b] = json({ op: 'sock-pair', domain }) as [number, number];
         let first: number;
         try {
-          first = install(a, nonblock);
+          first = install(a, nonblock, cloexec);
         } catch (e) {
           sys.close(b);
           throw e;
         }
         try {
-          return [first, install(b, nonblock)] as [number, number];
+          return [first, install(b, nonblock, cloexec)] as [number, number];
         } catch (e) {
           // No room for the second end: the first goes too (its close releases kernel fd `a`).
           const stream = Fs.getStream(first);
@@ -153,7 +156,7 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
       }),
     bind: (fd, addr) => guard(() => done({ op: 'sock-bind', fd: kfd(fd), addr })),
     listen: (fd, backlog) => guard(() => done({ op: 'sock-listen', fd: kfd(fd), backlog })),
-    accept: (fd, nonblock) =>
+    accept: (fd, nonblock, cloexec) =>
       guard(() => {
         const listener = socketAt(fd);
         const req = {
@@ -162,7 +165,7 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
           nonblock: (listener.flags & O_NONBLOCK) !== 0,
         };
         const got = json(req) as { fd: number; peer: SockAddr };
-        return { fd: install(got.fd, nonblock), peer: got.peer };
+        return { fd: install(got.fd, nonblock, cloexec), peer: got.peer };
       }),
     connect: (fd, addr) =>
       guard(() => {
