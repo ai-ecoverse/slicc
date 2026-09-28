@@ -37,6 +37,45 @@ function setup(login: (resolve: (r: Result) => void) => void) {
 }
 
 describe('RemoteTerminalView login shell', () => {
+  it('`wasm --login` typed at the slicc prompt runs bash as the login shell again', async () => {
+    let finish!: (r: Result) => void;
+    const s = setup((resolve) => (finish = resolve));
+    const line = (Reflect.get(s.view, 'processLine') as (l: string) => Promise<Result>).call(
+      s.view,
+      ' wasm --login '
+    );
+    await Promise.resolve();
+    s.event({ type: 'terminal-mode', sid: 's', mode: 'pty' });
+    s.event({ type: 'terminal-output', sid: 's', stream: 'stdout', data: '\x1b]7777;0\x07/ $ ' });
+    const typed = s.view.executeCommandInTerminal('echo hi');
+    expect(s.stdin).toHaveBeenLastCalledWith('echo hi\r');
+    s.event({
+      type: 'terminal-output',
+      sid: 's',
+      stream: 'stdout',
+      data: 'echo hi\r\nhi\r\n\x1b]7777;0\x07',
+    });
+    expect(await typed).toMatchObject({ stdout: 'hi\n', exitCode: 0 });
+    s.event({ type: 'terminal-mode', sid: 's', mode: 'line' });
+    finish({ stdout: '', stderr: '', exitCode: 0 });
+    expect(await line).toMatchObject({ exitCode: 0 });
+    expect(s.lines.join('\n')).toContain('bash exited (0)');
+    s.view.dispose();
+  });
+
+  it('`wasm --login` without bash says so', async () => {
+    const s = setup((resolve) => resolve({ stdout: '', stderr: '', exitCode: NO_LOGIN_SHELL }));
+    const r = await (Reflect.get(s.view, 'processLine') as (l: string) => Promise<Result>).call(
+      s.view,
+      'wasm --login'
+    );
+    expect(r).toMatchObject({
+      exitCode: NO_LOGIN_SHELL,
+      stderr: expect.stringContaining('wasm-bash'),
+    });
+    s.view.dispose();
+  });
+
   it('without GNU bash: the slicc banner and prompt, as before', async () => {
     const s = setup((resolve) => resolve({ stdout: '', stderr: '', exitCode: NO_LOGIN_SHELL }));
     await s.start();

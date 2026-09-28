@@ -214,24 +214,35 @@ export class RemoteTerminalView {
    * when there is none.
    */
   private async startSession(terminal: SliccTerminal): Promise<void> {
+    const login = await this.runLoginShell();
+    if (this.disposed) return;
+    if (!login) {
+      terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
+      terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
+      terminal.writeln('');
+    }
+    void this.runPromptLoop();
+  }
+
+  /**
+   * GNU bash as the terminal's login shell, until it exits (then a note
+   * says so). `null` when there is none to run: no bash installed,
+   * `SLICC_SHELL=just-bash`, no wasm realm. Both at the session's start and
+   * when `wasm --login` is typed at the slicc prompt, so "run in terminal"
+   * and the prompt marks work either way.
+   */
+  private async runLoginShell(): Promise<TerminalExecResult | null> {
     this.loginShell = true;
     this.loginSawPty = false;
     // A session can last all day: stream its output, keep none of it.
     const login = await this.runRemote('wasm --login', { discardCapturedOutput: true });
     this.loginShell = false;
     this.marks.end();
-    if (this.disposed) return;
-    const hadBash = this.loginSawPty || login.exitCode !== NO_LOGIN_SHELL;
-    if (hadBash) {
-      terminal.writeln(
-        `\x1b[90mbash exited (${login.exitCode}); this is the slicc shell. \`wasm --login\` starts bash again.\x1b[0m`
-      );
-    } else {
-      terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
-      terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
-      terminal.writeln('');
-    }
-    void this.runPromptLoop();
+    if (!this.loginSawPty && login.exitCode === NO_LOGIN_SHELL) return null;
+    this.terminal?.writeln(
+      `\x1b[90mbash exited (${login.exitCode}); this is the slicc shell. \`wasm --login\` starts bash again.\x1b[0m`
+    );
+    return login;
   }
 
   /** Re-fit the terminal to its container, and tell the worker its size. */
@@ -488,6 +499,15 @@ export class RemoteTerminalView {
     const command = rawLine.trim();
     const noop: TerminalExecResult = { stdout: '', stderr: '', exitCode: 0 };
     if (!command) return noop;
+    if (command === 'wasm --login') {
+      return (
+        (await this.runLoginShell()) ?? {
+          stdout: '',
+          stderr: 'wasm: --login: no GNU bash to log in to (install @ai-ecoverse/wasm-bash)\n',
+          exitCode: NO_LOGIN_SHELL,
+        }
+      );
+    }
     if (!programmatic && (await this.tryRunPicker(command))) return noop;
     return this.runRemote(command);
   }
