@@ -23,6 +23,7 @@ import {
   bedrockCampRegionFromBaseUrl,
   isBedrockCampClaudeModel,
   isBedrockCampCompatible,
+  isBedrockCampGpt6Model,
 } from '../../src/providers/built-in/bedrock-camp-compat.js';
 import { CLAUDE_FAMILIES, parseClaudeVersion } from '../../src/providers/claude-model-version.js';
 
@@ -263,6 +264,14 @@ describe('isBedrockCampClaudeModel', () => {
 // Verified live on bedrock-runtime.us-west-2 with `reasoning: { effort }`:
 // none (Sol/Luna only), low, medium, high, xhigh, max; minimal 400s everywhere.
 describe('bedrockCampOpenAIEffortMap', () => {
+  it('identifies only the live-verified GPT-6 Bedrock variants for image placement', () => {
+    for (const variant of ['sol', 'luna', 'astra']) {
+      expect(isBedrockCampGpt6Model({ id: `global.openai.gpt-6-${variant}` })).toBe(true);
+    }
+    expect(isBedrockCampGpt6Model({ id: 'global.openai.gpt-6-terra' })).toBe(false);
+    expect(isBedrockCampGpt6Model({ id: 'global.anthropic.claude-opus-5-5' })).toBe(false);
+  });
+
   it.each([['global.openai.gpt-6-sol'], ['us.openai.gpt-6-sol'], ['global.openai.gpt-6-luna']])(
     'lets %s turn reasoning off with none',
     (id) => {

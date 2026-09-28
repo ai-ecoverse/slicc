@@ -144,6 +144,10 @@ export const BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP: BedrockCampEffortMap = Object.f
 
 const BEDROCK_CAMP_GPT6_RE = /\.openai\.gpt-6-(sol|luna|astra)$/;
 
+export function isBedrockCampGpt6Model(model: { id: string }): boolean {
+  return BEDROCK_CAMP_GPT6_RE.test(model.id);
+}
+
 /**
  * The effort map for a model that takes OpenAI-style `reasoning.effort`
  * (GPT-6), or null. gpt-5.6 is deliberately not covered: it rejects every
