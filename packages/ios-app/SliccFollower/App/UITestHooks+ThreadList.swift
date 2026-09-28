@@ -103,7 +103,8 @@ import SliccTrayKit
             let opus = ScoopSummaryModel(provider: "anthropic", id: "claude-opus-4-6")
             return [
                 ScoopSummary(
-                    jid: threadListMainCone, name: "cone", folder: "/workspace", parentId: nil, assistantLabel: "sliccy", state: "idle", activity: "awaiting", fill: 22, model: opus),
+                    jid: threadListMainCone, name: "cone", folder: "/workspace", parentId: nil, assistantLabel: "sliccy", state: "idle", activity: "awaiting",
+                    fill: 22, model: opus),
                 ScoopSummary(
                     jid: threadListResearcher, name: "researcher",
                     folder: "/scoops/researcher", parentId: threadListMainCone, assistantLabel: "researcher",

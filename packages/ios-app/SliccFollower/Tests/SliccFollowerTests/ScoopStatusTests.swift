@@ -87,7 +87,8 @@ final class ScoopStatusTests: XCTestCase {
 
     func testScoopSummaryBuildsStatusPresentationValue() {
         let summary = ScoopSummary(
-            jid: "reviewer", name: "reviewer", folder: "/scoops/reviewer", parentId: "cone", assistantLabel: "Reviewer", trigger: nil, state: "broken", fill: 82)
+            jid: "reviewer", name: "reviewer", folder: "/scoops/reviewer", parentId: "cone", assistantLabel: "Reviewer", trigger: nil, state: "broken", fill: 82
+        )
 
         XCTAssertEqual(summary.status, ScoopStatus(state: "broken", fill: 82))
     }
