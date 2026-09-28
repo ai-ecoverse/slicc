@@ -29,9 +29,14 @@ describe('assertCliSupports', () => {
       /wait --allsettled/
     );
     const current = vi.fn(() => ({
-      stdout: 'prompt [--allsettled <dur>] wait --allsettled <duration>',
+      stdout: 'prompt [--allsettled <dur>] wait --allsettled <duration> <join-url> abort',
     }));
     expect(() => assertCliSupports('/tmp/wait-slicc', undefined, current)).not.toThrow();
+    expect(() =>
+      assertCliSupports('/tmp/no-abort-slicc', undefined, () => ({
+        stdout: 'prompt [--allsettled <dur>] wait --allsettled <duration>',
+      }))
+    ).toThrow(/abort/);
   });
 
   it('refuses an older CLI, which would send the option as the prompt text', () => {

@@ -80,8 +80,13 @@ remaining timeout and retries the export. A successful export whose final cone
 message is absent from prompt stdout also proves a continuation, even when
 spend is flat: the runner takes that final transcript message and records
 `metrics.resumed_after_settle`. If spend is rising during that export, it waits
-and re-exports before scoring. A run that stays active, or whose final
-transcript cannot be collected, remains an unscored error.
+and re-exports before scoring. The cost watcher remains active during recovery.
+If the passive wait reaches the task timeout or cost cap, the runner calls
+`slicc abort`, waits for `abort_ack` and flat spend, then exports again. That
+run is judged with `timedOut` or `cost_capped` and the cone's latest final
+message; timeout duration is capped at the task limit. An unconfirmed abort,
+continued spend after abort, or a missing final transcript remains an unscored
+error.
 
 - **Never `cat` a large file over one `exec`.** The leader sends an exec's whole
   stdout as one tray message, and a message over 8 MiB (about 6.3 MB of output

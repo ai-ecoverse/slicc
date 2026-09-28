@@ -1518,6 +1518,7 @@ describe('a prompt that returns while the agent still works', () => {
     const dir = '/tmp/bench/recovered';
     const files = leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT)), TRANSCRIPT_PART_BYTES, dir);
     let exports = 0;
+    const totals = [1, 1, 2, 2];
     const { leader, calls } = fakeLeader({
       verbs: {
         model: ok('m\n'),
@@ -1525,7 +1526,7 @@ describe('a prompt that returns while the agent still works', () => {
         wait: ok('settled\n'),
       },
       commands: [
-        [/^cost --json --all$/, () => costOf(1 + exports, 10 + exports, 1 + exports)],
+        [/^cost --json --all$/, () => costOf(totals.shift() ?? 2, 10, 1)],
         [
           /^session export/,
           () =>
@@ -1554,14 +1555,276 @@ describe('a prompt that returns while the agent still works', () => {
     expect(traceFromResult(result).metrics.resumed_after_settle).toBe(true);
   });
 
+  it('aborts a resumed agent at the task timeout and scores its final transcript', async () => {
+    const files = leaderFiles(
+      Buffer.from(JSON.stringify(TRANSCRIPT)),
+      TRANSCRIPT_PART_BYTES,
+      '/tmp/bench/recovery-timeout'
+    );
+    let clock = 0;
+    let exports = 0;
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: ok('INITIAL ANSWER'),
+        wait: () => {
+          clock = 900_000;
+          return { ...fail('timed out', 130), timedOut: true };
+        },
+        abort: ok('stopped\n'),
+      },
+      commands: [
+        [/^cost --json --all$/, () => costOf(1, 10, 1)],
+        [
+          /^session export/,
+          () => {
+            exports += 1;
+            return exports === 1 ? { ...fail('timed out', 130), timedOut: true } : files.list();
+          },
+        ],
+        files.commands[1],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x', slicc: { timeoutSeconds: 900 } },
+      runId: 'recovery-timeout',
+      model: 'm',
+      now: () => clock,
+      sleep: async () => {},
+      busyProbeMs: 1,
+      capture: { pollMs: 5 },
+    });
+    expect(calls.filter((c) => c.kind === 'cli' && c.args[0] === 'abort')).toHaveLength(1);
+    expect(exports).toBe(2);
+    expect(result).toMatchObject({
+      timedOut: true,
+      costCapped: false,
+      resumedAfterSettle: true,
+      finalText: 'FINAL ANSWER: done',
+      durationMs: 900_000,
+    });
+    expect(traceFromResult(result).metrics).toMatchObject({
+      timedOut: true,
+      resumed_after_settle: true,
+    });
+  });
+
+  it('leaves a resumed run unscored when the leader does not confirm abort', async () => {
+    let clock = 0;
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: ok('INITIAL ANSWER'),
+        wait: () => {
+          clock = 900_000;
+          return { ...fail('timed out', 130), timedOut: true };
+        },
+        abort: fail('the leader did not confirm the turn stopped'),
+      },
+      commands: [
+        [/^cost --json --all$/, () => costOf(1, 10, 1)],
+        [/^session export/, { ...fail('timed out', 130), timedOut: true }],
+      ],
+    });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x', slicc: { timeoutSeconds: 900 } },
+      runId: 'recovery-unconfirmed',
+      model: 'm',
+      now: () => clock,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.stillWorking).toBe(true);
+    expect(err.message).toMatch(/did not confirm abort/);
+    expect(calls.filter((c) => c.kind === 'cli' && c.args[0] === 'abort')).toHaveLength(1);
+  });
+
+  it('leaves a resumed run unscored when spend keeps rising after abort', async () => {
+    let clock = 0;
+    let reads = 0;
+    const { leader } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: ok('INITIAL ANSWER'),
+        wait: () => {
+          clock = 900_000;
+          return { ...fail('timed out', 130), timedOut: true };
+        },
+        abort: ok('stopped\n'),
+      },
+      commands: [
+        [/^cost --json --all$/, () => costOf(++reads <= 2 ? 1 : reads, reads, reads)],
+        [/^session export/, { ...fail('timed out', 130), timedOut: true }],
+      ],
+    });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x', slicc: { timeoutSeconds: 900 } },
+      runId: 'recovery-still-spending',
+      model: 'm',
+      now: () => clock,
+      stopProbeIntervals: 2,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.stillWorking).toBe(true);
+    expect(err.leaderDown).toBe(true);
+    expect(err.message).toMatch(/kept working after abort/);
+  });
+
+  it('leaves a resumed run unscored when no final transcript can be exported', async () => {
+    let clock = 0;
+    const { leader } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: ok('INITIAL ANSWER'),
+        wait: () => {
+          clock = 900_000;
+          return { ...fail('timed out', 130), timedOut: true };
+        },
+        abort: ok('stopped\n'),
+      },
+      commands: [
+        [/^cost --json --all$/, () => costOf(1, 10, 1)],
+        [/^session export/, { ...fail('timed out', 130), timedOut: true }],
+      ],
+    });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x', slicc: { timeoutSeconds: 900 } },
+      runId: 'recovery-no-transcript',
+      model: 'm',
+      now: () => clock,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.stillWorking).toBe(true);
+    expect(err.message).toMatch(/final transcript could not be exported/);
+  });
+
+  it('enforces the cost cap during a post-settle wait before scoring', async () => {
+    const files = leaderFiles(
+      Buffer.from(JSON.stringify(TRANSCRIPT)),
+      TRANSCRIPT_PART_BYTES,
+      '/tmp/bench/recovery-cost-cap'
+    );
+    let costReads = 0;
+    let exports = 0;
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: ok('INITIAL ANSWER'),
+        wait: (_args, opts) => {
+          if (!opts.signal) return fail('wait has no cost-cap signal');
+          return new Promise((resolve) => {
+            const stopped = () => resolve({ ...fail('stopped', 143), aborted: true });
+            if (opts.signal.aborted) stopped();
+            else opts.signal.addEventListener('abort', stopped, { once: true });
+          });
+        },
+        abort: ok('stopped\n'),
+      },
+      commands: [
+        [/^cost --json --all$/, () => costOf(++costReads <= 2 ? 0 : 3, 10, 1)],
+        [
+          /^session export/,
+          () => {
+            exports += 1;
+            return exports === 1 ? { ...fail('timed out', 130), timedOut: true } : files.list();
+          },
+        ],
+        files.commands[1],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x', slicc: { timeoutSeconds: 900 } },
+      runId: 'recovery-cost-cap',
+      model: 'm',
+      maxCost: 2,
+      costPollMs: 5,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    });
+    expect(calls.filter((c) => c.kind === 'cli' && c.args[0] === 'abort')).toHaveLength(1);
+    expect(exports).toBe(2);
+    expect(result).toMatchObject({
+      timedOut: false,
+      costCapped: true,
+      resumedAfterSettle: true,
+      finalText: 'FINAL ANSWER: done',
+    });
+    expect(traceFromResult(result).metrics).toMatchObject({
+      cost_capped: true,
+      resumed_after_settle: true,
+    });
+  });
+
+  it('does not drop a prompt cost cap when work resumes during collection', async () => {
+    const files = leaderFiles(
+      Buffer.from(JSON.stringify(TRANSCRIPT)),
+      TRANSCRIPT_PART_BYTES,
+      '/tmp/bench/prompt-cost-cap-resumed'
+    );
+    let readings = 0;
+    let exports = 0;
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: { ...fail('not confirmed', 130), aborted: true, stdout: 'INITIAL ANSWER' },
+        abort: ok('stopped\n'),
+      },
+      commands: [
+        [/^cost --json --all$/, () => costOf(++readings === 1 ? 0 : 3, 10, 1)],
+        [
+          /^session export/,
+          (_command, opts) => {
+            exports += 1;
+            if (exports > 1) return files.list();
+            if (!opts.signal) return fail('export has no cost-cap signal');
+            return new Promise((resolve) => {
+              const stopped = () => resolve({ ...fail('stopped', 143), aborted: true });
+              if (opts.signal.aborted) stopped();
+              else opts.signal.addEventListener('abort', stopped, { once: true });
+            });
+          },
+        ],
+        files.commands[1],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'prompt-cost-cap-resumed',
+      model: 'm',
+      maxCost: 2,
+      costPollMs: 5,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    });
+    expect(calls.filter((c) => c.kind === 'cli' && c.args[0] === 'abort')).toHaveLength(1);
+    expect(exports).toBe(2);
+    expect(result).toMatchObject({
+      costCapped: true,
+      resumedAfterSettle: true,
+      finalText: 'FINAL ANSWER: done',
+    });
+  });
+
   it('recognizes a continuation when export succeeds after waiting for the cone', async () => {
     const dir = '/tmp/bench/recovered-on-export';
     const files = leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT)), TRANSCRIPT_PART_BYTES, dir);
     let exports = 0;
+    const totals = [1, 1, 2, 2, 2];
     const { leader, calls } = fakeLeader({
       verbs: { model: ok('m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
       commands: [
-        [/^cost --json --all$/, () => costOf(1 + exports, 10 + exports, 1 + exports)],
+        [/^cost --json --all$/, () => costOf(totals.shift() ?? 2, 10, 1)],
         [
           /^session export/,
           () => {
@@ -1584,6 +1847,41 @@ describe('a prompt that returns while the agent still works', () => {
     expect(exports).toBe(2);
     expect(result.finalText).toBe('FINAL ANSWER: done');
     expect(traceFromResult(result).metrics.resumed_after_settle).toBe(true);
+  });
+
+  it('waits again when spend rises during a later recovery export', async () => {
+    const files = leaderFiles(
+      Buffer.from(JSON.stringify(TRANSCRIPT)),
+      TRANSCRIPT_PART_BYTES,
+      '/tmp/bench/recovery-resumed-twice'
+    );
+    const totals = [0, 1, 1, 2, 2, 2];
+    let exports = 0;
+    const { leader, calls } = fakeLeader({
+      verbs: { model: ok('m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
+      commands: [
+        [/^cost --json --all$/, () => costOf(totals.shift() ?? 2, 10, 1)],
+        [
+          /^session export/,
+          () => {
+            exports += 1;
+            return exports === 1 ? { ...fail('timed out', 130), timedOut: true } : files.list();
+          },
+        ],
+        files.commands[1],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x', slicc: { timeoutSeconds: 900 } },
+      runId: 'recovery-resumed-twice',
+      model: 'm',
+      capture: { pollMs: 5 },
+    });
+    expect(calls.filter((c) => c.kind === 'cli' && c.args[0] === 'wait')).toHaveLength(2);
+    expect(exports).toBe(3);
+    expect(result.finalText).toBe('FINAL ANSWER: done');
+    expect(result.resumedAfterSettle).toBe(true);
   });
 
   it('uses a fast continuation from the transcript even when spend is flat', async () => {

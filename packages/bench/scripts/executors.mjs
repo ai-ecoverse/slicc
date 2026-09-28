@@ -136,14 +136,19 @@ export function callLabel(args) {
 }
 
 /** CLI features the runner relies on for initial settle and recovery. */
-export const REQUIRED_CLI_OPTIONS = ['prompt [--allsettled', 'wait --allsettled'];
+export const REQUIRED_CLI_OPTIONS = [
+  'prompt [--allsettled',
+  'wait --allsettled',
+  '<join-url> abort',
+];
 
 const checkedClis = new Set();
 
 /**
  * Fail before any run when the CLI is too old. An older `slicc prompt` does not know
  * `--allsettled` and joins it into the prompt text; a CLI without `wait` cannot recover
- * when the agent resumes during transcript export.
+ * when the agent resumes during transcript export, and a CLI without `abort` cannot stop
+ * a resumed agent at the task timeout or cost cap.
  */
 export function assertCliSupports(cli, options = REQUIRED_CLI_OPTIONS, run = spawnSync) {
   if (checkedClis.has(cli)) return;

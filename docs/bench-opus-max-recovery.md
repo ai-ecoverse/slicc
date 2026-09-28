@@ -69,3 +69,33 @@ The regression tests for pending tools, passive `wait`, late child abort, and
 export-time recovery were each observed failing against the previous code
 before their corresponding fixes. A run that never settles or lacks its final
 transcript remains an unscored error.
+
+## Pinned eight-task check on 4ec7d5c83
+
+Run `36455694738` exercised eight previously failed Opus 5.5 `@max` tasks.
+The two shard artifacts contain `calls.jsonl`, leader infrastructure logs,
+and encrypted traces for the two scored runs. Six were still unscored when
+passive recovery reached the 60-minute task limit. The scored `bu2-024` run
+reached $15.22 despite a $10 task cap: the prompt's stop was not confirmed,
+export waited ten minutes, and the later passive wait had no cost watcher.
+
+The call timeline does **not** establish repeated self-scheduled wake-ups.
+Several prompts stayed open for 30–60 minutes and ended with “the leader did
+not confirm the turn stopped”; the corresponding first transcript exports
+then occupied their full ten-minute call limit. Two passive waits themselves
+timed out at the task limit. The leader infrastructure logs contain browser
+and connection diagnostics, but no cron or scheduled-lick delivery event;
+their `[licks]` lines only report browser client disconnects. Thus those logs
+cannot identify the exact wake frame for the six runs without transcripts.
+
+The encrypted scored transcripts were inspected in memory without printing
+or copying task text. `bu2-024` has 91 cone assistant turns, 110 cone tool
+calls, eight `scoop_scoop`, eight `drop_scoop`, one `scoop_wait`, and no exported
+scoop conversations. `bu2-021` has 13 cone turns plus eight scoop
+conversations and 365 tool calls, including eight `scoop_scoop` and one
+`scoop_wait`. Both contain ordinary `sleep` shell commands. Neither has a
+cron tool call. The `scoop_wait` calls can deliver a later scoop-completion
+lick, but the artifacts do not show that self-scheduled timers or cron jobs
+caused the long runs. The evidence favors prolonged cone/scoop/tool work and
+failed stop confirmation over a recurring cron wake. Whether to disable
+self-scheduled wake-ups for benchmark fairness remains a separate decision.

@@ -514,6 +514,7 @@ const clipDetail = (r) =>
 function callFailure(r) {
   if (r.leaderDown) return 'leader-down';
   if (r.timedOut) return 'timeout';
+  if (r.aborted) return 'aborted';
   return `exit ${r.status}`;
 }
 
@@ -528,15 +529,16 @@ const overBudget = (last) => ({
  * Run the export until it prints a complete listing: `{ listing }` or `{ failure }`. A timed-out
  * export is not repeated (it would only time out again), nor one that never reached the leader.
  */
-async function runExport(leader, command, info, { partBytes, timeoutMs, attempts, left }) {
+async function runExport(leader, command, info, { partBytes, timeoutMs, attempts, left, signal }) {
   let failure = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (signal?.aborted) return { failure: { stage: 'export', reason: 'aborted' } };
     if (left() < MIN_CALL_MS) return { failure: overBudget(failure) };
     info.exports = attempt;
-    const r = await leader.exec(command, { timeoutMs: Math.min(timeoutMs, left()) });
+    const r = await leader.exec(command, { timeoutMs: Math.min(timeoutMs, left()), signal });
     if (r.status !== 0) {
       failure = { stage: 'export', reason: callFailure(r), detail: clipDetail(r) };
-      if (r.timedOut || (r.leaderDown && !r.connectionLost)) break;
+      if (r.timedOut || r.aborted || signal?.aborted || (r.leaderDown && !r.connectionLost)) break;
       continue;
     }
     const listing = parseExportListing(r.stdout, partBytes);
@@ -547,19 +549,21 @@ async function runExport(leader, command, info, { partBytes, timeoutMs, attempts
 }
 
 /** Read one part until it arrives intact: `{ buf }` or `{ failure }`. */
-async function readPart(leader, part, info, { timeoutMs, attempts, left }) {
+async function readPart(leader, part, info, { timeoutMs, attempts, left, signal }) {
   let failure = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (signal?.aborted) return { failure: { stage: 'read', reason: 'aborted' } };
     if (left() < MIN_CALL_MS) return { failure: overBudget(failure) };
     info.reads += 1;
     const r = await leader.exec(`base64 ${quote(part.path)}`, {
       timeoutMs: Math.min(timeoutMs, left()),
+      signal,
     });
     if (r.status !== 0) {
       failure = { stage: 'read', reason: callFailure(r), detail: clipDetail(r) };
       // The CLI already retried the dial; a leader that stays unreachable will not send the rest.
       // A connection that closed mid-transfer is worth a new one: reading a part is repeatable.
-      if (r.leaderDown && !r.connectionLost) break;
+      if (r.aborted || signal?.aborted || (r.leaderDown && !r.connectionLost)) break;
       continue;
     }
     const decoded = decodeTranscriptPart(r.stdout, part);
@@ -590,6 +594,7 @@ export async function exportTranscript(
     readAttempts = TRANSCRIPT_READ_ATTEMPTS,
     budgetMs = TRANSCRIPT_BUDGET_MS,
     now = Date.now,
+    signal,
   } = {}
 ) {
   const started = now();
@@ -608,6 +613,7 @@ export async function exportTranscript(
     timeoutMs: exportTimeoutMs,
     attempts: exportAttempts,
     left,
+    signal,
   });
   if (exported.failure) return done(null, exported.failure);
   const { listing } = exported;
@@ -620,6 +626,7 @@ export async function exportTranscript(
       timeoutMs: readTimeoutMs,
       attempts: readAttempts,
       left,
+      signal,
     });
     if (read.failure) return done(null, read.failure);
     bufs.push(read.buf);
@@ -878,9 +885,9 @@ export async function awaitQuiescent(
 }
 
 /**
- * Stop a prompt that spends more than `maxCost` dollars: poll `cost --json --all` against the
- * reading taken before it, and abort once the difference passes the cap. A reading that fails is
- * skipped, never taken as zero. `stop()` ends the polling.
+ * Stop work that spends more than `maxCost` dollars, during the prompt or recovery: poll
+ * `cost --json --all` against the reading taken before the prompt, and abort once the
+ * difference passes the cap. A failed reading is skipped, never taken as zero.
  */
 export function watchSpend(leader, before, maxCost, abort, pollMs = COST_POLL_MS) {
   let running = true;
@@ -892,7 +899,7 @@ export function watchSpend(leader, before, maxCost, abort, pollMs = COST_POLL_MS
         setTimeout(r, pollMs);
       });
       if (!running) break;
-      const now = await spend(leader);
+      const now = await spend(leader, STOP_PROBE_READ_TIMEOUT_MS);
       if (before && now && now.cost - before.cost > maxCost) abort.abort();
     }
   })();
@@ -905,23 +912,129 @@ export function watchSpend(leader, before, maxCost, abort, pollMs = COST_POLL_MS
   };
 }
 
-async function waitForResumedAgent(leader, deadline, now) {
+async function waitForResumedAgent(leader, deadline, now, signal) {
   const remaining = deadline - now();
-  if (remaining <= 0) {
-    const err = new Error('agent resumed after settle, but the task timeout expired');
-    err.stillWorking = true;
-    throw err;
-  }
+  if (signal?.aborted) return { limit: 'cost', at: now() };
+  if (remaining <= 0) return { limit: 'timeout', at: deadline };
   const settled = await leader.cli(['wait', '--allsettled', PROMPT_ALL_SETTLED], {
     timeoutMs: remaining,
+    signal,
   });
-  if (settled.status !== 0 || settled.timedOut) {
+  if (signal?.aborted) return { limit: 'cost', at: now() };
+  if (settled.timedOut || now() >= deadline) return { limit: 'timeout', at: deadline };
+  if (settled.status !== 0) {
     const err = new Error('agent resumed after settle and did not settle before the task timeout');
     err.stillWorking = true;
     err.leaderDown = Boolean(settled.leaderDown);
     throw err;
   }
-  return spend(leader);
+  return { after: await spend(leader), at: now() };
+}
+
+async function abortResumedAgent(
+  leader,
+  { busyProbeMs, stopProbeIntervals, stopProbeBudgetMs, sleep, now }
+) {
+  const stopped = await leader.cli(['abort'], { timeoutMs: 30_000 });
+  if (stopped.status !== 0 || stopped.leaderDown) {
+    const err = new Error('agent resumed after settle and the leader did not confirm abort');
+    err.stillWorking = true;
+    err.leaderDown = Boolean(stopped.leaderDown);
+    throw err;
+  }
+  const quiet = await awaitQuiescent(leader, {
+    probeMs: busyProbeMs,
+    maxIntervals: stopProbeIntervals,
+    budgetMs: stopProbeBudgetMs,
+    sleep,
+    now,
+  });
+  if (!quiet.stopped) {
+    const err = new Error('agent resumed after settle and kept working after abort');
+    err.stillWorking = true;
+    err.leaderDown = true;
+    throw err;
+  }
+  return quiet.spend;
+}
+
+function markRecoveryLimit(state, reason, at) {
+  state.stopReason = reason;
+  state.stoppedAt = at;
+}
+
+function applyRecoveryWait(state, waited) {
+  if (waited.limit) {
+    markRecoveryLimit(state, waited.limit, waited.at);
+    return;
+  }
+  state.after = waited.after;
+  state.settledAt = waited.at;
+  state.resumedAfterSettle = true;
+}
+
+async function needsRecoveryWait(ctx, state, signal) {
+  const unseenFinal = lastConeAssistantText(state.transcript);
+  const absentFromPrompt = Boolean(
+    ctx.checkPrompt && unseenFinal && !String(ctx.reply.stdout ?? '').includes(unseenFinal)
+  );
+  const observedAfterExport = state.transcriptExport.ok ? await spend(ctx.leader) : null;
+  const stillWorkingAfterExport = Boolean(
+    (state.after && observedAfterExport && spendRising(state.after, observedAfterExport)) ||
+      ((absentFromPrompt || state.resumedAfterSettle) && (!state.after || !observedAfterExport))
+  );
+  if (observedAfterExport) state.after = observedAfterExport;
+  if (signal.aborted) {
+    markRecoveryLimit(state, 'cost', ctx.now());
+    return false;
+  }
+  const exportTimedOut = !state.transcriptExport.ok && state.transcriptExport.reason === 'timeout';
+  if (exportTimedOut && ++state.exportTimeouts > 1) {
+    const err = new Error('session export timed out again after the agent settled');
+    err.stillWorking = true;
+    throw err;
+  }
+  if (!stillWorkingAfterExport && absentFromPrompt) state.resumedAfterSettle = true;
+  return exportTimedOut || stillWorkingAfterExport;
+}
+
+async function collectRecoveryExport(ctx, state, signal) {
+  if (signal.aborted) {
+    markRecoveryLimit(state, 'cost', ctx.now());
+    return false;
+  }
+  if (!state.after) state.after = await spend(ctx.leader);
+  if (
+    ctx.checkPrompt &&
+    ctx.before &&
+    state.after &&
+    ctx.maxCost > 0 &&
+    state.after.cost - ctx.before.cost > ctx.maxCost
+  ) {
+    markRecoveryLimit(state, 'cost', ctx.now());
+    return false;
+  }
+  const budgetMs = ctx.checkPrompt
+    ? Math.min(TRANSCRIPT_BUDGET_MS, Math.max(0, ctx.deadline - ctx.now()))
+    : TRANSCRIPT_BUDGET_MS;
+  if (ctx.checkPrompt && budgetMs < MIN_CALL_MS) {
+    markRecoveryLimit(state, 'timeout', ctx.deadline);
+    return false;
+  }
+  ({ doc: state.transcript, info: state.transcriptExport } = await exportTranscript(
+    ctx.leader,
+    ctx.dir,
+    { now: ctx.now, budgetMs, signal }
+  ));
+  if (signal.aborted) {
+    markRecoveryLimit(state, 'cost', ctx.now());
+    return false;
+  }
+  if (ctx.checkPrompt && ctx.now() >= ctx.deadline && !state.transcript) {
+    markRecoveryLimit(state, 'timeout', ctx.deadline);
+    return false;
+  }
+  return needsRecoveryWait(ctx, state, signal);
 }
 
 async function collectAfterPrompt({
@@ -934,50 +1047,79 @@ async function collectAfterPrompt({
   sleep,
   deadline,
   now,
+  before,
+  maxCost,
+  costPollMs,
+  stopProbeIntervals,
+  stopProbeBudgetMs,
 }) {
-  let resumedAfterSettle = false;
-  if (checkPrompt && (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep }))) {
-    after = await waitForResumedAgent(leader, deadline, now);
-    resumedAfterSettle = true;
-  }
-  if (!after) after = await spend(leader);
-  let { doc: transcript, info: transcriptExport } = await exportTranscript(leader, dir, { now });
-  // Export waits for processing scoops. A late tool result or lick can wake
-  // the cone after prompt's quiet window. It may succeed after that work
-  // finishes; a final cone message absent from prompt stdout reveals the
-  // continuation even without an export timeout.
-  const unseenFinal = lastConeAssistantText(transcript);
-  const absentFromPrompt = Boolean(
-    checkPrompt && unseenFinal && !String(reply.stdout ?? '').includes(unseenFinal)
-  );
-  const observedAfterExport = !resumedAfterSettle && absentFromPrompt ? await spend(leader) : null;
-  const stillWorkingAfterExport =
-    !resumedAfterSettle &&
-    absentFromPrompt &&
-    (!after || !observedAfterExport || spendRising(after, observedAfterExport));
-  if (observedAfterExport) after = observedAfterExport;
-  if ((!transcriptExport.ok && transcriptExport.reason === 'timeout') || stillWorkingAfterExport) {
-    after = await waitForResumedAgent(leader, deadline, now);
-    resumedAfterSettle = true;
-    ({ doc: transcript, info: transcriptExport } = await exportTranscript(leader, dir, {
-      now,
-      budgetMs: Math.min(TRANSCRIPT_BUDGET_MS, Math.max(0, deadline - now())),
-    }));
-    if (!transcriptExport.ok && transcriptExport.reason === 'timeout') {
-      const err = new Error('session export timed out again after the agent settled');
-      err.stillWorking = true;
-      throw err;
+  const ctx = { leader, dir, reply, checkPrompt, deadline, now, before, maxCost };
+  const state = {
+    after,
+    resumedAfterSettle: false,
+    stopReason: null,
+    stoppedAt: null,
+    settledAt: null,
+    transcript: null,
+    transcriptExport: null,
+    exportTimeouts: 0,
+  };
+  const recoveryAbort = new AbortController();
+  const watcher =
+    maxCost > 0 ? watchSpend(leader, before, maxCost, recoveryAbort, costPollMs) : null;
+  try {
+    if (checkPrompt && (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep }))) {
+      applyRecoveryWait(
+        state,
+        await waitForResumedAgent(leader, deadline, now, recoveryAbort.signal)
+      );
     }
+    while (!state.stopReason) {
+      const needsWait = await collectRecoveryExport(ctx, state, recoveryAbort.signal);
+      if (!needsWait) break;
+      applyRecoveryWait(
+        state,
+        await waitForResumedAgent(leader, deadline, now, recoveryAbort.signal)
+      );
+    }
+    if (state.stopReason) {
+      await watcher?.stop();
+      state.after = await abortResumedAgent(leader, {
+        busyProbeMs,
+        stopProbeIntervals,
+        stopProbeBudgetMs,
+        sleep,
+        now,
+      });
+      state.resumedAfterSettle = true;
+      ({ doc: state.transcript, info: state.transcriptExport } = await exportTranscript(
+        leader,
+        dir,
+        {
+          now,
+        }
+      ));
+    }
+  } finally {
+    await watcher?.stop();
   }
-  if (absentFromPrompt) resumedAfterSettle = true;
-  if (resumedAfterSettle && !transcript) {
+  if (state.resumedAfterSettle && !state.transcript) {
     const err = new Error(
-      `agent settled but its final transcript could not be exported: ${transcriptExport.stage ?? 'unknown'} ${transcriptExport.reason ?? 'unknown'}`
+      `agent settled but its final transcript could not be exported: ${state.transcriptExport.stage ?? 'unknown'} ${state.transcriptExport.reason ?? 'unknown'}`
     );
     err.stillWorking = true;
     throw err;
   }
-  return { after, transcript, transcriptExport, resumedAfterSettle };
+  return {
+    after: state.after,
+    transcript: state.transcript,
+    transcriptExport: state.transcriptExport,
+    resumedAfterSettle: state.resumedAfterSettle,
+    timedOut: state.stopReason === 'timeout',
+    costCapped: state.stopReason === 'cost',
+    stoppedAt: state.stoppedAt,
+    settledAt: state.settledAt,
+  };
 }
 
 /**
@@ -1074,6 +1216,11 @@ export async function runTask({
       sleep,
       deadline: started + timeout * 1000,
       now,
+      before,
+      maxCost,
+      costPollMs,
+      stopProbeIntervals,
+      stopProbeBudgetMs,
     });
     after = collected.after;
     const { transcript, transcriptExport, resumedAfterSettle } = collected;
@@ -1087,12 +1234,14 @@ export async function runTask({
       modelId: prepared.modelId,
       thinking: prepared.spec.thinking,
       thinkingEffective: prepared.thinkingEffective,
-      exitCode: reply.status,
-      timedOut: Boolean(reply.timedOut),
-      costCapped: Boolean(reply.aborted),
+      exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
+      timedOut: Boolean(reply.timedOut || collected.timedOut),
+      costCapped: Boolean(reply.aborted || collected.costCapped),
       finalText: resumedAfterSettle ? lastConeAssistantText(transcript) : reply.stdout,
       stderr: reply.stderr.slice(-4000),
-      durationMs: resumedAfterSettle ? done - started : durationMs,
+      durationMs: resumedAfterSettle
+        ? (collected.stoppedAt ?? collected.settledAt ?? done) - started
+        : durationMs,
       ...spendDelta(before, after),
       transcript,
       transcriptExport,

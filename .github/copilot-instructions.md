@@ -74,6 +74,7 @@ Capability/command/argument/workflow changes must update matching runtime + deve
 Require fail-closed redaction, `reasoningExcluded: true`, sudo-funnel approval
 (`kind: 'export'`; only `NOPASSWD Export` skips it, follower-delegated when headless),
 binary integrity, `transfer-corrupt` for unknown errors or SHA-256 mismatches.
+Bench recovery must abort at timeout/cost cap and confirm flat spend before scoring.
 
 ## 14. `--help` that does the thing
 
