@@ -5,6 +5,7 @@ import {
   evaluateGlue,
   glueBody,
   kernelSys,
+  ownValue,
   SyscallError,
   signalMasks,
 } from '../../../src/kernel/wasm-realm/process-runtime.js';
@@ -97,6 +98,49 @@ describe('evaluateGlue', () => {
     expect(scoped.sliccRunMain?.(['x'])).toBe(-1);
     expect(scoped.PIPEFS).toHaveProperty('createPipe');
     expect(scoped.sliccSigpipe?.()).toBe(-1);
+  });
+
+  it('replaces the aborting accessors an assertions build puts on unexported symbols', () => {
+    const guarded = [
+      "var Module = typeof Module != 'undefined' ? Module : {};",
+      ...['FS', 'callMain', 'PIPEFS'].map(
+        (name) =>
+          `Object.defineProperty(Module, '${name}', { configurable: true, get() { throw new Error('Aborted(${name} was not exported)'); } });`
+      ),
+      'var ENV = {};',
+      'var FS = { own: true };',
+      'function callMain(args) { return args.length; }',
+      'var PIPEFS = { createPipe() {} };',
+    ].join('\n');
+    const module = { sliccEnv: {} } as {
+      sliccEnv: object;
+      FS?: object;
+      callMain?: (a: string[]) => number;
+      PIPEFS?: object;
+    };
+    evaluateGlue(guarded, module);
+    expect(module.FS).toEqual({ own: true });
+    expect(module.callMain?.(['a'])).toBe(1);
+    expect(module.PIPEFS).toHaveProperty('createPipe');
+  });
+
+  it('ownValue() reads a data property and never an accessor', () => {
+    const module = { FS: 1 };
+    Object.defineProperty(module, 'PIPEFS', {
+      get() {
+        throw new Error('Aborted');
+      },
+    });
+    expect(ownValue(module, 'FS')).toBe(1);
+    expect(ownValue(module, 'PIPEFS')).toBeUndefined();
+    expect(ownValue(module, 'nothing')).toBeUndefined();
+  });
+
+  it('keeps what the program exported', () => {
+    const exported = { exported: true };
+    const module = { sliccEnv: {}, FS: exported } as { sliccEnv: object; FS?: object };
+    evaluateGlue(glue, module);
+    expect(module.FS).toBe(exported);
   });
 
   it("asks the program's SIGPIPE disposition once it is instantiated", () => {

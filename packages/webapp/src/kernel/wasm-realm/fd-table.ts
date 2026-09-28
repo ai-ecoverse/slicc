@@ -12,7 +12,10 @@ export type KernelErrno =
   | 'ESPIPE'
   | 'EINTR'
   | 'ESRCH'
-  | 'ENOTTY';
+  | 'ENOTTY'
+  | 'EPERM'
+  | 'EIO'
+  | 'EACCES';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {

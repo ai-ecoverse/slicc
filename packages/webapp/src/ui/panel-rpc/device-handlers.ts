@@ -10,14 +10,17 @@ import {
 } from '../../kernel/usb-device-registry.js';
 import * as usbOps from '../../kernel/usb-operations.js';
 import type { StandalonePanelRpcHandlerOptions } from '../panel-rpc-handlers.js';
+import { gestureHid, gestureSerial, gestureUsb } from './gesture-picker.js';
 
 export function buildUsbHandlers(options: StandalonePanelRpcHandlerOptions) {
   ensureUsbClaimEventRelay(options.emitEvent);
+
+  const surface = () => options.getPermissionsSurface?.() ?? null;
   return {
     'usb-list': async () => ({ devices: await usbOps.usbList(usbRegistry(), requireUsb()) }),
 
     'usb-request': async ({ filters }) => ({
-      device: await usbOps.usbRequest(usbRegistry(), requireUsb(), filters),
+      device: await usbOps.usbRequest(usbRegistry(), gestureUsb(requireUsb(), surface), filters),
     }),
 
     'usb-device-info': ({ handle }) => ({
@@ -92,11 +95,12 @@ export function buildHidHandlers(
   options: StandalonePanelRpcHandlerOptions,
   hidSubscriptions: Map<string, () => void>
 ) {
+  const surface = () => options.getPermissionsSurface?.() ?? null;
   return {
     'hid-list': async () => ({ devices: await hidOps.hidList(hidRegistry(), requireHid()) }),
 
     'hid-request': async ({ filters }) => ({
-      devices: await hidOps.hidRequest(hidRegistry(), requireHid(), filters),
+      devices: await hidOps.hidRequest(hidRegistry(), gestureHid(requireHid(), surface), filters),
     }),
 
     'hid-device-info': ({ handle }) => ({
@@ -147,14 +151,19 @@ export function buildHidHandlers(
   } satisfies Partial<PanelRpcHandlers>;
 }
 
-export function buildSerialHandlers() {
+export function buildSerialHandlers(options: StandalonePanelRpcHandlerOptions = {}) {
+  const surface = () => options.getPermissionsSurface?.() ?? null;
   return {
     'serial-list': async () => ({
       devices: await serialOps.serialList(serialRegistry(), requireSerial()),
     }),
 
     'serial-request': async ({ filters }) => ({
-      device: await serialOps.serialRequest(serialRegistry(), requireSerial(), filters),
+      device: await serialOps.serialRequest(
+        serialRegistry(),
+        gestureSerial(requireSerial(), surface),
+        filters
+      ),
     }),
 
     'serial-device-info': ({ handle }) => ({

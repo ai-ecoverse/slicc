@@ -14,12 +14,17 @@ import {
   parseSerialFilters,
 } from '../shell/supplemental-commands/serial-command.js';
 import { parseUsbArgs, parseUsbFilters } from '../shell/supplemental-commands/usb-command.js';
-import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
+import {
+  NO_LOGIN_SHELL,
+  type TerminalEventMsg,
+  type TerminalSessionId,
+} from '../shell/terminal-protocol.js';
 import {
   getSharedHidRegistry,
   type HidDevice,
   type HidDeviceFilter,
 } from './hid-device-registry.js';
+import { LoginShellMarks } from './login-shell-marks.js';
 import {
   getSharedSerialRegistry,
   type SerialFilter,
@@ -27,6 +32,7 @@ import {
 } from './serial-port-registry.js';
 import { TerminalLineEditor } from './terminal-line-editor.js';
 import {
+  type TerminalExecOptions,
   type TerminalExecResult,
   TerminalSessionClient,
   type TerminalSessionTransport,
@@ -67,6 +73,12 @@ export class RemoteTerminalView {
   private isExecuting = false;
 
   private ptyMode = false;
+
+  private loginShell = false;
+
+  private loginSawPty = false;
+
+  private readonly marks = new LoginShellMarks();
   private reportedSize = '';
 
   private suppressOutput = false;
@@ -140,12 +152,33 @@ export class RemoteTerminalView {
     this.resizeObserver = new ResizeObserver(() => this.refit());
     this.resizeObserver.observe(this.terminalHost);
 
-    terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
-    terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
-    terminal.writeln('');
-
     await this.client.open({ cwd: this.options.cwd, env: this.options.env });
+    void this.startSession(terminal);
+  }
+
+  private async startSession(terminal: SliccTerminal): Promise<void> {
+    const login = await this.runLoginShell();
+    if (this.disposed) return;
+    if (!login) {
+      terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
+      terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
+      terminal.writeln('');
+    }
     void this.runPromptLoop();
+  }
+
+  private async runLoginShell(): Promise<TerminalExecResult | null> {
+    this.loginShell = true;
+    this.loginSawPty = false;
+
+    const login = await this.runRemote('wasm --login', { discardCapturedOutput: true });
+    this.loginShell = false;
+    this.marks.end();
+    if (!this.loginSawPty && login.exitCode === NO_LOGIN_SHELL) return null;
+    this.terminal?.writeln(
+      `\x1b[90mbash exited (${login.exitCode}); this is the slicc shell. \`wasm --login\` starts bash again.\x1b[0m`
+    );
+    return login;
   }
 
   refit(): void {
@@ -169,6 +202,7 @@ export class RemoteTerminalView {
   async executeCommandInTerminal(command: string): Promise<TerminalExecResult> {
     const trimmed = command.trim();
     if (!trimmed) return { stdout: '', stderr: '', exitCode: 0 };
+    if (this.loginShell && this.ptyMode) return this.typeIntoLoginShell(trimmed);
     if (!this.terminal || !this.editor) return this.client.exec(trimmed);
     if (
       this.isExecuting ||
@@ -184,6 +218,17 @@ export class RemoteTerminalView {
     });
     this.editor.setLine(trimmed);
     this.editor.accept();
+    return result;
+  }
+
+  private typeIntoLoginShell(command: string): Promise<TerminalExecResult> {
+    if (this.marks.pending) {
+      return Promise.resolve({ stdout: '', stderr: 'terminal is busy\n', exitCode: 1 });
+    }
+    const result = this.marks.seen
+      ? this.marks.expect()
+      : Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    this.client.stdin(`${command}\r`);
     return result;
   }
 
@@ -341,6 +386,15 @@ export class RemoteTerminalView {
     const command = rawLine.trim();
     const noop: TerminalExecResult = { stdout: '', stderr: '', exitCode: 0 };
     if (!command) return noop;
+    if (command === 'wasm --login') {
+      return (
+        (await this.runLoginShell()) ?? {
+          stdout: '',
+          stderr: 'wasm: --login: no GNU bash to log in to (install @ai-ecoverse/wasm-bash)\n',
+          exitCode: NO_LOGIN_SHELL,
+        }
+      );
+    }
     if (!programmatic && (await this.tryRunPicker(command))) return noop;
     return this.runRemote(command);
   }
@@ -628,11 +682,14 @@ export class RemoteTerminalView {
     }
   }
 
-  private async runRemote(command: string): Promise<TerminalExecResult> {
+  private async runRemote(
+    command: string,
+    opts?: TerminalExecOptions
+  ): Promise<TerminalExecResult> {
     this.isExecuting = true;
     this.clearMediaPreview();
     try {
-      return await this.client.exec(command);
+      return await this.client.exec(command, opts);
     } finally {
       this.isExecuting = false;
     }
@@ -644,7 +701,7 @@ export class RemoteTerminalView {
       case 'terminal-output':
         if (this.suppressOutput) return;
         if (this.ptyMode) {
-          this.terminal.write(event.data);
+          this.terminal.write(this.loginShell ? this.marks.filter(event.data) : event.data);
           return;
         }
 
@@ -662,6 +719,7 @@ export class RemoteTerminalView {
         return;
       case 'terminal-mode':
         this.ptyMode = event.mode === 'pty';
+        if (this.ptyMode && this.loginShell) this.loginSawPty = true;
         if (this.ptyMode) {
           this.reportedSize = '';
           this.reportSize();

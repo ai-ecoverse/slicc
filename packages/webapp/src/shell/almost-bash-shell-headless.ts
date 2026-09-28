@@ -24,6 +24,7 @@ import { getRegisteredProviderConfig } from '../providers/index.js';
 import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import { filesystemExecutionLimits } from './filesystem-budgets.js';
+import { carriedEnv, runOnGnuBash, SHELL_CHOICE_ENV } from './gnu-bash.js';
 import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
 import { isInstalledProgramPath } from './ipk/wasm-programs.js';
 import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
@@ -101,6 +102,8 @@ export interface HeadlessShellOptions {
   processOwner?: ProcessOwner;
 
   terminal?: TerminalPort;
+
+  gnuBash?: boolean;
 
   getCurrentShellPid?: () => number | undefined;
 
@@ -361,6 +364,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       isScoop: options.isScoop,
       buildProcessConfig: this.resolveJshProcessConfig,
       terminal: options.terminal,
+      gateNativeCommand: this.gateNativeCommand,
 
       processManager: options.processManager,
 
@@ -705,6 +709,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     clearReadByteProvenance();
 
     await this.waitForInitialJshSync(signal);
+    if (await this.usesGnuBash()) {
+      return this.runOnGnuBash(command, signal, runPid, stdin, outputTeeId, capturePipeStatus);
+    }
 
     const sudoReason = extractLeadingCommentReason(command);
     const taggedEnv: Record<string, string> = {
@@ -750,16 +757,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       await this.syncJshCommands().catch(() => undefined);
     }
 
-    if (this.pendingEnvWrites.size > 0) {
-      for (const [k, v] of this.pendingEnvWrites) {
-        if (v === null) {
-          delete this.lastEnv[k];
-        } else {
-          this.lastEnv[k] = v;
-        }
-      }
-      this.pendingEnvWrites.clear();
-    }
+    this.applyPendingEnvWrites();
     if (result.env?.PWD) {
       this.cwd = result.env.PWD;
     }
@@ -781,6 +779,96 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
     return result;
   }
+
+  private applyPendingEnvWrites(): void {
+    for (const [k, v] of this.pendingEnvWrites) {
+      if (v === null) delete this.lastEnv[k];
+      else this.lastEnv[k] = v;
+    }
+    this.pendingEnvWrites.clear();
+  }
+
+  private async usesGnuBash(): Promise<boolean> {
+    if (!this.options.gnuBash || this.lastEnv[SHELL_CHOICE_ENV] === 'just-bash') return false;
+    if (typeof SharedArrayBuffer !== 'function') return false;
+    return (await this.scriptCatalog.getWasmCommands()).has('bash');
+  }
+
+  private async runOnGnuBash(
+    command: string,
+    signal: AbortSignal | undefined,
+    runPid: number | undefined,
+    stdin: ByteString,
+    outputTeeId: string | undefined,
+    capturePipeStatus: boolean
+  ): Promise<BashExecResult & { pipeStatus?: number[] }> {
+    const { runWasmCommand } = await import('./supplemental-commands/wasm/run.js');
+    const sudoReason = extractLeadingCommentReason(command);
+    const env: Record<string, string> = {
+      ...this.lastEnv,
+      ...(runPid === undefined ? {} : { [RUN_PID_ENV]: String(runPid) }),
+      ...(sudoReason ? { [SUDO_REASON_ENV]: sudoReason } : {}),
+    };
+    const tee = outputTeeId === undefined ? undefined : this.outputTees.get(outputTeeId);
+    const run = await runOnGnuBash(command, {
+      fs: this.options.fs,
+      tmpDir: this.lastEnv.TMPDIR ?? '/tmp',
+      env,
+      run: (args, runEnv) =>
+        runWasmCommand(args, this.wasmContext(runEnv, signal, stdin), {
+          processConfig: this.buildJshProcessConfig(runPid),
+          gate: this.gateNativeCommand,
+          onOutput: tee,
+        }),
+    });
+    const pathBefore = this.lastEnv.PATH;
+    if (run.state) {
+      this.cwd = run.state.cwd;
+      this.lastEnv = carriedEnv(run.state.env, [RUN_PID_ENV, SUDO_REASON_ENV, OUTPUT_TEE_ENV]);
+    }
+
+    if (this.lastEnv.PATH !== pathBefore) await this.syncJshCommands().catch(() => undefined);
+    await this.flushPendingCommandGrants();
+    this.applyPendingEnvWrites();
+    return {
+      stdout: run.stdout,
+      stderr: run.stderr,
+      exitCode: run.exitCode,
+      env: { ...this.lastEnv },
+      ...(capturePipeStatus && run.state ? { pipeStatus: run.state.pipeStatus } : {}),
+    };
+  }
+
+  private wasmContext(
+    env: Record<string, string>,
+    signal: AbortSignal | undefined,
+    stdin: ByteString
+  ): CommandContext {
+    return {
+      fs: this.vfsAdapter,
+      cwd: this.cwd,
+      env: new Map(Object.entries(env)),
+      exportedEnv: env,
+      stdin,
+      signal,
+
+      exec: (cmd: string, opts: Parameters<Bash['exec']>[1]) =>
+        this.bash.exec(cmd, { ...opts, umask: this.umask }),
+    } as unknown as CommandContext;
+  }
+
+  private readonly gateNativeCommand = async (
+    name: string,
+    args: string[],
+    env: Record<string, string>
+  ): Promise<{ stderr: string; exitCode: number } | null> => {
+    if (this.allowedCommands !== null && !this.isCommandAllowed(name)) {
+      return { stderr: `bash: ${name}: command not found\n`, exitCode: 127 };
+    }
+    if (!this.isTransparentGatingEnabled()) return null;
+    const denial = await this.gateCommandDispatch(name, args, env[SUDO_REASON_ENV]);
+    return denial ? { stderr: denial.stderr, exitCode: denial.exitCode } : null;
+  };
 
   private isTransparentGatingEnabled(): boolean {
     const sudo = this.options.sudo;
@@ -1051,7 +1139,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         return runWasmCommand(
           ['--argv0', wasm.argv0, '--module', wasm.wasm, wasm.glue, ...args],
           ctx,
-          this.buildJshProcessConfig(runPidFromEnv(ctx.env))
+          {
+            processConfig: this.buildJshProcessConfig(runPidFromEnv(ctx.env)),
+            gate: this.gateNativeCommand,
+          }
         );
       }
 

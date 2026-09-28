@@ -29,6 +29,18 @@ export interface ChildHandle {
   exited: Promise<number>;
 
   termsig?: () => number | undefined;
+
+  onState?: (listener: ChildStateListener) => void;
+}
+
+export type ChildStateListener = (state: 'stopped' | 'continued', sig: number) => void;
+
+export interface WaitFlags {
+  untraced?: boolean;
+
+  continued?: boolean;
+
+  inGroup?: (childPid: number) => boolean;
 }
 
 export class SpawnError extends Error {
@@ -47,6 +59,10 @@ interface Child {
 
   code?: number;
 
+  stopReport?: number;
+
+  continueReport?: boolean;
+
   captured: Map<number, Uint8Array[]>;
 }
 
@@ -63,6 +79,12 @@ function interrupted(signal: AbortSignal | undefined): {
   });
   return { promise, done: () => signal?.removeEventListener('abort', fail) };
 }
+
+export function stoppedStatus(sig: number): number {
+  return ((sig & 0xff) << 8) | 0x7f;
+}
+
+export const CONTINUED_STATUS = 0xffff;
 
 export function waitStatus(code: number, termsig?: number): number {
   return termsig ? termsig & 0x7f : (code & 0xff) << 8;
@@ -83,7 +105,11 @@ export class ChildTable {
 
   private readonly leftovers = new Map<number, Map<number, Uint8Array[]>>();
 
-  onChildExit?: () => void;
+  onChildState?: () => void;
+
+  private stateChanged: Array<() => void> = [];
+
+  private readonly watchers = new Map<number, ChildStateListener>();
 
   constructor(
     private readonly parentFds: FdTable,
@@ -125,10 +151,24 @@ export class ChildTable {
     const child: Child = { exited: handle.exited, termsig: handle.termsig, captured };
     void handle.exited.then((code) => {
       child.code = code;
-      this.onChildExit?.();
+      this.watchers.delete(handle.pid);
+      this.onChildState?.();
+    });
+    handle.onState?.((state, sig) => {
+      child.stopReport = state === 'stopped' ? sig : undefined;
+      child.continueReport = state === 'continued';
+      this.watchers.get(handle.pid)?.(state, sig);
+      const waiters = this.stateChanged;
+      this.stateChanged = [];
+      for (const wake of waiters) wake();
+      this.onChildState?.();
     });
     this.children.set(handle.pid, child);
     return handle.pid;
+  }
+
+  watch(pid: number, listener: ChildStateListener): void {
+    if (this.children.has(pid)) this.watchers.set(pid, listener);
   }
 
   private openSlot(slot: ChildStdio, n: number, captured: Map<number, Uint8Array[]>): OpenFile {
@@ -142,22 +182,70 @@ export class ChildTable {
     return nullFile();
   }
 
-  async wait(pid: number, nohang: boolean, signal?: AbortSignal): Promise<[number, number]> {
-    const candidates = pid > 0 ? [...this.children].filter(([p]) => p === pid) : [...this.children];
-    if (candidates.length === 0) throw new KernelError('ECHILD');
-    const done = candidates.find(([, child]) => child.code !== undefined);
-    if (done) return this.reap(done[0], done[1].code as number);
-    if (nohang) return [0, 0];
-    const interrupt = interrupted(signal);
+  async wait(
+    pid: number,
+    nohang: boolean,
+    signal?: AbortSignal,
+    flags: WaitFlags = {}
+  ): Promise<[number, number]> {
+    let interrupt: ReturnType<typeof interrupted> | undefined;
     try {
-      const [reaped, code] = await Promise.race([
-        ...candidates.map(([p, child]) => child.exited.then((c) => [p, c] as const)),
-        interrupt.promise,
-      ]);
-      return this.reap(reaped, code);
+      for (;;) {
+        const candidates = this.candidates(pid, flags);
+        if (candidates.length === 0) throw new KernelError('ECHILD');
+        const done = candidates.find(([, child]) => child.code !== undefined);
+        if (done) return this.reap(done[0], done[1].code as number);
+        const changed = this.stateReport(candidates, flags);
+        if (changed) return changed;
+        if (nohang) return [0, 0];
+        interrupt ??= interrupted(signal);
+        await this.nextChange(candidates, flags, interrupt.promise);
+      }
     } finally {
-      interrupt.done();
+      interrupt?.done();
     }
+  }
+
+  private candidates(pid: number, flags: WaitFlags): [number, Child][] {
+    const all = [...this.children];
+    if (pid > 0) return all.filter(([p]) => p === pid);
+    const inGroup = flags.inGroup;
+    return pid === -1 || !inGroup ? all : all.filter(([p]) => inGroup(p));
+  }
+
+  private async nextChange(
+    candidates: [number, Child][],
+    flags: WaitFlags,
+    interrupt: Promise<never>
+  ): Promise<void> {
+    let wake: (() => void) | undefined;
+    const stateChange = new Promise<void>((resolve) => (wake = resolve));
+    const watching = flags.untraced || flags.continued;
+    if (watching && wake) this.stateChanged.push(wake);
+    try {
+      await Promise.race([
+        ...candidates.map(([, child]) => child.exited),
+        ...(watching ? [stateChange] : []),
+        interrupt,
+      ]);
+    } finally {
+      this.stateChanged = this.stateChanged.filter((w) => w !== wake);
+    }
+  }
+
+  private stateReport(candidates: [number, Child][], flags: WaitFlags): [number, number] | null {
+    for (const [p, child] of candidates) {
+      if (flags.untraced && child.stopReport !== undefined) {
+        const sig = child.stopReport;
+        child.stopReport = undefined;
+        return [p, stoppedStatus(sig)];
+      }
+      if (flags.continued && child.continueReport) {
+        child.continueReport = false;
+        return [p, CONTINUED_STATUS];
+      }
+    }
+    return null;
   }
 
   private reap(pid: number, code: number): [number, number] {

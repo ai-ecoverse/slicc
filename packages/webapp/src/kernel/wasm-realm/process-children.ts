@@ -1,8 +1,22 @@
+import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
 import type { ChildStdio } from './children.js';
 import type { ProcessFs, ProcessStream } from './kernel-streams.js';
+import type { WasmSyscall } from './process.js';
 import type { ForkState, ForkStream } from './protocol.js';
 import { wasiErrno } from './wasi-errno.js';
+
+const WUNTRACED = 2;
+const WCONTINUED = 8;
+
+function status(r: SyncFsResult): number {
+  return r.ok ? 0 : -wasiErrno(r.errno);
+}
+
+function number(r: SyncFsResult): number {
+  if (!r.ok) return -wasiErrno(r.errno);
+  return r.kind === 'json' && typeof r.json === 'number' ? r.json : -wasiErrno('EIO');
+}
 
 export interface ProcessKernel {
   spawn(
@@ -13,11 +27,21 @@ export interface ProcessKernel {
     stdio: number[]
   ): number;
 
-  wait(pid: number, nohang: boolean): [number, number] | number;
+  wait(pid: number, nohang: boolean, options?: number): [number, number] | number;
 
   fork(state: ForkState): number;
 
   kill(pid: number, sig: number): number;
+
+  setpgid(pid: number, pgid: number): number;
+  setsid(): number;
+
+  getpgid(pid: number): number;
+  getsid(pid: number): number;
+
+  tcgetpgrp(fd: number): number;
+
+  tcsetpgrp(fd: number, pgrp: number): number;
 
   execWait(pid: number): number;
 
@@ -70,6 +94,9 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
 
   const reaped = new Map<number, number>();
 
+  const call = (req: WasmSyscall, label: string): SyncFsResult =>
+    transport.call(req, Infinity, label);
+
   const slot = (fd: number, n: number): ChildStdio => {
     const stream = fd >= 0 ? Fs.getStream(fd) : null;
     if (!stream) return { none: true };
@@ -77,11 +104,18 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
     return n === 0 ? { input: drain(Fs, stream) } : { capture: true };
   };
 
-  const kernelWait = (pid: number, nohang: boolean): [number, number] | number => {
-    let r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+  const kernelWait = (pid: number, nohang: boolean, options = 0): [number, number] | number => {
+    const req = {
+      op: 'proc-wait' as const,
+      pid,
+      nohang,
+      ...(options & WUNTRACED ? { untraced: true } : {}),
+      ...(options & WCONTINUED ? { continued: true } : {}),
+    };
+    let r = transport.call(req, Infinity, `proc-wait ${pid}`);
 
     while (!r.ok && r.errno === 'EINTR' && deps.restartable?.()) {
-      r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+      r = transport.call(req, Infinity, `proc-wait ${pid}`);
     }
     if (!r.ok) return -wasiErrno(r.errno);
     const waited = r.kind === 'json' ? (r.json as [number, number]) : [0, 0];
@@ -158,22 +192,34 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
       return r.kind === 'json' ? (r.json as [number, number])[1] : 0;
     },
     kill(pid, sig) {
-      if (pid === 0 || pid === deps.pid || pid === -(deps.pid ?? Number.NaN)) {
+      if (pid === deps.pid) {
         if (sig !== 0) deps.raise?.(sig);
         return 0;
       }
-      const target = pid < -1 ? -pid : pid;
-      const r = transport.call({ op: 'proc-kill', pid: target, sig }, Infinity, `kill ${pid}`);
-      return r.ok ? 0 : -wasiErrno(r.errno);
+      return status(call({ op: 'proc-kill', pid, sig }, `kill ${pid}`));
     },
-    wait(pid, nohang) {
+    setpgid: (pid, pgid) => status(call({ op: 'proc-setpgid', pid, pgid }, 'setpgid')),
+    setsid: () => number(call({ op: 'proc-setsid' }, 'setsid')),
+    getpgid: (pid) => number(call({ op: 'proc-getpgid', pid }, 'getpgid')),
+    getsid: (pid) => number(call({ op: 'proc-getsid', pid }, 'getsid')),
+    tcgetpgrp(fd) {
+      const kfd = Fs.getStream(fd)?.sliccKernelFd;
+      if (kfd === undefined) return -wasiErrno('ENOTTY');
+      return number(call({ op: 'tty-pgrp-get', fd: kfd }, 'tcgetpgrp'));
+    },
+    tcsetpgrp(fd, pgrp) {
+      const kfd = Fs.getStream(fd)?.sliccKernelFd;
+      if (kfd === undefined) return -wasiErrno('ENOTTY');
+      return status(call({ op: 'tty-pgrp-set', fd: kfd, pgrp }, 'tcsetpgrp'));
+    },
+    wait(pid, nohang, options) {
       const key = pid > 0 ? (reaped.has(pid) ? pid : undefined) : reaped.keys().next().value;
       if (key !== undefined) {
         const status = reaped.get(key) as number;
         reaped.delete(key);
         return [key, status];
       }
-      return kernelWait(pid, nohang);
+      return kernelWait(pid, nohang, options);
     },
   };
 }

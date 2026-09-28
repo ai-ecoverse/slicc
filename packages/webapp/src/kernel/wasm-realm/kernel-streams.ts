@@ -147,6 +147,26 @@ export class KernelStreams {
     };
   }
 
+  useControllingTerminal(): void {
+    if (typeof this.Fs.open !== 'function') return;
+    const open = this.Fs.open.bind(this.Fs);
+    this.Fs.open = (path, flags, mode) => {
+      const stream = open(path, flags, mode);
+
+      const terminal = stream.tty ? this.controllingTerminal() : undefined;
+      if (terminal !== undefined) this.attach(stream, terminal, true);
+      return stream;
+    };
+  }
+
+  private controllingTerminal(): number | undefined {
+    for (const fd of [0, 1, 2]) {
+      const stream = this.Fs.getStream(fd);
+      if (stream?.sliccKernelFd !== undefined && stream.tty) return stream.sliccKernelFd;
+    }
+    return undefined;
+  }
+
   usePipes(pipefs: ProcessPipeFs): void {
     const createPipe = pipefs.createPipe.bind(pipefs);
     pipefs.createPipe = () => {

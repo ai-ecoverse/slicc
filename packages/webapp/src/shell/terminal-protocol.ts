@@ -138,3 +138,5 @@ export function isTerminalEventMsg(msg: unknown): msg is TerminalEventMsg {
     t === 'terminal-status'
   );
 }
+
+export const NO_LOGIN_SHELL = 125;

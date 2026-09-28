@@ -98,6 +98,7 @@ import { createUpgradeCommand } from './upgrade-command.js';
 import { createUptimeCommand } from './uptime-command.js';
 import { createUsbCommand } from './usb-command.js';
 import { createV86Command } from './v86-command.js';
+import type { NativeGate } from './wasm/launch.js';
 import { createWasmCommand } from './wasm-command.js';
 import { createWebhookCommand, type WebhookCommandOptions } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
@@ -156,6 +157,8 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   buildProcessConfig?: (runEnv?: ReadonlyMap<string, string>) => JshProcessConfig | undefined;
 
   terminal?: TerminalPort;
+
+  gateNativeCommand?: NativeGate;
 }
 
 function secretCommandDeps(options: SupplementalCommandsConfig): SecretCommandDeps {
@@ -210,6 +213,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWasmCommand({
       buildProcessConfig: options.buildProcessConfig,
       terminal: options.terminal,
+      gate: options.gateNativeCommand,
     }),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),

@@ -140,9 +140,9 @@ describe('wasm command', () => {
       processManager: pm,
       owner: { kind: 'cone' },
       getParentPid: () => 42,
-    } as unknown as Parameters<typeof runWasmCommand>[2];
+    } as unknown as NonNullable<Parameters<typeof runWasmCommand>[2]>['processConfig'];
     const files = { '/w/loop.js': 'G', '/w/loop.wasm': 'W' };
-    const running = runWasmCommand(['loop.js', 'x'], ctx(files), config);
+    const running = runWasmCommand(['loop.js', 'x'], ctx(files), { processConfig: config });
     await vi.waitFor(() => expect(listener).toBeDefined());
     expect(pm.spawn).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'wasm', argv: ['loop', 'x'], cwd: '/w', ppid: 42 })
@@ -228,6 +228,46 @@ describe('wasm command', () => {
       }));
     });
 
+    it('--login runs installed GNU bash on the terminal as a login shell with a slicc-like prompt', async () => {
+      const bashPkg = '/shared/lib/node_modules/@ai-ecoverse/wasm-bash';
+      const files = {
+        [`${bashPkg}/package.json`]: JSON.stringify({
+          name: '@ai-ecoverse/wasm-bash',
+          slicc: { commands: { bash: { glue: 'bin/bash', wasm: 'bin/bash.wasm' } } },
+        }),
+        [`${bashPkg}/bin/bash`]: 'BASH',
+        [`${bashPkg}/bin/bash.wasm`]: 'W',
+      };
+      const lease = {
+        cols: 80,
+        rows: 24,
+        write: () => {},
+        onInput: () => {},
+        onResize: () => {},
+        release: vi.fn(),
+      };
+      const terminal = { lease: () => lease };
+      const r = await runWasmCommand(['--login'], ctx(files), { terminal });
+      expect(r.exitCode).toBe(0);
+      const opts = spawn.mock.calls.at(-1)![0];
+      expect(opts.program.glue).toBe('BASH');
+      expect(opts.args).toEqual(['-i']);
+      expect(opts.env).toMatchObject({ PS1: '\\w $ ', TERM: 'xterm-256color' });
+      expect(opts.env.PROMPT_COMMAND).toContain('7777');
+      expect(lease.release).toHaveBeenCalled();
+    });
+
+    it('--login answers 125 silently without bash, a terminal, or when opted out', async () => {
+      const quiet = { stdout: '', stderr: '', exitCode: 125 };
+      const terminal = { lease: () => null };
+      expect(await runWasmCommand(['--login'], ctx(installed), { terminal })).toEqual(quiet);
+      expect(await runWasmCommand(['--login'], ctx(installed))).toEqual(quiet);
+      const optedOut = ctx(installed);
+      optedOut.exportedEnv = { SLICC_SHELL: 'just-bash' };
+      expect(await runWasmCommand(['--login'], optedOut, { terminal })).toEqual(quiet);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
     it('lists them with --list', async () => {
       const r = await runWasmCommand(['--list'], ctx(installed));
       expect(r).toEqual({
@@ -278,6 +318,7 @@ describe('wasm command', () => {
         release,
       };
       spawn.mockImplementation((opts) => {
+        expect(opts.env).toMatchObject({ TERM: 'xterm-256color', COLORTERM: 'truecolor' });
         const tty = opts.fds.get(0).file.tty;
         expect(opts.fds.get(1).file.tty).toBe(tty);
         expect(opts.fds.get(2).file.tty).toBe(tty);
@@ -294,29 +335,43 @@ describe('wasm command', () => {
           signal: vi.fn(),
         };
       });
-      const r = await runWasmCommand(
-        ['-t', 'sh.js'],
-        ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }),
-        undefined,
-        {
-          lease: () => lease,
-        }
-      );
+      const r = await runWasmCommand(['-t', 'sh.js'], ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }), {
+        terminal: { lease: () => lease },
+      });
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toBe('');
       expect(screen.join('')).toBe('hello\r\ntyped\r\n');
       expect(release).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps a real TERM the shell exports, and leaves piped programs’ env alone', async () => {
+      compile.mockResolvedValue({});
+      const envs: Record<string, string>[] = [];
+      spawn.mockImplementation((opts) => {
+        envs.push(opts.env);
+        return { pid: opts.pid, exited: Promise.resolve(0), kill: vi.fn(), signal: vi.fn() };
+      });
+      const lease = {
+        cols: 80,
+        rows: 24,
+        write: () => {},
+        onInput: () => {},
+        onResize: () => {},
+        release: () => {},
+      };
+      const files = { '/w/sh.js': 'G', '/w/sh.wasm': 'W' };
+      const screen = ctx(files);
+      screen.exportedEnv = { TERM: 'screen-256color' };
+      await runWasmCommand(['-t', 'sh.js'], screen, { terminal: { lease: () => lease } });
+      await runWasmCommand(['sh.js'], ctx(files));
+      expect(envs[0]).toEqual({ TERM: 'screen-256color' });
+      expect(envs[1]).toEqual({ A: '1' });
+    });
+
     it('fails without a terminal to lease', async () => {
-      const r = await runWasmCommand(
-        ['-t', 'sh.js'],
-        ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }),
-        undefined,
-        {
-          lease: () => null,
-        }
-      );
+      const r = await runWasmCommand(['-t', 'sh.js'], ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }), {
+        terminal: { lease: () => null },
+      });
       expect(r.exitCode).toBe(1);
       expect(r.stderr).toMatch(/-t: no terminal/);
       const none = await runWasmCommand(

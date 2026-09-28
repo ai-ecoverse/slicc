@@ -16,7 +16,8 @@ import {
 } from '../realm/sync-sab-wire.js';
 import type { ChildForker, ChildSpawner } from './children.js';
 import type { FdTable } from './fd-table.js';
-import { isWasmSyscall, WasmProcess } from './process.js';
+import type { JobTable } from './jobs.js';
+import { isWasmSyscall, type StateListener, WasmProcess } from './process.js';
 import {
   type ForkState,
   WASM_PROCESS_ERROR,
@@ -55,7 +56,9 @@ export interface SpawnWasmOptions {
 
   fork?: ForkState;
 
-  kill?: (pid: number, sig: number) => boolean;
+  kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
+
+  jobs?: JobTable;
 }
 
 export interface WasmProcessHandle {
@@ -68,6 +71,8 @@ export interface WasmProcessHandle {
   signal(sig: number): void;
 
   termsig(): number | undefined;
+
+  onState(listener: StateListener): void;
 }
 
 const CRASHED = 70;
@@ -86,6 +91,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     forker: opts.forker,
     fs: opts.fs,
     kill: opts.kill,
+    jobs: opts.jobs,
 
     onPending: (sig) => void Atomics.or(header, SAB_I_SIGNALS, sigbit(sig)),
     hasPending: () => Atomics.load(header, SAB_I_SIGNALS) !== 0,
@@ -154,5 +160,12 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
 
   const kill = (code = 137): void =>
     finish(code, code > 128 && code < 160 ? code - 128 : undefined);
-  return { pid: opts.pid, exited, kill, signal, termsig: () => endedBy };
+  return {
+    pid: opts.pid,
+    exited,
+    kill,
+    signal,
+    termsig: () => endedBy,
+    onState: (listener) => process.onState(listener),
+  };
 }

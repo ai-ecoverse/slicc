@@ -108,6 +108,8 @@ export interface LiveNodeOps {
 
 export interface LiveStreamOps {
   open(stream: LiveFsStream): void;
+
+  dup(stream: LiveFsStream): void;
   close(stream: LiveFsStream): void;
   read(
     stream: LiveFsStream,
@@ -428,6 +430,11 @@ function createStreamOps(h: LiveHelpers): LiveStreamOps {
   const { Fs, statOf, ensureLoaded, ensureCapacity, flushNode } = h;
   return {
     open(stream) {
+      if (!Fs.isFile(stream.node.mode)) return;
+      stream.node.live.openCount++;
+    },
+
+    dup(stream) {
       if (!Fs.isFile(stream.node.mode)) return;
       stream.node.live.openCount++;
     },

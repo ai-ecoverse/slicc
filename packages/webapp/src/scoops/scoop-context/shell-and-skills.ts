@@ -160,6 +160,7 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
 
     scrubProgressLabel: getToolResultScrubber(),
 
+    gnuBash: true,
     processManager: deps.processManager ?? undefined,
     processOwner: deps.processOwner,
     getCurrentShellPid: deps.getTurnPid,

@@ -1,4 +1,5 @@
 import type { CommandContext } from 'just-bash';
+import { LOGIN_PROMPT_COMMAND } from '../../../kernel/login-shell-marks.js';
 import { bytesSource, FdTable, sinkFile } from '../../../kernel/wasm-realm/fd-table.js';
 import type { WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import { KernelTty } from '../../../kernel/wasm-realm/tty.js';
@@ -6,7 +7,8 @@ import type { WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
 import { stdinAsLatin1 } from '../../just-bash-compat.js';
 import type { TerminalLease, TerminalPort } from '../../terminal-port.js';
-import { installedCommands, modulePath, WasmSession } from './launch.js';
+import { NO_LOGIN_SHELL } from '../../terminal-protocol.js';
+import { installedCommands, modulePath, type NativeGate, WasmSession } from './launch.js';
 
 type Result = {
   stdout: string;
@@ -16,7 +18,7 @@ type Result = {
 };
 
 const USAGE =
-  'usage: wasm [-t] [--argv0 NAME] [--module PATH] PROGRAM [ARGS...]\n       wasm --list\n';
+  'usage: wasm [-t] [--argv0 NAME] [--module PATH] PROGRAM [ARGS...]\n       wasm --list\n       wasm --login\n';
 
 const NO_SAB =
   'the wasm realm needs SharedArrayBuffer, which this page lacks (it is not cross-origin isolated)';
@@ -28,6 +30,8 @@ interface Invocation {
   module?: string;
 
   tty?: boolean;
+
+  login?: boolean;
   program: string;
   args: string[];
 }
@@ -38,6 +42,11 @@ function parse(args: string[]): Invocation | undefined {
   for (;;) {
     if (args[i] === '-t') {
       call.tty = true;
+      i += 1;
+      continue;
+    }
+    if (args[i] === '--login-prompt') {
+      call.login = true;
       i += 1;
       continue;
     }
@@ -60,13 +69,37 @@ interface Stdio {
   release(): void;
 }
 
-function pipedStdio(ctx: CommandContext, session: WasmSession, err: Uint8Array[]): Stdio {
+export interface RunWasmOptions {
+  processConfig?: JshProcessConfig;
+
+  terminal?: TerminalPort;
+
+  gate?: NativeGate;
+
+  onOutput?: (text: string) => void;
+}
+
+function teeing(onOutput: ((text: string) => void) | undefined): (bytes: Uint8Array) => void {
+  if (!onOutput) return () => {};
+  const decoder = new TextDecoder();
+  return (bytes) => {
+    const text = decoder.decode(bytes, { stream: true });
+    if (text) onOutput(text);
+  };
+}
+
+function pipedStdio(
+  ctx: CommandContext,
+  session: WasmSession,
+  err: Uint8Array[],
+  onOutput?: (text: string) => void
+): Stdio {
   const out: Uint8Array[] = [];
 
   const limit = ctx.limits?.maxOutputSize ?? DEFAULT_MAX_OUTPUT;
   let collected = 0;
   let overflow = false;
-  const collect = (into: Uint8Array[]) => (bytes: Uint8Array) => {
+  const collect = (into: Uint8Array[], tee: (bytes: Uint8Array) => void) => (bytes: Uint8Array) => {
     collected += bytes.length;
     if (collected > limit) {
       overflow = true;
@@ -74,11 +107,12 @@ function pipedStdio(ctx: CommandContext, session: WasmSession, err: Uint8Array[]
       return;
     }
     into.push(bytes);
+    tee(bytes);
   };
   const fds = new FdTable();
   fds.install(bytesSource(stdinBytes(ctx)));
-  fds.install(sinkFile(collect(out)));
-  fds.install(sinkFile(collect(err)));
+  fds.install(sinkFile(collect(out, teeing(onOutput))));
+  fds.install(sinkFile(collect(err, teeing(onOutput))));
   return {
     fds,
     collected: () => ({
@@ -90,8 +124,8 @@ function pipedStdio(ctx: CommandContext, session: WasmSession, err: Uint8Array[]
 }
 
 function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
-  const tty = new KernelTty({ write: (bytes) => lease.write(bytes) }, (sig) =>
-    session.signalAll(sig)
+  const tty: KernelTty = new KernelTty({ write: (bytes) => lease.write(bytes) }, (sig) =>
+    session.signalTerminal(tty, sig)
   );
   tty.setSize(lease.cols, lease.rows);
   lease.onInput((bytes) => tty.receive(bytes));
@@ -102,6 +136,32 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
   fds.installAt(1, file.retain());
   fds.installAt(2, file.retain());
   return { fds, collected: () => ({ stdout: '', note: '' }), release: () => lease.release() };
+}
+
+function programEnv(ctx: CommandContext, call: Invocation): Record<string, string> {
+  const env = { ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
+  if (call.tty && (!env.TERM || env.TERM === 'dumb')) {
+    env.TERM = 'xterm-256color';
+    env.COLORTERM ??= 'truecolor';
+  }
+
+  if (call.login) {
+    env.PS1 ??= '\\w $ ';
+
+    env.PROMPT_COMMAND ??= LOGIN_PROMPT_COMMAND;
+  }
+  return env;
+}
+
+async function loginShell(ctx: CommandContext, options: RunWasmOptions): Promise<Result> {
+  const none = { stdout: '', stderr: '', exitCode: NO_LOGIN_SHELL };
+  const choice = ctx.exportedEnv?.SLICC_SHELL ?? ctx.env.get('SLICC_SHELL');
+  if (choice === 'just-bash' || !options.terminal || typeof SharedArrayBuffer !== 'function') {
+    return none;
+  }
+  if (!(await installedCommands(ctx)).has('bash')) return none;
+
+  return runWasmCommand(['-t', '--login-prompt', 'bash', '-i'], ctx, options);
 }
 
 function listing(commands: Map<string, WasmCommand>): string {
@@ -147,10 +207,11 @@ function stdinBytes(ctx: CommandContext): Uint8Array {
 export async function runWasmCommand(
   args: string[],
   ctx: CommandContext,
-  processConfig?: JshProcessConfig,
-  terminal?: TerminalPort
+  options: RunWasmOptions = {}
 ): Promise<Result> {
+  const { processConfig, terminal } = options;
   if (args[0] === '--help' || args[0] === '-h') return { stdout: USAGE, stderr: '', exitCode: 0 };
+  if (args[0] === '--login' && args.length === 1) return loginShell(ctx, options);
   if (args[0] === '--list' && args.length === 1) {
     return { stdout: listing(await installedCommands(ctx)), stderr: '', exitCode: 0 };
   }
@@ -161,8 +222,11 @@ export async function runWasmCommand(
   }
 
   const err: Uint8Array[] = [];
-  const session = new WasmSession(ctx, processConfig, (message) =>
-    err.push(new TextEncoder().encode(`wasm: ${message}\n`))
+  const session = new WasmSession(
+    ctx,
+    processConfig,
+    (message) => err.push(new TextEncoder().encode(`wasm: ${message}\n`)),
+    options.gate
   );
   const call = await resolveInstalled(ctx, session, parsed);
   const gluePath = ctx.fs.resolvePath(ctx.cwd, call.program);
@@ -179,7 +243,7 @@ export async function runWasmCommand(
     }
     stdio = terminalStdio(lease, session);
   } else {
-    stdio = pipedStdio(ctx, session, err);
+    stdio = pipedStdio(ctx, session, err, options.onOutput);
   }
   const { fds } = stdio;
 
@@ -190,7 +254,7 @@ export async function runWasmCommand(
       module: call.module ? ctx.fs.resolvePath(ctx.cwd, call.module) : modulePath(gluePath),
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
-      env: ctx.exportedEnv ?? Object.fromEntries(ctx.env),
+      env: programEnv(ctx, call),
       cwd: ctx.cwd,
       fds,
       signal: ctx.signal,
