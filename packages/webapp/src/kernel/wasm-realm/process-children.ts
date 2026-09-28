@@ -16,6 +16,10 @@ export interface ProcessKernel {
   wait(pid: number, nohang: boolean): [number, number] | number;
 
   fork(state: ForkState): number;
+
+  kill(pid: number, sig: number): number;
+
+  execWait(pid: number): number;
 }
 
 export interface ProcessKernelDeps {
@@ -29,6 +33,12 @@ export interface ProcessKernelDeps {
   afterChild(): void;
 
   describeFork(): ForkStream[];
+
+  pid?: number;
+
+  raise?(sig: number): void;
+
+  restartable?(): boolean;
 }
 
 function drain(Fs: ProcessFs, stream: ProcessStream): Uint8Array {
@@ -62,7 +72,11 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
   };
 
   const kernelWait = (pid: number, nohang: boolean): [number, number] | number => {
-    const r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+    let r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+
+    while (!r.ok && r.errno === 'EINTR' && deps.restartable?.()) {
+      r = transport.call({ op: 'proc-wait', pid, nohang }, Infinity, `proc-wait ${pid}`);
+    }
     if (!r.ok) return -wasiErrno(r.errno);
     const waited = r.kind === 'json' ? (r.json as [number, number]) : [0, 0];
     if (waited[0] > 0) deps.afterChild();
@@ -110,6 +124,21 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
       );
       if (!r.ok) return -wasiErrno(r.errno);
       return r.kind === 'json' ? (r.json as number) : -wasiErrno('EIO');
+    },
+    execWait(pid) {
+      const r = transport.call({ op: 'proc-exec', pid }, Infinity, `exec ${pid}`);
+      if (!r.ok) return -wasiErrno(r.errno);
+      deps.afterChild();
+      return r.kind === 'json' ? (r.json as [number, number])[1] : 0;
+    },
+    kill(pid, sig) {
+      if (pid === 0 || pid === deps.pid || pid === -(deps.pid ?? Number.NaN)) {
+        if (sig !== 0) deps.raise?.(sig);
+        return 0;
+      }
+      const target = pid < -1 ? -pid : pid;
+      const r = transport.call({ op: 'proc-kill', pid: target, sig }, Infinity, `kill ${pid}`);
+      return r.ok ? 0 : -wasiErrno(r.errno);
     },
     wait(pid, nohang) {
       const key = pid > 0 ? (reaped.has(pid) ? pid : undefined) : reaped.keys().next().value;

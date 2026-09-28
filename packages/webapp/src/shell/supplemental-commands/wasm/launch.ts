@@ -10,17 +10,16 @@ import {
 import type { FdTable, OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
+import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
 import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
 
 const modules = new Map<string, Promise<WebAssembly.Module>>();
 
-const SIGNAL_EXIT_CODE: Readonly<Partial<Record<string, number>>> = {
-  SIGKILL: 137,
-  SIGINT: 130,
-  SIGTERM: 143,
-};
+const SIGNAL_NAME = new Map(
+  Object.entries(SIGNAL_BY_NAME).map(([name, sig]) => [sig, name as keyof typeof SIGNAL_BY_NAME])
+);
 
 const REGISTRY_PATH = /^\/(?:usr\/)?bin\/([^/]+)$/;
 
@@ -125,6 +124,9 @@ export class WasmSession {
   private readonly live = new Set<WasmProcessHandle>();
 
   private readonly shellChildren = new Set<AbortController>();
+
+  private readonly wasmByPid = new Map<number, WasmProcessHandle>();
+  private readonly shellByPid = new Map<number, AbortController>();
   private installed: Promise<Map<string, WasmCommand>> | undefined;
 
   constructor(
@@ -167,20 +169,40 @@ export class WasmSession {
       onError: this.onError,
       spawner: this.spawner(pid),
       forker: this.forker(pid, req),
+      kill: (target, sig) => this.kill(target, sig),
       ...(req.fork ? { fork: req.fork } : {}),
     });
     this.live.add(handle);
+    this.wasmByPid.set(pid, handle);
 
     const unsubscribe = pm?.onSignal((signaled, sig) => {
-      const code = signaled.pid === pid ? SIGNAL_EXIT_CODE[sig] : undefined;
-      if (code !== undefined) handle.kill(code);
+      if (signaled.pid === pid) handle.signal(SIGNAL_BY_NAME[sig]);
     });
     void handle.exited.then((code) => {
       this.live.delete(handle);
+      this.wasmByPid.delete(pid);
       unsubscribe?.();
       if (this.processConfig) pm?.exit(pid, code);
     });
     return handle;
+  }
+
+  private kill(pid: number, sig: number): boolean {
+    const wasm = this.wasmByPid.get(pid);
+    if (wasm) {
+      if (sig !== 0) wasm.signal(sig);
+      return true;
+    }
+    const shell = this.shellByPid.get(pid);
+    if (shell) {
+      if (sig !== 0 && defaultAction(sig) === 'terminate') shell.abort();
+      return true;
+    }
+    const pm = this.processConfig?.processManager;
+    if (!pm) return false;
+    if (sig === 0) return pm.get(pid) !== null;
+    const name = SIGNAL_NAME.get(sig);
+    return name !== undefined && pm.signal(pid, name);
   }
 
   killAll(code: number): void {
@@ -242,6 +264,7 @@ export class WasmSession {
     this.ctx.signal?.addEventListener('abort', onAbort, { once: true });
     if (this.ctx.signal?.aborted) onAbort();
     this.shellChildren.add(controller);
+    this.shellByPid.set(pid, controller);
     const exited = (async () => {
       try {
         const stdin = fds.has(0) ? await readAll(fds.get(0)) : new Uint8Array(0);
@@ -269,6 +292,7 @@ export class WasmSession {
       } finally {
         await fds.closeAll();
         this.shellChildren.delete(controller);
+        this.shellByPid.delete(pid);
         this.ctx.signal?.removeEventListener('abort', onAbort);
       }
     })();

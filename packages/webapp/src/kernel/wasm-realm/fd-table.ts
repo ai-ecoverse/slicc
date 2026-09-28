@@ -8,7 +8,9 @@ export type KernelErrno =
   | 'ENOENT'
   | 'ECHILD'
   | 'ENOSYS'
-  | 'ESPIPE';
+  | 'ESPIPE'
+  | 'EINTR'
+  | 'ESRCH';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {
@@ -25,9 +27,9 @@ export interface PollState {
 }
 
 export interface KernelFile {
-  read?(max: number): Promise<Uint8Array>;
+  read?(max: number, signal?: AbortSignal): Promise<Uint8Array>;
 
-  write?(bytes: Uint8Array): Promise<number>;
+  write?(bytes: Uint8Array, signal?: AbortSignal): Promise<number>;
 
   close(): void | Promise<void>;
 
@@ -64,16 +66,23 @@ export function openPipe(capacity?: number): { read: OpenFile; write: OpenFile }
   pipe.openWrite();
   return {
     read: new OpenFile({
-      read: (max) => pipe.read(max),
+      read: async (max, signal) => {
+        try {
+          return await pipe.read(max, signal);
+        } catch (e) {
+          if (e instanceof PipeError) throw new KernelError(e.code);
+          throw e;
+        }
+      },
       close: () => pipe.closeRead(),
       poll: () => ({ readable: pipe.readReady, writable: false, hangup: pipe.writersGone }),
     }),
     write: new OpenFile({
-      write: async (bytes) => {
+      write: async (bytes, signal) => {
         try {
-          return await pipe.write(bytes);
+          return await pipe.write(bytes, signal);
         } catch (e) {
-          if (e instanceof PipeError) throw new KernelError('EPIPE');
+          if (e instanceof PipeError) throw new KernelError(e.code);
           throw e;
         }
       },

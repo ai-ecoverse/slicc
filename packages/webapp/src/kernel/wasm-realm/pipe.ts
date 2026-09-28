@@ -1,7 +1,7 @@
 export const PIPE_CAPACITY = 64 * 1024;
 
 export class PipeError extends Error {
-  constructor(readonly code: 'EPIPE') {
+  constructor(readonly code: 'EPIPE' | 'EINTR') {
     super(code);
   }
 }
@@ -57,23 +57,28 @@ export class KernelPipe {
     this.wake();
   }
 
-  async read(max: number): Promise<Uint8Array> {
+  async read(max: number, signal?: AbortSignal): Promise<Uint8Array> {
     while (this.size === 0) {
       if (this.writers === 0) return new Uint8Array(0);
-      await this.waitForChange();
+      await this.waitForChange(signal);
     }
     const out = this.take(Math.min(max, this.size));
     this.wake();
     return out;
   }
 
-  async write(bytes: Uint8Array): Promise<number> {
+  async write(bytes: Uint8Array, signal?: AbortSignal): Promise<number> {
     let offset = 0;
     while (offset < bytes.length) {
       if (this.readers === 0) throw new PipeError('EPIPE');
       const room = this.capacity - this.size;
       if (room === 0) {
-        await this.waitForChange();
+        try {
+          await this.waitForChange(signal);
+        } catch (e) {
+          if (offset > 0) return offset;
+          throw e;
+        }
         continue;
       }
       const n = Math.min(room, bytes.length - offset);
@@ -100,8 +105,20 @@ export class KernelPipe {
     return out;
   }
 
-  private waitForChange(): Promise<void> {
-    return new Promise((resolve) => this.waiters.push(resolve));
+  private waitForChange(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(new PipeError('EINTR'));
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => {
+        this.waiters = this.waiters.filter((w) => w !== waiter);
+        reject(new PipeError('EINTR'));
+      };
+      const waiter = (): void => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      this.waiters.push(waiter);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   private wake(): void {

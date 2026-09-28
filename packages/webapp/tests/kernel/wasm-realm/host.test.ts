@@ -199,6 +199,35 @@ describe('spawnWasmProcess', () => {
     expect(answer).toMatchObject({ ok: false, errno: 'EPIPE' });
   });
 
+  it("signal(): an uncaught signal's default action ends it; a caught one is left for the worker", async () => {
+    let header!: Int32Array;
+    let masked!: () => void;
+    const reported = new Promise<void>((resolve) => (masked = resolve));
+    const worker = fakeWorker(async (call, init) => {
+      header = new Int32Array(init.sab, 0, 16);
+      await call({ op: 'sig-mask', caught: 1 << 10, ignored: 0 });
+      masked();
+      return new Promise<number>(() => {});
+    });
+    const handle = spawnWasmProcess({
+      pid: 3020,
+      program,
+      argv0: 'loop',
+      args: [],
+      env: {},
+      cwd: '/',
+      fds: new FdTable(),
+      fs: memFs({}),
+      createWorker: () => worker,
+    });
+    await reported;
+    handle.signal(10);
+    expect(Atomics.load(header, 8)).toBe(1 << 10);
+    handle.signal(15);
+    expect(await handle.exited).toBe(143);
+    expect(worker.terminated).toBe(true);
+  });
+
   it('kill ends the process at once with 137 and releases everything', async () => {
     const { read, write } = openPipe();
     const fds = new FdTable();

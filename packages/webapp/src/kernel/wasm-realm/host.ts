@@ -8,7 +8,12 @@ import {
   attachSyncSabResponder,
   type SyncSabDispatchRequest,
 } from '../realm/sync-sab-responder.js';
-import { SAB_DEFAULT_WINDOW_BYTES, SAB_HEADER_BYTES } from '../realm/sync-sab-wire.js';
+import {
+  SAB_DEFAULT_WINDOW_BYTES,
+  SAB_HEADER_BYTES,
+  SAB_HEADER_I32,
+  SAB_I_SIGNALS,
+} from '../realm/sync-sab-wire.js';
 import type { ChildForker, ChildSpawner } from './children.js';
 import type { FdTable } from './fd-table.js';
 import { isWasmSyscall, WasmProcess } from './process.js';
@@ -20,6 +25,7 @@ import {
   type WasmProcessInitMsg,
   type WasmProgram,
 } from './protocol.js';
+import { SIG, sigbit } from './signals.js';
 
 export interface WasmWorkerLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -48,6 +54,8 @@ export interface SpawnWasmOptions {
   forker?: ChildForker;
 
   fork?: ForkState;
+
+  kill?: (pid: number, sig: number) => boolean;
 }
 
 export interface WasmProcessHandle {
@@ -56,6 +64,8 @@ export interface WasmProcessHandle {
   exited: Promise<number>;
 
   kill(code?: number): void;
+
+  signal(sig: number): void;
 }
 
 const CRASHED = 70;
@@ -67,13 +77,17 @@ function defaultWorker(): WasmWorkerLike {
 }
 
 export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
+  const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + SAB_DEFAULT_WINDOW_BYTES);
+  const header = new Int32Array(sab, 0, SAB_HEADER_I32);
   const process = new WasmProcess(opts.pid, opts.fds, {
     spawner: opts.spawner,
     forker: opts.forker,
     fs: opts.fs,
+    kill: opts.kill,
+
+    onPending: (sig) => void Atomics.or(header, SAB_I_SIGNALS, sigbit(sig)),
   });
   const token = mintSyncFsToken({ fs: opts.fs, cwd: opts.cwd });
-  const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + SAB_DEFAULT_WINDOW_BYTES);
   const worker = (opts.createWorker ?? defaultWorker)();
   const dispatch = async (req: SyncSabDispatchRequest): Promise<SyncFsResult> => {
     if (isWasmSyscall(req)) return process.syscall(req);
@@ -128,5 +142,8 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
   };
 
   worker.postMessage(init, opts.fork ? [opts.fork.memory.buffer] : []);
-  return { pid: opts.pid, exited, kill: (code = 137) => finish(code) };
+  const signal = (sig: number): void => {
+    if (process.signal(sig) === 'terminate') finish(sig === SIG.KILL ? 137 : 128 + sig);
+  };
+  return { pid: opts.pid, exited, kill: (code = 137) => finish(code), signal };
 }

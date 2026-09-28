@@ -8,7 +8,7 @@ import {
   type SabPostLike,
   type SyncSabTransport,
 } from '../realm/sync-sab-bridge.js';
-import type { SyncSabRequestBody } from '../realm/sync-sab-wire.js';
+import { SAB_HEADER_I32, type SyncSabRequestBody } from '../realm/sync-sab-wire.js';
 import type { PollState } from './fd-table.js';
 import {
   KernelStreams,
@@ -19,6 +19,7 @@ import {
 } from './kernel-streams.js';
 import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import { describeForFork, restoreForkedStreams } from './process-fork.js';
+import { SignalGate } from './process-signals.js';
 import type { ForkState, WasmProcessInitMsg } from './protocol.js';
 
 export {
@@ -93,6 +94,10 @@ interface RunningModule {
 
   sliccSigpipe?: () => number;
 
+  sliccSigMask?: (which: number) => number;
+
+  sliccRaise?: (sig: number) => void;
+
   sliccKernel?: ProcessKernel;
 }
 
@@ -111,6 +116,9 @@ const GLUE_TRAILER = [
   "if (typeof PIPEFS !== 'undefined') Module.PIPEFS ??= PIPEFS;",
 
   "Module.sliccSigpipe ??= () => (typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
+
+  "Module.sliccSigMask ??= (w) => (typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
+  "Module.sliccRaise ??= (sig) => { if (typeof _slicc_raise === 'function') _slicc_raise(sig); };",
 ].join('\n');
 
 export const evaluateGlue: GlueEvaluator = (glue, module) => {
@@ -127,12 +135,29 @@ export const EVAL_BLOCKED =
   "the wasm realm evaluates the program's Emscripten glue, and this page's CSP forbids eval " +
   "(no 'unsafe-eval')";
 
+export function signalMasks(
+  m: Pick<RunningModule, 'sliccSigMask'>
+): { caught: number; ignored: number; restart: number } | null {
+  const mask = m.sliccSigMask;
+  const caught = mask?.(0) ?? -1;
+  if (!mask || caught === -1) return null;
+  return { caught, ignored: mask(1), restart: mask(2) };
+}
+
 export async function runWasmProcess(
   init: WasmProcessInitMsg,
   port: SabPostLike,
   deps: { evaluate?: GlueEvaluator; warn?: (message: string) => void } = {}
 ): Promise<number> {
-  const transport = createSyncSabTransport(init.sab, port);
+  const signals = new SignalGate(
+    createSyncSabTransport(init.sab, port),
+    new Int32Array(init.sab, 0, SAB_HEADER_I32),
+    {
+      masks: () => signalMasks(module as unknown as RunningModule),
+      raise: (sig) => (module as unknown as RunningModule).sliccRaise?.(sig),
+    }
+  );
+  const transport = signals.transport();
   const sys = kernelSys(transport);
   const encoder = new TextEncoder();
   const say = (fd: number) => (text: string) => sys.write(fd, encoder.encode(`${text}\n`));
@@ -183,7 +208,10 @@ export async function runWasmProcess(
     },
     { cwd: init.cwd }
   );
-  const streams = new KernelStreams(running.FS, sys, () => running.sliccSigpipe?.() === 1);
+  const streams = new KernelStreams(running.FS, sys, {
+    sigpipe: () => running.sliccSigpipe?.() === 1,
+    restartable: () => signals.restartable(),
+  });
   if (init.fork) restoreForkedStreams(running.FS, streams, init.fork.streams ?? []);
   else wireKernelStdio(running.FS, streams);
   if (running.PIPEFS) streams.usePipes(running.PIPEFS);
@@ -193,6 +221,9 @@ export async function runWasmProcess(
     env: init.env,
     beforeSpawn: () => vfs.flush(),
     afterChild: () => vfs.invalidate(),
+    pid: init.pid,
+    raise: (sig) => running.sliccRaise?.(sig),
+    restartable: () => signals.restartable(),
     describeFork: () =>
       describeForFork(running.FS, sys, streams, (s) =>
         liveNodePath(s.node as unknown as LiveFsNode)

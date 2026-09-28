@@ -12,6 +12,8 @@ export const SAB_I_TOTAL = 3;
 export const SAB_I_CHUNK = 4;
 export const SAB_I_OFFSET = 5;
 
+export const SAB_I_SIGNALS = 8;
+
 export const SAB_STATE_IDLE = 0;
 export const SAB_STATE_PENDING = 1;
 export const SAB_STATE_READY = 2;

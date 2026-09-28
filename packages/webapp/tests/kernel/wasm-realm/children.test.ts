@@ -60,6 +60,19 @@ describe('ChildTable', () => {
     await expect(children.wait(-1, false)).rejects.toMatchObject({ code: 'ECHILD' });
   });
 
+  it('detaches from the interrupt signal once a wait is over', async () => {
+    const { spawner, ends } = controllable();
+    const children = new ChildTable(new FdTable(), spawner);
+    const interrupt = new AbortController();
+    const add = vi.spyOn(interrupt.signal, 'addEventListener');
+    const remove = vi.spyOn(interrupt.signal, 'removeEventListener');
+    const pid = await children.spawn(REQ, []);
+    const waiting = children.wait(pid, false, interrupt.signal);
+    ends.get(pid)!(0);
+    expect(await waiting).toEqual([pid, 0]);
+    expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0]![1]);
+  });
+
   it('returns an already exited child without waiting', async () => {
     const { spawner, ends } = controllable();
     const children = new ChildTable(new FdTable(), spawner);

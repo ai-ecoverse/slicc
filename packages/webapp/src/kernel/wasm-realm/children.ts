@@ -47,6 +47,20 @@ interface Child {
   captured: Map<number, Uint8Array[]>;
 }
 
+function interrupted(signal: AbortSignal | undefined): {
+  promise: Promise<never>;
+
+  done(): void;
+} {
+  let fail = (): void => {};
+  const promise = new Promise<never>((_, reject) => {
+    fail = () => reject(new KernelError('EINTR'));
+    if (signal?.aborted) fail();
+    else signal?.addEventListener('abort', fail, { once: true });
+  });
+  return { promise, done: () => signal?.removeEventListener('abort', fail) };
+}
+
 export function waitStatus(code: number): number {
   return (code & 0xff) << 8;
 }
@@ -65,6 +79,8 @@ export class ChildTable {
   private readonly children = new Map<number, Child>();
 
   private readonly leftovers = new Map<number, Map<number, Uint8Array[]>>();
+
+  onChildExit?: () => void;
 
   constructor(
     private readonly parentFds: FdTable,
@@ -106,6 +122,7 @@ export class ChildTable {
     const child: Child = { exited: handle.exited, captured };
     void handle.exited.then((code) => {
       child.code = code;
+      this.onChildExit?.();
     });
     this.children.set(handle.pid, child);
     return handle.pid;
@@ -122,16 +139,22 @@ export class ChildTable {
     return nullFile();
   }
 
-  async wait(pid: number, nohang: boolean): Promise<[number, number]> {
+  async wait(pid: number, nohang: boolean, signal?: AbortSignal): Promise<[number, number]> {
     const candidates = pid > 0 ? [...this.children].filter(([p]) => p === pid) : [...this.children];
     if (candidates.length === 0) throw new KernelError('ECHILD');
     const done = candidates.find(([, child]) => child.code !== undefined);
     if (done) return this.reap(done[0], done[1].code as number);
     if (nohang) return [0, 0];
-    const [reaped, code] = await Promise.race(
-      candidates.map(([p, child]) => child.exited.then((c) => [p, c] as const))
-    );
-    return this.reap(reaped, code);
+    const interrupt = interrupted(signal);
+    try {
+      const [reaped, code] = await Promise.race([
+        ...candidates.map(([p, child]) => child.exited.then((c) => [p, c] as const)),
+        interrupt.promise,
+      ]);
+      return this.reap(reaped, code);
+    } finally {
+      interrupt.done();
+    }
   }
 
   private reap(pid: number, code: number): [number, number] {

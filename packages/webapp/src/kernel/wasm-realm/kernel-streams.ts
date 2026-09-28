@@ -86,13 +86,19 @@ export interface ProcessPipeFs {
   createPipe(): { readable_fd: number; writable_fd: number };
 }
 
+export interface KernelStreamOptions {
+  sigpipe?: () => boolean;
+
+  restartable?: () => boolean;
+}
+
 export class KernelStreams {
   private readonly refs = new Map<number, number>();
 
   constructor(
     private readonly Fs: ProcessFs,
     private readonly sys: ProcessSys,
-    private readonly sigpipe?: () => boolean
+    private readonly options: KernelStreamOptions = {}
   ) {}
 
   attach(stream: ProcessStream, kfd: number): void {
@@ -139,6 +145,18 @@ export class KernelStreams {
     };
   }
 
+  private restarting<T>(syscall: () => T): T {
+    for (;;) {
+      try {
+        return syscall();
+      } catch (e) {
+        if (!(e instanceof SyscallError && e.code === 'EINTR' && this.options.restartable?.())) {
+          throw e;
+        }
+      }
+    }
+  }
+
   private call<T>(syscall: () => T): T {
     try {
       return syscall();
@@ -153,15 +171,15 @@ export class KernelStreams {
       ...base,
       read: (_s, buffer, offset, length) =>
         this.call(() => {
-          const bytes = this.sys.read(kfd, length);
+          const bytes = this.restarting(() => this.sys.read(kfd, length));
           buffer.set(bytes, offset);
           return bytes.length;
         }),
       write: (_s, buffer, offset, length) => {
         try {
-          return this.sys.write(kfd, buffer.slice(offset, offset + length));
+          return this.restarting(() => this.sys.write(kfd, buffer.slice(offset, offset + length)));
         } catch (e) {
-          if (e instanceof SyscallError && e.code === 'EPIPE' && !this.sigpipe?.()) {
+          if (e instanceof SyscallError && e.code === 'EPIPE' && !this.options.sigpipe?.()) {
             throw new ProcessExit(KILLED_BY_SIGPIPE);
           }
           return this.call(() => {
