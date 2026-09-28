@@ -10,10 +10,12 @@
  * cannot be shared with another worker, so the child's stdin is what that
  * descriptor holds now, and its output is captured and written there once it
  * has exited — `spawn` returns after the child is done, as in the node realm.
+ * Beyond 0-2 the child inherits the program's fds that are not close-on-exec,
+ * at the same numbers (`describeInherited`), as execve and posix_spawn do.
  */
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
-import type { ChildStdio } from './children.js';
+import type { ChildStdio, InheritedSlot } from './children.js';
 import type { ProcessFs, ProcessStream } from './kernel-streams.js';
 import type { WasmSyscall } from './process.js';
 import type { SocketKernel } from './process-sockets.js';
@@ -37,12 +39,18 @@ function number(r: SyncFsResult): number {
 
 /** What the libc shims call: pids and wait statuses, or a negative WASI errno. */
 export interface ProcessKernel {
+  /**
+   * `stdio`: the program fds the child's 0-2 are (-1: closed). `actions`:
+   * posix_spawn's file actions on the child's fds beyond 2, `[target,
+   * source]` (source -1 closes); the child inherits the rest.
+   */
   spawn(
     file: string,
     argv: string[],
     env: Record<string, string> | null,
     cwd: string | null,
-    stdio: number[]
+    stdio: number[],
+    actions?: ReadonlyArray<readonly [number, number]>
   ): number;
   /**
    * `[pid, status]`; `[0, 0]` for `nohang` with no child exited yet.
@@ -94,6 +102,8 @@ export interface ProcessKernelDeps {
   afterChild(): void;
   /** Hand the open VFS files to the kernel and describe the fd table (process-fork.ts). */
   describeFork(): ForkStream[];
+  /** The fds beyond 0-2 a spawned child inherits, after `actions` (process-fork.ts). */
+  inherit?(actions?: ReadonlyArray<readonly [number, number]>): InheritedSlot[];
   /** This process's pid: kill() of itself raises the signal in place. */
   pid?: number;
   /** raise(sig) in the program. */
@@ -170,11 +180,20 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
   };
 
   return {
-    spawn(file, argv, env, cwd, fds) {
+    spawn(file, argv, env, cwd, fds, actions) {
       const stdio = [0, 1, 2].map((n) => slot(fds[n] ?? -1, n));
       deps.beforeSpawn();
+      const inherit = deps.inherit?.(actions) ?? [];
       const r = transport.call(
-        { op: 'proc-spawn', file, argv, env: env ?? deps.env, cwd: cwd ?? Fs.cwd(), stdio },
+        {
+          op: 'proc-spawn',
+          file,
+          argv,
+          env: env ?? deps.env,
+          cwd: cwd ?? Fs.cwd(),
+          stdio,
+          ...(inherit.length > 0 ? { inherit } : {}),
+        },
         Infinity,
         `proc-spawn ${file}`
       );

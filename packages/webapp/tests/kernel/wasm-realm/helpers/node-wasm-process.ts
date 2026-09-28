@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { build } from 'esbuild';
+import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
 import { FdTable, nullFile, sinkFile } from '../../../../src/kernel/wasm-realm/fd-table.js';
 import {
   type SpawnWasmOptions,
@@ -66,7 +67,7 @@ export async function loadProgram(glue: string): Promise<WasmProgram> {
   };
 }
 
-/** A filesystem with nothing on it: the programs here only use sockets and stdio. */
+/** A filesystem with nothing on it: the programs here only use sockets, pipes, stdio and their own /tmp. */
 const emptyFs = {
   resolvePath: (cwd: string, path: string) => (path.startsWith('/') ? path : `${cwd}/${path}`),
   readdir: async () => [],
@@ -87,7 +88,12 @@ export interface RunningProgram {
   kill(): void;
 }
 
-/** Start `program` with `args` on the loopback network `net`; stdin is /dev/null. */
+/**
+ * Start `program` with `args` on the loopback network `net`; stdin is
+ * /dev/null. Every child it spawns runs `program` again (with the argv it
+ * asked for) on the descriptors the kernel built for it, and writes where
+ * those lead: stdout / stderr here, unless redirected.
+ */
 export function runProgram(
   workerFile: string,
   program: WasmProgram,
@@ -112,19 +118,26 @@ export function runProgram(
     2,
     sinkFile((bytes) => err.push(decoder.decode(bytes)))
   );
-  const handle = spawnWasmProcess({
-    pid: nextPid++,
-    program,
-    argv0,
-    args,
-    env: {},
-    cwd: '/',
-    fds,
-    fs: emptyFs,
-    net,
-    createWorker: () => nodeWorker(workerFile),
-    onError: (message) => err.push(message),
-  });
+  const start = (argv: string[], table: FdTable) =>
+    spawnWasmProcess({
+      pid: nextPid++,
+      program,
+      argv0,
+      args: argv,
+      env: {},
+      cwd: '/',
+      fds: table,
+      fs: emptyFs,
+      net,
+      createWorker: () => nodeWorker(workerFile),
+      onError: (message) => err.push(message),
+      spawner,
+    });
+  const spawner: ChildSpawner = async (req, table) => {
+    const child = start(req.argv.slice(1), table);
+    return { pid: child.pid, exited: child.exited, termsig: child.termsig };
+  };
+  const handle = start(args, fds);
   const stdout = () => out.join('');
   let ended = false;
   void handle.exited.then(() => {

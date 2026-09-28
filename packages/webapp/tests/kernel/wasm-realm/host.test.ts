@@ -21,11 +21,13 @@ import {
 import {
   bytesSource,
   FdTable,
+  OpenFile,
   openPipe,
   sinkFile,
 } from '../../../src/kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmWorkerLike } from '../../../src/kernel/wasm-realm/host.js';
-import type { WasmProcessInitMsg } from '../../../src/kernel/wasm-realm/protocol.js';
+import type { InheritedFd, WasmProcessInitMsg } from '../../../src/kernel/wasm-realm/protocol.js';
+import { LoopbackNet } from '../../../src/kernel/wasm-realm/socket.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -263,14 +265,22 @@ describe('spawnWasmProcess', () => {
     expect(await read.file.read!(8)).toHaveLength(0);
   });
 
-  it('announces the descriptors beyond stdio the program starts with', async () => {
-    let seen: number[] | undefined;
+  it('announces the descriptors beyond stdio the program starts with, their kind and FD_CLOEXEC', async () => {
+    let seen: InheritedFd[] | undefined;
     const fds = new FdTable();
     for (const n of [0, 1, 2, 97])
       fds.installAt(
         n,
         sinkFile(() => {})
       );
+    fds.installAt(
+      5,
+      new OpenFile({ read: async () => new Uint8Array(0), seek: async () => 0, close() {} })
+    );
+    fds.setCloseOnExec(97);
+    fds.dup2(97, 98);
+    fds.installAt(6, new OpenFile(new LoopbackNet().socket('inet')));
+    fds.setStatusFlags(6, 0o4002); // O_RDWR | O_NONBLOCK
     const handle = spawnWasmProcess({
       pid: 3006,
       program,
@@ -287,7 +297,15 @@ describe('spawnWasmProcess', () => {
         }),
     });
     expect(await handle.exited).toBe(0);
-    expect(seen).toEqual([97]);
+    const desc = seen?.find((f) => f.fd === 97)?.desc;
+    expect(seen).toEqual([
+      { fd: 5, kind: 'file' },
+      { fd: 6, kind: 'socket', flags: 0o4002 },
+      { fd: 97, kind: 'stream', cloexec: true, desc: expect.any(Number) },
+      // A dup of 97: the same description, so the same id.
+      { fd: 98, kind: 'stream', desc },
+    ]);
+    expect(seen?.find((f) => f.fd === 5)).not.toHaveProperty('desc');
   });
 
   it('a worker failure resolves to 70 with a diagnostic', async () => {

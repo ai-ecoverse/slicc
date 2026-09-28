@@ -107,7 +107,10 @@ export interface RunWasmOptions {
   gate?: NativeGate;
   /** Output as it is written (piped stdio): the caller's live tee. */
   onOutput?: (text: string) => void;
-  /** Descriptors beyond 0-2 the program starts with (piped stdio), by number. */
+  /**
+   * Descriptors beyond 0-2 the program starts with (piped stdio), by number:
+   * close-on-exec, so they stay the program's own and never reach what it runs.
+   */
   fds?: ReadonlyArray<readonly [number, OpenFile]>;
   /** The installed command's env defaults, when the shell dispatched it by name. */
   defaults?: Readonly<Record<string, string>>;
@@ -316,7 +319,10 @@ export async function runWasmCommand(
     report = (message) => lease.write(new TextEncoder().encode(`wasm: ${message}\r\n`));
   } else {
     stdio = pipedStdio(ctx, session, err, options.onOutput);
-    for (const [fd, file] of options.fds ?? []) stdio.fds.installAt(fd, file);
+    for (const [fd, file] of options.fds ?? []) {
+      stdio.fds.installAt(fd, file);
+      stdio.fds.setCloseOnExec(fd);
+    }
   }
   const { fds } = stdio;
 

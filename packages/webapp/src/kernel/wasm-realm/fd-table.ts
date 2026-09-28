@@ -9,7 +9,9 @@
  * lets a pipe inherited by several processes reach EOF only when its last
  * writer exits. A process's {@link FdTable} maps fd numbers to descriptions:
  * `dup` / `dup2` / `close` share and release them, `fork` copies the table
- * (every description gains a reference), `closeAll` is exit.
+ * (every description gains a reference), `closeAll` is exit. An fd can be
+ * marked close-on-exec before the process starts: the program sees it with
+ * FD_CLOEXEC set, so the programs it runs do not inherit it.
  */
 import { KernelPipe, PipeError } from './pipe.js';
 import type { KernelTty } from './tty.js';
@@ -175,10 +177,25 @@ export function nullFile(): OpenFile {
   });
 }
 
+/**
+ * How a process's runtime backs a kernel descriptor: a terminal, a seekable
+ * VFS file, a socket, or a stream.
+ */
+export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket';
+
+/** The kind of a descriptor that is no socket (the host tells sockets apart). */
+export function kernelFdKind(file: KernelFile): Exclude<KernelFdKind, 'socket'> {
+  if (file.tty) return 'tty';
+  return file.seek ? 'file' : 'stream';
+}
+
 /** Per-process table of fd numbers → open file descriptions. */
 export class FdTable {
   static readonly MAX_FDS = 1024;
   private fds = new Map<number, OpenFile>();
+  private readonly cloexec = new Set<number>();
+  /** Status flags a runtime keeps per stream (a socket's O_NONBLOCK), for a process starting on them. */
+  private readonly status = new Map<number, number>();
 
   /** The description behind `fd`, or EBADF. */
   get(fd: number): OpenFile {
@@ -194,6 +211,26 @@ export class FdTable {
 
   has(fd: number): boolean {
     return this.fds.has(fd);
+  }
+
+  /** FD_CLOEXEC on `fd`: the process keeps it, the programs it execs or spawns do not get it. */
+  setCloseOnExec(fd: number): void {
+    this.get(fd);
+    this.cloexec.add(fd);
+  }
+
+  closesOnExec(fd: number): boolean {
+    return this.cloexec.has(fd);
+  }
+
+  /** Record the status flags the program starting on `fd` gives its stream. */
+  setStatusFlags(fd: number, flags: number): void {
+    this.get(fd);
+    this.status.set(fd, flags);
+  }
+
+  statusFlags(fd: number): number | undefined {
+    return this.status.get(fd);
   }
 
   /** Install `file` (whose reference the table takes over) at the lowest free fd ≥ `min`. */
@@ -216,6 +253,8 @@ export class FdTable {
     }
     const previous = this.fds.get(fd);
     this.fds.set(fd, file);
+    this.cloexec.delete(fd);
+    this.status.delete(fd);
     void Promise.resolve(previous?.release()).catch(() => undefined);
   }
 
@@ -234,6 +273,8 @@ export class FdTable {
   close(fd: number): void | Promise<void> {
     const file = this.get(fd);
     this.fds.delete(fd);
+    this.cloexec.delete(fd);
+    this.status.delete(fd);
     return file.release();
   }
 
@@ -241,6 +282,8 @@ export class FdTable {
   fork(): FdTable {
     const child = new FdTable();
     for (const [fd, file] of this.fds) child.fds.set(fd, file.retain());
+    for (const fd of this.cloexec) child.cloexec.add(fd);
+    for (const [fd, flags] of this.status) child.status.set(fd, flags);
     return child;
   }
 
@@ -248,6 +291,8 @@ export class FdTable {
   async closeAll(): Promise<void> {
     const files = [...this.fds.values()];
     this.fds.clear();
+    this.cloexec.clear();
+    this.status.clear();
     await Promise.all(files.map((file) => Promise.resolve(file.release())));
   }
 }

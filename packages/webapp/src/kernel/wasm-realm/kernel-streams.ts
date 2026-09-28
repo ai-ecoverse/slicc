@@ -85,6 +85,8 @@ export interface ProcessSys {
 }
 
 export interface StreamOps {
+  /** fstat(2) of the stream, over its node's own (Emscripten's FS.fstat asks this first). */
+  getattr?: (stream: ProcessStream) => object;
   llseek?: (stream: ProcessStream, offset: number, whence: number) => number;
   read?: (stream: ProcessStream, buffer: Uint8Array, offset: number, length: number) => number;
   write?: (stream: ProcessStream, buffer: Uint8Array, offset: number, length: number) => number;
@@ -103,11 +105,17 @@ export interface ProcessStream {
   sliccKernelFile?: boolean;
   /** Backed by a kernel socket (O_NONBLOCK counts; send / recv work on it). */
   sliccKernelSocket?: boolean;
+  /** FD_CLOEXEC: per fd, where Emscripten's `flags` belong to the shared description. */
+  sliccCloexec?: boolean;
   path?: string;
   flags: number;
   position: number;
   tty?: unknown;
-  node: { mode: number; mount?: { type?: unknown } };
+  node: {
+    mode: number;
+    mount?: { type?: unknown };
+    node_ops?: { getattr?: (node: ProcessStream['node']) => object };
+  };
   /** Emscripten's per-description state (the offset), shared by dups in one worker. */
   shared: object;
 }
@@ -137,6 +145,11 @@ export interface ProcessFs extends EmscriptenFsForHook {
   cwd(): string;
   read(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
   write(stream: ProcessStream, buffer: Uint8Array, offset: number, length: number): number;
+  /** stat(2) / fstat(2): the attributes the syscalls write out (absent in a minimal FS). */
+  stat?(path: string, dontFollow?: boolean): object;
+  fstat?(fd: number): object;
+  symlink?(target: string, path: string): void;
+  lookupPath?(path: string, opts?: { follow?: boolean }): { node: object };
 }
 
 /** Emscripten's PIPEFS: `pipe()` goes through `createPipe`. */

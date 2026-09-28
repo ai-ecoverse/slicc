@@ -204,6 +204,18 @@ describe('evaluateGlue', () => {
     expect(module.FS).toBe(exported);
   });
 
+  it('hands over the syscalls that must know FD_CLOEXEC, and none a glue lacks', () => {
+    const module: { sliccEnv: object; sliccSyscalls?: Record<string, unknown> } = { sliccEnv: {} };
+    evaluateGlue(
+      'var ENV = {};\nfunction ___syscall_fcntl64() { return 7; }\nvar ___syscall_dup3 = () => 3;',
+      module
+    );
+    const fns = module.sliccSyscalls as Record<string, (() => number) | undefined>;
+    expect(fns.fcntl?.()).toBe(7);
+    expect(fns.dup3?.()).toBe(3);
+    expect([fns.pipe2, fns.socket, fns.accept4]).toEqual([undefined, undefined, undefined]);
+  });
+
   it('runs a glue without a filesystem', () => {
     const module: { sliccEnv: object; FS?: object } = { sliccEnv: {} };
     evaluateGlue('var ENV = {};', module);
