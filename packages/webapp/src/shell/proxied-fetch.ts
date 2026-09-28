@@ -141,6 +141,7 @@ export {
   type RawFetchResponse,
   type RawHeaderList,
   type RawProxiedFetch,
+  resetRawFetchCapabilities,
 } from './proxied-fetch-raw.js';
 
 /** Shared content-type predicate, re-exported for backwards compatibility. */

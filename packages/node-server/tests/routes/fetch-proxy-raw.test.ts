@@ -325,6 +325,36 @@ describe('raw /api/fetch-proxy', () => {
     expect(h.seen).toHaveLength(0);
   });
 
+  it('answers the capability probe without contacting upstream', async () => {
+    const h = await harness((_req, res) => res.end());
+    const resp = await fetch(`${h.bridge}/api/fetch-proxy`, {
+      method: 'POST',
+      headers: { 'X-Slicc-Raw-Probe': '1' },
+    });
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toEqual({
+      rawFetch: 1,
+      requestBodyStreaming: false,
+      maxRequestBodyBytes: 256 * 1024 * 1024,
+    });
+    expect(h.seen).toHaveLength(0);
+    expect(h.activity.isActiveInLastMinute()).toBe(false);
+  });
+
+  it('drops upstream fields named by Connection from the head', async () => {
+    const h = await harness((_req, res) => {
+      res.writeHead(200, [
+        ['Connection', 'X-Hop'],
+        ['X-Hop', 'hop-local'],
+        ['X-End', 'kept'],
+      ]);
+      res.end();
+    });
+    const result = await rawFetch(h, `${h.origin}/hop`);
+    expect(values(result.head.headers, 'x-hop')).toEqual([]);
+    expect(values(result.head.headers, 'x-end')).toEqual(['kept']);
+  });
+
   it('rejects a malformed request head and an unreachable upstream', async () => {
     const h = await harness((_req, res) => res.end());
     const malformed = await fetch(`${h.bridge}/api/fetch-proxy`, {

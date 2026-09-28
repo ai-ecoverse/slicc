@@ -21,6 +21,7 @@ import {
   createProxiedStreamingFetch,
   getRawFetchCapabilities,
   RawFetchError,
+  resetRawFetchCapabilities,
   setChromeExtensionRealm,
 } from '../../src/shell/proxied-fetch.js';
 
@@ -78,14 +79,37 @@ async function drain(stream: ReadableStream<Uint8Array> | null): Promise<number[
   }
 }
 
+const probeOk = () =>
+  new Response(
+    JSON.stringify({
+      rawFetch: 1,
+      requestBodyStreaming: false,
+      maxRequestBodyBytes: RAW_FETCH_BRIDGE_REQUEST_BODY_CAP,
+    }),
+    { headers: { 'content-type': 'application/json' } }
+  );
+
 describe('raw proxied fetch — bridge floats (CLI, cloud)', () => {
+  /** The raw requests; capability probes are answered by `probeReply`. */
   let fetchSpy: ReturnType<typeof vi.fn>;
+  let probeReply: () => Promise<Response> | Response;
+  let probes: number;
 
   beforeEach(() => {
     setLocalApiBaseUrl('http://localhost:5710');
     setBridgeToken('bridge-token');
+    resetRawFetchCapabilities();
     fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
+    probes = 0;
+    probeReply = probeOk;
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      if (headers['X-Slicc-Raw-Probe'] !== undefined) {
+        probes += 1;
+        return Promise.resolve().then(probeReply);
+      }
+      return (fetchSpy as unknown as typeof fetch)(input, init);
+    });
   });
   afterEach(() => {
     setLocalApiBaseUrl(null);
@@ -93,12 +117,85 @@ describe('raw proxied fetch — bridge floats (CLI, cloud)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('reports buffered uploads with the bridge ceiling', () => {
-    expect(getRawFetchCapabilities()).toEqual({
+  it('asks the bridge once what raw mode it supports', async () => {
+    expect(await getRawFetchCapabilities()).toEqual({
       supported: true,
       requestBodyStreaming: false,
       maxRequestBodyBytes: RAW_FETCH_BRIDGE_REQUEST_BODY_CAP,
     });
+    await getRawFetchCapabilities();
+    expect(probes).toBe(1);
+  });
+
+  it.each([
+    ['swift-server or an older node-server', () => proxyError(400, 'Missing X-Target-URL header')],
+    ['a page with no bridge', () => new Response('not found', { status: 404 })],
+    ['a bridge that answers something else', () => new Response('<html>', { status: 200 })],
+  ])('reports and fails unsupported, without sending, for %s', async (_name, reply) => {
+    probeReply = reply;
+    expect((await getRawFetchCapabilities()).supported).toBe(false);
+    await expect(createProxiedStreamingFetch({ mode: 'raw' })(url)).rejects.toMatchObject({
+      code: 'unsupported',
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(probes).toBe(1);
+  });
+
+  it('asks again after the bridge could not be reached', async () => {
+    probeReply = () => Promise.reject(new TypeError('Failed to fetch'));
+    expect((await getRawFetchCapabilities()).supported).toBe(false);
+    probeReply = probeOk;
+    expect((await getRawFetchCapabilities()).supported).toBe(true);
+    expect(probes).toBe(2);
+  });
+
+  it('maps an unreachable bridge to a bridge RawFetchError', async () => {
+    fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    await expect(createProxiedStreamingFetch({ mode: 'raw' })(url)).rejects.toMatchObject({
+      name: 'RawFetchError',
+      code: 'bridge',
+      status: 502,
+    });
+  });
+
+  it('maps a response body that breaks after the head to an upstream RawFetchError', async () => {
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(encodeRawResponseFrame({ ...redirectHead, status: 200 }));
+        } else {
+          controller.error(new TypeError('network error'));
+        }
+      },
+    });
+    fetchSpy.mockResolvedValue(
+      new Response(body, { headers: { 'content-type': RAW_FETCH_CONTENT_TYPE } })
+    );
+    const resp = await createProxiedStreamingFetch({ mode: 'raw' })(url);
+    await expect(drain(resp.body)).rejects.toMatchObject({ code: 'upstream', status: 502 });
+  });
+
+  it('stops buffering a stalled upload when the caller aborts, cancelling the source', async () => {
+    const cancelled = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+      cancel: cancelled,
+    });
+    const controller = new AbortController();
+    const pending = createProxiedStreamingFetch({ mode: 'raw' })(url, {
+      method: 'PUT',
+      body,
+      signal: controller.signal,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancelled).toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('posts the request head and body, and returns the 3xx with its headers', async () => {
@@ -273,7 +370,7 @@ describe('raw proxied fetch — extension float', () => {
 
   it('is unsupported until the extension grows a raw transport', async () => {
     setChromeExtensionRealm(true);
-    expect(getRawFetchCapabilities().supported).toBe(false);
+    expect((await getRawFetchCapabilities()).supported).toBe(false);
     await expect(createProxiedStreamingFetch({ mode: 'raw' })(url)).rejects.toMatchObject({
       code: 'unsupported',
       status: 501,

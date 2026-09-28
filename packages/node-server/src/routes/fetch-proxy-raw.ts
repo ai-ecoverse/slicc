@@ -29,7 +29,10 @@ import {
   RAW_FETCH_ACCEPT_ENCODING,
   RAW_FETCH_BRIDGE_REQUEST_BODY_CAP,
   RAW_FETCH_CONTENT_TYPE,
+  RAW_FETCH_PROBE_HEADER,
+  RAW_FETCH_PROTOCOL_VERSION,
   RAW_FETCH_REQUEST_HEADER,
+  type RawFetchProbeReply,
   type RawFetchRequestHead,
   type RawHeaderList,
   rawResponseHasBody,
@@ -48,6 +51,7 @@ import {
 } from './fetch-proxy.js';
 
 const RAW_REQUEST_HEADER_LOWER = RAW_FETCH_REQUEST_HEADER.toLowerCase();
+const RAW_PROBE_HEADER_LOWER = RAW_FETCH_PROBE_HEADER.toLowerCase();
 
 export interface RawFetchProxyDeps {
   secretProxy: SecretProxyManager;
@@ -170,6 +174,22 @@ export function isRawFetchProxyRequest(req: Request): boolean {
   return typeof req.headers[RAW_REQUEST_HEADER_LOWER] === 'string';
 }
 
+/** Whether this `/api/fetch-proxy` request asks what raw mode can do. */
+export function isRawFetchProbe(req: Request): boolean {
+  return req.headers[RAW_PROBE_HEADER_LOWER] !== undefined;
+}
+
+/** Answer the capability probe; nothing is fetched upstream. */
+export function answerRawFetchProbe(res: Response, maxRequestBodyBytes: number): void {
+  const reply: RawFetchProbeReply = {
+    rawFetch: RAW_FETCH_PROTOCOL_VERSION,
+    requestBodyStreaming: false,
+    maxRequestBodyBytes,
+  };
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).json(reply);
+}
+
 export async function handleRawFetchProxy(
   req: Request,
   res: Response,
@@ -224,6 +244,10 @@ export async function handleRawFetchProxy(
  */
 export function registerRawFetchProxyRoute(app: Express, deps: RawFetchProxyDeps): void {
   app.post('/api/fetch-proxy', (req, res, next) => {
+    if (isRawFetchProbe(req) && !isRawFetchProxyRequest(req)) {
+      answerRawFetchProbe(res, deps.maxRequestBodyBytes ?? RAW_FETCH_BRIDGE_REQUEST_BODY_CAP);
+      return;
+    }
     if (!isRawFetchProxyRequest(req)) {
       next();
       return;

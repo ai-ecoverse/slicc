@@ -52,6 +52,39 @@ export interface RawFetchResponseHead {
  */
 export const RAW_FETCH_REQUEST_HEADER = 'X-Slicc-Raw-Request';
 
+/**
+ * Capability probe on the node-server hop: a `POST /api/fetch-proxy` carrying
+ * only this header (no `X-Target-URL`, no request head). A bridge with raw
+ * mode answers `200` JSON {@link RawFetchProbeReply}; one without it answers
+ * 400 (node-server before raw mode, swift-server) or 404 (no bridge at all),
+ * and nothing is fetched upstream either way.
+ */
+export const RAW_FETCH_PROBE_HEADER = 'X-Slicc-Raw-Probe';
+
+/** Raw-mode protocol revision a bridge reports in its probe reply. */
+export const RAW_FETCH_PROTOCOL_VERSION = 1;
+
+/** What a raw-capable bridge reports about itself. */
+export interface RawFetchProbeReply {
+  rawFetch: number;
+  requestBodyStreaming: boolean;
+  maxRequestBodyBytes: number;
+}
+
+/** Validate a probe reply; `null` when it is not one. */
+export function parseRawFetchProbeReply(value: unknown): RawFetchProbeReply | null {
+  if (!value || typeof value !== 'object') return null;
+  const reply = value as Partial<RawFetchProbeReply>;
+  if (typeof reply.rawFetch !== 'number' || reply.rawFetch < 1) return null;
+  if (typeof reply.requestBodyStreaming !== 'boolean') return null;
+  if (typeof reply.maxRequestBodyBytes !== 'number') return null;
+  return {
+    rawFetch: reply.rawFetch,
+    requestBodyStreaming: reply.requestBodyStreaming,
+    maxRequestBodyBytes: reply.maxRequestBodyBytes,
+  };
+}
+
 /** Content type of a raw-mode answer on the node-server hop. */
 export const RAW_FETCH_CONTENT_TYPE = 'application/vnd.slicc.raw-fetch';
 
@@ -178,7 +211,8 @@ export function rawResponseHasBody(method: string, status: number): boolean {
 }
 
 /**
- * The head a raw caller sees. Hop-by-hop headers go. A bodiless response
+ * The head a raw caller sees. Hop-by-hop headers go, and so do the fields
+ * the response's `Connection` header names (RFC 9110 §7.6.1). A bodiless response
  * (HEAD, 1xx/204/205/304) keeps `Content-Encoding` and `Content-Length` as
  * sent, since they describe the representation, not bytes on this hop.
  * Otherwise a decoded coding drops both headers, and `Content-Length` also
@@ -186,9 +220,11 @@ export function rawResponseHasBody(method: string, status: number): boolean {
  * encoded bytes.
  */
 export function rawResponseHeaders(input: RawResponseHeaderInput): RawHeaderList {
-  const withoutHop = input.headers.filter(
-    ([name]) => !RAW_RESPONSE_SKIP_HEADERS.has(name.toLowerCase())
-  );
+  const named = connectionTokens(input.headers);
+  const withoutHop = input.headers.filter(([name]) => {
+    const lower = name.toLowerCase();
+    return !RAW_RESPONSE_SKIP_HEADERS.has(lower) && !named.has(lower);
+  });
   if (!rawResponseHasBody(input.method, input.status)) return withoutHop;
   const encoding = withoutHop
     .filter(([name]) => name.toLowerCase() === 'content-encoding')

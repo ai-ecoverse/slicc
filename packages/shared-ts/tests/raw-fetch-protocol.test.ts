@@ -5,6 +5,7 @@ import {
   encodeRawRequestHead,
   encodeRawResponseFrame,
   foldRawRequestHeaders,
+  parseRawFetchProbeReply,
   RAW_FETCH_MAX_HEAD_BYTES,
   type RawFetchResponseHead,
   rawResponseHasBody,
@@ -45,6 +46,21 @@ describe('raw fetch request head', () => {
     expect(decodeRawRequestHead('{"url":"u","method":"GET","headers":[["a"]]}')).toBeNull();
     expect(decodeRawRequestHead('{"url":1,"method":"GET","headers":[]}')).toBeNull();
     expect(decodeRawRequestHead('{"url":"u","method":"PROPFIND","headers":[]}')).not.toBeNull();
+  });
+});
+
+describe('raw fetch probe reply', () => {
+  it('accepts a raw bridge reply and rejects anything else', () => {
+    expect(
+      parseRawFetchProbeReply({ rawFetch: 1, requestBodyStreaming: true, maxRequestBodyBytes: 9 })
+    ).toEqual({ rawFetch: 1, requestBodyStreaming: true, maxRequestBodyBytes: 9 });
+    expect(parseRawFetchProbeReply(null)).toBeNull();
+    expect(parseRawFetchProbeReply({ error: 'Missing X-Target-URL header' })).toBeNull();
+    expect(
+      parseRawFetchProbeReply({ rawFetch: 0, requestBodyStreaming: true, maxRequestBodyBytes: 9 })
+    ).toBeNull();
+    expect(parseRawFetchProbeReply({ rawFetch: 1, maxRequestBodyBytes: 9 })).toBeNull();
+    expect(parseRawFetchProbeReply({ rawFetch: 1, requestBodyStreaming: false })).toBeNull();
   });
 });
 
@@ -137,6 +153,22 @@ describe('rawResponseHeaders', () => {
     expect(
       rawResponseHeaders({ method: 'GET', status: 200, headers, bodyRewritten: true })
     ).toEqual([]);
+  });
+
+  it('drops the response fields its Connection header names', () => {
+    expect(
+      rawResponseHeaders({
+        method: 'GET',
+        status: 200,
+        headers: [
+          ['Connection', 'close, X-Hop'],
+          ['X-Hop', 'hop-local'],
+          ['x-hop', 'again'],
+          ['X-End', 'kept'],
+        ],
+        bodyRewritten: false,
+      })
+    ).toEqual([['X-End', 'kept']]);
   });
 
   it('keeps an unknown coding with its encoded bytes', () => {
