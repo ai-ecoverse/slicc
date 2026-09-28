@@ -13,6 +13,7 @@ import {
   createIpkCommand,
   parseInstallArgs,
 } from '../../../src/shell/supplemental-commands/ipk-command.js';
+import { withTarballIntegrity } from '../ipk/helpers/tarball-integrity.js';
 
 type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 
@@ -179,7 +180,7 @@ function makeFetch(reg: Registry): SecureFetch {
           status: 200,
           statusText: 'OK',
           headers: { 'content-type': 'application/json' },
-          body: bytes(JSON.stringify(reg.packuments[name])),
+          body: bytes(JSON.stringify(withTarballIntegrity(reg.packuments[name], reg.tarballs))),
           url,
         };
       }

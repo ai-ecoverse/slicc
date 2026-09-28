@@ -8,6 +8,7 @@ import {
   installPackage,
   installPackages,
 } from '../../../src/shell/ipk/installer.js';
+import { withTarballIntegrity } from './helpers/tarball-integrity.js';
 
 type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 
@@ -177,7 +178,7 @@ function fakeFetch(reg: FakeRegistry): SecureFetch {
           status: 200,
           statusText: 'OK',
           headers: { 'content-type': 'application/json' },
-          body: bytes(JSON.stringify(reg.packuments[name])),
+          body: bytes(JSON.stringify(withTarballIntegrity(reg.packuments[name], reg.tarballs))),
           url,
         };
       }

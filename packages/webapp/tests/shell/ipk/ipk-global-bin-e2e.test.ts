@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { AlmostBashShellHeadless } from '../../../src/shell/almost-bash-shell-headless.js';
 import { GLOBAL_BIN_DIR, GLOBAL_NODE_MODULES } from '../../../src/shell/ipk/global-prefix.js';
+import { withTarballIntegrity } from './helpers/tarball-integrity.js';
 
 type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 type FetchResult = Awaited<ReturnType<SecureFetch>>;
@@ -145,7 +146,7 @@ vi.mock('../../../src/shell/proxied-fetch.js', async (importOriginal) => {
           status: 200,
           statusText: 'OK',
           headers: { 'content-type': 'application/json' },
-          body: bytes(JSON.stringify(reg.packuments[name])),
+          body: bytes(JSON.stringify(withTarballIntegrity(reg.packuments[name], reg.tarballs))),
           url,
         };
       }

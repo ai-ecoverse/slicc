@@ -2,7 +2,6 @@ import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash
 import type { VirtualFS } from '../../fs/index.js';
 import { joinPath, normalizePath, splitPath } from '../../fs/path-utils.js';
 import { GLOBAL_NODE_MODULES } from '../ipk/global-prefix.js';
-import { installPackages } from '../ipk/installer.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { stripShebang } from '../strip-shebang.js';
 import { formatBuiltinShadowHint, lookupBuiltinShadow } from './builtin-shadow-map.js';
@@ -183,6 +182,7 @@ async function autoInstall(
   deps: IpxCommandDeps
 ): Promise<{ progress: string } | { error: ExecResult }> {
   try {
+    const { installPackages } = await import('../ipk/installer.js');
     const outcome = await installPackages([binName], {
       fs: deps.fs,
       fetch: deps.fetch,

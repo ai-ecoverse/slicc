@@ -11,6 +11,8 @@ export interface InstallNode {
   resolved: string;
   integrity?: string;
 
+  shasum?: string;
+
   bin?: string | Record<string, string>;
   dependencies: Record<string, InstallNode>;
 }
@@ -129,6 +131,9 @@ function buildNode(name: string, version: string, entry: PackumentVersion): Inst
   };
   if (typeof entry.dist.integrity === 'string') {
     node.integrity = entry.dist.integrity;
+  }
+  if (typeof entry.dist.shasum === 'string') {
+    node.shasum = entry.dist.shasum;
   }
   if (entry.bin !== undefined && entry.bin !== null) {
     node.bin = entry.bin;

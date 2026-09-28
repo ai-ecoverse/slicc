@@ -10,6 +10,7 @@ import {
   listLocalPackages,
   uninstallPackages,
 } from '../../../src/shell/ipk/installer.js';
+import { withTarballIntegrity } from './helpers/tarball-integrity.js';
 
 type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 
@@ -199,7 +200,7 @@ function fakeFetch(reg: FakeRegistry): SecureFetch {
           status: 200,
           statusText: 'OK',
           headers: { 'content-type': 'application/json' },
-          body: bytes(JSON.stringify(reg.packuments[name])),
+          body: bytes(JSON.stringify(withTarballIntegrity(reg.packuments[name], reg.tarballs))),
           url,
         };
       }
@@ -734,6 +735,53 @@ describe('installPackage (single-package path)', () => {
     ).rejects.toThrow(/gunzip|gzip|corrupt|decompress|magic/i);
     expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
     expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('rejects a tarball that does not match dist.integrity and extracts nothing', async () => {
+    const reg = makeRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    const url = 'https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz';
+
+    reg.packuments.pkg = withTarballIntegrity(reg.packuments.pkg, reg.tarballs);
+    reg.tarballs[url] = buildPackageTarball({
+      name: 'pkg',
+      version: '1.0.0',
+      files: { 'index.js': 'module.exports = "tampered";\n' },
+    });
+    await expect(
+      installPackage('pkg', { fs, fetch: fakeFetch(reg), cwd: '/work' })
+    ).rejects.toThrow(/EINTEGRITY: pkg@1\.0\.0 does not match its dist\.integrity/);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('keeps the installed version when an upgrade tarball fails its integrity check', async () => {
+    const reg = makeRegistry([
+      { name: 'pkg', version: '1.0.0' },
+      { name: 'pkg', version: '1.1.0' },
+    ]);
+    await installPackage('pkg@1.0.0', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    reg.packuments.pkg = withTarballIntegrity(reg.packuments.pkg, reg.tarballs);
+    reg.tarballs['https://registry.npmjs.org/pkg/-/pkg-1.1.0.tgz'] =
+      bytes('not the published bytes');
+    await expect(
+      installPackage('pkg@1.1.0', { fs, fetch: fakeFetch(reg), cwd: '/work' })
+    ).rejects.toThrow(/EINTEGRITY/);
+    const kept = JSON.parse((await fs.readFile('/work/node_modules/pkg/package.json')) as string);
+    expect(kept.version).toBe('1.0.0');
+  });
+
+  it('refuses a tarball whose packument carries neither dist.integrity nor dist.shasum', async () => {
+    const reg = makeRegistry([{ name: 'pkg', version: '1.0.0' }]);
+    const pk = reg.packuments.pkg as {
+      versions: Record<string, { dist: Record<string, unknown> }>;
+    };
+
+    pk.versions['1.0.0'].dist.integrity = undefined;
+    pk.versions['1.0.0'].dist.shasum = undefined;
+    await expect(
+      installPackage('pkg', { fs, fetch: fakeFetch(reg), cwd: '/work' })
+    ).rejects.toThrow(/EINTEGRITY: pkg@1\.0\.0 has neither dist\.integrity nor dist\.shasum/);
+    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
   });
 
   it('rejects with a clear error and cleans up when the tarball is truncated (valid gzip, bad tar)', async () => {
