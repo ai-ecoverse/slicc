@@ -21,6 +21,38 @@ async function install(fs: VirtualFS, name: string, pkg: object, files: string[]
 describe('commandsFromManifest', () => {
   const dir = '/m/pkg';
 
+  it('gives commands the manifest’s env defaults, package paths resolved inside the package', () => {
+    const [magick, convert] = commandsFromManifest(dir, {
+      name: 'im',
+      slicc: {
+        env: { MAGICK_CONFIGURE_PATH: 'etc/ImageMagick-7', LANG: 'C.UTF-8', 'bad-name': 'x' },
+        commands: {
+          magick: { glue: 'bin/magick', wasm: 'bin/magick.wasm' },
+          convert: {
+            glue: 'bin/magick',
+            wasm: 'bin/magick.wasm',
+            argv0: 'convert',
+            env: { LANG: 'POSIX', HOME_DIR: '${package}/share', ESCAPE: '../outside', N: 3 },
+          },
+        },
+      },
+    });
+    expect(magick?.env).toEqual({
+      MAGICK_CONFIGURE_PATH: `${dir}/etc/ImageMagick-7`,
+      LANG: 'C.UTF-8',
+    });
+
+    expect(convert?.env).toEqual({
+      MAGICK_CONFIGURE_PATH: `${dir}/etc/ImageMagick-7`,
+      LANG: 'POSIX',
+      HOME_DIR: `${dir}/share`,
+    });
+    const [plain] = commandsFromManifest(dir, {
+      slicc: { commands: { x: { glue: 'bin/x', wasm: 'bin/x.wasm' } } },
+    });
+    expect(plain).not.toHaveProperty('env');
+  });
+
   it('maps each declared command to absolute glue and module paths', () => {
     const commands = commandsFromManifest(dir, {
       name: 'pkg',

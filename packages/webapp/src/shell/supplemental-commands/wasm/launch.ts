@@ -190,7 +190,15 @@ export class WasmSession {
       await req.fds.closeAll();
       throw e;
     }
-    return this.start({ ...req, program: { glue, module } });
+    return this.start({ ...req, env: await this.withDefaults(req), program: { glue, module } });
+  }
+
+  private async withDefaults(req: LaunchRequest): Promise<Record<string, string>> {
+    let defaults: Readonly<Record<string, string>> | undefined;
+    for (const command of (await this.commands()).values()) {
+      if (command.glue === req.glue && command.env) defaults = command.env;
+    }
+    return defaults ? { ...defaults, ...req.env } : req.env;
   }
 
   private start(req: StartRequest): WasmProcessHandle {
