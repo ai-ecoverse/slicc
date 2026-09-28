@@ -2,7 +2,7 @@
 /**
  * Regenerates `pnpm-picker-oracle.json`: pnpm's own answer to "which version
  * does `name@range` pick from this packument?" for every case below. The
- * `ipk-picker-oracle.test.ts` suite asserts ipk's `resolveVersion` against it.
+ * `pnpm-picker-oracle.test.ts` suite asserts ipk's `resolveVersion` against it.
  *
  * NOT run in CI. It needs the wasm build of pnpm 12's picker
  * (`pick_package_from_meta`, compiled verbatim from pnpm/pnpm with a
