@@ -20,6 +20,7 @@ import {
 } from './children.js';
 import { type FdTable, KernelError, openPipe, pollFile } from './fd-table.js';
 import type { ForkState } from './protocol.js';
+import { selectFds } from './select.js';
 import { type DefaultAction, defaultAction, isSignal, SIG, sigbit } from './signals.js';
 import { type VfsFileFs, vfsFile } from './vfs-file.js';
 
@@ -41,6 +42,7 @@ export type WasmSyscall =
       orphan?: boolean;
     }
   | { op: 'fd-seek'; fd: number; offset: number; whence: number }
+  | { op: 'fd-select'; read: number[]; write: number[]; timeoutMs: number }
   | { op: 'fd-flush'; fd: number }
   | {
       op: 'proc-spawn';
@@ -72,6 +74,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-poll',
   'fd-open-vfs',
   'fd-seek',
+  'fd-select',
   'fd-flush',
   'proc-spawn',
   'proc-wait',
@@ -102,6 +105,8 @@ export interface WasmProcessOptions {
   kill?: (pid: number, sig: number) => boolean;
   /** A caught signal is pending: publish it where the worker looks after each syscall. */
   onPending?: (sig: number) => void;
+  /** Whether a published signal still waits for the worker (it interrupts the next blocking call). */
+  hasPending?: () => boolean;
 }
 
 /**
@@ -165,6 +170,16 @@ export class WasmProcess {
     }
   }
 
+  /**
+   * The signal to interrupt a blocking call with. One already pending when the
+   * call starts interrupts it at once: the worker runs the handler as the call
+   * returns, as a real kernel does before sleeping.
+   */
+  private blockingSignal(): AbortSignal {
+    if (this.options.hasPending?.()) throw new KernelError('EINTR');
+    return this.interrupt.signal;
+  }
+
   /** Descriptor syscalls: reads and writes a caught signal can interrupt. */
   private async fdSyscall(req: FdSyscall): Promise<SyncFsResult> {
     switch (req.op) {
@@ -172,16 +187,20 @@ export class WasmProcess {
         const file = this.fds.get(req.fd).file;
         if (!file.read) throw new KernelError('EBADF');
         const max = Math.max(0, Math.min(req.max, MAX_READ));
-        return { ok: true, kind: 'bytes', bytes: await file.read(max, this.interrupt.signal) };
+        const signal = pollFile(file).readable ? this.interrupt.signal : this.blockingSignal();
+        return { ok: true, kind: 'bytes', bytes: await file.read(max, signal) };
       }
       case 'fd-write': {
         const file = this.fds.get(req.fd).file;
         if (!file.write) throw new KernelError('EBADF');
-        return {
-          ok: true,
-          kind: 'json',
-          json: await file.write(req.body, this.interrupt.signal),
-        };
+        // Room for some of it: with a signal pending, the write takes what fits
+        // and returns that short count instead of waiting for the rest.
+        const signal = pollFile(file).writable
+          ? this.options.hasPending?.()
+            ? AbortSignal.abort()
+            : this.interrupt.signal
+          : this.blockingSignal();
+        return { ok: true, kind: 'json', json: await file.write(req.body, signal) };
       }
       case 'fd-close':
         await Promise.resolve(this.fds.close(req.fd));
@@ -211,6 +230,12 @@ export class WasmProcess {
         });
         return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
       }
+      case 'fd-select': {
+        const { read, write, timeoutMs } = req;
+        const signal = this.blockingSignal();
+        const selected = await selectFds(this.fds, read, write, timeoutMs, signal);
+        return { ok: true, kind: 'json', json: selected };
+      }
       case 'fd-seek': {
         const file = this.fds.get(req.fd).file;
         if (!file.seek) throw new KernelError('ESPIPE');
@@ -235,7 +260,8 @@ export class WasmProcess {
         return { ok: true, kind: 'json', json: pid };
       }
       case 'proc-wait': {
-        const waited = await this.children.wait(req.pid, req.nohang, this.interrupt.signal);
+        const signal = req.nohang ? this.interrupt.signal : this.blockingSignal();
+        const waited = await this.children.wait(req.pid, req.nohang, signal);
         return { ok: true, kind: 'json', json: waited };
       }
       case 'proc-exec': {

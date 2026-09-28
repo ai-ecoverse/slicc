@@ -55,6 +55,8 @@ export interface KernelFile {
   close(): void | Promise<void>;
   /** Readiness; absent means never waits (a byte source, a sink). */
   poll?(): PollState;
+  /** Resolves when the readiness may have changed (`signal`: EINTR). Absent: never changes. */
+  changed?(signal?: AbortSignal): Promise<void>;
   /** lseek(2) on the shared offset; absent: not seekable (ESPIPE). */
   seek?(offset: number, whence: number): Promise<number>;
   /** Write back buffered content (a VFS file). */
@@ -100,6 +102,7 @@ export function openPipe(capacity?: number): { read: OpenFile; write: OpenFile }
       },
       close: () => pipe.closeRead(),
       poll: () => ({ readable: pipe.readReady, writable: false, hangup: pipe.writersGone }),
+      changed: (signal) => pipe.changed(signal),
     }),
     write: new OpenFile({
       write: async (bytes, signal) => {
@@ -112,6 +115,7 @@ export function openPipe(capacity?: number): { read: OpenFile; write: OpenFile }
       },
       close: () => pipe.closeWrite(),
       poll: () => ({ readable: false, writable: pipe.writeReady, hangup: pipe.readersGone }),
+      changed: (signal) => pipe.changed(signal),
     }),
   };
 }
