@@ -282,15 +282,19 @@ export class WasmSession {
   async resolve(file: string, argv0: string, cwd: string): Promise<WasmTarget | undefined> {
     const name = REGISTRY_PATH.exec(file)?.[1] ?? (file.includes('/') ? undefined : file);
     if (name !== undefined) {
-      const command = (await this.commands()).get(name);
-      return (
-        command && {
+      const commands = await this.commands();
+      const command = commands.get(name);
+      if (command) {
+        return {
           glue: command.glue,
           module: command.wasm,
           argv0: command.argv0,
           defaults: command.env,
-        }
-      );
+        };
+      }
+
+      const bash = name === 'sh' ? commands.get('bash') : undefined;
+      return bash && { glue: bash.glue, module: bash.wasm, argv0: 'sh', defaults: bash.env };
     }
     const glue = this.ctx.fs.resolvePath(cwd, file);
     const module = modulePath(glue);
