@@ -201,13 +201,37 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
 }
 
 /**
+ * GNU bash's `secret`: the slicc command, then (when it succeeded) the line
+ * `secret shell-env` gives for it, so a `secret set` / `secret delete` keeps
+ * `$NAME` in step in the running shell itself, as `export` would, not only in
+ * slicc's shell, which a bash that is already running never hears from. It is
+ * an exported function (bash imports `BASH_FUNC_<name>%%` from its
+ * environment), so the panel's login shell, the agent's `bash -c` and a bash
+ * a script starts all have it; `command secret` is the plain command. In a
+ * pipeline stage (`echo v | secret set …`) it runs in a subshell, as any
+ * function does, and the export ends with it.
+ */
+export const SECRET_FUNCTION_ENV = 'BASH_FUNC_secret%%';
+export const SECRET_FUNCTION =
+  '() { command secret "$@" || return; local __slicc_env; ' +
+  'if __slicc_env=$(command secret shell-env "$@" 2>/dev/null); then eval "$__slicc_env"; fi; return 0; }';
+
+/** Whether a program is GNU bash (as bash or as sh). */
+function isBash(call: Invocation): boolean {
+  const name = call.argv0 ?? call.program.slice(call.program.lastIndexOf('/') + 1);
+  return /^(ba)?sh(\.js)?$/.test(name);
+}
+
+/**
  * The program's environment: the realm's network defaults (the proxy, see
- * `realm-network.ts`) under the shell's exports. On the panel terminal,
+ * `realm-network.ts`) under the shell's exports (GNU bash also gets its
+ * `secret` function, {@link SECRET_FUNCTION}). On the panel terminal,
  * which is Ghostty's VT core, a `TERM` that is unset or `dumb` becomes
  * `xterm-256color` (with `COLORTERM=truecolor`), so curses programs use it.
  */
 function programEnv(ctx: CommandContext, call: Invocation): Record<string, string> {
   const env = { ...realmNetworkEnv(), ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
+  if (isBash(call)) env[SECRET_FUNCTION_ENV] ??= SECRET_FUNCTION;
   if (call.tty && (!env.TERM || env.TERM === 'dumb')) {
     env.TERM = 'xterm-256color';
     env.COLORTERM ??= 'truecolor';

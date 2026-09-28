@@ -9,7 +9,10 @@ vi.mock('../../../src/kernel/realm/wasm-compiler.js', () => ({ compileWasmFromVf
 import { LOGIN_RC, LOGIN_RC_FD } from '../../../src/kernel/login-shell-marks.js';
 import { sinkFile } from '../../../src/kernel/wasm-realm/fd-table.js';
 import { realmNetworkEnv } from '../../../src/kernel/wasm-realm/net/realm-network.js';
-import { runWasmCommand } from '../../../src/shell/supplemental-commands/wasm/run.js';
+import {
+  runWasmCommand,
+  SECRET_FUNCTION_ENV,
+} from '../../../src/shell/supplemental-commands/wasm/run.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 
@@ -441,8 +444,11 @@ describe('wasm command', () => {
       screen.exportedEnv = { TERM: 'screen-256color' };
       await runWasmCommand(['-t', 'sh.js'], screen, { terminal: { lease: () => lease } });
       await runWasmCommand(['sh.js'], ctx(files));
-      expect(envs[0]).toEqual({ ...realmNetworkEnv(), TERM: 'screen-256color' });
-      expect(envs[1]).toEqual({ ...realmNetworkEnv(), A: '1' });
+      // (A bash, even as `sh`, also gets its `secret` function.)
+      const { [SECRET_FUNCTION_ENV]: _fn0, ...env0 } = envs[0];
+      const { [SECRET_FUNCTION_ENV]: _fn1, ...env1 } = envs[1];
+      expect(env0).toEqual({ ...realmNetworkEnv(), TERM: 'screen-256color' });
+      expect(env1).toEqual({ ...realmNetworkEnv(), A: '1' });
     });
 
     it('shows a process crash on the terminal at once, not only in the final stderr', async () => {
@@ -479,5 +485,32 @@ describe('wasm command', () => {
       );
       expect(none.exitCode).toBe(1);
     });
+  });
+});
+
+describe('GNU bash’s secret function', () => {
+  it('reaches bash (and sh) through its environment, and no other program', async () => {
+    const { SECRET_FUNCTION, SECRET_FUNCTION_ENV } = await import(
+      '../../../src/shell/supplemental-commands/wasm/run.js'
+    );
+    compile.mockResolvedValue({});
+    const envs: Array<Record<string, string>> = [];
+    spawn.mockImplementation((opts) => {
+      envs.push(opts.env);
+      return { pid: opts.pid, exited: Promise.resolve(0), kill: vi.fn() };
+    });
+    const files = { '/w/bash': 'G', '/w/bash.wasm': 'W', '/w/curl.js': 'G', '/w/curl.wasm': 'W' };
+    await runWasmCommand(['bash', '-c', 'true'], ctx(files));
+    await runWasmCommand(['--argv0', 'sh', 'bash', '-c', 'true'], ctx(files));
+    await runWasmCommand(['curl.js'], ctx(files));
+    expect(envs[0][SECRET_FUNCTION_ENV]).toBe(SECRET_FUNCTION);
+    expect(envs[1][SECRET_FUNCTION_ENV]).toBe(SECRET_FUNCTION);
+    expect(envs[2][SECRET_FUNCTION_ENV]).toBeUndefined();
+    expect(SECRET_FUNCTION).toMatch(/^\(\) \{ command secret "\$@" \|\| return;/);
+    // A function the shell exports itself wins.
+    const own = ctx(files);
+    own.exportedEnv = { [SECRET_FUNCTION_ENV]: '() { :; }' };
+    await runWasmCommand(['bash', '-c', 'true'], own);
+    expect(envs[3][SECRET_FUNCTION_ENV]).toBe('() { :; }');
   });
 });
