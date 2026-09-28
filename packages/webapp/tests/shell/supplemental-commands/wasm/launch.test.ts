@@ -160,6 +160,7 @@ describe('WasmSession', () => {
     fakeProcesses();
     const files = {
       ...installed,
+      [`${PKG}/etc/conf`]: 'x',
       [`${PKG}/package.json`]: JSON.stringify({
         name: '@ai-ecoverse/wasm-gnu',
         slicc: {

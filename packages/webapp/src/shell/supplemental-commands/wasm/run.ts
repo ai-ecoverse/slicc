@@ -109,6 +109,8 @@ export interface RunWasmOptions {
   onOutput?: (text: string) => void;
   /** Descriptors beyond 0-2 the program starts with (piped stdio), by number. */
   fds?: ReadonlyArray<readonly [number, OpenFile]>;
+  /** The installed command's env defaults, when the shell dispatched it by name. */
+  defaults?: Readonly<Record<string, string>>;
 }
 
 /** A tee of the bytes written, decoded as UTF-8 per stream. */
@@ -263,6 +265,14 @@ function stdinBytes(ctx: CommandContext): Uint8Array {
   return bytes;
 }
 
+/** The program's env defaults: its installed command's, as looked up or as the shell dispatched it. */
+function programDefaults(
+  call: Invocation,
+  options: RunWasmOptions
+): Readonly<Record<string, string>> | undefined {
+  return call.defaults ?? options.defaults;
+}
+
 export async function runWasmCommand(
   args: string[],
   ctx: CommandContext,
@@ -318,7 +328,7 @@ export async function runWasmCommand(
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
       env: programEnv(ctx, call),
-      defaults: call.defaults,
+      defaults: programDefaults(call, options),
       cwd: ctx.cwd,
       fds,
       signal: ctx.signal,

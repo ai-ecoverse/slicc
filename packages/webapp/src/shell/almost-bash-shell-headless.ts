@@ -1746,6 +1746,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           {
             processConfig: this.buildJshProcessConfig(runPidFromEnv(ctx.env)),
             gate: this.gateNativeCommand,
+            defaults: wasm.env,
           }
         );
       }

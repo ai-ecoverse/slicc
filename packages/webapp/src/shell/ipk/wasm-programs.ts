@@ -88,18 +88,38 @@ interface ManifestEnvEntries {
   readonly [name: string]: unknown;
 }
 
-/** A manifest's `env`: valid names with string values, paths resolved inside the package. */
+/**
+ * A manifest's `env`: valid names with string values, `${package}` expanded.
+ * Relative paths resolve later, against what the package holds
+ * ({@link withPackagePaths}).
+ */
 function manifestEnv(pkgDir: string, raw: unknown): Record<string, string> {
   const env: Record<string, string> = {};
   if (!raw || typeof raw !== 'object') return env;
   for (const [key, value] of Object.entries(raw as ManifestEnvEntries)) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== 'string') continue;
-    const expanded = value.replaceAll('${package}', pkgDir);
-    const relativePath = !expanded.startsWith('/') && expanded.includes('/');
-    const resolved = relativePath ? insidePackage(pkgDir, expanded) : expanded;
-    if (resolved !== undefined) env[key] = resolved;
+    env[key] = value.replaceAll('${package}', pkgDir);
   }
   return env;
+}
+
+/**
+ * A command's env with each relative value that names something in its
+ * package (`etc/ImageMagick-7`) made that absolute path. Any other value, a
+ * `TZ=America/New_York` or a URL, is literal.
+ */
+async function withPackagePaths(
+  fs: ProgramFs,
+  pkgDir: string,
+  command: WasmCommand
+): Promise<WasmCommand> {
+  if (!command.env) return command;
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(command.env)) {
+    const path = !value.startsWith('/') && value.includes('/') && insidePackage(pkgDir, value);
+    env[key] = path && (await fs.exists(path)) ? path : value;
+  }
+  return { ...command, env };
 }
 
 /** True for a write that can change the installed command set (a manifest or a module). */
@@ -177,7 +197,9 @@ async function packageCommands(fs: ProgramFs, pkgDir: string): Promise<WasmComma
     return [];
   }
   const declared = commandsFromManifest(pkgDir, pkg);
-  if (declared.length > 0 || pkg.slicc) return declared;
+  if (declared.length > 0 || pkg.slicc) {
+    return Promise.all(declared.map((command) => withPackagePaths(fs, pkgDir, command)));
+  }
   const name = typeof pkg.name === 'string' ? pkg.name : '';
   if (
     name.startsWith(FALLBACK_SCOPE) &&
