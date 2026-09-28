@@ -160,6 +160,52 @@ describe('multiple roots', () => {
     expect(waits[0].content).toContain('B result');
   });
 
+  it('an aborted requester receives no delayed scoop_wait lick', async () => {
+    const scoops = registry();
+    const routed: ChannelMessage[] = [];
+    const service = new ScoopCompletionService({
+      getSharedFs: () => null,
+      getScoop: (jid) => scoops.get(jid),
+      findParent: parentOrDefaultRoot(scoops),
+      hasScoop: (jid) => scoops.has(jid),
+      notifyIncomingMessage: vi.fn(),
+      handleMessage: async (msg) => {
+        routed.push(msg);
+      },
+      reportError: vi.fn(),
+    });
+    service.scheduleScoopWait([childA.jid], 10_000, rootA.jid);
+    service.cancelScheduledWaits(rootA.jid);
+    service.setResponseFull(childA.jid, 'late result');
+    await service.notifyCompletion(childA.jid);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(routed.filter((message) => message.channel === 'scoop-wait')).toEqual([]);
+  });
+
+  it('an aborted child cannot wake its cone with a late completion', async () => {
+    const scoops = registry();
+    const routed: ChannelMessage[] = [];
+    const service = new ScoopCompletionService({
+      getSharedFs: () => null,
+      getScoop: (jid) => scoops.get(jid),
+      findParent: parentOrDefaultRoot(scoops),
+      hasScoop: (jid) => scoops.has(jid),
+      notifyIncomingMessage: vi.fn(),
+      handleMessage: async (msg) => {
+        routed.push(msg);
+      },
+      reportError: vi.fn(),
+    });
+    service.suppressCompletionUntilNextPrompt(childA.jid);
+    service.setResponseFull(childA.jid, 'late result');
+    await service.notifyCompletion(childA.jid);
+    expect(routed).toEqual([]);
+    service.allowCompletion(childA.jid);
+    service.setResponseFull(childA.jid, 'new result');
+    await service.notifyCompletion(childA.jid);
+    expect(routed).toHaveLength(1);
+  });
+
   it('falls back to parent routing when the requester is gone before the wait resolves', async () => {
     const scoops = registry();
     const routed: ChannelMessage[] = [];
