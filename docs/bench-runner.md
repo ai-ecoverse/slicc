@@ -74,13 +74,14 @@ prompt: the cone plus every scoop it spawned, dropped ones included. The judge's
 trajectory comes from `session export`; its per-message model ids fill
 `modelsUsed`, which shows when scoops ran on another model.
 
-If the prompt appears settled but spend continues, a transcript export times
-out, or a successful export contains a final cone message absent from prompt
-stdout, the runner calls passive `slicc wait --allsettled 2m` within the task's
-remaining timeout and retries the export. The final answer
-comes from the cone's last assistant message in the completed transcript, and
-`metrics.resumed_after_settle` records the recovery. A run that stays active, or
-whose final transcript cannot be collected, remains an unscored error.
+If the prompt appears settled but spend continues, or a transcript export times
+out, the runner calls passive `slicc wait --allsettled 2m` within the task's
+remaining timeout and retries the export. A successful export whose final cone
+message is absent from prompt stdout also proves a continuation, even when
+spend is flat: the runner takes that final transcript message and records
+`metrics.resumed_after_settle`. If spend is rising during that export, it waits
+and re-exports before scoring. A run that stays active, or whose final
+transcript cannot be collected, remains an unscored error.
 
 - **Never `cat` a large file over one `exec`.** The leader sends an exec's whole
   stdout as one tray message, and a message over 8 MiB (about 6.3 MB of output

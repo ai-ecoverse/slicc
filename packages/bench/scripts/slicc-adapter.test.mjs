@@ -879,7 +879,7 @@ describe('runTask', () => {
     );
 
   function leaderFor({
-    prompt = ok('FINAL ANSWER: Example Domain\n'),
+    prompt = ok('FINAL ANSWER: done\n'),
     model = ok('bedrock-camp:global.anthropic.claude-sonnet-5\n'),
   } = {}) {
     let costCalls = 0;
@@ -948,7 +948,7 @@ describe('runTask', () => {
       thinkingEffective: '',
       exitCode: 0,
       timedOut: false,
-      finalText: 'FINAL ANSWER: Example Domain\n',
+      finalText: 'FINAL ANSWER: done\n',
       tokens: 2500,
       turns: 25,
       transcript: TRANSCRIPT,
@@ -1584,6 +1584,64 @@ describe('a prompt that returns while the agent still works', () => {
     expect(exports).toBe(2);
     expect(result.finalText).toBe('FINAL ANSWER: done');
     expect(traceFromResult(result).metrics.resumed_after_settle).toBe(true);
+  });
+
+  it('uses a fast continuation from the transcript even when spend is flat', async () => {
+    const files = leaderFiles(
+      Buffer.from(JSON.stringify(TRANSCRIPT)),
+      TRANSCRIPT_PART_BYTES,
+      '/tmp/bench/fast-continuation'
+    );
+    let exports = 0;
+    const { leader, calls } = fakeLeader({
+      verbs: { model: ok('m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
+      commands: [
+        [/^cost --json --all$/, () => costOf(1, 10, 1)],
+        [
+          /^session export/,
+          () => {
+            exports += 1;
+            return files.list();
+          },
+        ],
+        files.commands[1],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x', slicc: { timeoutSeconds: 900 } },
+      runId: 'fast-continuation',
+      model: 'm',
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    });
+    expect(calls.filter((c) => c.kind === 'cli' && c.args[0] === 'wait')).toHaveLength(0);
+    expect(exports).toBe(1);
+    expect(result.finalText).toBe('FINAL ANSWER: done');
+    expect(traceFromResult(result).metrics.resumed_after_settle).toBe(true);
+  });
+
+  it('keeps prompt stdout when it already contains the exported final message', async () => {
+    const files = leaderFiles(
+      Buffer.from(JSON.stringify(TRANSCRIPT)),
+      TRANSCRIPT_PART_BYTES,
+      '/tmp/bench/no-continuation'
+    );
+    const stdout = 'PREAMBLE\nFINAL ANSWER: done\n';
+    const { leader, calls } = fakeLeader({
+      verbs: { model: ok('m\n'), prompt: ok(stdout), wait: ok('settled\n') },
+      commands: [[/^cost --json --all$/, () => costOf(1, 10, 1)], ...files.commands],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'no-continuation',
+      model: 'm',
+      capture: { pollMs: 5 },
+    });
+    expect(result.finalText).toBe(stdout);
+    expect(traceFromResult(result).metrics.resumed_after_settle).toBeUndefined();
+    expect(calls.filter((c) => c.kind === 'cli' && c.args[0] === 'wait')).toHaveLength(0);
   });
 
   it('collects as usual when spend has stopped', async () => {

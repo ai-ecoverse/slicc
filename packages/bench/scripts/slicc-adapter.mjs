@@ -947,16 +947,16 @@ async function collectAfterPrompt({
   // finishes; a final cone message absent from prompt stdout reveals the
   // continuation even without an export timeout.
   const unseenFinal = lastConeAssistantText(transcript);
-  const absentFromPrompt = unseenFinal && !String(reply.stdout ?? '').includes(unseenFinal);
-  const observedAfterExport =
-    checkPrompt && !resumedAfterSettle && absentFromPrompt ? await spend(leader) : null;
-  const continuedDuringExport =
-    checkPrompt &&
+  const absentFromPrompt = Boolean(
+    checkPrompt && unseenFinal && !String(reply.stdout ?? '').includes(unseenFinal)
+  );
+  const observedAfterExport = !resumedAfterSettle && absentFromPrompt ? await spend(leader) : null;
+  const stillWorkingAfterExport =
     !resumedAfterSettle &&
     absentFromPrompt &&
     (!after || !observedAfterExport || spendRising(after, observedAfterExport));
   if (observedAfterExport) after = observedAfterExport;
-  if ((!transcriptExport.ok && transcriptExport.reason === 'timeout') || continuedDuringExport) {
+  if ((!transcriptExport.ok && transcriptExport.reason === 'timeout') || stillWorkingAfterExport) {
     after = await waitForResumedAgent(leader, deadline, now);
     resumedAfterSettle = true;
     ({ doc: transcript, info: transcriptExport } = await exportTranscript(leader, dir, {
@@ -969,6 +969,7 @@ async function collectAfterPrompt({
       throw err;
     }
   }
+  if (absentFromPrompt) resumedAfterSettle = true;
   if (resumedAfterSettle && !transcript) {
     const err = new Error(
       `agent settled but its final transcript could not be exported: ${transcriptExport.stage ?? 'unknown'} ${transcriptExport.reason ?? 'unknown'}`
