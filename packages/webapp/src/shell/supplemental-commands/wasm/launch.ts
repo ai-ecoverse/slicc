@@ -47,6 +47,18 @@ const REGISTRY_PATH = /^\/(?:usr\/)?bin\/([^/]+)$/;
 /** Pids when there is no process table (unit tests). */
 let nextPid = 40000;
 
+/**
+ * The shell's command policy (allowed commands, sudo `Cmnd` rules) for a
+ * program a wasm process spawns: a denial is what the program's run reports
+ * instead (its message and exit code), `null` lets it run. A shell command
+ * needs none: it runs through the shell, whose dispatch applies the policy.
+ */
+export type NativeGate = (
+  name: string,
+  args: string[],
+  env: Record<string, string>
+) => Promise<{ stderr: string; exitCode: number } | null>;
+
 /** A wasm program to start: its glue and module paths and `argv[0]`. */
 export interface WasmTarget {
   glue: string;
@@ -74,6 +86,11 @@ interface StartRequest extends LaunchRequest {
 /** The glue's module: `x.js` → `x.wasm`, `x` → `x.wasm`. */
 export function modulePath(glue: string): string {
   return glue.endsWith('.js') ? `${glue.slice(0, -3)}.wasm` : `${glue}.wasm`;
+}
+
+/** The command a program path names: `/usr/bin/rm` and `rm` are `rm`. */
+function commandName(file: string): string {
+  return REGISTRY_PATH.exec(file)?.[1] ?? baseName(file);
 }
 
 function baseName(path: string): string {
@@ -188,7 +205,8 @@ export class WasmSession {
   constructor(
     private readonly ctx: CommandContext,
     private readonly processConfig: JshProcessConfig | undefined,
-    private readonly onError: (message: string) => void
+    private readonly onError: (message: string) => void,
+    private readonly gate?: NativeGate
   ) {}
 
   /** The installed commands, scanned once per invocation. */
@@ -327,6 +345,8 @@ export class WasmSession {
     return async (req, fds) => {
       const target = await this.resolve(req.file, req.argv[0] ?? req.file, req.cwd);
       if (!target) return this.runShellChild(req, fds, ppid);
+      const denial = await this.gate?.(commandName(req.file), req.argv.slice(1), req.env);
+      if (denial) return this.deniedChild(req, fds, ppid, denial);
       const handle = await this.launch({
         ...target,
         args: req.argv.slice(1),
@@ -337,6 +357,25 @@ export class WasmSession {
       });
       return childHandle(handle);
     };
+  }
+
+  /** A program the shell's policy refused: a child that reports the denial and exits. */
+  private deniedChild(
+    req: ChildSpawnRequest,
+    fds: FdTable,
+    ppid: number,
+    denial: { stderr: string; exitCode: number }
+  ): ChildHandle {
+    const { pid } = this.register('shell', req.argv, req.cwd, req.env, ppid);
+    const exited = (async () => {
+      await writeAll(fds, 2, new TextEncoder().encode(denial.stderr));
+      await fds.closeAll();
+      return denial.exitCode;
+    })();
+    if (this.processConfig) {
+      void exited.then((code) => this.processConfig?.processManager.exit(pid, code));
+    }
+    return { pid, exited };
   }
 
   /** A child that is no wasm program: a shell command on the child's descriptors. */

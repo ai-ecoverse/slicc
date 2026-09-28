@@ -59,6 +59,7 @@ import { getRegisteredProviderConfig } from '../providers/index.js';
 import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import { filesystemExecutionLimits } from './filesystem-budgets.js';
+import { carriedEnv, runOnGnuBash, SHELL_CHOICE_ENV } from './gnu-bash.js';
 import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
 import { isInstalledProgramPath } from './ipk/wasm-programs.js';
 import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
@@ -153,6 +154,11 @@ export interface HeadlessShellOptions {
   processOwner?: ProcessOwner;
   /** The panel terminal this shell runs in, which a program can lease (`wasm -t`). */
   terminal?: TerminalPort;
+  /**
+   * Run commands on GNU bash when a package provides it (`gnu-bash.ts`); the
+   * agent's shells set this. `SLICC_SHELL=just-bash` in the environment opts out.
+   */
+  gnuBash?: boolean;
   /**
    * Returns the active `kind:'shell'` pid the jsh script runs
    * under (e.g. the bash command the user typed that resolved
@@ -610,6 +616,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       isScoop: options.isScoop,
       buildProcessConfig: this.resolveJshProcessConfig,
       terminal: options.terminal,
+      gateNativeCommand: this.gateNativeCommand,
       // Thread the manager into `ps` / `kill`. When the
       // shell is constructed without one (extension offscreen,
       // inline standalone), the commands fall back to
@@ -1109,6 +1116,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     clearReadByteProvenance();
 
     // Wait for the constructor's `.jsh` registration before the first command.
+    // (Also before GNU bash: its PATH search finds `.jsh` commands too.)
     //
     // WHY THIS IS NOT COVERED BY `tryJshFallback`. That fallback fires on
     // `result.exitCode === 127`, which only surfaces when the WHOLE command is
@@ -1129,6 +1137,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // not a Ctrl+C. On abort we stop WAITING but let the registration run on in
     // the background, so the next command still benefits.
     await this.waitForInitialJshSync(signal);
+    if (await this.usesGnuBash()) {
+      return this.runOnGnuBash(command, signal, runPid, stdin, outputTeeId, capturePipeStatus);
+    }
 
     // just-bash's published ExecOptions type does not yet expose
     // AbortSignal, but we still forward it so external callers and
@@ -1191,16 +1202,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // does not include them — without this re-merge the next exec would not see
     // `$NAME`. A `null` is a removal: `result.env` DOES still carry the old
     // value, so it has to be deleted after the overwrite or it comes back.
-    if (this.pendingEnvWrites.size > 0) {
-      for (const [k, v] of this.pendingEnvWrites) {
-        if (v === null) {
-          delete this.lastEnv[k];
-        } else {
-          this.lastEnv[k] = v;
-        }
-      }
-      this.pendingEnvWrites.clear();
-    }
+    this.applyPendingEnvWrites();
     if (result.env?.PWD) {
       this.cwd = result.env.PWD;
     }
@@ -1222,6 +1224,114 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
     return result;
   }
+
+  private applyPendingEnvWrites(): void {
+    for (const [k, v] of this.pendingEnvWrites) {
+      if (v === null) delete this.lastEnv[k];
+      else this.lastEnv[k] = v;
+    }
+    this.pendingEnvWrites.clear();
+  }
+
+  /**
+   * Whether this run goes to GNU bash: asked for, installed, not opted out,
+   * and runnable here. A shell restricted to a command list stays on
+   * just-bash, whose registry holds exactly those commands (bash's builtins
+   * would come on top).
+   */
+  private async usesGnuBash(): Promise<boolean> {
+    if (!this.options.gnuBash || this.allowedCommands !== null) return false;
+    if (this.lastEnv[SHELL_CHOICE_ENV] === 'just-bash') return false;
+    if (typeof SharedArrayBuffer !== 'function') return false; // the wasm realm needs it
+    return (await this.scriptCatalog.getWasmCommands()).has('bash');
+  }
+
+  /**
+   * One command on GNU bash (`gnu-bash.ts`): `bash -c COMMAND` in the wasm
+   * realm, on the shell's cwd and environment, whose state it then takes on.
+   * Output goes to the run's tee as it is written. The shell's command policy
+   * applies to every program bash runs (`gateNativeCommand`, and just-bash's
+   * dispatch for the commands it runs through the shell) — not to the
+   * `bash -c` wrapper itself, which is no command of the caller's.
+   */
+  private async runOnGnuBash(
+    command: string,
+    signal: AbortSignal | undefined,
+    runPid: number | undefined,
+    stdin: ByteString,
+    outputTeeId: string | undefined,
+    capturePipeStatus: boolean
+  ): Promise<BashExecResult & { pipeStatus?: number[] }> {
+    const { runWasmCommand } = await import('./supplemental-commands/wasm/run.js');
+    const sudoReason = extractLeadingCommentReason(command);
+    const env: Record<string, string> = {
+      ...this.lastEnv,
+      ...(runPid === undefined ? {} : { [RUN_PID_ENV]: String(runPid) }),
+      ...(sudoReason ? { [SUDO_REASON_ENV]: sudoReason } : {}),
+    };
+    const tee = outputTeeId === undefined ? undefined : this.outputTees.get(outputTeeId);
+    const run = await runOnGnuBash(command, {
+      fs: this.options.fs,
+      tmpDir: this.lastEnv.TMPDIR ?? '/tmp',
+      env,
+      run: (args, runEnv) =>
+        runWasmCommand(args, this.wasmContext(runEnv, signal, stdin), {
+          processConfig: this.buildJshProcessConfig(runPid),
+          gate: this.gateNativeCommand,
+          onOutput: tee,
+        }),
+    });
+    if (run.state) {
+      this.cwd = run.state.cwd;
+      this.lastEnv = carriedEnv(run.state.env, [RUN_PID_ENV, SUDO_REASON_ENV, OUTPUT_TEE_ENV]);
+    }
+    await this.flushPendingCommandGrants();
+    this.applyPendingEnvWrites();
+    return {
+      stdout: run.stdout,
+      stderr: run.stderr,
+      exitCode: run.exitCode,
+      env: { ...this.lastEnv },
+      ...(capturePipeStatus && run.state ? { pipeStatus: run.state.pipeStatus } : {}),
+    };
+  }
+
+  /** The command context `wasm` runs in for a GNU bash run: this shell's fs, cwd and registry. */
+  private wasmContext(
+    env: Record<string, string>,
+    signal: AbortSignal | undefined,
+    stdin: ByteString
+  ): CommandContext {
+    return {
+      fs: this.vfsAdapter,
+      cwd: this.cwd,
+      env: new Map(Object.entries(env)),
+      exportedEnv: env,
+      stdin,
+      signal,
+      // A command bash finds no wasm program for runs through this shell,
+      // whose dispatch applies the command policy.
+      exec: (cmd: string, opts: Parameters<Bash['exec']>[1]) =>
+        this.bash.exec(cmd, { ...opts, umask: this.umask }),
+    } as unknown as CommandContext;
+  }
+
+  /**
+   * The command policy for a program a wasm process runs natively (`NativeGate`):
+   * what just-bash's registry filter and dispatch-time sudo gate do for a command.
+   */
+  private readonly gateNativeCommand = async (
+    name: string,
+    args: string[],
+    env: Record<string, string>
+  ): Promise<{ stderr: string; exitCode: number } | null> => {
+    if (this.allowedCommands !== null && !this.isCommandAllowed(name)) {
+      return { stderr: `bash: ${name}: command not found\n`, exitCode: 127 };
+    }
+    if (!this.isTransparentGatingEnabled()) return null;
+    const denial = await this.gateCommandDispatch(name, args, env[SUDO_REASON_ENV]);
+    return denial ? { stderr: denial.stderr, exitCode: denial.exitCode } : null;
+  };
 
   // -------------------------------------------------------------------------
   // Internal
@@ -1592,7 +1702,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         return runWasmCommand(
           ['--argv0', wasm.argv0, '--module', wasm.wasm, wasm.glue, ...args],
           ctx,
-          this.buildJshProcessConfig(runPidFromEnv(ctx.env))
+          {
+            processConfig: this.buildJshProcessConfig(runPidFromEnv(ctx.env)),
+            gate: this.gateNativeCommand,
+          }
         );
       }
 

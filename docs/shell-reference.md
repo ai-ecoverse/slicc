@@ -31,6 +31,8 @@ WASM enters only for specific runtime-heavy commands, which fetch and cache thei
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
+**GNU bash.** Once a package provides `bash` (`ipk add -g @ai-ecoverse/wasm-bash`), the agent's `bash` tool runs each command on GNU bash in the wasm realm (`shell/gnu-bash.ts`): `bash -c COMMAND`, one fresh bash per call, whose working directory and exported environment carry into the next call. A command bash finds no wasm program for (every supplemental command, `.jsh` scripts) runs through just-bash, batch as always, under the same command policy. The shell's output tee, timeouts and backgrounding are unchanged. Opt a shell out with `export SLICC_SHELL=just-bash` (in `~/.profile` to make it stick). A scoop restricted to a command list (`allowedCommands`) stays on just-bash.
+
 The agent `bash` tool leaves pipeline exit as last-stage-wins (just-bash default, `pipefail` off). When any stage is non-zero it appends `pipeline: 1 0` from `PIPESTATUS` so an upstream failure is visible even if `tail` succeeded. The human terminal does not add that line.
 
 ### Shared `/tmp` scratch space and `$TMPDIR`

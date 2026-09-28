@@ -141,9 +141,9 @@ describe('wasm command', () => {
       processManager: pm,
       owner: { kind: 'cone' },
       getParentPid: () => 42,
-    } as unknown as Parameters<typeof runWasmCommand>[2];
+    } as unknown as NonNullable<Parameters<typeof runWasmCommand>[2]>['processConfig'];
     const files = { '/w/loop.js': 'G', '/w/loop.wasm': 'W' };
-    const running = runWasmCommand(['loop.js', 'x'], ctx(files), config);
+    const running = runWasmCommand(['loop.js', 'x'], ctx(files), { processConfig: config });
     await vi.waitFor(() => expect(listener).toBeDefined());
     expect(pm.spawn).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'wasm', argv: ['loop', 'x'], cwd: '/w', ppid: 42 })
@@ -296,14 +296,9 @@ describe('wasm command', () => {
           signal: vi.fn(),
         };
       });
-      const r = await runWasmCommand(
-        ['-t', 'sh.js'],
-        ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }),
-        undefined,
-        {
-          lease: () => lease,
-        }
-      );
+      const r = await runWasmCommand(['-t', 'sh.js'], ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }), {
+        terminal: { lease: () => lease },
+      });
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toBe(''); // it went to the screen
       expect(screen.join('')).toBe('hello\r\ntyped\r\n');
@@ -328,21 +323,16 @@ describe('wasm command', () => {
       const files = { '/w/sh.js': 'G', '/w/sh.wasm': 'W' };
       const screen = ctx(files);
       screen.exportedEnv = { TERM: 'screen-256color' };
-      await runWasmCommand(['-t', 'sh.js'], screen, undefined, { lease: () => lease });
+      await runWasmCommand(['-t', 'sh.js'], screen, { terminal: { lease: () => lease } });
       await runWasmCommand(['sh.js'], ctx(files));
       expect(envs[0]).toEqual({ TERM: 'screen-256color' });
       expect(envs[1]).toEqual({ A: '1' });
     });
 
     it('fails without a terminal to lease', async () => {
-      const r = await runWasmCommand(
-        ['-t', 'sh.js'],
-        ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }),
-        undefined,
-        {
-          lease: () => null,
-        }
-      );
+      const r = await runWasmCommand(['-t', 'sh.js'], ctx({ '/w/sh.js': 'G', '/w/sh.wasm': 'W' }), {
+        terminal: { lease: () => null },
+      });
       expect(r.exitCode).toBe(1);
       expect(r.stderr).toMatch(/-t: no terminal/);
       const none = await runWasmCommand(

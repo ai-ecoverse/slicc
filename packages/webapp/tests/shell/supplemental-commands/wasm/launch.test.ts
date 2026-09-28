@@ -132,6 +132,30 @@ describe('WasmSession', () => {
     expect(await session.resolve('sed', 'sed', '/w')).toBeUndefined();
   });
 
+  it('asks the gate before a program runs natively; a denied one reports and exits', async () => {
+    fakeProcesses();
+    const { config } = processConfig();
+    const gate = vi.fn(async (name: string) =>
+      name === 'tac' ? { stderr: 'sudo: denied\n', exitCode: 77 } : null
+    );
+    const session = new WasmSession(ctx(installed), config, () => {}, gate);
+    const spawner = await parentSpawner(session);
+    const launched = spawn.mock.calls.length;
+    const err: Uint8Array[] = [];
+    const fds = new FdTable();
+    fds.install(bytesSource(new Uint8Array(0)));
+    fds.install(sinkFile(() => {}));
+    fds.install(sinkFile((b) => err.push(b)));
+    const child = await spawner(
+      { file: '/usr/bin/tac', argv: ['tac', '-r'], env: { R: 'why' }, cwd: '/w' },
+      fds
+    );
+    expect(gate).toHaveBeenCalledWith('tac', ['-r'], { R: 'why' });
+    expect(await child.exited).toBe(77);
+    expect(new TextDecoder().decode(err[0])).toBe('sudo: denied\n');
+    expect(spawn.mock.calls.length).toBe(launched); // no worker started
+  });
+
   it('starts a wasm child as a process parented to its spawner', async () => {
     const ends = fakeProcesses();
     const { pm, config } = processConfig();

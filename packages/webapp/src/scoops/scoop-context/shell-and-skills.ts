@@ -234,6 +234,8 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
     // returns `undefined` and the realm child registers at `ppid:1`, so the
     // `stop()`/`dispose()`/`drop_scoop` fan-out from the `kind:'scoop-turn'`
     // pid never reaches it and it survives the turn (#1166).
+    // The agent's shell runs on GNU bash once a package provides it.
+    gnuBash: true,
     processManager: deps.processManager ?? undefined,
     processOwner: deps.processOwner,
     getCurrentShellPid: deps.getTurnPid,
