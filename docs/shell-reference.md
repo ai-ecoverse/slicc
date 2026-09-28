@@ -635,6 +635,15 @@ package without a `slicc` field offers each `bin/<x>` that has a `bin/<x>.wasm`
 beside it. Programs never come from a host mount, so they work in every float
 that has the wasm realm.
 
+Programs linked with the toolchain's `slicc_socket.c` (and `slicc_select.c`) have
+BSD sockets on a loopback network of their own (#3571): `AF_INET` on
+`127.0.0.1` and `AF_UNIX`, one network per process owner (a cone, each scoop,
+and the system, which the panel terminal runs as), shared by all of that owner's
+`wasm` invocations, so a server in one answers `curl http://127.0.0.1:PORT/`
+from another for as long as it runs. Nothing leaves the realm:
+an address off loopback is unreachable and `getaddrinfo` knows only `localhost`
+and numeric IPv4 (see `docs/kernel/process-model.md`, **Sockets**).
+
 ### `ipk mamba` (conda / emscripten-forge)
 
 `ipk mamba install <pkg>[=<version>]` installs **emscripten-wasm32** packages from

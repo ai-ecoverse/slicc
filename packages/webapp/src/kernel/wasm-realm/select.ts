@@ -69,8 +69,9 @@ async function waitReady(
     // Wait for any descriptor to change, the timeout, or a signal; then look again.
     const round = new AbortController();
     const changes = [...new Set([...read, ...write])].flatMap((fd) => {
-      const { changed } = fds.get(fd).file;
-      return changed === undefined ? [] : [changed(round.signal).catch(() => undefined)];
+      // A method call: the file may be a class instance (a socket) that needs its `this`.
+      const file = fds.get(fd).file;
+      return file.changed === undefined ? [] : [file.changed(round.signal).catch(() => undefined)];
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expiry =

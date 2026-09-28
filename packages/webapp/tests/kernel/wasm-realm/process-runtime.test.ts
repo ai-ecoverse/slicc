@@ -36,6 +36,28 @@ describe('kernelSys', () => {
     ]);
   });
 
+  it('asks for a non-blocking or peeking read and a non-blocking write (a socket)', () => {
+    const seen: unknown[] = [];
+    const sys = kernelSys(
+      transport((req) => {
+        seen.push(req);
+        return (req as { op: string }).op === 'fd-read'
+          ? { ok: true, kind: 'bytes', bytes: bytes('in') }
+          : { ok: true, kind: 'json', json: 2 };
+      })
+    );
+    sys.read(3, 8, { nonblock: true });
+    sys.read(3, 8, { peek: true });
+    sys.write(3, bytes('hi'), { nonblock: true });
+    sys.write(3, bytes('hi'), {});
+    expect(seen).toEqual([
+      { op: 'fd-read', fd: 3, max: 8, nonblock: true },
+      { op: 'fd-read', fd: 3, max: 8, peek: true },
+      { op: 'fd-write', fd: 3, body: bytes('hi'), nonblock: true },
+      { op: 'fd-write', fd: 3, body: bytes('hi') },
+    ]);
+  });
+
   it('closes, makes pipes, and polls through the kernel', () => {
     const seen: unknown[] = [];
     const replies: Record<string, SyncFsResult> = {

@@ -93,6 +93,26 @@ export class KernelPipe {
     return out;
   }
 
+  /**
+   * Up to `max` buffered bytes, left in the buffer (recv's MSG_PEEK): waits as
+   * {@link read} does, and is empty at end of file.
+   */
+  async peek(max: number, signal?: AbortSignal): Promise<Uint8Array> {
+    while (this.size === 0) {
+      if (this.writers === 0) return new Uint8Array(0);
+      await this.changed(signal);
+    }
+    const out = new Uint8Array(Math.min(max, this.size));
+    let filled = 0;
+    for (const chunk of this.chunks) {
+      if (filled === out.length) break;
+      const count = Math.min(chunk.length, out.length - filled);
+      out.set(chunk.subarray(0, count), filled);
+      filled += count;
+    }
+    return out;
+  }
+
   /** Buffer every byte of `bytes`, waiting for room as needed. */
   /**
    * Write every byte, waiting while full. `signal` interrupts the wait: EINTR,

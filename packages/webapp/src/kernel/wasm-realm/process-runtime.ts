@@ -34,6 +34,7 @@ import {
 import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import { describeForFork, restoreForkedStreams } from './process-fork.js';
 import { SignalGate } from './process-signals.js';
+import { createSocketKernel } from './process-sockets.js';
 import type { ForkState, WasmProcessInitMsg } from './protocol.js';
 import type { Termios } from './tty.js';
 
@@ -52,12 +53,22 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
   };
   const json = (r: SyncFsResult): unknown => (r.ok && r.kind === 'json' ? r.json : undefined);
   return {
-    read(fd, max) {
-      const r = call({ op: 'fd-read', fd, max }, `fd-read ${fd}`);
+    read(fd, max, opts) {
+      const flags = {
+        ...(opts?.nonblock ? { nonblock: true } : {}),
+        ...(opts?.peek ? { peek: true } : {}),
+      };
+      const r = call({ op: 'fd-read', fd, max, ...flags }, `fd-read ${fd}`);
       return r.ok && r.kind === 'bytes' ? r.bytes : new Uint8Array(0);
     },
-    write(fd, bytes) {
-      const n = json(call({ op: 'fd-write', fd, body: bytes }, `fd-write ${fd}`));
+    write(fd, bytes, opts) {
+      const req = {
+        op: 'fd-write' as const,
+        fd,
+        body: bytes,
+        ...(opts?.nonblock ? { nonblock: true } : {}),
+      };
+      const n = json(call(req, `fd-write ${fd}`));
       return typeof n === 'number' ? n : bytes.length;
     },
     close(fd) {
@@ -293,10 +304,9 @@ export async function runWasmProcess(
     },
     { cwd: init.cwd }
   );
-  const streams = new KernelStreams(running.FS, sys, {
-    sigpipe: () => running.sliccSigpipe?.() === 1,
-    restartable: () => signals.restartable(),
-  });
+  const sigpipe = (): boolean => running.sliccSigpipe?.() === 1;
+  const restartable = (): boolean => signals.restartable();
+  const streams = new KernelStreams(running.FS, sys, { sigpipe, restartable });
   if (init.fork) restoreForkedStreams(running.FS, streams, init.fork.streams ?? []);
   else {
     wireKernelStdio(running.FS, streams);
@@ -313,11 +323,19 @@ export async function runWasmProcess(
     afterChild: () => vfs.invalidate(),
     pid: init.pid,
     raise: (sig) => running.sliccRaise?.(sig),
-    restartable: () => signals.restartable(),
+    restartable,
     describeFork: () =>
       describeForFork(running.FS, sys, streams, (s) =>
         liveNodePath(s.node as unknown as LiveFsNode)
       ),
+  });
+  running.sliccKernel.net = createSocketKernel({
+    transport,
+    Fs: running.FS,
+    sys,
+    streams,
+    sigpipe,
+    restartable,
   });
   try {
     if (init.fork) {

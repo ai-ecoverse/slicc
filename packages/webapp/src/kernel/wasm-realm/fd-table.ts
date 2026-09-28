@@ -29,7 +29,20 @@ export type KernelErrno =
   | 'ENOTTY'
   | 'EPERM'
   | 'EIO'
-  | 'EACCES';
+  | 'EACCES'
+  // Sockets (socket.ts).
+  | 'EAGAIN'
+  | 'ENOTSOCK'
+  | 'EAFNOSUPPORT'
+  | 'EPROTONOSUPPORT'
+  | 'EOPNOTSUPP'
+  | 'EADDRINUSE'
+  | 'EADDRNOTAVAIL'
+  | 'ENETUNREACH'
+  | 'ECONNREFUSED'
+  | 'EINPROGRESS'
+  | 'EISCONN'
+  | 'ENOTCONN';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {
@@ -54,6 +67,8 @@ export interface KernelFile {
    * readable. `signal` interrupts a wait with EINTR (a caught signal).
    */
   read?(max: number, signal?: AbortSignal): Promise<Uint8Array>;
+  /** As `read`, but the bytes stay to be read again (recv's MSG_PEEK). Absent: EOPNOTSUPP. */
+  peek?(max: number, signal?: AbortSignal): Promise<Uint8Array>;
   /** Write every byte, waiting as needed (`signal`: as for read). Absent: not writable. */
   write?(bytes: Uint8Array, signal?: AbortSignal): Promise<number>;
   /** The last reference is gone. May return a promise when writeback is in flight. */
