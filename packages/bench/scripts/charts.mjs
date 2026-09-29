@@ -6,8 +6,9 @@
  *
  * Pure: configuration stats (`reportData().benchmarks[].configs`) in, SVG strings out. Color
  * follows the model (`--series-N`, which the page defines for light and dark); the skills
- * condition is the fill: `none` is outlined, any skills solid. Every mark has a direct label
- * and a tooltip, so identity never rests on color alone.
+ * condition is the fill: `none` is outlined, any skills solid. Every mark has a tooltip; bars and
+ * the value chart's Pareto points also carry a direct label, the value chart's other points
+ * show theirs on hover, so a crowded chart stays legible and identity never rests on color alone.
  */
 
 const esc = (v) =>
@@ -17,7 +18,7 @@ const esc = (v) =>
   );
 
 /** Categorical slots the page defines (`--series-1` … `--series-8`). */
-export const SERIES_SLOTS = 8;
+export const SERIES_SLOTS = 12;
 
 /** Model → categorical slot, alphabetical, so a model keeps its color from report to report. */
 export function modelSlots(models) {
@@ -125,21 +126,50 @@ export function paretoFront(points) {
 const money = (v) => (v >= 1 ? `$${v.toFixed(v % 1 ? 1 : 0)}` : `$${Number(v.toPrecision(2))}`);
 
 /**
+ * The score axis: 0–100 zoomed to the data in steps of 10, with a step of headroom each side, so
+ * configurations that differ by a few points do not sit on one line.
+ */
+export function scoreRange(scores) {
+  const lo = Math.max(0, Math.floor(Math.min(...scores) / 10) * 10 - 10);
+  const hi = Math.min(100, Math.ceil(Math.max(...scores) / 10) * 10 + 10);
+  return [lo, hi];
+}
+
+/**
+ * Spread label baselines at least `gap` apart, keeping each as close to its point as it can:
+ * sort by y, push down past the one above, then pull the whole run back inside `[min, max]`.
+ */
+export function spreadLabels(ys, gap, min, max) {
+  const order = ys.map((y, i) => [y, i]).sort((a, b) => a[0] - b[0]);
+  const out = new Array(ys.length);
+  let prev = -Infinity;
+  for (const [y, i] of order) {
+    out[i] = Math.max(y, prev + gap);
+    prev = out[i];
+  }
+  const over = Math.max(...out) - max;
+  if (over > 0) for (let i = 0; i < out.length; i++) out[i] = Math.max(min, out[i] - over);
+  return out;
+}
+
+/**
  * Score (0–100) against mean cost per task (log scale), one point per configuration with both.
- * The most attractive quadrant is cheaper and better than the median configuration.
+ * The most attractive quadrant is cheaper and better than the median configuration. Only the
+ * Pareto points are labelled; hovering any point shows its label and numbers.
  */
 export function valueChart(configs, slots) {
   const pts = configs
     .filter((c) => c.mean_score != null && c.mean_cost > 0)
     .map((c) => ({ c, cost: c.mean_cost, score: indexScore(c) }));
   if (!pts.length) return '<p class="muted">No configuration has both a score and a cost yet.</p>';
-  const [W, H] = [760, 380];
-  const [left, right, top, bottom] = [52, 190, 16, 48];
+  const [W, H] = [1100, 620];
+  const [left, right, top, bottom] = [60, 250, 16, 52];
+  const [yLo, yHi] = scoreRange(pts.map((p) => p.score));
   const costs = pts.map((p) => p.cost);
   const lo = Math.log10(Math.min(...costs) / 1.8);
   const hi = Math.log10(Math.max(...costs) * 1.8);
   const x = (v) => left + ((Math.log10(v) - lo) / (hi - lo)) * (W - left - right);
-  const y = (v) => top + (1 - v / 100) * (H - top - bottom);
+  const y = (v) => top + (1 - (v - yLo) / (yHi - yLo)) * (H - top - bottom);
   const [mx, my] = [x(median(costs)), y(median(pts.map((p) => p.score)))];
   const xTicks = logTicks(10 ** lo, 10 ** hi)
     .map(
@@ -147,7 +177,7 @@ export function valueChart(configs, slots) {
         `<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - bottom}" class="grid"/><text x="${x(t)}" y="${H - bottom + 18}" text-anchor="middle" class="label">${money(t)}</text>`
     )
     .join('');
-  const yTicks = [0, 20, 40, 60, 80, 100]
+  const yTicks = Array.from({ length: (yHi - yLo) / 10 + 1 }, (_, i) => yLo + i * 10)
     .map(
       (v) =>
         `<line x1="${left}" x2="${W - right}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${left - 8}" y="${y(v) + 4}" text-anchor="end" class="label">${v}</text>`
@@ -158,16 +188,41 @@ export function valueChart(configs, slots) {
     front.length > 1
       ? `<polyline points="${front.map((p) => `${x(p.cost).toFixed(1)},${y(p.score).toFixed(1)}`).join(' ')}" class="pareto"/>`
       : '';
-  const marks = pts
-    .map(({ c, cost, score }) => {
-      const [px, py] = [x(cost), y(score)];
-      const tip = `${c.model} · ${c.skills}: score ${score.toFixed(0)}, $${cost.toFixed(3)} per task`;
-      return `<g><circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="7" ${fill(c, slots)}><title>${esc(tip)}</title></circle>
-<text x="${(px + 11).toFixed(1)}" y="${(py + 4).toFixed(1)}" class="point-label">${esc(c.model)} · ${esc(c.skills)}</text></g>`;
-    })
-    .join('\n');
+  const onFront = new Set(front);
+  // Frontier labels sit right of their points, spread so neighbours never overprint.
+  const labelled = pts.filter((p) => onFront.has(p));
+  const labelY = spreadLabels(
+    labelled.map((p) => y(p.score) + 5),
+    18,
+    top + 12,
+    H - bottom - 4
+  );
+  const labelAt = new Map(labelled.map((p, i) => [p, labelY[i]]));
+  // Frontier labels go under the dots, so a label's halo never hides a neighbouring point; a
+  // hover label rides with its own dot.
+  const layers = { labels: [], dots: [] };
+  for (const p of pts) {
+    const { c, cost, score } = p;
+    const [px, py] = [x(cost), y(score)];
+    const name = `${c.model} · ${c.skills}`;
+    const tip = `${name}: score ${score.toFixed(0)}, $${cost.toFixed(3)} per task`;
+    const isFront = onFront.has(p);
+    const ly = isFront ? labelAt.get(p) : py + 5;
+    const leader =
+      isFront && Math.abs(ly - 5 - py) > 3
+        ? `<line x1="${(px + 8).toFixed(1)}" y1="${py.toFixed(1)}" x2="${(px + 14).toFixed(1)}" y2="${(ly - 5).toFixed(1)}" class="leader"/>`
+        : '';
+    const label = `<text x="${(px + 15).toFixed(1)}" y="${ly.toFixed(1)}" class="point-label${isFront ? '' : ' on-hover'}">${esc(name)}</text>`;
+    if (isFront) layers.labels.push(`${leader}${label}`);
+    layers.dots.push(
+      `<g class="pt${isFront ? ' front' : ''}"><circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${isFront ? 8 : 7}" ${fill(c, slots)}><title>${esc(tip)}</title></circle>${isFront ? '' : label}</g>`
+    );
+  }
+  const marks = [...layers.labels, ...layers.dots].join('\n');
   const quadKey = `<li><span class="swatch quad"></span>most attractive quadrant</li>${
-    pareto ? '<li><span class="swatch pareto-key"></span>Pareto line</li>' : ''
+    pareto
+      ? '<li><span class="swatch pareto-key"></span>Pareto line (labelled; hover the rest)</li>'
+      : ''
   }`;
   // A lone frontier point is cheapest and best at once: say so instead of drawing a line.
   const dominant =

@@ -92,7 +92,7 @@ describe('reportHtml', () => {
     const at = order.map((s) => html.indexOf(s));
     expect(at.every((v, i) => v > 0 && (i === 0 || v > at[i - 1]))).toBe(true);
     expect(html).toContain('class="bar-value">100</text>');
-    expect(html).toContain('<svg viewBox="0 0 760 380" class="value"');
+    expect(html).toContain('<svg viewBox="0 0 1100 620" class="value"');
     expect(html.match(/<article class="card lift">/g)).toHaveLength(2);
     expect(html).toContain('<p class="big up">+25.0%<small> score lift</small></p>');
     expect(html).toContain('<svg class="dumbbell up"');

@@ -6,6 +6,8 @@ import {
   modelSlots,
   paretoFront,
   rankingChart,
+  scoreRange,
+  spreadLabels,
   toolUseChart,
   valueChart,
 } from './charts.mjs';
@@ -33,8 +35,13 @@ describe('encoding', () => {
       ['opus', 1],
       ['sonnet', 2],
     ]);
-    const many = modelSlots(Array.from({ length: 9 }, (_, i) => `m${i}`));
-    expect(many.get('m8')).toBe(1);
+    // Twelve distinct colors before any repeats: the V2.1 report compares twelve models.
+    const twelve = modelSlots(
+      Array.from({ length: 12 }, (_, i) => `m${String(i).padStart(2, '0')}`)
+    );
+    expect(new Set(twelve.values()).size).toBe(12);
+    const many = modelSlots(Array.from({ length: 13 }, (_, i) => `m${String(i).padStart(2, '0')}`));
+    expect(many.get('m12')).toBe(1);
   });
 
   it('reads a score as an index, and lists models and the skills encoding', () => {
@@ -169,11 +176,52 @@ describe('valueChart', () => {
     );
     expect(withLine).toContain('class="quad-good"');
     expect(withLine).toContain('<polyline points=');
-    expect(withLine).toContain('Pareto line</li>');
+    expect(withLine).toContain('Pareto line (labelled; hover the rest)</li>');
     expect(withLine).toContain('>opus · builtin</text>');
     expect(withLine).toContain('<title>sonnet · none: score 20, $2.000 per task</title>');
     expect(withLine).toMatch(/class="label">\$0\.2<\/text>/);
     expect(withLine).toMatch(/class="label">\$1<\/text>/);
+  });
+
+  it('labels only the Pareto points; the others show their label on hover', () => {
+    const slots = modelSlots(['opus', 'sonnet']);
+    const svg = valueChart(
+      [
+        cfg('opus', 'builtin', 0.73, 1.2),
+        cfg('sonnet', 'builtin', 0.4, 0.3),
+        cfg('sonnet', 'none', 0.2, 2),
+      ],
+      slots
+    );
+    expect(svg).toContain('class="point-label">opus · builtin</text>');
+    expect(svg).toContain('class="point-label">sonnet · builtin</text>');
+    expect(svg).toMatch(
+      /<g class="pt"><circle[^>]*>[\s\S]*?class="point-label on-hover">sonnet · none<\/text><\/g>/
+    );
+    expect(svg).not.toContain('on-hover">opus · builtin');
+    // Frontier labels are drawn before any dot, so their halos never cover a point.
+    expect(svg.indexOf('class="point-label">opus · builtin')).toBeLessThan(
+      svg.indexOf('<g class="pt')
+    );
+  });
+
+  it('zooms the score axis to the data in steps of 10', () => {
+    expect(scoreRange([27, 54])).toEqual([10, 70]);
+    expect(scoreRange([3, 97])).toEqual([0, 100]);
+    const svg = valueChart(
+      [cfg('opus', 'builtin', 0.54, 5), cfg('sonnet', 'builtin', 0.34, 0.17)],
+      modelSlots(['opus', 'sonnet'])
+    );
+    expect(svg).toMatch(/class="label">20<\/text>/);
+    expect(svg).toMatch(/class="label">70<\/text>/);
+    expect(svg).not.toMatch(/class="label">100<\/text>/);
+  });
+
+  it('spreads close labels apart and keeps them inside the plot', () => {
+    expect(spreadLabels([100, 102, 300], 18, 0, 500)).toEqual([100, 118, 300]);
+    const clamped = spreadLabels([490, 495], 18, 0, 500);
+    expect(clamped[1] - clamped[0]).toBe(18);
+    expect(Math.max(...clamped)).toBeLessThanOrEqual(500);
   });
 
   it('says so when one configuration is cheapest and best, and needs a score and a cost', () => {
