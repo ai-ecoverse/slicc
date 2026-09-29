@@ -282,6 +282,20 @@ The SW also exposes message handlers:
   updates a session secret's domains or rewrites a persisted secret's
   `_DOMAINS` while preserving its value.
 
+### Raw mode (#3571)
+
+The same Port carries the raw HTTP-client mode the wasm realm's HTTP proxy uses. A Port whose first message is `raw-request` becomes a raw session (`src/fetch-proxy-raw.ts`, injected into `handleFetchProxyConnectionAsync` by `service-worker.ts`). The contract is `@slicc/shared-ts` `raw-fetch-protocol.ts`, and the page side is `packages/webapp/src/shell/proxied-fetch-raw-port.ts`.
+
+- **Probe:** before its first raw request the page sends `raw-probe` on a fresh Port and expects `raw-probe-reply` with the SW's capabilities. A service worker that predates raw mode ignores both message types, so silence (5 s) means unsupported and the page never sends a `raw-request` it would wait on forever.
+- **Flow control:** the page grants response credits (`raw-credit`) and the SW grants upload credits (`raw-body-credit`). Neither side sends more chunks than granted, because the Port has no backpressure of its own.
+- **Head:** the upstream `fetch` uses `redirect: 'manual'` and `credentials: 'omit'`. `src/raw-fetch-capture.ts` records the real status line and every header line from `webRequest.onHeadersReceived` with `extraHeaders`.
+  - Correlation is by a per-request `#slicc-raw-<uuid>` fragment. `details.url` keeps it, so concurrent requests to one URL stay apart.
+  - The DNR forbidden-header rule is keyed to the same fragment and also restores `User-Agent`.
+  - A manual redirect whose head was not observed within 5 s fails with `upstream`.
+- **Ranged requests:** the caller's `Accept-Encoding` is dropped and Chrome's `fetch` sends `identity` for a request carrying `Range`, verified by the check below, so `Content-Range` matches the delivered bytes. A 206 whose coding Chrome undid anyway is refused (`upstream`, 502).
+- **Uploads:** non-text bodies of at least 8 MiB (or unknown length) stream with `duplex: 'half'`. Chrome rejects the first streamed request that needs a new connection before sending any of it (measured with `credentials: 'omit'`, whose connections are pooled apart from those with cookies). The attempt is retried once, and only for a `TypeError` raised before its body produced a single byte: a chunked request without its terminating chunk cannot be complete at the origin, so nothing that may have been processed is ever replayed. Text and HMAC-signed bodies are buffered (256 MiB cap) so the pipeline can unmask and sign them.
+- **Check:** `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension && npm run test:raw-fetch -w @slicc/chrome-extension` (`packages/dev-tools/tools/extension-raw-fetch-check.ts`). It follows the Local QA recipe below with a disposable profile and drives the options page's id-less Port. It covers redirects, cookies, repeated headers, concurrency, gzip/zstd, a 20 MiB download, a streamed 12 MiB upload and the secret round trip.
+
 ### OAuth-token extra allowed domains
 
 Each provider's hardcoded `oauthTokenDomains` is the immutable default

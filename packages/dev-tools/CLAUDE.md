@@ -58,6 +58,7 @@ Each bold gate is an `npm run` script unless the raw command is shown.
 - **CI phase timings**: `tools/ci-job-timing.mjs` (+ `-lib.mjs`) — step timestamps → Markdown summary + JSON artifact; both Cloudflare staging workflows.
 - **Preflight deps check**: `tools/preflight-deps.mjs` (via `pretypecheck`/`pretest`).
 - **Release gating**: `tools/release-plan.mjs` (Linux preflight) + `release-native.mjs`, `tools/merge-queue-busy.mjs` (+ `merge-queue-lib.mjs`), `tools/release-publish.mjs` (wraps `npx semantic-release`), `tools/release-alert.mjs` (open/close the red-release tracking issue). [details](../../docs/dev-tools-details.md#release-gating).
+- **Extension raw-fetch check**: `tools/extension-raw-fetch-check.ts` — loads the built extension in Chrome for Testing and drives raw fetch mode end to end; `npm run test:raw-fetch -w @slicc/chrome-extension`.
 - **Optional-binary guard**: `tools/run-if-installed.mjs <binary> [args…]` — runs iff on `PATH`, else exits 0; used by `lint-staged` Swift/Go globs.
 
 ### CDP tooling

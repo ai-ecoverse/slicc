@@ -49,6 +49,7 @@ import {
   buildSliccSidecarHandlers,
 } from './panel-rpc/misc-handlers.js';
 import { buildTrayOauthHandlers } from './panel-rpc/oauth-handlers.js';
+import { buildRawFetchHandlers } from './panel-rpc/raw-fetch-handlers.js';
 import {
   buildComputerTabHandlers,
   buildFeatureFlagHandler,
@@ -307,6 +308,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildRemoteCdpHandlers(options),
     ...buildPermissionRequestHandler(options),
     ...buildProxiedFetchHandler(),
+    ...buildRawFetchHandlers(),
     ...buildSudoRequestHandler(),
     ...buildSecretRequestHandler(),
     ...buildSecretsBridgeHandler(),

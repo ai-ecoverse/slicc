@@ -43,6 +43,9 @@ import type {
   ComputerInputEvent,
   FollowerBiscottoGate,
   OAuthExtraDomainsStore,
+  RawFetchErrorCode,
+  RawFetchResponseHead,
+  RawHeaderList,
   SignAndForwardReply,
 } from '@slicc/shared-ts';
 import type { SecretRequest, SecretRequestOutcome } from '../base/secret-request-registry.js';
@@ -674,6 +677,31 @@ export type PanelRpcRequest =
       };
     }
   | {
+      // Raw-mode proxied fetch (#3571) from the kernel worker on the extension
+      // float: the page runs it over the `fetch-proxy.fetch` Port
+      // (`shell/proxied-fetch-raw-port.ts`) and the worker drives it with the
+      // four ops below, one chunk per call in each direction, so both sides
+      // stay flow-controlled. `id` names the page-side session.
+      op: 'raw-fetch-open';
+      payload: {
+        url: string;
+        method: string;
+        headers: RawHeaderList;
+        hasBody: boolean;
+        bodyLength?: number;
+      };
+    }
+  | {
+      // Probe the extension's raw mode for the worker (`raw-fetch-open` only
+      // works against a service worker that answers the probe).
+      op: 'raw-fetch-probe';
+      payload: Record<string, never>;
+    }
+  | { op: 'raw-fetch-write'; payload: { id: string; chunk: Uint8Array | null } }
+  | { op: 'raw-fetch-head'; payload: { id: string } }
+  | { op: 'raw-fetch-read'; payload: { id: string } }
+  | { op: 'raw-fetch-cancel'; payload: { id: string } }
+  | {
       // Relay a sudo / protected-write approval request from the kernel-worker
       // realm to the page (the hosted leader tab the thin extension pins),
       // where `resolveSudoRequest` raises a genuine native modal. The worker
@@ -999,6 +1027,16 @@ export interface PanelRpcResults {
     head: { status: number; statusText: string; headers: Record<string, string> };
     body: ArrayBuffer;
   };
+  'raw-fetch-open': { id: string };
+  'raw-fetch-probe': {
+    supported: boolean;
+    requestBodyStreaming: boolean;
+    maxRequestBodyBytes: number;
+  };
+  'raw-fetch-write': { ok: true } | RawFetchRpcFailure;
+  'raw-fetch-head': { ok: true; head: RawFetchResponseHead; hasBody: boolean } | RawFetchRpcFailure;
+  'raw-fetch-read': { ok: true; chunk: Uint8Array | null } | RawFetchRpcFailure;
+  'raw-fetch-cancel': { ok: true };
   'permission-request': { grants: PermissionRpcGrant[] };
   // Value-free by construction: see the `secret-request` op comment.
   'secret-request': SecretRequestOutcome;
@@ -1061,6 +1099,14 @@ export type PermissionRpcGrant =
  * `src/speech/hear.ts` (the page-side implementation) — kept import-free so
  * the worker-side type graph never references the page-only speech modules.
  */
+/** A raw-mode failure carried across panel-RPC (errors there are strings). */
+export interface RawFetchRpcFailure {
+  ok: false;
+  code: RawFetchErrorCode;
+  status: number;
+  error: string;
+}
+
 export interface HearRpcStatus {
   state: 'idle' | 'loading' | 'ready' | 'failed';
   loaded?: number;

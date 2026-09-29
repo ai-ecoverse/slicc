@@ -74,6 +74,11 @@ the tray.
   `maybeUnmaskCdpFrame`, event/detach forward.
 - `src/secrets-sw.ts` - SW-owned `SecretsPipeline`, `secrets.*`, `secrets.crud` Port.
 - `src/mount-backends-sw.ts` - S3 / DA sign+forward.
+- `src/fetch-proxy-raw.ts` + `src/raw-fetch-capture.ts` - raw fetch mode on the
+  `fetch-proxy.fetch` Port (#3571): credit-based `raw-*` messages, manual
+  redirects, heads from `webRequest` (`extraHeaders`) keyed by a
+  `#slicc-raw-<uuid>` fragment, streamed uploads. `npm run test:raw-fetch`
+  (after a `SLICC_EXT_DEV=1` build). `docs/extension-thin-bridge.md`.
 - `src/handoff-notifications-sw.ts` - handoff `Link` observer, OS toasts,
   once-per-session dedup. Installed BEFORE `discovery-sw.ts` (first on
   `onHeadersReceived`).

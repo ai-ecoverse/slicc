@@ -129,8 +129,22 @@ const RAW_RESPONSE_SKIP_HEADERS = new Set([
   'upgrade',
 ]);
 
-/** Content codings every float's fetch decodes on its own. */
-const DECODED_CODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
+/** Content codings Node's fetch (undici) decodes on its own: the bridge floats. */
+export const NODE_DECODED_CODINGS: ReadonlySet<string> = new Set([
+  'gzip',
+  'x-gzip',
+  'deflate',
+  'br',
+]);
+
+/**
+ * Content codings Chrome's fetch decodes on its own: the extension float.
+ * Chrome advertises `zstd` itself and cannot be told otherwise.
+ */
+export const BROWSER_DECODED_CODINGS: ReadonlySet<string> = new Set([
+  ...NODE_DECODED_CODINGS,
+  'zstd',
+]);
 
 /** `Accept-Encoding` a float sends upstream: exactly the codings it decodes. */
 export const RAW_FETCH_ACCEPT_ENCODING = 'gzip, deflate, br';
@@ -160,13 +174,15 @@ export function rawAcceptEncoding(headers: Record<string, string>): string | und
 export function isDecodedPartialResponse(input: {
   status: number;
   headers: RawHeaderList;
+  /** Codings the float's fetch undid; defaults to {@link NODE_DECODED_CODINGS}. */
+  decodedCodings?: ReadonlySet<string>;
 }): boolean {
   if (input.status !== 206) return false;
   const encoding = input.headers
     .filter(([name]) => name.toLowerCase() === 'content-encoding')
     .map(([, value]) => value)
     .join(',');
-  return codingsWereDecoded(encoding);
+  return codingsWereDecoded(encoding, input.decodedCodings ?? NODE_DECODED_CODINGS);
 }
 
 /** Statuses whose responses never carry a body. */
@@ -220,12 +236,12 @@ export function foldRawRequestHeaders(headers: RawHeaderList): Record<string, st
 }
 
 /** True when every listed coding is one the float's fetch undid. */
-function codingsWereDecoded(contentEncoding: string): boolean {
+function codingsWereDecoded(contentEncoding: string, decodedCodings: ReadonlySet<string>): boolean {
   const codings = contentEncoding
     .split(',')
     .map((c) => c.trim().toLowerCase())
     .filter((c) => c !== '' && c !== 'identity');
-  return codings.length > 0 && codings.every((c) => DECODED_CODINGS.has(c));
+  return codings.length > 0 && codings.every((c) => decodedCodings.has(c));
 }
 
 export interface RawResponseHeaderInput {
@@ -237,6 +253,8 @@ export interface RawResponseHeaderInput {
    * upstream `Content-Length` would no longer count the delivered bytes.
    */
   bodyRewritten: boolean;
+  /** Codings the float's fetch undid; defaults to {@link NODE_DECODED_CODINGS}. */
+  decodedCodings?: ReadonlySet<string>;
 }
 
 /** Whether a response to `method` with `status` carries a body at all. */
@@ -264,7 +282,7 @@ export function rawResponseHeaders(input: RawResponseHeaderInput): RawHeaderList
     .filter(([name]) => name.toLowerCase() === 'content-encoding')
     .map(([, value]) => value)
     .join(',');
-  const decoded = codingsWereDecoded(encoding);
+  const decoded = codingsWereDecoded(encoding, input.decodedCodings ?? NODE_DECODED_CODINGS);
   const dropLength = decoded || input.bodyRewritten;
   return withoutHop.filter(([name]) => {
     const lower = name.toLowerCase();
@@ -350,4 +368,85 @@ export function decodeRawResponseFrame(
   }
   if (!isRawResponseHead(head)) throw new Error('raw fetch: malformed response head');
   return { head, rest: buffer.subarray(4 + length) };
+}
+
+/**
+ * Why a raw fetch failed without an upstream HTTP response. The accompanying
+ * status is the one a proxy should answer its own client with.
+ */
+export type RawFetchErrorCode =
+  /** The float has no raw mode (a bridge that predates it, or swift-server). */
+  | 'unsupported'
+  /** The request body is past the float's ceiling. */
+  | 'request-body-too-large'
+  /** A masked secret was used against a domain it is not scoped to. */
+  | 'forbidden-secret'
+  /** The upstream could not be reached, or the stream broke. */
+  | 'upstream'
+  /** The float's own transport answered with something raw mode cannot read. */
+  | 'bridge';
+
+// ── Extension Port leg ─────────────────────────────────────────────────
+//
+// On the extension float the page talks to the service worker over the
+// pinned `fetch-proxy.fetch` Port; raw mode rides it with the messages
+// below. Port messages are JSON, so bytes travel as base64, and the Port
+// has no backpressure of its own, so each direction is credit-based: a
+// sender may have at most as many chunks outstanding as the receiver granted.
+
+/** URL-fragment prefix that tags one raw request for `webRequest` correlation. */
+export const RAW_FETCH_TAG_PREFIX = 'slicc-raw-';
+
+/** Largest body chunk one Port message carries. */
+export const RAW_FETCH_PORT_CHUNK_BYTES = 256 * 1024;
+
+/** Chunks a receiver grants up front, in each direction. */
+export const RAW_FETCH_PORT_WINDOW = 4;
+
+/**
+ * Uploads a float buffers before sending. Past it the answer is 413. The
+ * extension streams large non-text bodies instead (see
+ * `RAW_FETCH_STREAM_THRESHOLD_BYTES`), so there the ceiling bounds only the
+ * bodies it must hold whole: text bodies (secret unmask) and HMAC-signed ones.
+ */
+export const RAW_FETCH_BUFFERED_REQUEST_BODY_CAP = 256 * 1024 * 1024;
+
+/** Non-text uploads at least this large (or of unknown length) are streamed. */
+export const RAW_FETCH_STREAM_THRESHOLD_BYTES = 8 * 1024 * 1024;
+
+/** Page → service worker. */
+export type RawPortRequestMsg =
+  /**
+   * Capability probe, answered with `raw-probe-reply`. A service worker
+   * that predates raw mode ignores it, so the page treats silence as
+   * unsupported rather than sending a `raw-request` nobody will answer.
+   */
+  | { type: 'raw-probe' }
+  | {
+      type: 'raw-request';
+      head: RawFetchRequestHead;
+      /** Whether `raw-body-chunk`s follow, ended by `raw-body-end`. */
+      hasBody: boolean;
+      /** Upload size when the caller knows it. */
+      bodyLength?: number;
+      /** Response chunks the page grants up front. */
+      credits: number;
+    }
+  | { type: 'raw-body-chunk'; dataBase64: string }
+  | { type: 'raw-body-end' }
+  | { type: 'raw-credit'; chunks: number };
+
+/** Service worker → page. */
+export type RawPortResponseMsg =
+  | { type: 'raw-probe-reply'; reply: RawFetchProbeReply }
+  | { type: 'raw-body-credit'; chunks: number }
+  | { type: 'raw-response-head'; head: RawFetchResponseHead; hasBody: boolean }
+  | { type: 'raw-response-chunk'; dataBase64: string }
+  | { type: 'raw-response-end' }
+  | { type: 'raw-response-error'; code: RawFetchErrorCode; status: number; error: string };
+
+/** `HTTP/1.1 302 Found` → `Found`; HTTP/2 status lines carry no reason. */
+export function reasonFromStatusLine(statusLine: string | undefined): string {
+  const match = /^HTTP\/\S+\s+\d{3}\s*(.*)$/.exec(statusLine ?? '');
+  return match?.[1]?.trim() ?? '';
 }
