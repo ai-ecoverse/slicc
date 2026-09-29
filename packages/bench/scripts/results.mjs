@@ -280,9 +280,14 @@ export function reportData(input) {
       );
     };
     const base = skillsBaseline(skills);
+    // A lift needs a finished run in both conditions: a model that never ran the baseline, or
+    // whose runs there all errored, gets no card, not an empty one (a sparse matrix runs `none`
+    // for one model only). Judge-stage failures count: they keep their time and cost.
+    const finished = (m, s) =>
+      rs.some((r) => r.config.model === m && r.config.skills === s && ran(r));
     const skillDeltas = [];
-    for (const m of models) {
-      for (const s of skills.filter((x) => x !== base)) {
+    for (const m of models.filter((x) => finished(x, base))) {
+      for (const s of skills.filter((x) => x !== base && finished(m, x))) {
         skillDeltas.push(delta(rs, cfg(m, base), cfg(m, s), { model: m, from: base, to: s }));
       }
     }

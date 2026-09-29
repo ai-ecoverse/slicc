@@ -283,6 +283,37 @@ describe('skills lift', () => {
   });
 });
 
+describe('skill deltas', () => {
+  it('lists a lift only for models that ran both conditions', () => {
+    const data = reportData([
+      rec('t1', 'claude-sonnet-5-5', 'none', 0.4),
+      rec('t1', 'claude-sonnet-5-5', 'builtin', 0.6),
+      rec('t1', 'claude-opus-5-5', 'builtin', 0.7),
+    ]);
+    const lifts = data.benchmarks[0].skill_deltas;
+    expect(lifts.map((d) => d.model)).toEqual(['claude-sonnet-5-5']);
+    expect(lifts[0]).toMatchObject({ from: 'none', to: 'builtin', n: 1 });
+  });
+
+  it('needs a finished run in both conditions, not just a record', () => {
+    const errored = {
+      benchmark: 'B',
+      task_id: 't1',
+      repeat: 1,
+      config: S('claude-opus-5-5', 'none'),
+      error: 'leader unreachable',
+      error_stage: 'run',
+    };
+    const data = reportData([
+      errored,
+      rec('t1', 'claude-opus-5-5', 'builtin', 0.7),
+      rec('t1', 'claude-sonnet-5-5', 'none', 0.4),
+      rec('t1', 'claude-sonnet-5-5', 'builtin', 0.6),
+    ]);
+    expect(data.benchmarks[0].skill_deltas.map((d) => d.model)).toEqual(['claude-sonnet-5-5']);
+  });
+});
+
 describe('canonicalRecords', () => {
   it('pools @default with the plain model, renumbering clashing repeats', () => {
     const records = [
@@ -311,7 +342,8 @@ describe('reportMarkdown', () => {
     expect(md).toContain('| sonnet | none | 3 | 0 | 1 | 1 | 0 | 1 | 0.25 | 10 | 0.100 |');
     expect(md).toContain('**What skills add** (lift over `none`, paired by task and repeat):');
     expect(md).toContain('- sonnet, `builtin`: score +300.0% (0.25 → 1.00)');
-    expect(md).toContain('(n=0)');
+    // opus never ran `none`: no lift line for it.
+    expect(md).not.toContain('- opus, `builtin`');
   });
 
   it('shows unjudged runs as such, never as NaN, and names no judge for them', () => {
