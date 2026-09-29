@@ -39,10 +39,10 @@
       ]
     },
     "chrome-extension": {
-      "lines": 88,
+      "lines": 89,
       "statements": 87,
-      "functions": 80,
-      "branches": 79,
+      "functions": 81,
+      "branches": 80,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -69,7 +69,7 @@
     "webapp": {
       "lines": 86,
       "statements": 84,
-      "functions": 84,
+      "functions": 85,
       "branches": 75,
       "coverageExclude": [
         "**/node_modules/**",
@@ -112,7 +112,7 @@
     "shared": {
       "lines": 97,
       "statements": 95,
-      "functions": 95,
+      "functions": 96,
       "branches": 90
     },
     "webcomponents": {
@@ -195,7 +195,7 @@
       "regions": 93
     },
     "ios-app": {
-      "lines": 75,
+      "lines": 76,
       "functions": 76,
       "regions": 73
     }
