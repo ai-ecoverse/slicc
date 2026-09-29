@@ -861,7 +861,10 @@ export class Bridge implements KernelFacade {
     requestId: string,
     request: import('../sudo/types.js').SudoRequest
   ): Promise<void> {
-    let decision: import('../sudo/types.js').SudoDecision = { decision: 'deny' };
+    let decision: import('../sudo/types.js').SudoDecision = {
+      decision: 'deny',
+      reason: 'unavailable',
+    };
 
     const directive = request.approver;
     if (directive && directive.kind !== 'user') {

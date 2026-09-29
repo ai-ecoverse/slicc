@@ -249,7 +249,7 @@ export interface ApprovalRequest {
   signal?: AbortSignal;
 }
 
-export type ApprovalDenialReason = 'user-timeout' | 'cone-timeout';
+export type ApprovalDenialReason = 'user-timeout' | 'cone-timeout' | 'unavailable';
 
 export interface ApprovalDecision {
   decision: 'allow' | 'deny' | 'always';

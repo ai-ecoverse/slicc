@@ -1,5 +1,10 @@
 import { createLogger } from '../base/logger.js';
-import { SUDO_REQUEST_TYPE, type SudoDecision, type SudoRequest } from './types.js';
+import {
+  SUDO_REQUEST_TYPE,
+  type SudoDecision,
+  type SudoRequest,
+  unavailableDecision,
+} from './types.js';
 
 const log = createLogger('sudo-panel');
 
@@ -11,6 +16,13 @@ const NATIVE_PROMPT: ((message?: string, defaultValue?: string) => string | null
 export interface PanelResponderDeps {
   confirm?: (message: string) => boolean;
   prompt?: (message: string, defaultValue?: string) => string | null;
+
+  isHidden?: () => boolean;
+}
+
+function defaultIsHidden(): boolean {
+  const doc = (globalThis as { document?: { visibilityState?: string } }).document;
+  return doc?.visibilityState === 'hidden';
 }
 
 interface ChromeOnMessage {
@@ -32,14 +44,22 @@ export function resolveSudoRequest(req: SudoRequest, deps: PanelResponderDeps = 
   const promptFn = deps.prompt ?? NATIVE_PROMPT;
   if (!confirmFn) {
     log.warn('no native confirm available in this realm — denying');
-    return { decision: 'deny' };
+    return unavailableDecision();
   }
+  const isHidden = deps.isHidden ?? defaultIsHidden;
 
   const who = req.requester ? `Requested by: ${req.requester}\n\n` : '';
 
   const why = req.reason ? `\n\nReason given: ${req.reason}` : '';
   const label = `Approve ${req.kind}:\n\n${who}${req.detail}${why}\n\nOK = allow · Cancel = deny`;
-  if (!confirmFn(label)) return { decision: 'deny' };
+  const hiddenBefore = isHidden();
+  if (!confirmFn(label)) {
+    if (hiddenBefore || isHidden()) {
+      log.warn('native confirm returned false in a hidden document — unavailable, not refused');
+      return unavailableDecision();
+    }
+    return { decision: 'deny' };
+  }
 
   const suggested = req.suggestedPattern?.trim() || req.detail.trim();
   const alwaysLabel = `Always allow actions matching:\n\n${suggested}\n\nOK = always · Cancel = just this once`;
@@ -67,7 +87,7 @@ export function installPanelSudoResponder(deps: PanelResponderDeps = {}): boolea
       log.warn('panel responder threw — denying', {
         error: err instanceof Error ? err.message : String(err),
       });
-      sendResponse({ ok: false, decision: { decision: 'deny' }, error: 'panel responder error' });
+      sendResponse({ ok: false, decision: unavailableDecision(), error: 'panel responder error' });
     }
 
     return false;

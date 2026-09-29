@@ -18,6 +18,32 @@ describe('resolveSudoRequest', () => {
     expect(decision).toEqual({ decision: 'deny' });
   });
 
+  it('classifies a false confirm from a hidden document as unavailable, not refused', () => {
+    const decision = resolveSudoRequest(REQ, {
+      confirm: () => false,
+      prompt: () => null,
+      isHidden: () => true,
+    });
+    expect(decision).toEqual({ decision: 'deny', reason: 'unavailable' });
+  });
+
+  it('classifies a false confirm as unavailable when the document hid while it was open', () => {
+    let hidden = false;
+    const decision = resolveSudoRequest(REQ, {
+      confirm: () => {
+        hidden = true;
+        return false;
+      },
+      isHidden: () => hidden,
+    });
+    expect(decision).toEqual({ decision: 'deny', reason: 'unavailable' });
+  });
+
+  it('still reports a visible Cancel as a real refusal', () => {
+    const decision = resolveSudoRequest(REQ, { confirm: () => false, isHidden: () => false });
+    expect(decision).toEqual({ decision: 'deny' });
+  });
+
   it('allows when the first confirm passes and the second is cancelled', () => {
     let call = 0;
     const decision = resolveSudoRequest(REQ, {
@@ -46,7 +72,7 @@ describe('resolveSudoRequest', () => {
       const overridden = vi.fn(() => true);
       (globalThis as Record<string, unknown>).confirm = overridden;
       try {
-        expect(resolveSudoRequest(REQ)).toEqual({ decision: 'deny' });
+        expect(resolveSudoRequest(REQ)).toEqual({ decision: 'deny', reason: 'unavailable' });
         expect(overridden).not.toHaveBeenCalled();
       } finally {
         if (original === undefined) delete (globalThis as Record<string, unknown>).confirm;
@@ -54,8 +80,8 @@ describe('resolveSudoRequest', () => {
       }
     });
 
-    it('fails closed (deny) when the realm has no native confirm at all', () => {
-      expect(resolveSudoRequest(REQ)).toEqual({ decision: 'deny' });
+    it('fails closed (deny, unavailable) when the realm has no native confirm at all', () => {
+      expect(resolveSudoRequest(REQ)).toEqual({ decision: 'deny', reason: 'unavailable' });
     });
 
     it('still honors explicitly injected seams (the test/DI path is unaffected)', () => {

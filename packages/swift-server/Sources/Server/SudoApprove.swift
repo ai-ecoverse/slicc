@@ -28,7 +28,15 @@ enum SudoApprove {
     typealias OsascriptRunner = @Sendable ([String]) async throws -> String
 
     
-    static let validKinds: Set<String> = ["command", "read", "write", "secret"]
+    
+    
+    
+    
+    
+    
+    static let validKinds: Set<String> = [
+        "command", "read", "write", "secret", "export", "guest-message", "guest-tool",
+    ]
 
     enum SudoApproveError: Error, Equatable {
         case nonZeroExit(code: Int32)
@@ -40,6 +48,11 @@ enum SudoApprove {
         let kind: String
         let detail: String
         let suggestedPattern: String?
+        
+        
+        var requester: String? = nil
+        
+        var reason: String? = nil
     }
 
     struct Decision: Equatable {
@@ -51,14 +64,24 @@ enum SudoApprove {
         let kind: String
         let detail: String
         let suggestedPattern: String?
+        let requester: String?
+        let reason: String?
     }
 
     
 
     
     
+    
+    
     static func describeRequest(_ req: ApproveRequest) -> String {
-        "\(req.kind): \(req.detail)"
+        let requester = req.requester?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let head =
+            requester.isEmpty
+            ? "\(req.kind): \(req.detail)"
+            : "\(req.kind) from \(requester): \(req.detail)"
+        let reason = req.reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return reason.isEmpty ? head : "\(head)\n\nReason given: \(reason)"
     }
 
     
@@ -180,7 +203,13 @@ enum SudoApprove {
         guard !env.detail.isEmpty else { return badRequest() }
 
         let decision = await decide(
-            request: ApproveRequest(kind: env.kind, detail: env.detail, suggestedPattern: env.suggestedPattern),
+            request: ApproveRequest(
+                kind: env.kind,
+                detail: env.detail,
+                suggestedPattern: env.suggestedPattern,
+                requester: env.requester?.isEmpty == false ? env.requester : nil,
+                reason: env.reason?.isEmpty == false ? env.reason : nil
+            ),
             runner: runner
         )
         return decisionResponse(decision)

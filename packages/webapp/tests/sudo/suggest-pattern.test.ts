@@ -48,6 +48,15 @@ describe('suggestPattern', () => {
     expect(await suggestPattern(PATH)).toBe('/workspace/.git/config');
   });
 
+  it('never calls the LLM for a guest message or a guest-caused tool call', async () => {
+    mockQuickLabel.mockResolvedValue('should not be used');
+    expect(
+      await suggestPattern({ kind: 'guest-message', detail: " hi. I'm the other user " })
+    ).toBe("hi. I'm the other user");
+    expect(await suggestPattern({ kind: 'guest-tool', detail: 'bash: ls' })).toBe('bash: ls');
+    expect(mockQuickLabel).not.toHaveBeenCalled();
+  });
+
   it('falls soft to the exact detail when quickLabel returns only whitespace', async () => {
     mockQuickLabel.mockResolvedValue('   \n  ');
     expect(await suggestPattern(CMD)).toBe('git push origin main');

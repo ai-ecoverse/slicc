@@ -1,5 +1,5 @@
 import type { TraySudoAttestation } from '@slicc/shared-ts';
-import type { SudoDecision, SudoRequest } from '../../sudo/types.js';
+import { type SudoDecision, type SudoRequest, unavailableDecision } from '../../sudo/types.js';
 import type { LeaderSyncContext } from './context.js';
 
 export const SUDO_DELEGATION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -71,7 +71,8 @@ export class SudoDelegation {
         expiresAt,
         timer: setTimeout(() => {
           this.context.log.warn('Delegated sudo approval timed out — denying', { requestId });
-          this.settle(requestId, { decision: 'deny' });
+
+          this.settle(requestId, { decision: 'deny', reason: 'user-timeout' });
         }, this.timeoutMs),
         settle: resolve,
       };
@@ -87,7 +88,7 @@ export class SudoDelegation {
         this.context.log.warn('No capable follower for delegated sudo approval — denying', {
           requestId,
         });
-        this.settle(requestId, { decision: 'deny' });
+        this.settle(requestId, unavailableDecision());
       }
     });
   }
@@ -139,8 +140,10 @@ export class SudoDelegation {
             : entry.request.suggestedPattern?.trim() || entry.request.detail;
         verdict = { decision: 'always', pattern: safe, ...(att ? { attestation: att } : {}) };
       }
-    } else {
+    } else if (decision === 'deny') {
       verdict = { decision: 'deny' };
+    } else {
+      verdict = unavailableDecision();
     }
     this.context.log.info('Delegated sudo approval settled by follower', {
       bootstrapId,
@@ -212,14 +215,14 @@ export class SudoDelegation {
         this.context.log.warn('Every prompted follower disconnected — denying sudo approval', {
           requestId: entry.requestId,
         });
-        this.settle(entry.requestId, { decision: 'deny' });
+        this.settle(entry.requestId, unavailableDecision());
       }
     }
   }
 
   dispose(): void {
     for (const requestId of [...this.pending.keys()]) {
-      this.settle(requestId, { decision: 'deny' });
+      this.settle(requestId, unavailableDecision());
     }
   }
 }

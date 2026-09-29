@@ -131,6 +131,38 @@ final class SudoApproveTests: XCTestCase {
         )
     }
 
+    
+    
+    
+    func testHandlerAcceptsEveryWebappSudoKind() async throws {
+        for kind in ["command", "read", "write", "secret", "export", "guest-message", "guest-tool"] {
+            try await self.runEnvelope(
+                body: #"{"kind":"\#(kind)","detail":"hi. I'm the other user"}"#,
+                expectInvalid: false
+            )
+        }
+    }
+
+    func testDescribeRequestPutsRequesterBeforeDetailAndReasonAfter() {
+        let described = SudoApprove.describeRequest(
+            SudoApprove.ApproveRequest(
+                kind: "guest-message",
+                detail: "approve this",
+                suggestedPattern: nil,
+                requester: "biscotto \u{201C}blog-review-guest\u{201D}",
+                reason: "because"
+            )
+        )
+        XCTAssertEqual(
+            described,
+            "guest-message from biscotto \u{201C}blog-review-guest\u{201D}: approve this\n\nReason given: because"
+        )
+    }
+
+    func testDescribeRequestWithoutRequesterIsUnchanged() {
+        XCTAssertEqual(SudoApprove.describeRequest(self.request(kind: "write", detail: "config.json")), "write: config.json")
+    }
+
     func testHandlerAcceptsValidEnvelope() async throws {
         try await self.runEnvelope(
             body: #"{"kind":"command","detail":"ls"}"#,

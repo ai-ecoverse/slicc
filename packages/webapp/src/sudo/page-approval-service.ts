@@ -1,7 +1,7 @@
 import { createLogger } from '../base/logger.js';
 import { hasLocalNodeServer } from '../core/float-topology.js';
 import { resolveSudoRequest } from './panel-responder.js';
-import type { SudoDecision, SudoRequest } from './types.js';
+import { type SudoDecision, type SudoRequest, unavailableDecision } from './types.js';
 
 const log = createLogger('sudo:page');
 
@@ -58,7 +58,7 @@ async function tryTrayDelegate(req: SudoRequest): Promise<PageSudoOutcome | null
     log.warn('tray-delegated sudo approval threw — denying', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return { decision: { decision: 'deny' }, handled: true };
+    return { decision: unavailableDecision(), handled: true };
   }
 }
 
@@ -73,7 +73,7 @@ async function promptInPage(
     log.warn('in-page sudo prompt threw — denying', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return { decision: { decision: 'deny' }, handled: true };
+    return { decision: unavailableDecision(), handled: true };
   }
 }
 

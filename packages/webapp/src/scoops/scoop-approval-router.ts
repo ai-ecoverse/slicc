@@ -156,14 +156,14 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
         scoopJid,
         kind: request.kind,
       });
-      return { decision: 'deny' };
+      return { decision: 'deny', reason: 'unavailable' };
     }
     if (!scoops.has(scoopJid)) {
       log.warn('Sudo request from unknown scoop — failing closed', {
         scoopJid,
         kind: request.kind,
       });
-      return { decision: 'deny' };
+      return { decision: 'deny', reason: 'unavailable' };
     }
 
     if (request.kind === 'write' && isUnhonoredSudoersPath(request.detail)) {
@@ -217,7 +217,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
         scoopJid,
         error: errMsg,
       });
-      this.registry.resolve(id, { decision: 'deny' });
+      this.registry.resolve(id, { decision: 'deny', reason: 'unavailable' });
     }
 
     return pending;

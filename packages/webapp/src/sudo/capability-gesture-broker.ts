@@ -1,7 +1,13 @@
 import { createLogger } from '../base/logger.js';
 import { type CapabilityBroker, normalizeApprovalDecision } from '../work-unit/capability/index.js';
 import { suggestPattern } from './suggest-pattern.js';
-import type { SudoBroker, SudoDecision, SudoRequest, SudoRequestOptions } from './types.js';
+import {
+  type SudoBroker,
+  type SudoDecision,
+  type SudoRequest,
+  type SudoRequestOptions,
+  unavailableDecision,
+} from './types.js';
 
 const log = createLogger('sudo:capability-gesture');
 
@@ -31,7 +37,7 @@ export function createCapabilityGestureSudoBroker(
 
       if (signal?.aborted) {
         log.warn('sudo approval aborted before prompting — denying', { detail: req.detail });
-        return { decision: 'deny' };
+        return unavailableDecision();
       }
 
       if (!broker) {
@@ -39,7 +45,7 @@ export function createCapabilityGestureSudoBroker(
           'no CapabilityBroker injected for the sudo gesture hop — denying (composition bug, never a guessed transport)',
           { detail: req.detail }
         );
-        return { decision: 'deny' };
+        return unavailableDecision();
       }
 
       const result = await broker.approvals.request({
@@ -55,7 +61,7 @@ export function createCapabilityGestureSudoBroker(
         log.warn('capability broker approvals.request failed — denying', {
           message: result.message,
         });
-        return { decision: 'deny' };
+        return unavailableDecision();
       }
 
       return normalizeApprovalDecision(result.value, suggestedPattern);

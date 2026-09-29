@@ -33,14 +33,20 @@ export interface SudoDecision {
 
   pattern?: string;
 
-  reason?: SudoTimeoutReason;
+  reason?: SudoUnansweredReason;
 
   note?: string;
 
   attestation?: 'biometric' | 'passcode' | 'none';
 }
 
-export type SudoTimeoutReason = 'user-timeout' | 'cone-timeout';
+export type SudoUnansweredReason = 'user-timeout' | 'cone-timeout' | 'unavailable';
+
+export type SudoTimeoutReason = SudoUnansweredReason;
+
+export function unavailableDecision(): SudoDecision {
+  return { decision: 'deny', reason: 'unavailable' };
+}
 
 export interface SudoRequestOptions {
   signal?: AbortSignal;

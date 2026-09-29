@@ -194,31 +194,31 @@ describe('secret command — gated ops', () => {
 });
 
 describe('secret command — no broker injected (unwired shell) fails every gate closed', () => {
-  it('persisted set denies with "approval denied" and never persists', async () => {
+  it('persisted set denies as unrequestable and never persists', async () => {
     const backend = makeBackend();
     const res = await run(['set', 'TOKEN', 'v', '--domain', 'api.x.com', '--persist'], {
       backend,
     });
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain('approval denied');
+    expect(res.stderr).toContain('approval could not be requested');
     expect(backend.setPersisted).not.toHaveBeenCalled();
   });
 
-  it('scope edit denies with "approval denied" and never rescopes', async () => {
+  it('scope edit denies as unrequestable and never rescopes', async () => {
     const backend = makeBackend();
     const res = await run(['scope', 'TOKEN', '--domain', 'api.x.com'], { backend });
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain('approval denied');
+    expect(res.stderr).toContain('approval could not be requested');
     expect(backend.setScope).not.toHaveBeenCalled();
   });
 
-  it('value change of an existing secret denies with "approval denied" and never overwrites', async () => {
+  it('value change of an existing secret denies as unrequestable and never overwrites', async () => {
     const backend = makeBackend({
       getInfo: vi.fn(async () => ({ name: 'TOKEN', domains: ['x'], persisted: false })),
     });
     const res = await run(['set', 'TOKEN', 'newval', '--domain', 'api.x.com'], { backend });
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain('approval denied');
+    expect(res.stderr).toContain('approval could not be requested');
     expect(backend.setSession).not.toHaveBeenCalled();
   });
 

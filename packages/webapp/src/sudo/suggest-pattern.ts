@@ -31,6 +31,8 @@ export async function suggestPattern(req: SudoRequest, signal?: AbortSignal): Pr
   }
 
   const exact = req.detail.trim();
+
+  if (req.kind === 'guest-message' || req.kind === 'guest-tool') return exact;
   const system = req.kind === 'command' ? COMMAND_SYSTEM : PATH_SYSTEM;
 
   let proposed: string | null = null;

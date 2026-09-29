@@ -1,10 +1,11 @@
 import { createLogger } from '../base/logger.js';
-import type {
-  SudoBroker,
-  SudoDecision,
-  SudoRequest,
-  SudoRequestOptions,
-  SudoTimeoutReason,
+import {
+  type SudoBroker,
+  type SudoDecision,
+  type SudoRequest,
+  type SudoRequestOptions,
+  type SudoTimeoutReason,
+  unavailableDecision,
 } from './types.js';
 
 const log = createLogger('sudo:timeout');
@@ -21,6 +22,10 @@ const TIMEOUT_NOTICE: Record<SudoTimeoutReason, string> = {
     'no human was ever prompted, the cone simply never resolved the request. Do not retry ' +
     'this action; report that the escalation went unanswered and continue with work that ' +
     'does not need it.',
+  unavailable:
+    'no approval prompt could be shown to anyone — the approval surface failed before a human ' +
+    'or approver saw the request. This is NOT a denial; nobody refused. Do not retry this ' +
+    'action in a loop; report that the approval could not be requested.',
 };
 
 export function timeoutNotice(reason: SudoTimeoutReason): string {
@@ -37,9 +42,11 @@ export function isTimedOut(decision: SudoDecision): boolean {
 
 export function sudoRefusalMessage(prefix: string, decision: SudoDecision): string {
   const reason = decision.decision === 'deny' ? decision.reason : undefined;
-  const base = reason
-    ? `${prefix}: approval request timed out — ${timeoutNotice(reason)}`
-    : `${prefix}: approval denied`;
+  const base = !reason
+    ? `${prefix}: approval denied`
+    : reason === 'unavailable'
+      ? `${prefix}: approval could not be requested — ${timeoutNotice(reason)}`
+      : `${prefix}: approval request timed out — ${timeoutNotice(reason)}`;
 
   const note = decision.note?.trim();
   return note ? `${base} — approver's reason: ${note}` : base;
@@ -107,7 +114,8 @@ export function withApprovalTimeout(
           log.warn('sudo broker threw — denying', {
             error: err instanceof Error ? err.message : String(err),
           });
-          settle({ decision: 'deny' });
+
+          settle(unavailableDecision());
         });
       });
     },
