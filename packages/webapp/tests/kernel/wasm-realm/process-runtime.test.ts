@@ -58,11 +58,12 @@ describe('kernelSys', () => {
     ]);
   });
 
-  it('closes, makes pipes, and polls through the kernel', () => {
+  it('closes, makes pipes, opens the controlling terminal, and polls through the kernel', () => {
     const seen: unknown[] = [];
     const replies: Record<string, SyncFsResult> = {
       'fd-close': { ok: true, kind: 'void' },
       'fd-pipe': { ok: true, kind: 'json', json: [3, 4] },
+      'fd-open-tty': { ok: true, kind: 'json', json: 5 },
       'fd-poll': {
         ok: true,
         kind: 'json',
@@ -77,8 +78,14 @@ describe('kernelSys', () => {
     );
     sys.close(3);
     expect(sys.pipe()).toEqual([3, 4]);
+    expect(sys.openTty?.()).toBe(5);
     expect(sys.poll(3)).toEqual({ readable: true, writable: false, hangup: false });
-    expect(seen).toEqual([{ op: 'fd-close', fd: 3 }, { op: 'fd-pipe' }, { op: 'fd-poll', fd: 3 }]);
+    expect(seen).toEqual([
+      { op: 'fd-close', fd: 3 },
+      { op: 'fd-pipe' },
+      { op: 'fd-open-tty' },
+      { op: 'fd-poll', fd: 3 },
+    ]);
   });
 
   it('raises a kernel errno as SyscallError', () => {
@@ -213,6 +220,34 @@ describe('evaluateGlue', () => {
     expect(fns.fcntl?.()).toBe(7);
     expect(fns.dup3?.()).toBe(3);
     expect([fns.pipe2, fns.socket, fns.accept4]).toEqual([undefined, undefined, undefined]);
+  });
+
+  const forkGlue = (toolchainPops: boolean) =>
+    [
+      'var runtimeKeepaliveCounter = 0;',
+      'function runtimeKeepalivePop() { runtimeKeepaliveCounter -= 1; }',
+      `var SliccFork = { forking: false${toolchainPops ? ', balancesKeepalive: true' : ''} };`,
+      'Module.fork = () => {',
+      '  SliccFork.forking = true;',
+      '  runtimeKeepaliveCounter += 1;',
+      '  SliccFork.forking = false;',
+      `  ${toolchainPops ? 'runtimeKeepalivePop();' : ''}`,
+      '  return runtimeKeepaliveCounter;',
+      '};',
+    ].join('\n');
+
+  it("pops the keepalive of each fork the toolchain's fork emulation leaves pushed", () => {
+    const module: { sliccEnv: object; fork?: () => number } = { sliccEnv: {} };
+    evaluateGlue(forkGlue(false), module);
+
+    expect(module.fork?.()).toBe(0);
+    expect(module.fork?.()).toBe(0);
+  });
+
+  it('leaves the keepalive to a fork emulation that balances it itself', () => {
+    const module: { sliccEnv: object; fork?: () => number } = { sliccEnv: {} };
+    evaluateGlue(forkGlue(true), module);
+    expect(module.fork?.()).toBe(0);
   });
 
   it('runs a glue without a filesystem', () => {

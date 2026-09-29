@@ -55,6 +55,8 @@ export interface ProcessSys {
 
   isatty?(fd: number): boolean;
 
+  openTty?(): number;
+
   tcgets?(fd: number): Termios;
   tcsets?(fd: number, termios: Termios): void;
   winsize?(fd: number): [number, number];
@@ -194,13 +196,26 @@ export class KernelStreams {
     this.Fs.open = (path, flags, mode) => {
       const stream = open(path, flags, mode);
 
-      const terminal = stream.tty ? this.controllingTerminal() : undefined;
+      if (!stream.tty) return stream;
+      if (stream.path === '/dev/tty' && this.sys.openTty) {
+        let kfd: number;
+        try {
+          kfd = this.call(() => this.sys.openTty?.() as number);
+        } catch (e) {
+          this.Fs.closeStream(stream.fd);
+          throw e;
+        }
+        this.attach(stream, kfd, true);
+        return stream;
+      }
+
+      const terminal = this.stdioTerminal();
       if (terminal !== undefined) this.attach(stream, terminal, true);
       return stream;
     };
   }
 
-  private controllingTerminal(): number | undefined {
+  private stdioTerminal(): number | undefined {
     for (const fd of [0, 1, 2]) {
       const stream = this.Fs.getStream(fd);
       if (stream?.sliccKernelFd !== undefined && stream.tty) return stream.sliccKernelFd;

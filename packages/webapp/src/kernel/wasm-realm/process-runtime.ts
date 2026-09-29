@@ -35,6 +35,7 @@ import {
 import { SignalGate } from './process-signals.js';
 import { createSocketKernel } from './process-sockets.js';
 import type { ForkState, InheritedFd, WasmProcessInitMsg } from './protocol.js';
+import { ownByRealmUser } from './realm-user.js';
 import type { Termios } from './tty.js';
 
 export {
@@ -104,6 +105,9 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
       return (
         (json(call({ op: 'fd-info', fd }, `fd-info ${fd}`)) as { tty?: boolean })?.tty === true
       );
+    },
+    openTty() {
+      return json(call({ op: 'fd-open-tty' }, 'fd-open-tty')) as number;
     },
     tcgets(fd) {
       return json(call({ op: 'tty-get', fd }, `tty-get ${fd}`)) as Termios;
@@ -178,6 +182,15 @@ const GLUE_TRAILER = [
 
   "Module.sliccSigMask ??= (w) => (__sliccUp() && typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
   "Module.sliccRaise ??= (sig) => { if (__sliccUp() && typeof _slicc_raise === 'function') _slicc_raise(sig); };",
+
+  "if (typeof SliccFork !== 'undefined' && !SliccFork.balancesKeepalive && typeof runtimeKeepalivePop === 'function') {",
+  '  let __sliccForking = SliccFork.forking === true;',
+  "  Object.defineProperty(SliccFork, 'forking', {",
+  '    get: () => __sliccForking,',
+  '    set: (on) => { if (__sliccForking && !on) runtimeKeepalivePop(); __sliccForking = on; },',
+  '    configurable: true,',
+  '  });',
+  '}',
 ].join('\n');
 
 export function ownValue<T>(module: object, name: string): T | undefined {
@@ -295,6 +308,7 @@ export async function runWasmProcess(
   if (pipefs) streams.usePipes(pipefs);
   streams.useControllingTerminal();
   useDevFd(running.FS);
+  ownByRealmUser(running.FS);
   const livePath = (s: ProcessStream) => liveNodePath(s.node as unknown as LiveFsNode);
   running.sliccKernel = createProcessKernel({
     transport,

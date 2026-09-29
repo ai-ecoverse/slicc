@@ -19,8 +19,16 @@ export class JobTable {
   private readonly members = new Map<number, JobMember>();
   private readonly foreground = new Map<KernelTty, number>();
 
-  add(pid: number, parentPid: number | undefined, signal: (sig: number) => void): JobMember {
+  private readonly terminals = new Map<number, KernelTty>();
+
+  add(
+    pid: number,
+    parentPid: number | undefined,
+    signal: (sig: number) => void,
+    terminal?: KernelTty
+  ): JobMember {
     const parent = parentPid === undefined ? undefined : this.members.get(parentPid);
+    if (!parent && terminal) this.terminals.set(pid, terminal);
     const member: JobMember = {
       pid,
       ppid: parent?.pid,
@@ -83,7 +91,13 @@ export class JobTable {
     if (member.pgid === pid) throw new KernelError('EPERM');
     member.sid = pid;
     member.pgid = pid;
+    this.terminals.delete(pid);
     return pid;
+  }
+
+  controllingTerminal(pid: number): KernelTty | null | undefined {
+    const member = this.members.get(pid);
+    return member && (this.terminals.get(member.sid) ?? null);
   }
 
   killGroup(pgid: number, sig: number): boolean {

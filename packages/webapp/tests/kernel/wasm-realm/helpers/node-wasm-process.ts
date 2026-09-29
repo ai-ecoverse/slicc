@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { build } from 'esbuild';
-import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
+import type { ChildForker, ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
 import {
   bytesSource,
   FdTable,
@@ -15,8 +15,10 @@ import {
   spawnWasmProcess,
   type WasmWorkerLike,
 } from '../../../../src/kernel/wasm-realm/host.js';
-import type { WasmProgram } from '../../../../src/kernel/wasm-realm/protocol.js';
+import { JobTable } from '../../../../src/kernel/wasm-realm/jobs.js';
+import type { ForkState, WasmProgram } from '../../../../src/kernel/wasm-realm/protocol.js';
 import type { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
+import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
 
 export async function bundleProcessWorker(): Promise<{ file: string; dispose(): void }> {
   const dir = mkdtempSync(join(tmpdir(), 'slicc-wasm-worker-'));
@@ -114,6 +116,12 @@ export interface RunningProgram {
   kill(): void;
 }
 
+export interface RunOptions {
+  terminal?: boolean;
+
+  emulateFork?: boolean;
+}
+
 export function runProgram(
   workerFile: string,
   program: WasmProgram,
@@ -122,29 +130,43 @@ export function runProgram(
   argv0 = 'socktest',
   env: Record<string, string> = {},
   files: Readonly<Record<string, string>> = {},
-  stdin?: Uint8Array
+  stdin?: Uint8Array,
+  options: RunOptions = {}
 ): RunningProgram {
   const fs = memoryFs(files);
   const out: string[] = [];
   const err: string[] = [];
   const waiters: Array<() => void> = [];
   const decoder = new TextDecoder();
+  const jobs = new JobTable();
+  let leader = 0;
+  const output = (bytes: Uint8Array) => {
+    out.push(decoder.decode(bytes));
+    for (const wake of waiters.splice(0)) wake();
+  };
+  const tty: KernelTty | undefined = options.terminal
+    ? new KernelTty({ write: output }, (sig) =>
+        jobs.signalForeground(tty as KernelTty, leader, sig)
+      )
+    : undefined;
   const fds = new FdTable();
-  fds.installAt(0, stdin ? bytesSource(stdin) : nullFile());
-  fds.installAt(
-    1,
-    sinkFile((bytes) => {
-      out.push(decoder.decode(bytes));
-      for (const wake of waiters.splice(0)) wake();
-    })
-  );
-  fds.installAt(
-    2,
-    sinkFile((bytes) => err.push(decoder.decode(bytes)))
-  );
-  const start = (argv: string[], table: FdTable) =>
-    spawnWasmProcess({
-      pid: nextPid++,
+  if (tty) {
+    const file = tty.file();
+    fds.installAt(0, file);
+    fds.installAt(1, file.retain());
+    fds.installAt(2, file.retain());
+  } else {
+    fds.installAt(0, stdin ? bytesSource(stdin) : nullFile());
+    fds.installAt(1, sinkFile(output));
+    fds.installAt(
+      2,
+      sinkFile((bytes) => err.push(decoder.decode(bytes)))
+    );
+  }
+  const start = (argv: string[], table: FdTable, ppid?: number, fork?: ForkState) => {
+    const pid = nextPid++;
+    const child = spawnWasmProcess({
+      pid,
       program,
       argv0,
       args: argv,
@@ -155,13 +177,30 @@ export function runProgram(
       net,
       createWorker: () => nodeWorker(workerFile),
       onError: (message) => err.push(message),
-      spawner,
+      spawner: spawnerOf(pid),
+      ...(options.emulateFork ? {} : { forker: forkerOf(pid) }),
+      jobs,
+      ...(fork ? { fork } : {}),
     });
-  const spawner: ChildSpawner = async (req, table) => {
-    const child = start(req.argv.slice(1), table);
-    return { pid: child.pid, exited: child.exited, termsig: child.termsig };
+    jobs.add(pid, ppid, (sig) => child.signal(sig), ppid === undefined ? tty : undefined);
+    void child.exited.then(() => jobs.remove(pid));
+    return child;
   };
+  const handleOf = (child: ReturnType<typeof start>) => ({
+    pid: child.pid,
+    exited: child.exited,
+    termsig: child.termsig,
+  });
+  const spawnerOf =
+    (ppid: number): ChildSpawner =>
+    async (req, table) =>
+      handleOf(start(req.argv.slice(1), table, ppid));
+  const forkerOf =
+    (ppid: number): ChildForker =>
+    async (state, table) =>
+      handleOf(start([], table, ppid, state));
   const handle = start(args, fds);
+  leader = handle.pid;
   const stdout = () => out.join('');
   let ended = false;
   void handle.exited.then(() => {

@@ -13,6 +13,7 @@ export type KernelErrno =
   | 'EINTR'
   | 'ESRCH'
   | 'ENOTTY'
+  | 'ENXIO'
   | 'EPERM'
   | 'EIO'
   | 'EACCES'
@@ -165,6 +166,14 @@ export class FdTable {
     const file = this.fds.get(fd);
     if (!file) throw new KernelError('EBADF');
     return file;
+  }
+
+  stdioTerminal(): KernelTty | undefined {
+    for (const fd of [0, 1, 2]) {
+      const tty = this.fds.get(fd)?.file.tty;
+      if (tty) return tty;
+    }
+    return undefined;
   }
 
   numbers(): number[] {
