@@ -784,6 +784,40 @@ describe('installPackage (single-package path)', () => {
     await installPackages(['tool'], { fs, fetch: fakeFetch(reg), cwd: '/work', global: true });
     const st = await fs.stat(`${GLOBAL_NODE_MODULES}/tool/libexec/helper`);
     expect(st.mode! & 0o7777).toBe(0o755);
+    // The global prune keeps the modes marker, so a repeat install downloads nothing.
+    reg.calls.length = 0;
+    await installPackages(['tool'], { fs, fetch: fakeFetch(reg), cwd: '/work', global: true });
+    expect(reg.calls.filter((c) => c.url.endsWith('.tgz'))).toEqual([]);
+  });
+
+  it('re-extracts an already-installed version once so modes installed before the fix are repaired', async () => {
+    const reg = makeRegistry([
+      {
+        name: 'tool',
+        version: '1.0.0',
+        files: { 'libexec/helper': '#!/bin/sh\n' },
+        modes: { 'libexec/helper': 0o755 },
+      },
+    ]);
+    await installPackage('tool', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    // Simulate a tree installed before modes were kept: helper at 0644, no marker.
+    await fs.chmod('/work/node_modules/tool/libexec/helper', 0o644);
+    if (await fs.exists('/work/node_modules/.ipk-modes-v1')) {
+      await fs.rm('/work/node_modules/.ipk-modes-v1');
+    }
+
+    await installPackage('tool', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    const st = await fs.stat('/work/node_modules/tool/libexec/helper');
+    expect(st.mode! & 0o7777).toBe(0o755);
+    expect(await fs.exists('/work/node_modules/.ipk-modes-v1')).toBe(true);
+  });
+
+  it('does not re-download an up-to-date install once its modes are known to be applied', async () => {
+    const reg = makeRegistry([{ name: 'tool', version: '1.0.0' }]);
+    await installPackage('tool', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    reg.calls.length = 0;
+    await installPackage('tool', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    expect(reg.calls.filter((c) => c.url.endsWith('.tgz'))).toEqual([]);
   });
 
   it('makes bin targets executable even when the tarball does not', async () => {

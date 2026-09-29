@@ -429,7 +429,21 @@ interface MaterializeContext {
   limit: Limiter;
   /** Set on the first failure so queued packages are skipped, not started. */
   failed: boolean;
+  /**
+   * The tree predates file modes being applied (no {@link MODES_MARKER}):
+   * re-extract packages whose version already matches, once, so their
+   * executable bits are repaired.
+   */
+  reextractMatching: boolean;
 }
+
+/**
+ * Written at a `node_modules` root once every package in it was extracted
+ * with its file modes applied. Trees installed before that dropped every
+ * executable bit, so an install into a tree without it re-extracts even
+ * matching versions. A dotfile, so package listing and bin walks ignore it.
+ */
+const MODES_MARKER = '.ipk-modes-v1';
 
 /** Fetch, verify and extract `node` into `installDir` unless that version is already there. */
 async function installNodeFiles(
@@ -445,7 +459,7 @@ async function installNodeFiles(
       installedManifestPath,
       null
     );
-    if (installed?.version === node.version) return;
+    if (installed?.version === node.version && !ctx.reextractMatching) return;
   }
 
   const tarballBytes = await fetchTarball(node.resolved, ctx.fetch, { timeoutMs: ctx.timeoutMs });
@@ -505,16 +519,19 @@ async function materializePlan(
   const topNames = Object.keys(plan.root);
   if (topNames.length === 0) return;
   await ensureDir(fs, modulesDir);
+  const markerPath = joinPath(modulesDir, MODES_MARKER);
   const ctx: MaterializeContext = {
     fs,
     fetch,
     timeoutMs,
     limit: createLimiter(concurrency ?? DEFAULT_FETCH_CONCURRENCY),
     failed: false,
+    reextractMatching: !(await fs.exists(markerPath)),
   };
   await allSettledOrThrow(
     topNames.map((name) => materializeNode(ctx, modulesDir, plan.root[name]))
   );
+  if (ctx.reextractMatching) await fs.writeFile(markerPath, '');
 }
 
 function unscopedName(pkgName: string): string {
