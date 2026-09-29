@@ -31,6 +31,7 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges each r
 | `dataset/README.md`          | Dataset card template; `publish.mjs` fills `<!-- report -->`                                |
 | `scripts/run.mjs`            | CLI: plan, run, judge, resume; writes `records/`, `traces/`, `results/`, `report.md`        |
 | `tasks/smoke.json`           | Two short live tasks; PR smoke run uses the first                                           |
+| `tasks/subsets/*.json`       | Frozen task-id lists for `--tasks @name` (V2.1 explore-20 ⊂ explore-40; ids only)           |
 
 ## How a run works
 

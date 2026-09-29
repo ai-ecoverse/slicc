@@ -25,6 +25,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createLeader } from './executors.mjs';
 import {
@@ -140,7 +141,7 @@ export function parseCli(argv) {
     models,
     skills: list(values.skills).map(parseSkillsCondition),
     repeats,
-    taskIds: values.tasks ? list(values.tasks) : null,
+    taskIds: values.tasks ? resolveTaskIds(list(values.tasks)) : null,
     limit: values.limit ? Number.parseInt(values.limit, 10) : null,
     shard,
     timeout,
@@ -238,8 +239,43 @@ export function shardRuns(runs, shard) {
   );
 }
 
+/** Named task subsets (`--tasks @bu-v2-explore-20`): task ids only, never task text. */
+export const SUBSETS_DIR = fileURLToPath(new URL('../tasks/subsets/', import.meta.url));
+
+/**
+ * Expand `@name` entries to the ids in `tasks/subsets/<name>.json`, keeping plain ids and the
+ * order given, without duplicates. An unknown subset fails with the ones that exist.
+ */
+export function resolveTaskIds(entries, dir = SUBSETS_DIR) {
+  const out = [];
+  for (const e of entries) {
+    if (!e.startsWith('@')) {
+      out.push(e);
+      continue;
+    }
+    const name = e.slice(1);
+    const file = join(dir, `${name}.json`);
+    if (!/^[\w.-]+$/.test(name) || !existsSync(file)) {
+      const known = existsSync(dir)
+        ? readdirSync(dir)
+            .filter((f) => f.endsWith('.json'))
+            .map((f) => `@${f.slice(0, -5)}`)
+        : [];
+      throw new Error(`unknown task subset ${e} (known: ${known.join(', ') || 'none'})`);
+    }
+    out.push(...JSON.parse(readFileSync(file, 'utf8')).tasks);
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * The tasks to run: the set's order, or the order `--tasks` lists them in. Order decides shard
+ * placement (`shardRuns`), so a nested subset whose smaller list comes first keeps every earlier
+ * task on its shard when a resumed run extends it.
+ */
 export function selectTasks(tasks, { taskIds, limit }) {
-  let picked = taskIds ? tasks.filter((t) => taskIds.includes(t.id)) : tasks;
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  let picked = taskIds ? taskIds.map((id) => byId.get(id)).filter(Boolean) : tasks;
   if (limit && limit > 0) picked = picked.slice(0, limit);
   return picked;
 }
