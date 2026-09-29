@@ -85,7 +85,8 @@ func registerAPIRoutes(
     httpClient: HTTPClient,
     agentActivityTracker: AgentActivityTracker = AgentActivityTracker(),
     secretInjector: SecretInjector = SecretInjector(secrets: []),
-    oauthStore: OAuthSecretStore? = nil
+    oauthStore: OAuthSecretStore? = nil,
+    rawFetchHTTPClient: HTTPClient? = nil
 ) {
     // Host-FS bridge for the mount table. Roots are resolved once at
     // registration; a folder created later needs a restart.
@@ -424,8 +425,17 @@ func registerAPIRoutes(
     // any error. See Sources/Server/SudoApprove.swift.
     SudoApprove.registerRoutes(router: router)
 
+    // Raw mode (#3571) needs its own no-redirect client
+    // (`RawFetchProxy.makeHTTPClient()`); without one, raw requests and the
+    // probe fall through to the default route's 400.
+    let rawFetch = rawFetchHTTPClient.map {
+        RawFetchProxy(httpClient: $0, secretInjector: secretInjector, activityTracker: agentActivityTracker)
+    }
     for method in fetchProxyMethods {
         router.on("/api/fetch-proxy", method: method) { request, _ in
+            if let rawFetch, let response = try await rawFetch.respond(to: request) {
+                return response
+            }
             guard let initialTargetURLValue = await trackedTargetURL(request, tracker: agentActivityTracker) else {
                 return try proxyErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
             }
@@ -466,74 +476,25 @@ func registerAPIRoutes(
                 {
                     injectedHeaders[.authorization] = synthetic
                 }
-                for field in request.headers {
-                    // Detect Basic-auth headers so the masked password
-                    // (hidden inside base64) gets decoded, unmasked, and
-                    // re-encoded — substring `inject` cannot see it.
-                    if field.name == .authorization,
-                        field.value.lowercased().hasPrefix("basic ")
-                    {
-                        let basic = secretInjector.unmaskAuthorizationBasic(
-                            value: field.value,
-                            targetHostname: targetHostname
-                        )
-                        if let forbidden = basic.forbidden {
-                            return try proxyErrorResponse(
-                                status: .forbidden,
-                                message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
-                            )
-                        }
-                        if basic.value != field.value {
-                            injectedHeaders[field.name] = basic.value
-                        }
-                        continue
-                    }
-                    switch secretInjector.inject(text: field.value, hostname: targetHostname) {
-                    case .success(let replaced):
-                        if replaced != field.value {
-                            injectedHeaders[field.name] = replaced
-                        }
-                    case .domainBlocked(let secretName, let hostname):
-                        return try proxyErrorResponse(
-                            status: .forbidden,
-                            message: "Secret \(secretName) is not allowed for domain \(hostname)"
-                        )
-                    }
+                if let forbidden = unmaskRequestHeaders(
+                    request.headers,
+                    into: &injectedHeaders,
+                    hostname: targetHostname,
+                    injector: secretInjector
+                ) {
+                    return try proxyErrorResponse(status: .forbidden, message: forbiddenSecretMessage(forbidden))
                 }
 
-                // Inject secrets into request body. Text bodies (json, form, etc.
-                // — `isTextRequestContentType`, shared with node-server via
-                // shared-ts) go through the string-replace `injectBody` path;
-                // binary and unlabeled bodies (git packfiles, octet-stream,
-                // images) go through byte-safe
-                // `unmaskBodyBytes` so non-UTF-8 byte sequences don't get
-                // corrupted by the `String` round-trip. injectBody/unmaskBodyBytes
-                // both leave masked values intact on domain mismatch (safe,
-                // matches TS — avoids false 403s from LLM conversation context).
-                // Empty Content-Type is binary (mirrors TS `isTextContentType`):
-                // a JPEG posted with no type must not take the UTF-8 String path.
-                if rawBody.readableBytes > 0 {
-                    let contentType = injectedHeaders[.contentType] ?? ""
-                    if isTextRequestContentType(contentType),
-                        let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes)
-                    {
-                        // A form body takes the encoding-aware path: a plain
-                        // substring splice corrupts it whenever the real secret
-                        // carries a form-reserved character (base64 + / =).
-                        let replaced =
-                            isFormContentType(contentType)
-                            ? unmaskFormBody(text: bodyString, hostname: targetHostname, injector: secretInjector)
-                            : secretInjector.injectBody(text: bodyString, hostname: targetHostname)
-                        if replaced != bodyString {
-                            rawBody = ByteBuffer(string: replaced)
-                        }
-                    } else if let bodyData = rawBody.getData(at: rawBody.readerIndex, length: rawBody.readableBytes) {
-                        let replaced = secretInjector.unmaskBodyBytes(bytes: bodyData, targetHostname: targetHostname)
-                        if replaced != bodyData {
-                            rawBody = ByteBuffer(data: replaced)
-                        }
-                    }
-                }
+                // Inject secrets into the request body (text, form and binary
+                // paths in `unmaskRequestBody`). Empty Content-Type is binary
+                // (mirrors TS `isTextContentType`): a JPEG posted with no type
+                // must not take the UTF-8 String path.
+                rawBody = unmaskRequestBody(
+                    rawBody,
+                    contentType: injectedHeaders[.contentType] ?? "",
+                    hostname: targetHostname,
+                    injector: secretInjector
+                )
 
                 // Proxy-side HMAC body signing: the client can't compute this
                 // itself (it only ever sees a masked secret token), so it asks
@@ -541,24 +502,14 @@ func registerAPIRoutes(
                 // value and attach the result under the header it names.
                 if let hmacSpec = injectedHeaders[hmacSignHeader] {
                     injectedHeaders[hmacSignHeader] = nil
-                    let bodyBytes = rawBody.getBytes(at: rawBody.readerIndex, length: rawBody.readableBytes) ?? []
-                    let signResult = secretInjector.signHmac(spec: hmacSpec, body: bodyBytes, targetHostname: targetHostname)
-                    if let forbidden = signResult.forbidden {
-                        return try proxyErrorResponse(
-                            status: .forbidden,
-                            message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
-                        )
-                    }
-                    if let headerName = signResult.headerName, let signatureHex = signResult.signatureHex,
-                        let field = HTTPField.Name(headerName)
-                    {
-                        injectedHeaders[field] = signatureHex
-                    }
-                    if let timestampHeaderName = signResult.timestampHeaderName,
-                        let timestampValue = signResult.timestampValue,
-                        let field = HTTPField.Name(timestampHeaderName)
-                    {
-                        injectedHeaders[field] = timestampValue
+                    if let forbidden = applyHmacSigning(
+                        spec: hmacSpec,
+                        body: rawBody,
+                        headers: &injectedHeaders,
+                        hostname: targetHostname,
+                        injector: secretInjector
+                    ) {
+                        return try proxyErrorResponse(status: .forbidden, message: forbiddenSecretMessage(forbidden))
                     }
                 }
 

@@ -56,7 +56,7 @@ export const RAW_FETCH_REQUEST_HEADER = 'X-Slicc-Raw-Request';
  * Capability probe on the node-server hop: a `POST /api/fetch-proxy` carrying
  * only this header (no `X-Target-URL`, no request head). A bridge with raw
  * mode answers `200` JSON {@link RawFetchProbeReply}; one without it answers
- * 400 (node-server before raw mode, swift-server) or 404 (no bridge at all),
+ * 400 (node-server or swift-server before raw mode) or 404 (no bridge at all),
  * and nothing is fetched upstream either way.
  */
 export const RAW_FETCH_PROBE_HEADER = 'X-Slicc-Raw-Probe';
@@ -376,7 +376,7 @@ export function decodeRawResponseFrame(
  * status is the one a proxy should answer its own client with.
  */
 export type RawFetchErrorCode =
-  /** The float has no raw mode (a bridge that predates it, or swift-server). */
+  /** The float has no raw mode (a bridge that predates it). */
   | 'unsupported'
   /** The request body is past the float's ceiling. */
   | 'request-body-too-large'
