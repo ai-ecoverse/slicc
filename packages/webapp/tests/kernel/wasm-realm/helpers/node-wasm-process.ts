@@ -137,6 +137,8 @@ export interface RunOptions {
    * `stdout()`, and the program leads a session it controls.
    */
   terminal?: boolean;
+  /** No forker: the toolchain emulates fork in-process, as where the kernel cannot fork. */
+  emulateFork?: boolean;
 }
 
 /**
@@ -204,7 +206,7 @@ export function runProgram(
       createWorker: () => nodeWorker(workerFile),
       onError: (message) => err.push(message),
       spawner: spawnerOf(pid),
-      forker: forkerOf(pid),
+      ...(options.emulateFork ? {} : { forker: forkerOf(pid) }),
       jobs,
       ...(fork ? { fork } : {}),
     });

@@ -83,6 +83,16 @@ describe('wasm-realm fork, exec and terminal (real C programs)', () => {
     expect(r.stdout).toBe('exec seen: EOF\nslept\nchild exited 0\n');
   }, 30_000);
 
+  it('keeps the parent its descriptors when a child of the in-process fork emulation execs', async () => {
+    // No forker: the child runs in the parent's worker and ends at once when it
+    // execs, its pid standing for the program. The exec must not take the
+    // parent's kernel descriptors with it: stdout still works afterwards.
+    const r = await run(['notify'], {}, { emulateFork: true });
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('exec seen: EOF\nslept\nchild exited 0\n');
+  }, 30_000);
+
   it('runs atexit handlers and flushes stdio when a process that forked exits', async () => {
     const r = await run(['atexit']);
     expect(r.stderr).toBe('');
