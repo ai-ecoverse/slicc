@@ -28,6 +28,12 @@
 
 import type { FileContent, ReadFileOptions } from '../../fs/types.js';
 import { GLOBAL_NODE_MODULES } from './global-prefix.js';
+import {
+  type PythonBlock,
+  type PythonInterpreter,
+  type PythonPackage,
+  pythonOf,
+} from './python-packages.js';
 
 /** The ABIs the wasm realm runs: Emscripten glue + module, or a WASI preview1 module. */
 export type WasmAbi = 'emscripten' | 'wasi';
@@ -94,7 +100,7 @@ interface CommandEntry {
 
 interface PackageJson {
   name?: unknown;
-  slicc?: { abi?: unknown; commands?: unknown; env?: unknown };
+  slicc?: { abi?: unknown; commands?: unknown; env?: unknown; python?: PythonBlock };
 }
 
 /** A manifest `env` object as read: names to (hopefully string) values. */
@@ -276,4 +282,30 @@ export async function scanWasmCommands(
     }
   }
   return out;
+}
+
+/**
+ * The Python interpreters (by package name) and the Python packages the
+ * packages under `modulesDir` provide (their manifests' `slicc.python`).
+ */
+export async function scanPythonPackages(
+  fs: ProgramFs,
+  modulesDir: string
+): Promise<{ interpreters: Map<string, PythonInterpreter>; packages: PythonPackage[] }> {
+  const interpreters = new Map<string, PythonInterpreter>();
+  const packages: PythonPackage[] = [];
+  if (!(await fs.exists(modulesDir))) return { interpreters, packages };
+  for (const pkgDir of await packageDirs(fs, modulesDir)) {
+    let pkg: PackageJson;
+    try {
+      pkg = JSON.parse(await readText(fs, `${pkgDir}/package.json`)) as PackageJson;
+    } catch {
+      continue;
+    }
+    const name = typeof pkg.name === 'string' ? pkg.name : pkgDir.slice(modulesDir.length + 1);
+    const found = pythonOf(pkgDir, name, pkg.slicc?.python);
+    if (found.interpreter) interpreters.set(name, found.interpreter);
+    if (found.package) packages.push(found.package);
+  }
+  return { interpreters, packages };
 }

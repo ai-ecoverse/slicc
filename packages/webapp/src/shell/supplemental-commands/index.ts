@@ -68,7 +68,7 @@ import { wireTeleportSelectionFromShim } from './playwright/teleport-follower-sh
 import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 import { createPluginCommand } from './plugin-command.js';
 import { createPsCommand } from './ps-command.js';
-import { createPython3LikeCommand } from './python-command.js';
+import { createPython3LikeCommand, type PythonCommandOptions } from './python-command.js';
 import { createRgCommand } from './rg-command.js';
 import { createRsyncCommand } from './rsync-command.js';
 import { createSayCommand } from './say-command.js';
@@ -259,6 +259,17 @@ function packageManagerCommands(options: SupplementalCommandsConfig): Command[] 
   ];
 }
 
+/**
+ * Pyodide as `python3` and `python`, and under its own name too: in GNU bash
+ * an installed native python3 shadows the first two.
+ */
+function pythonCommands(options: PythonCommandOptions) {
+  const config = { buildProcessConfig: options.buildProcessConfig };
+  return (['python3', 'python', 'pyodide'] as const).map((name) =>
+    createPython3LikeCommand(name, config)
+  );
+}
+
 /** `wasm` options: the shell's process table, terminal, policy, catalog and git identity. */
 function wasmCommandOptions(options: SupplementalCommandsConfig): WasmCommandOptions {
   const catalog = options.scriptCatalog;
@@ -301,8 +312,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createBiomeCommand(),
     createNodeCommand({ buildProcessConfig: options.buildProcessConfig }),
     createNodeCommand({ buildProcessConfig: options.buildProcessConfig }, 'jsh'),
-    createPython3LikeCommand('python3', { buildProcessConfig: options.buildProcessConfig }),
-    createPython3LikeCommand('python', { buildProcessConfig: options.buildProcessConfig }),
+    ...pythonCommands(options),
     ...packageManagerCommands(options),
     ...(options.fs ? [createGelatiereCommand({ fs: options.fs })] : []),
     ...(options.fs ? [createMemoryCommand({ fs: options.fs })] : []),

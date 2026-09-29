@@ -10,6 +10,7 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { PYODIDE_VERSION } from '../../../src/kernel/realm/py-realm-shared.js';
+import { createSupplementalCommands } from '../../../src/shell/supplemental-commands/index.js';
 import {
   computeOverlappingMountPoints,
   computePyodideMountDirs,
@@ -178,6 +179,19 @@ describe('createPython3LikeCommand — interpreter flags', () => {
     } as unknown as Parameters<typeof cmd.execute>[1];
     return cmd.execute(args, ctx);
   }
+
+  it('is Pyodide under its own name too (native python3 shadows it in GNU bash)', async () => {
+    const names = createSupplementalCommands().map((c) => c.name);
+    expect(names).toEqual(expect.arrayContaining(['python3', 'python', 'pyodide']));
+    const pyodide = createSupplementalCommands().find((c) => c.name === 'pyodide');
+    const ctx = {
+      fs: { resolvePath: (b: string, p: string) => `${b}/${p}` } as unknown as IFileSystem,
+      cwd: '/workspace',
+      env: new Map<string, string>(),
+      stdin: '',
+    } as unknown as Parameters<NonNullable<typeof pyodide>['execute']>[1];
+    expect((await pyodide?.execute(['--version'], ctx))?.stdout).toContain('(Pyodide)');
+  });
 
   it('answers --version and -h given before any script', async () => {
     expect((await run(['--version'])).stdout).toContain('(Pyodide)');

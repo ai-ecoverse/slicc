@@ -43,7 +43,13 @@ import {
   importedMemory,
 } from '../../../kernel/wasm-realm/wasi/wasi-module.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
-import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
+import { ensurePth, type PthFs, type PythonBlock, pythonOf } from '../../ipk/python-packages.js';
+import {
+  type ProgramFs,
+  scanPythonPackages,
+  scanWasmCommands,
+  type WasmCommand,
+} from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
 import { STDIN_ISATTY_ENV, STDOUT_ISATTY_ENV } from '../stdio-tty.js';
 
@@ -336,6 +342,9 @@ function childHandle(handle: WasmProcessHandle): ChildHandle {
   };
 }
 
+/** Python package scans, by the command catalog they were made for. */
+const PYTHON_SCANS = new WeakMap<object, ReturnType<typeof scanPythonPackages>>();
+
 export class WasmSession {
   private readonly live = new Set<WasmProcessHandle>();
   /** The running shell children: each one's abort ends it. */
@@ -399,12 +408,67 @@ export class WasmSession {
       throw e;
     }
     const env = withSecretFunction(req.argv0, withDefaults(req.defaults, req.env));
+    if (wasi) await this.pythonPackages(req, env);
     return this.start({
       ...req,
       env,
       program: wasi
         ? { abi: 'wasi', glue, module, ...(memory ? { memory } : {}) }
         : { glue, module },
+    });
+  }
+
+  /**
+   * An installed Python interpreter (a package whose manifest has a
+   * `slicc.python` version, abi and platform) starts with the installed
+   * Python packages on its path: `_slicc_packages.pth` in its user site
+   * (`python-packages.ts`). Never in the way of the start itself.
+   */
+  private async pythonPackages(req: LaunchRequest, env: Record<string, string>): Promise<void> {
+    const root = PACKAGE_ROOT.exec(req.module)?.[1];
+    if (!root) return;
+    try {
+      const fs = programFs(this.ctx);
+      const raw = await fs.readFile(`${root}/package.json`, { encoding: 'utf-8' });
+      const manifest = JSON.parse(
+        typeof raw === 'string' ? raw : new TextDecoder().decode(raw)
+      ) as {
+        name?: unknown;
+        slicc?: { python?: PythonBlock };
+      };
+      const name = typeof manifest.name === 'string' ? manifest.name : root;
+      const interpreter = pythonOf(root, name, manifest.slicc?.python).interpreter;
+      if (!interpreter) return;
+      const { packages } = await this.pythonScan(fs);
+      const skipped = await ensurePth(
+        this.ctx.fs as PthFs,
+        env.HOME ?? '/home',
+        interpreter,
+        packages
+      );
+      if (skipped.length > 0) {
+        const tag = `${interpreter.abi}-${interpreter.platform}`;
+        const note = `${req.argv0}: not for ${tag}, left off the path: ${skipped.map((p) => p.pkg).join(', ')}\n`;
+        await writeAll(req.fds, 2, new TextEncoder().encode(note));
+      }
+    } catch {
+      /* no manifest, an unwritable home: the interpreter starts without them */
+    }
+  }
+
+  /**
+   * The installed Python packages, scanned once per installed set: the
+   * command catalog is replaced on an install or removal, and a new one
+   * means a new scan.
+   */
+  private pythonScan(fs: ProgramFs): ReturnType<typeof scanPythonPackages> {
+    return this.commands().then((catalog) => {
+      let scan = PYTHON_SCANS.get(catalog);
+      if (!scan) {
+        scan = scanPythonPackages(fs, GLOBAL_NODE_MODULES);
+        PYTHON_SCANS.set(catalog, scan);
+      }
+      return scan;
     });
   }
 
