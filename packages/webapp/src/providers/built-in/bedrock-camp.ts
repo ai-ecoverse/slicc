@@ -46,6 +46,7 @@ import {
   claudeSupportsNativeXhighEffort,
   claudeSupportsPromptCaching,
 } from '../claude-model-version.js';
+import { toLegacyPiContext, toPiTranscriptContext } from '../pi-transcript-context.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
 import {
@@ -97,7 +98,8 @@ export const config: ProviderConfig = {
 const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac|au|jp)\./;
 const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?:[4-9]|\d\d)/;
 // Verified live on `bedrock-runtime.us-west-2` (see `docs/pitfalls.md` §5):
-// openai.gpt-5.6-{sol,terra,luna}, openai.gpt-6-{sol,luna,astra} and
+// openai.gpt-5.6-{sol,terra,luna}, openai.gpt-6-{sol,luna,astra},
+// openai.gpt-6.1-sol and
 // moonshotai.kimi-k3 do implicit prompt caching — cacheWrite on the first
 // call, cacheRead on every repeat, including with a system prompt and
 // toolConfig attached — and emit tool calls reliably.
@@ -109,7 +111,7 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 //
 // All of them reject `temperature` (`temperature-support.ts` strips it).
 // gpt-5.6 rejects every `additionalModelRequestFields` thinking shape, and
-// kimi-k3 ignores every shape, so neither gets one. gpt-6 accepts only
+// kimi-k3 ignores every shape, so neither gets one. gpt-6 and gpt-6.1 accept only
 // `reasoning.effort`, which `buildAdditionalModelRequestFields` sends (see
 // `bedrockCampOpenAIEffortMap`). gpt-5.6 does not accept an explicit `cachePoint` block either —
 // caching is automatic and sending one 403s — and `supportsPromptCaching` is
@@ -120,7 +122,7 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // exact default-deny hole this list exists to avoid — and would accept the
 // `gpt-5-6-` spelling, which no Bedrock id uses and which was never verified.
 const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
-  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra))|moonshotai\.kimi-k3)$/;
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3)$/;
 // Matches standard (us-east-1), FIPS (us-east-1-fips) and China
 // (cn-north-1.amazonaws.com.cn) Bedrock runtime hosts.
 const BEDROCK_RUNTIME_HOST_RE =
@@ -1133,9 +1135,11 @@ export const streamBedrockCamp = (
 ): AssistantMessageEventStream => {
   const stream = createAssistantMessageEventStream();
   const output = createInitialOutput(model);
-  void runBedrockCampStream(model, context, options, output, stream).catch((error) => {
-    handleStreamError(error, output, options, stream);
-  });
+  void runBedrockCampStream(model, toLegacyPiContext(context), options, output, stream).catch(
+    (error) => {
+      handleStreamError(error, output, options, stream);
+    }
+  );
   return stream;
 };
 
@@ -1156,12 +1160,11 @@ export const streamSimpleBedrockCamp = (
   context: Context,
   options?: BedrockCampSimpleOptions
 ): AssistantMessageEventStream => {
-  // pi-ai 0.80.3 added `context` as the 2nd param; the tsconfig `paths`
-  // workaround for this deep import doesn't resolve the new overload, so
-  // we cast to satisfy both the old and new signatures at compile time.
-  const base = (buildBaseOptions as Function)(model, context, options) as ReturnType<
-    typeof buildBaseOptions
-  >;
+  const base = buildBaseOptions(
+    model,
+    toPiTranscriptContext(context),
+    options as SimpleStreamOptions
+  );
   const extras = options ? pickCampExtras(options) : {};
   if (!options?.reasoning) {
     return streamBedrockCamp(model, context, { ...base, ...extras, reasoning: undefined });
@@ -1188,7 +1191,7 @@ export const streamSimpleBedrockCamp = (
       reasoning: options.reasoning,
       thinkingBudgets: {
         ...(options.thinkingBudgets || {}),
-        [clampReasoning(options.reasoning)!]: adjusted.budgetTokens,
+        [clampReasoning(options.reasoning)!]: adjusted.thinkingBudget,
       },
     });
   }

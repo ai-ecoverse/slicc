@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   lstatSync,
   mkdirSync,
@@ -15,6 +16,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  approvedLargeDependencyDrift,
   dependencyDrift,
   discoverWorkspacePackages,
   linkNodeModules,
@@ -26,6 +28,30 @@ import {
 } from './first-load-baseline.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+
+describe('approvedLargeDependencyDrift', () => {
+  const lockfile = '{"version":"reviewed-upgrade"}';
+  const exception = {
+    lockfileSha256: createHash('sha256').update(lockfile).digest('hex'),
+    reason: 'Reviewed one-off Pi family upgrade with absolute bundle caps still enforced.',
+  };
+  const drift = [
+    '214 dependencies differ from the base lockfile (limit 25) — too many to attribute a size delta to one change',
+  ];
+
+  it('accepts only the reviewed lockfile when the dependency count guard stopped the baseline', () => {
+    expect(approvedLargeDependencyDrift(drift, exception, lockfile)).toBe(true);
+    expect(approvedLargeDependencyDrift(drift, exception, lockfile + 'changed')).toBe(false);
+    expect(approvedLargeDependencyDrift(drift, { ...exception, reason: '' }, lockfile)).toBe(false);
+  });
+
+  it('keeps other baseline failures fatal even with the approved lockfile', () => {
+    expect(approvedLargeDependencyDrift(['baseline build failed'], exception, lockfile)).toBe(
+      false
+    );
+    expect(approvedLargeDependencyDrift([], exception, lockfile)).toBe(false);
+  });
+});
 
 describe('resolveBaselineRef', () => {
   it.each([

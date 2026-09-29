@@ -1,6 +1,6 @@
 /**
- * Bedrock models that AWS already serves but pi-ai's `amazon-bedrock`
- * catalogue does not list yet.
+ * Live-verified Bedrock models and pricing supplements for pi-ai's
+ * `amazon-bedrock` catalogue.
  *
  * The bedrock-camp picker is built from pi-ai's catalogue, so a model missing
  * there is invisible in SLICC even when every inference profile answers. Each
@@ -8,9 +8,11 @@
  * the inference profile is listed by `GET /inference-profiles` in the regions
  * its prefix covers, and `POST /converse` answers.
  *
- * pi-ai wins on id collisions (`mergeBedrockCampCatalogue`), so an entry
- * becomes dead weight — not a conflict — once pi-ai learns the model. Delete
- * it then.
+ * pi-ai wins on id collisions (`mergeBedrockCampCatalogue`), except that GPT-6
+ * long-context price tiers are retained when its base rates match. Pi-ai
+ * 0.99.1 lists the earlier models below, but its Bedrock GPT-6 entries omit
+ * those tiers. GPT-6.1 Sol still needs its own entry; the earlier entries
+ * retain their live probe record without adding duplicate picker entries.
  *
  * Dependency-free on purpose, like `bedrock-camp-compat.ts`: the eagerly
  * loaded `account-store.ts` imports it, so it must not pull in pi-ai.
@@ -19,6 +21,7 @@
 import {
   BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
   BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  BEDROCK_CAMP_GPT61_EFFORT_MAP,
 } from './bedrock-camp-compat.js';
 
 interface BedrockCampCostRates {
@@ -181,6 +184,26 @@ const EXTRA_MODEL_SPECS: readonly ExtraModelSpec[] = [
     contextWindow: 1_050_000,
     maxTokens: 128_000,
     thinkingLevelMap: BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  },
+  {
+    // Verified 2026-09-29: only `global.` is listed and answers Converse in
+    // US, EU, and APAC regions. Temperature and reasoning none/minimal 400;
+    // low through max and tool calls work. Bedrock rejects images nested in
+    // tool results, but accepts the same image as an adjacent user block.
+    // OpenAI's published rates and limits apply to global Bedrock service.
+    baseId: 'openai.gpt-6.1-sol',
+    name: 'GPT-6.1 Sol',
+    profiles: ['global'],
+    globalCost: {
+      input: 2,
+      output: 10,
+      cacheRead: 0.1,
+      cacheWrite: 2.5,
+      tiers: [{ inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }],
+    },
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
+    thinkingLevelMap: BEDROCK_CAMP_GPT61_EFFORT_MAP,
   },
   {
     baseId: 'openai.gpt-6-luna',

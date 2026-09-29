@@ -110,7 +110,7 @@ The fastest way to try SLICC — no clone, no install:
 npx sliccy
 ```
 
-This downloads the latest release, launches Chrome, and opens the workspace. Configure your LLM provider in the first-run settings dialog. Requires Node >= 22.
+This downloads the latest release, launches Chrome, and opens the workspace. Configure your LLM provider in the first-run settings dialog. Requires Node >= 22.19.
 
 ### 2. Install globally
 
@@ -285,6 +285,10 @@ Keys that navigate, or toggle chrome (digits, the arrows, <kbd>j</kbd>, <kbd>k</
 ## API Keys and Providers
 
 To use SLICC, you need an LLM provider. SLICC is very much a BYOT (bring your own tokens) affair. We have built-in support for many providers, and these have actually been tested.
+
+The bundled pi 0.99.1 catalogue includes GPT-6.1 Sol for OpenAI, Azure OpenAI Responses, and OpenAI Codex. Those entries currently declare a 272,000-token context window, although OpenAI documents 1,050,000 tokens; output is capped at 128,000 tokens. OpenAI Codex now defaults to GPT-6.1 Sol.
+
+On Bedrock CAMP, select **GPT-6.1 Sol (Global)** (`global.openai.gpt-6.1-sol`). Its Converse profile was verified in US, EU, and APAC regions. It accepts tool use, user images, and reasoning effort low through max; SLICC omits unsupported temperature and moves tool-result images into adjacent user content. Global rates are $2 input / $10 output per million tokens, with higher rates above 272,000 input tokens.
 
 - Adobe (for AEM customers. Talk to the team to get enabled)
 - AWS Bedrock (because enterprise)

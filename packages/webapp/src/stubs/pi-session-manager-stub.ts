@@ -1,8 +1,8 @@
 /**
  * Browser-safe stub for @earendil-works/pi-coding-agent/dist/core/session-manager.js
  *
- * The compaction submodule imports buildSessionContext and
- * sessionEntryToContextMessages at module scope, but the webapp only uses pure
+ * The compaction submodule imports buildSessionContext, buildSessionProjection,
+ * and sessionEntryToContextMessages at module scope, but the webapp only uses pure
  * functions that never call them. This stub prevents Node-only transitive
  * dependencies from entering the browser bundle.
  *
@@ -12,6 +12,11 @@
 /** No-op stub — never called in browser context. */
 export function buildSessionContext(): never {
   throw new Error('buildSessionContext is not available in the browser');
+}
+
+/** No-op stub — never called in browser context. */
+export function buildSessionProjection(): never {
+  throw new Error('buildSessionProjection is not available in the browser');
 }
 
 /** No-op stub — never called in browser context. */

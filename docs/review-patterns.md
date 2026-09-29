@@ -180,6 +180,8 @@ on a Developer ID appex unless a profile for _that_ bundle id is embedded.
 
 ### 6. Model metadata / provider pipeline gaps
 
+- Pi 0.99 system messages carry the active tool declarations. When a live cone reloads skills, compacts history, or clears chat, preserve the resolved `toolsAdded`/`toolsRemoved` state with the current prompt; otherwise the next provider request silently loses shell and browser access. Exclude system messages from the conversation summary cut, so a system-only prefix cannot trigger compaction. Test a tool call after each transcript rewrite.
+
 **Trigger patterns**
 
 - A new Claude model ID appears in the proxy or pi-ai that isn't in the version-based

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
   BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  BEDROCK_CAMP_GPT61_EFFORT_MAP,
   isBedrockCampCompatible,
 } from '../../src/providers/built-in/bedrock-camp-compat.js';
 import {
@@ -18,6 +19,25 @@ import {
 const byId = (id: string) => BEDROCK_CAMP_EXTRA_MODELS.find((m) => m.id === id);
 
 describe('BEDROCK_CAMP_EXTRA_MODELS', () => {
+  it('lists GPT-6.1 Sol only on its verified global profile with long-context pricing', () => {
+    const models = BEDROCK_CAMP_EXTRA_MODELS.filter((m) => m.id.endsWith('openai.gpt-6.1-sol'));
+    expect(models.map((m) => m.id)).toEqual(['global.openai.gpt-6.1-sol']);
+    expect(models[0]).toMatchObject({
+      name: 'GPT-6.1 Sol (Global)',
+      reasoning: true,
+      input: ['text', 'image'],
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: {
+        input: 2,
+        output: 10,
+        cacheRead: 0.1,
+        cacheWrite: 2.5,
+        tiers: [{ inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }],
+      },
+      thinkingLevelMap: BEDROCK_CAMP_GPT61_EFFORT_MAP,
+    });
+  });
   it('lists Opus 5.5 on every inference profile AWS serves it from', () => {
     const ids = BEDROCK_CAMP_EXTRA_MODELS.map((m) => m.id).filter((id) =>
       id.endsWith('anthropic.claude-opus-5-5')

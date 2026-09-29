@@ -583,13 +583,28 @@ describe('ScoopContext clearMessages', () => {
     ctx = new ScoopContext(testScoop, callbacks, {} as any);
   });
 
-  it('calls agent.clearMessages() when agent exists', () => {
+  it('clears conversation messages when agent exists', () => {
     injectMockAgent(ctx, async () => {});
     (ctx as any).agent.state.messages = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
 
     ctx.clearMessages();
 
     expect((ctx as any).agent.state.messages).toEqual([]);
+  });
+
+  it('retains the current system prompt and tools when clearing a live cone', () => {
+    injectMockAgent(ctx, async () => {});
+    const shell = { name: 'bash', description: 'Run a command', parameters: { type: 'object' } };
+    (ctx as any).agent.state.messages = [
+      { role: 'system', content: 'Current prompt', toolsAdded: [shell], timestamp: 1 },
+      { role: 'user', content: 'old conversation', timestamp: 2 },
+    ];
+
+    ctx.clearMessages();
+
+    expect((ctx as any).agent.state.messages).toEqual([
+      { role: 'system', content: 'Current prompt', toolsAdded: [shell], timestamp: 1 },
+    ]);
   });
 
   it('handles null agent gracefully (no throw)', () => {
@@ -1355,14 +1370,17 @@ describe('ScoopContext.reloadSkills', () => {
     const callbacks = createMockCallbacks();
     const ctx = new ScoopContext(testScoop, callbacks, {} as VirtualFS);
 
-    // Inject mock agent with state that tracks systemPrompt changes
+    // Pi 0.99 derives its prompt from the leading transcript message.
     const agent = {
       prompt: vi.fn(),
       abort: vi.fn(),
       subscribe: vi.fn(() => () => {}),
       followUp: vi.fn(),
       clearAllQueues: vi.fn(),
-      state: { isStreaming: false, systemPrompt: 'old prompt' },
+      state: {
+        isStreaming: false,
+        messages: [{ role: 'system', content: 'old prompt', timestamp: 0 }],
+      },
     };
     (ctx as any).agent = agent;
     (ctx as any).status = 'ready';
@@ -1381,7 +1399,7 @@ describe('ScoopContext.reloadSkills', () => {
 
     await ctx.reloadSkills();
 
-    const newPrompt = agent.state.systemPrompt;
+    const newPrompt = agent.state.messages[0].content;
     expect(newPrompt).not.toBe('old prompt');
     expect(newPrompt).toContain('test-skill');
     expect(newPrompt).toContain('A test skill');

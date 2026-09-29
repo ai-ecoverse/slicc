@@ -404,7 +404,7 @@ const RAW_REQUEST_HEADERS: { input: HeaderPairs; expected: HeaderPairs } = {
 /** `X-Slicc-Raw-Request` values and what `decodeRawRequestHead` makes of them. */
 const RAW_REQUEST_HEADS: Array<{ value: string; head: RawFetchRequestHead | null }> = [
   {
-    value: String.raw`{"url":"https://bücher.example/","method":"PROPFIND","headers":[["X-Name","ü"]]}`,
+    value: '{"url":"https://bücher.example/","method":"PROPFIND","headers":[["X-Name","ü"]]}',
     head: { url: 'https://bücher.example/', method: 'PROPFIND', headers: [['X-Name', 'ü']] },
   },
   {

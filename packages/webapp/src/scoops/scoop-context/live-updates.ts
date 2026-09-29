@@ -11,6 +11,7 @@
  */
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript';
 import type { Agent } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
 import type { VirtualFS } from '../../fs/index.js';
@@ -83,13 +84,23 @@ export async function rebuildSystemPrompt(
   const scoopMemory = await readUnitMemory(deps.fs, deps.unit.workspace.memoryPath);
   const globalMemory = await deps.getGlobalMemory();
 
-  agent.state.systemPrompt = buildScoopSystemPrompt(
+  const systemPrompt = buildScoopSystemPrompt(
     deps.scoop,
     deps.unit,
     globalMemory,
     scoopMemory,
     skills
   );
+  const activeTools = getCurrentTools(agent.state.messages);
+  agent.state.messages = [
+    {
+      role: 'system',
+      content: systemPrompt,
+      ...(activeTools.length > 0 ? { toolsAdded: activeTools } : {}),
+      timestamp: Date.now(),
+    },
+    ...agent.state.messages.filter((message) => message.role !== 'system'),
+  ];
 
   log.info('Skills reloaded', { folder: deps.scoop.folder, skillCount: skills.length });
 }

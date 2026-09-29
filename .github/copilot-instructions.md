@@ -1,11 +1,10 @@
 # SLICC — Code Review
 
-Review five runtimes (`webapp`, extension, Node, Swift, iOS). Flag concrete risks.
-Catalog: `docs/review-patterns.md`.
+Review `webapp`, extension, Node, Swift, and iOS. Details: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage
 
-Bound external calls and surface errors. Cap preload copies; cancel queues and drain active copies on failure. Test OPFS reloads/fallbacks; reject live wipes.
+Bound external calls and surface errors. Drain failed preload copies. Test OPFS reloads; reject live wipes.
 
 ## 2. Cross-runtime parity
 
@@ -30,6 +29,9 @@ entitlements. Avoid `keychain-access-groups` without an appex-specific Developer
 
 ## 6. Model metadata / provider pipeline
 
+Pi 0.99 stores tools in system messages. Reload, compact, clear-chat:
+preserve prompt and tools. Never summarize system messages.
+
 Model ID/metadata changes: verify reasoning, input, cost, thinking through
 discovery→enrichment→storage→API. OpenRouter (Free): all pricing dims zero;
 stream refuses IDs not in the live free catalog.
@@ -40,7 +42,7 @@ Ordinary scoops freeze model at creation; Gelatiere alone follows
 
 Probe FS limits through real shells; custom commands must use them.
 
-Require mirrored tests and floors. Check OPFS reload/retries, concurrent append, scoped identity over dev/ino, metadata errors, and ACL/sudo gates.
+Require mirrored tests and floors. Check OPFS retries, concurrent append, scoped identity, metadata errors, and ACL/sudo gates.
 
 ## 8. Follower surface wiring parity
 
@@ -71,8 +73,8 @@ Capability/command/argument/workflow changes must update matching runtime + deve
 
 ## 13. Transcript export
 
-Require fail-closed redaction, `reasoningExcluded: true`, sudo-funnel approval
-(`kind: 'export'`; only `NOPASSWD Export` skips it, follower-delegated when headless),
+Require fail-closed redaction, `reasoningExcluded: true`, sudo approval
+(`kind: 'export'`; only `NOPASSWD Export` skips it),
 binary integrity, `transfer-corrupt` for unknown errors or SHA-256 mismatches.
 Bench recovery must abort at timeout/cost cap and confirm flat spend before scoring.
 

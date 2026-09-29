@@ -1579,9 +1579,9 @@ Cross-importing breaks the build.
 
 **The Requirement**
 
-The repo pins `engines.node` to `>=22.18.0` (root `package.json`). Use Node 22.18 or later for both local development and CI.
+The repo pins `engines.node` to `>=22.19.0` (root `package.json`). Use Node 22.19 or later for both local development and CI.
 
-The historical LightningFS `navigator`-in-`DefaultBackend.init` tripwire that originally motivated this floor is gone — VirtualFS migrated to ZenFS / OPFS and falls back to `InMemory` under Node/Vitest, so it no longer references `navigator` at all. The floor stays because other dependencies and language features assume a modern Node runtime; the 22.18 patch level in particular is the oldest release `size-limit` (the `bundle-size` gate) supports.
+The historical LightningFS `navigator`-in-`DefaultBackend.init` tripwire that originally motivated this floor is gone — VirtualFS migrated to ZenFS / OPFS and falls back to `InMemory` under Node/Vitest, so it no longer references `navigator` at all. Pi 0.99.1 requires Node 22.19 or later; `size-limit` (the `bundle-size` gate) requires at least 22.18.
 
 `node-matrix-tests` in `.github/workflows/ci.yml` runs Node 24, 25 and 26. Node 25 sits outside `size-limit`'s declared range, which is harmless and intentional: those jobs only exercise runtime compatibility, never `size-limit`, and `.npmrc` sets no `engine-strict`, so the install just warns.
 
@@ -2256,7 +2256,8 @@ That is a catalogue gap, not a filter bug.
 
 The picker is default-deny for non-Claude (rule 2 in
 `bedrock-camp-compat.ts`). The allowlist holds
-`openai.gpt-5.6-{sol,terra,luna}`, `openai.gpt-6-{sol,luna,astra}` and
+`openai.gpt-5.6-{sol,terra,luna}`, `openai.gpt-6-{sol,luna,astra}`,
+`openai.gpt-6.1-sol` and
 `moonshotai.kimi-k3`, each admitted only after live verification, because
 these models differ from Claude in three ways that each fail silently or
 mid-loop:
@@ -2303,6 +2304,19 @@ Consequences of that gating, easy to miss:
   that flag only for Claude and gpt-6 and swaps in the gpt-6 effort map. This
   does not suppress `reasoningContent` — gpt-5.6 still reasons, it just
   cannot be told how hard.
+- **GPT-6.1 Sol has its own effort map.** The global inference profile
+  answers Converse in `us-west-2`, `us-east-1`, `eu-central-1`,
+  `ap-northeast-1`, and `ap-southeast-2`; no regional profile is listed.
+  Bedrock accepts `reasoning.effort` from `low` through `max`, but rejects
+  `none` and `minimal`, so off omits the field. It rejects `temperature` and
+  images nested in `toolResult.content`; an adjacent user image answers.
+  Three identical direct Converse calls with a 28,812-token context reported
+  one cache write, then two cache reads of 28,812 tokens. The extra-model
+  entry carries [OpenAI's published limits and prices](https://developers.openai.com/api/docs/models/gpt-6.1-sol):
+  a 1,050,000-token window, 128,000-token output limit, and the long-context
+  price tier above 272,000 input tokens. [OpenAI's pricing guide](https://developers.openai.com/api/docs/pricing)
+  says commercial-region Bedrock billing matches direct pricing for equivalent
+  services; no separate AWS GPT-6.1 price card was available at release.
 - **The allowlist is anchored per variant** (`sol|terra|luna`), not a
   `gpt-5.6-` prefix. A prefix would auto-admit any future variant the
   catalogue gains without anyone measuring its caching, which is the
@@ -2346,8 +2360,9 @@ Opus 5.5 was live on every profile tier (`us.`, `eu.`, `jp.`, `au.`,
 
 `bedrock-camp-extra-models.ts` holds synthesized entries for these models.
 `mergeBedrockCampCatalogue` appends them after pi-ai's list and lets pi-ai win
-on an id collision, so a pi-ai bump supersedes an entry without breaking
-anything. Delete the entry once that happens.
+on an id collision, while retaining verified long-context price tiers when
+base rates agree. Pi-ai 0.99.1 already lists the earlier supplements but
+still lacks GPT-6.1 Sol on Bedrock.
 
 Two traps when adding one:
 

@@ -29,7 +29,7 @@ async function main(): Promise<void> {
 
   // Node runtime for the sandbox. The e2bdev/code-interpreter base image ships
   // Node 20 (EOL April 2026, no security patches), while the repo requires
-  // engines >= 22.18.0. Install a pinned Node 22 LTS over /usr/local so the
+  // engines >= 22.19.0. Install a pinned Node 22 LTS over /usr/local so the
   // `node` on PATH matches what node-server is developed and tested against.
   // Keep this in sync with the root package.json `engines.node` range — the
   // e2b-runtime-deps test in packages/node-server/tests enforces it.
