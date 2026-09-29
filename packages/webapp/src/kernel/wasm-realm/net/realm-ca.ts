@@ -11,7 +11,7 @@
  * VFS: no path reaches it, from the shell, a file tool or a realm program.
  * Only the public certificate is written to the VFS (for `SSL_CERT_FILE`).
  */
-import { certificate, type DistinguishedName, pem, randomSerial } from './x509.js';
+import { certificate, type DistinguishedName, ipv6, pem, randomSerial } from './x509.js';
 
 /** What the store keeps for an owner: the key, the certificate and its public key. */
 export interface CaRecord {
@@ -54,6 +54,10 @@ export function indexedDbCaStore(dbName = 'slicc-realm-ca'): CaStore {
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
+    // A failed open is not kept: the next call opens the database again.
+    db.catch(() => {
+      db = undefined;
+    });
     return db;
   };
   return {
@@ -75,8 +79,9 @@ export function indexedDbCaStore(dbName = 'slicc-realm-ca'): CaStore {
 /** Why a name gets no leaf: the proxy refuses the tunnel. */
 export class LeafNameError extends Error {}
 
-/** A DNS name or IPv4 address a certificate can name. */
+/** A DNS name, IPv4 address or (unbracketed) IPv6 address a certificate can name. */
 export function validLeafName(host: string): boolean {
+  if (ipv6(host)) return true;
   if (host.length === 0 || host.length > 253) return false;
   return host.split('.').every((label) => /^(?!-)[a-z0-9-]{1,63}(?<!-)$/i.test(label));
 }

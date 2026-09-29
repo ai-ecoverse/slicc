@@ -154,6 +154,39 @@ export function ipv4(host: string): Uint8Array | undefined {
   return parts.every((p) => p <= 255) ? Uint8Array.from(parts) : undefined;
 }
 
+/**
+ * An IPv6 address's sixteen bytes (hex groups, `::` once, an IPv4 tail
+ * allowed), or undefined for any other name.
+ */
+export function ipv6(host: string): Uint8Array | undefined {
+  if (!host.includes(':') || !/^[0-9A-Fa-f:.]+$/.test(host)) return undefined;
+  const v4 = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(host);
+  let text = host;
+  const tail: number[] = [];
+  if (v4) {
+    const bytes = ipv4(v4[1]);
+    if (!bytes) return undefined;
+    tail.push((bytes[0] << 8) | bytes[1], (bytes[2] << 8) | bytes[3]);
+    text = host.slice(0, -v4[1].length).replace(/:$/, host.endsWith(`::${v4[1]}`) ? ':' : '');
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return undefined;
+  const groups = (part: string) => (part === '' ? [] : part.split(':'));
+  const head = groups(halves[0]);
+  const back = halves.length === 2 ? groups(halves[1]) : [];
+  if (![...head, ...back].every((g) => /^[0-9A-Fa-f]{1,4}$/.test(g))) return undefined;
+  const words = [...head, ...back].map((g) => Number.parseInt(g, 16));
+  const missing = 8 - words.length - tail.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return undefined;
+  const all = [
+    ...head.map((g) => Number.parseInt(g, 16)),
+    ...new Array(halves.length === 2 ? missing : 0).fill(0),
+    ...back.map((g) => Number.parseInt(g, 16)),
+    ...tail,
+  ];
+  return Uint8Array.from(all.flatMap((w) => [w >> 8, w & 0xff]));
+}
+
 export interface CertificateRequest {
   serial: Uint8Array;
   issuer: DistinguishedName;
@@ -180,7 +213,7 @@ async function extensions(req: CertificateRequest): Promise<Uint8Array> {
     list.push(extension('2.5.29.19', true, seq()));
     list.push(extension('2.5.29.15', true, bits(Uint8Array.of(0x80), 7))); // digitalSignature
     list.push(extension('2.5.29.37', false, seq(oid('1.3.6.1.5.5.7.3.1')))); // serverAuth
-    const ip = ipv4(req.kind.host);
+    const ip = ipv4(req.kind.host) ?? ipv6(req.kind.host);
     const altName = ip ? tlv(0x87, ip) : tlv(0x82, ascii(req.kind.host));
     list.push(extension('2.5.29.17', false, seq(altName)));
   }

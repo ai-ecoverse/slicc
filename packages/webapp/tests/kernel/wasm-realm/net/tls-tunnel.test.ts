@@ -149,6 +149,24 @@ describe('TLS termination', () => {
     expect(signals[0].aborted).toBe(true);
   }, 20_000);
 
+  it.each([
+    ['[2001:db8::1]:443', 'https://[2001:db8::1]/v6'],
+    ['203.0.113.7:8443', 'https://203.0.113.7:8443/v6'],
+  ])(
+    'terminates a CONNECT to the IP literal %s with an iPAddress leaf',
+    async (target, url) => {
+      const { net, seen } = network(() => reply(200, [], 'by address'));
+      const socket = await tlsTunnel(net, target, ca.pem);
+      expect(socket.authorized).toBe(true);
+      const host = new URL(url).host;
+      const res = await exchange(socket, `GET /v6 HTTP/1.1\r\nHost: ${host}\r\n\r\n`, complete);
+      expect(res.toString()).toContain('by address');
+      expect(seen.map((r) => r.url)).toEqual([url]);
+      socket.destroy();
+    },
+    20_000
+  );
+
   it('answers 421 to a request for another host inside the tunnel', async () => {
     const { net, seen } = network(() => reply(200, [], 'no'));
     const socket = await tlsTunnel(net, 'example.com:443', ca.pem);

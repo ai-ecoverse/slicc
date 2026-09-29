@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { X509Certificate } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   type CaRecord,
   type CaStore,
@@ -14,6 +14,7 @@ import {
   children,
   integer,
   ipv4,
+  ipv6,
   oid,
   publicKeyBits,
 } from '../../../../src/kernel/wasm-realm/net/x509.js';
@@ -90,6 +91,14 @@ describe('RealmCa', () => {
     expect(longLeaf.checkHost(long)).toBe(long);
   });
 
+  it('names an IPv6 address in an iPAddress SAN', async () => {
+    const ca = await RealmCa.open('cone:', memoryStore());
+    const leaf = new X509Certificate(Buffer.from(await ca.issue('2001:db8::1', await leafKey())));
+    expect(leaf.checkIP('2001:db8::1')).toBe('2001:db8::1');
+    expect(leaf.subjectAltName).toMatch(/^IP Address:2001:DB8:0:0:0:0:0:1$/i);
+    expect(validLeafName('::ffff:10.0.0.1')).toBe(true);
+  });
+
   it('refuses names a certificate cannot carry', async () => {
     const ca = await RealmCa.open('cone:', memoryStore());
     await expect(ca.issue('bad_name.test', await leafKey())).rejects.toBeInstanceOf(LeafNameError);
@@ -118,6 +127,29 @@ describe('CA custody', () => {
     expect(leaf.verify(new X509Certificate(cone.pem).publicKey)).toBe(true);
   });
 
+  it('opens the database again after a failed open', async () => {
+    const realOpen = indexedDB.open.bind(indexedDB);
+    let calls = 0;
+    const spy = vi.spyOn(indexedDB, 'open').mockImplementation((name, version) => {
+      calls++;
+      if (calls > 1) return realOpen(name, version);
+      const req = {} as IDBOpenDBRequest;
+      queueMicrotask(() => {
+        Object.defineProperty(req, 'error', { value: new DOMException('busy', 'UnknownError') });
+        req.onerror?.(new Event('error'));
+      });
+      return req;
+    });
+    try {
+      const store = indexedDbCaStore('slicc-realm-ca-retry');
+      await expect(store.get('cone:')).rejects.toThrow('busy');
+      expect(await store.get('cone:')).toBeUndefined();
+      expect(calls).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('opens each owner once per kernel and retries after a failure', async () => {
     let fail = true;
     const store: CaStore = {
@@ -141,6 +173,30 @@ describe('DER helpers', () => {
     expect(ipv4('1.2.3.4')).toEqual(Uint8Array.of(1, 2, 3, 4));
     expect(ipv4('1.2.3.400')).toBeUndefined();
     expect(ipv4('example.com')).toBeUndefined();
+  });
+
+  it('parses IPv6 in every compressed form, and nothing else', () => {
+    const hexOf = (h: string) => (ipv6(h) ? hex(ipv6(h) as Uint8Array) : undefined);
+    expect(hexOf('2001:db8::1')).toBe('20010db8000000000000000000000001');
+    expect(hexOf('::')).toBe('0'.repeat(32));
+    expect(hexOf('::1')).toBe(`${'0'.repeat(31)}1`);
+    expect(hexOf('fe80::')).toBe(`fe80${'0'.repeat(28)}`);
+    expect(hexOf('1:2:3:4:5:6:7:8')).toBe('00010002000300040005000600070008');
+    expect(hexOf('::ffff:10.0.0.1')).toBe('00000000000000000000ffff0a000001');
+    expect(hexOf('::1.2.3.4')).toBe('00000000000000000000000001020304');
+    expect(hexOf('1:2:3:4:5:6:1.2.3.4')).toBe('00010002000300040005000601020304');
+    for (const bad of [
+      '1::2::3',
+      '1:2:3:4:5:6:7:8:9',
+      '1:2:3',
+      '12345::',
+      'example.com',
+      '1.2.3.4',
+      ':::1',
+      '::1.2.3.999',
+    ]) {
+      expect(ipv6(bad)).toBeUndefined();
+    }
   });
 
   it('reads a public key out of a SubjectPublicKeyInfo', async () => {

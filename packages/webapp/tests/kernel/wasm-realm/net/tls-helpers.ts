@@ -23,11 +23,13 @@ export async function tlsTunnel(
   await c.send(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
   const established = await c.incoming.head(1024);
   expect(text(established ?? new Uint8Array())).toBe('HTTP/1.1 200 Connection Established\r\n\r\n');
-  const host = target.replace(/:\d+$/, '');
+  const host = target.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  // An IP literal has no SNI (RFC 6066): clients check the address instead.
+  const ip = host.includes(':') || /^\d+\.\d+\.\d+\.\d+$/.test(host);
   return new Promise((resolve, reject) => {
     const socket = tlsConnect({
       socket: duplex(c.conn),
-      servername: opts.servername ?? host,
+      ...(ip && !opts.servername ? { host } : { servername: opts.servername ?? host }),
       ca: opts.ca ?? caPem,
       ALPNProtocols: ['h2', 'http/1.1'],
       minVersion: opts.minVersion,
