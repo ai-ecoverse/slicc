@@ -1063,9 +1063,9 @@ export function attachWcWorkbench(
           const { reader } = await openVfs();
           return readSnapshot(reader, sessionId);
         },
-        write: async (sessionId, snapshot) => {
+        write: async (sessionId, snapshot, signal) => {
           const { writer } = await openVfs();
-          return writeSnapshot(writer, sessionId, snapshot);
+          return writeSnapshot(writer, sessionId, snapshot, signal);
         },
       },
       vfs: {

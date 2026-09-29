@@ -14,6 +14,11 @@ export interface SanitizedTranscriptSnapshot {
 
 const SESSIONS_DATA_DIR = '/sessions/data';
 const DOCUMENT_FILENAME = 'document.json';
+const PUBLISHING_FILENAME = '.publishing';
+
+function assertNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
+}
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const buf = bytes.buffer.slice(
@@ -74,14 +79,31 @@ async function removeDir(vfs: WritableVfsClient, dir: string): Promise<void> {
   } catch {}
 }
 
-async function copyDir(vfs: WritableVfsClient, srcDir: string, dstDir: string): Promise<void> {
+async function clearDestination(vfs: WritableVfsClient, dir: string): Promise<void> {
+  const entries = await (vfs as unknown as LocalVfsClient).readDir(dir);
+  for (const entry of entries) {
+    if (entry.name === PUBLISHING_FILENAME) continue;
+    const path = `${dir}/${entry.name}`;
+    if (entry.type === 'directory') await removeDir(vfs, path);
+    else await vfs.rm(path);
+  }
+}
+
+async function copyDir(
+  vfs: WritableVfsClient,
+  srcDir: string,
+  dstDir: string,
+  signal?: AbortSignal
+): Promise<void> {
+  assertNotAborted(signal);
   await ensureDir(vfs, dstDir);
   const entries = await (vfs as unknown as LocalVfsClient).readDir(srcDir);
   for (const entry of entries) {
+    assertNotAborted(signal);
     const srcPath = `${srcDir}/${entry.name}`;
     const dstPath = `${dstDir}/${entry.name}`;
     if (entry.type === 'directory') {
-      await copyDir(vfs, srcPath, dstPath);
+      await copyDir(vfs, srcPath, dstPath, signal);
     } else {
       const bytes = await (vfs as unknown as LocalVfsClient).readFile(srcPath, {
         encoding: 'binary',
@@ -94,7 +116,8 @@ async function copyDir(vfs: WritableVfsClient, srcDir: string, dstDir: string): 
 export async function writeSnapshot(
   vfs: WritableVfsClient,
   sessionId: string,
-  snapshot: SanitizedTranscriptSnapshot
+  snapshot: SanitizedTranscriptSnapshot,
+  signal?: AbortSignal
 ): Promise<void> {
   assertSafeSessionId(sessionId);
   const tmp = tmpDir(sessionId);
@@ -111,13 +134,15 @@ export async function writeSnapshot(
     }
   }
 
-  await removeDir(vfs, dst);
+  assertNotAborted(signal);
   await ensureDir(vfs, tmp);
+  let destinationPublishing = false;
 
   try {
     const allAttachments = [...snapshot.document.attachments];
 
     for (const [relPath, bytes] of snapshot.attachments) {
+      assertNotAborted(signal);
       const hash = await sha256Hex(bytes);
       const existing = attByPath.get(relPath);
       if (existing !== undefined) {
@@ -150,9 +175,22 @@ export async function writeSnapshot(
 
     await vfs.flush();
 
-    await copyDir(vfs, tmp, dst);
+    assertNotAborted(signal);
+    await ensureDir(vfs, dst);
+    destinationPublishing = true;
+    await vfs.writeFile(`${dst}/${PUBLISHING_FILENAME}`, 'in-progress');
+    await clearDestination(vfs, dst);
+    assertNotAborted(signal);
+    await copyDir(vfs, tmp, dst, signal);
     await vfs.flush();
+    assertNotAborted(signal);
+    await vfs.rm(`${dst}/${PUBLISHING_FILENAME}`);
   } catch (err) {
+    if (destinationPublishing) {
+      try {
+        await clearDestination(vfs, dst);
+      } catch {}
+    }
     await removeDir(vfs, tmp);
     throw err;
   }
@@ -167,6 +205,14 @@ export async function readSnapshot(
   assertSafeSessionId(sessionId);
   const dir = sessionDir(sessionId);
   const docPath = `${dir}/${DOCUMENT_FILENAME}`;
+
+  try {
+    await vfs.stat(`${dir}/${PUBLISHING_FILENAME}`);
+    throw new TranscriptExportError('session-not-found');
+  } catch (err) {
+    if (err instanceof TranscriptExportError) throw err;
+    if ((err as { code?: string }).code !== 'ENOENT') throw err;
+  }
 
   let docJson: string;
   try {

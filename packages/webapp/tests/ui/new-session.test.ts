@@ -219,6 +219,38 @@ describe('runNewSessionFreeze — write-first + race', () => {
     deferredEnrich.resolve(null);
   });
 
+  it('agentic New chat resolves when a child keeps the complete snapshot pending', async () => {
+    vi.useFakeTimers();
+    try {
+      mockIsFeatureEnabled.mockReturnValue(true);
+      mockFreezeConeSession.mockResolvedValue({ ...pending });
+      mockEnrichPendingSession.mockResolvedValue(null);
+      mockCurateFrozenSessionMemories.mockResolvedValue(null);
+      mockMarkSnapshotUnavailable.mockReset().mockResolvedValue(undefined);
+      let signal: AbortSignal | undefined;
+      const captureCompleteSnapshot = vi.fn((_frozen: FrozenSession, received: AbortSignal) => {
+        signal = received;
+        return new Promise<void>(() => {});
+      });
+
+      const freeze = runNewSessionFreeze({
+        vfs: {} as never,
+        agenticMemorySpawn: vi.fn(),
+        captureCompleteSnapshot,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      const result = await freeze;
+      expect(captureCompleteSnapshot).toHaveBeenCalledOnce();
+      expect(signal?.aborted).toBe(true);
+      expect(result?.filename).toBe(pending.filename);
+      expect(result?.completeSnapshotUnavailable).toBe(true);
+      expect(mockMarkSnapshotUnavailable).toHaveBeenCalledWith({}, pending.filename);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('agentic background pass: title enrichment (memory skipped) then curator, rail refreshed after each', async () => {
     mockIsFeatureEnabled.mockReturnValue(true);
     const frozen = { ...pending, memoryPending: true as const };
@@ -422,7 +454,8 @@ describe('runNewSessionFreeze — captureCompleteSnapshot hook', () => {
     expect(captureCompleteSnapshot).toHaveBeenCalledOnce();
 
     expect(captureCompleteSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ filename: pending.filename })
+      expect.objectContaining({ filename: pending.filename }),
+      expect.any(AbortSignal)
     );
 
     expect(result).not.toBeNull();
@@ -542,7 +575,8 @@ describe('runNewSessionFreezeQuick — captureCompleteSnapshot hook', () => {
       expect.objectContaining({
         filename: pending.filename,
         frozenAt: pending.frozenAt,
-      })
+      }),
+      expect.any(AbortSignal)
     );
     expect(result).not.toBeNull();
   });
@@ -638,6 +672,23 @@ describe('runNewSessionFreezeQuick — captureCompleteSnapshot hook', () => {
       captureCompleteSnapshot,
     });
     expect(result?.completeSnapshotUnavailable).toBeUndefined();
+  });
+
+  it('quick freeze also releases New chat after the complete-snapshot deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const captureCompleteSnapshot = vi.fn(() => new Promise<void>(() => {}));
+      const freeze = runNewSessionFreezeQuick({
+        vfs: {} as never,
+        captureCompleteSnapshot,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await freeze;
+      expect(result?.completeSnapshotUnavailable).toBe(true);
+      expect(mockMarkSnapshotUnavailable).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

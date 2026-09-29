@@ -164,6 +164,61 @@ describe('readSnapshot — hash validation', () => {
 });
 
 describe('writeSnapshot — atomic publish via temp dir', () => {
+  it('preserves an earlier complete snapshot when staging is aborted', async () => {
+    const vfs = await createVfs();
+    const sessionId = 'sess-prior-001';
+    await writeSnapshot(vfs, sessionId, makeSnapshot());
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      writeSnapshot(vfs, sessionId, makeSnapshot(), controller.signal)
+    ).rejects.toMatchObject({
+      code: 'transfer-aborted',
+    });
+    expect((await readSnapshot(vfs, sessionId)).document.session.id).toBe('sess-fixture-001');
+  });
+
+  it('keeps an interrupted destination unreadable and leaves the archive fallback available', async () => {
+    const vfs = await createVfs();
+    const sessionId = 'sess-interrupted-001';
+    const controller = new AbortController();
+    const destinationAttachment = `/sessions/data/${sessionId}/attachments/att-0001.bin`;
+    let releaseCopy!: () => void;
+    let copyStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      copyStarted = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      releaseCopy = resolve;
+    });
+    const originalWriteFile = vfs.writeFile.bind(vfs);
+    vfs.writeFile = async (path: string, content: string | Uint8Array) => {
+      if (path === destinationAttachment) {
+        copyStarted();
+        await blocked;
+      }
+      return originalWriteFile(path, content);
+    };
+
+    const write = writeSnapshot(
+      vfs,
+      sessionId,
+      makeSnapshot([['attachments/att-0001.bin', new Uint8Array([1, 2, 3])]]),
+      controller.signal
+    );
+    await started;
+    await expect(readSnapshot(vfs, sessionId)).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+    controller.abort();
+    releaseCopy();
+    await expect(write).rejects.toMatchObject({ code: 'transfer-aborted' });
+    expect((await vfs.stat(`/sessions/data/${sessionId}/.publishing`)).type).toBe('file');
+    await expect(readSnapshot(vfs, sessionId)).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+  });
+
   it('removes temp dir on successful write', async () => {
     const vfs = await createVfs();
     const sessionId = 'sess-tmp-clean-001';

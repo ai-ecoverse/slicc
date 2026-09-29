@@ -71,17 +71,21 @@ interface ArchiveConeSessionDeps {
 
 async function captureCompleteSnapshotFor(
   root: RegisteredScoop | undefined,
-  frozen: FrozenSession
+  frozen: FrozenSession,
+  signal: AbortSignal
 ): Promise<void> {
   const { getTranscriptExportService } = await import('../../transcript/export-provider.js');
-  await getTranscriptExportService().captureFrozen({
-    sessionId: frozen.sessionId ?? frozen.archive.id,
-    title: frozen.archive.title,
-    frozenAt: frozen.archive.frozenAt,
-    createdAt: frozen.archive.createdAt,
-    updatedAt: frozen.archive.updatedAt,
-    ...(root ? { rootJid: root.jid } : {}),
-  });
+  await getTranscriptExportService().captureFrozen(
+    {
+      sessionId: frozen.sessionId ?? frozen.archive.id,
+      title: frozen.archive.title,
+      frozenAt: frozen.archive.frozenAt,
+      createdAt: frozen.archive.createdAt,
+      updatedAt: frozen.archive.updatedAt,
+      ...(root ? { rootJid: root.jid } : {}),
+    },
+    signal
+  );
 }
 
 function recordFor(
@@ -108,8 +112,8 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   const { root } = deps;
 
   const cone = root ? archiveConeTarget(root) : undefined;
-  const captureCompleteSnapshot = (frozen: FrozenSession): Promise<void> =>
-    captureCompleteSnapshotFor(root, frozen);
+  const captureCompleteSnapshot = (frozen: FrozenSession, signal: AbortSignal): Promise<void> =>
+    captureCompleteSnapshotFor(root, frozen, signal);
 
   const onSessionSettled = (entry: FrozenSessionIndexEntry | null): void => {
     void import('./wc-gelatiere.js')
@@ -316,7 +320,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     await runNewSessionArchiveOnly({
       vfs: writer,
       cone: archiveConeTarget(root),
-      captureCompleteSnapshot: (frozen) => captureCompleteSnapshotFor(root, frozen),
+      captureCompleteSnapshot: (frozen, signal) => captureCompleteSnapshotFor(root, frozen, signal),
     });
     refreshFreezer();
   };

@@ -1219,8 +1219,8 @@ export class Orchestrator implements ConeApprovalRouter {
 
       snapshotStore: {
         read: (sessionId) => readSnapshot(fs as unknown as LocalVfsClient, sessionId),
-        write: (sessionId, snapshot) =>
-          writeSnapshot(fs as unknown as WritableVfsClient, sessionId, snapshot),
+        write: (sessionId, snapshot, signal) =>
+          writeSnapshot(fs as unknown as WritableVfsClient, sessionId, snapshot, signal),
       },
 
       vfs: fs as unknown as LocalVfsClient,

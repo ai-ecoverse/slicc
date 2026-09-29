@@ -26,6 +26,8 @@ const FREEZER_SESSION_ANCHOR = 'ui-new-session';
 
 const DEFAULT_ENRICHMENT_RACE_MS = 20_000;
 
+const COMPLETE_SNAPSHOT_TIMEOUT_MS = 5_000;
+
 const ENRICHMENT_PROGRESS_TICK_MS = 250;
 
 export interface PendingSessionCatchupOptions {
@@ -100,18 +102,7 @@ async function runAgenticMemoryFreeze(
     cone: opts.cone,
   });
   if (!frozen) return null;
-  if (opts.captureCompleteSnapshot) {
-    try {
-      await opts.captureCompleteSnapshot(frozen);
-    } catch (err) {
-      const code = (err as { code?: string } | null)?.code ?? 'unknown';
-      log.warn('captureCompleteSnapshot failed', { code });
-      frozen.completeSnapshotUnavailable = true;
-      try {
-        await markSnapshotUnavailable(opts.vfs, frozen.filename);
-      } catch {}
-    }
-  }
+  await captureCompleteSnapshotBestEffort(opts, frozen);
   void runAgenticBackgroundPass(opts, sessionStore, model, apiKey, headers, spawn, frozen);
   return frozen;
 }
@@ -185,9 +176,36 @@ export interface RunNewSessionFreezeOptions {
 
   onSessionSettled?: (entry: FrozenSessionIndexEntry | null) => void;
 
-  captureCompleteSnapshot?: (frozen: FrozenSession) => Promise<void>;
+  captureCompleteSnapshot?: (frozen: FrozenSession, signal: AbortSignal) => Promise<void>;
 
   cone?: FreezerConeRef;
+}
+
+async function captureCompleteSnapshotBestEffort(
+  opts: RunNewSessionFreezeOptions,
+  frozen: FrozenSession
+): Promise<void> {
+  if (!opts.captureCompleteSnapshot) return;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(Object.assign(new Error('Complete snapshot timed out'), { code: 'snapshot-timeout' }));
+    }, COMPLETE_SNAPSHOT_TIMEOUT_MS);
+  });
+  try {
+    await Promise.race([opts.captureCompleteSnapshot(frozen, controller.signal), deadline]);
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code ?? 'unknown';
+    log.warn('captureCompleteSnapshot failed', { code });
+    frozen.completeSnapshotUnavailable = true;
+    try {
+      await markSnapshotUnavailable(opts.vfs, frozen.filename);
+    } catch {}
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 type NewSessionTmpVfs = Pick<WritableVfsClient, 'listMountPoints' | 'mkdir' | 'readDir' | 'rm'>;
@@ -292,19 +310,7 @@ export async function runNewSessionFreeze(
   });
   if (!frozen) return null;
 
-  if (opts.captureCompleteSnapshot) {
-    try {
-      await opts.captureCompleteSnapshot(frozen);
-    } catch (err) {
-      const code = (err as { code?: string } | null)?.code ?? 'unknown';
-      log.warn('captureCompleteSnapshot failed', { code });
-
-      frozen.completeSnapshotUnavailable = true;
-      try {
-        await markSnapshotUnavailable(opts.vfs, frozen.filename);
-      } catch {}
-    }
-  }
+  await captureCompleteSnapshotBestEffort(opts, frozen);
 
   if (!apiKey || !model) {
     log.info('Frozen without enrichment (no LLM credentials) — left pending', {
@@ -403,18 +409,7 @@ async function runQuickFreeze(
     ...(memory ? { memory } : {}),
   });
 
-  if (frozen && opts.captureCompleteSnapshot) {
-    try {
-      await opts.captureCompleteSnapshot(frozen);
-    } catch (err) {
-      const code = (err as { code?: string } | null)?.code ?? 'unknown';
-      log.warn('captureCompleteSnapshot failed (quick-freeze)', { code });
-      frozen.completeSnapshotUnavailable = true;
-      try {
-        await markSnapshotUnavailable(opts.vfs, frozen.filename);
-      } catch {}
-    }
-  }
+  if (frozen) await captureCompleteSnapshotBestEffort(opts, frozen);
 
   if (frozen) opts.onSessionSettled?.(frozen);
   return frozen;
