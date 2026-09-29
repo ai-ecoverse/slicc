@@ -318,6 +318,92 @@ describe('VFS file syscalls', () => {
   });
 });
 
+describe('VFS files of one process (a threaded WASI process opens them all here)', () => {
+  function memFs(files: Record<string, string>) {
+    return {
+      readFileBuffer: async (p: string) => {
+        if (!(p in files)) throw new Error(`ENOENT: ${p}`);
+        return bytes(files[p]!);
+      },
+      writeFile: async (p: string, content: Uint8Array) => {
+        files[p] = text(content);
+      },
+    };
+  }
+  const json = (r: Awaited<ReturnType<WasmProcess['syscall']>>) =>
+    r.ok && r.kind === 'json' ? r.json : r;
+  const O_RDWR = 2;
+
+  it('two opens of a path share its bytes; pread and pwrite leave the offset; resize and size', async () => {
+    const files: Record<string, string> = { '/f': 'hello' };
+    const p = new WasmProcess(1, new FdTable(), { fs: memFs(files) });
+    const a = json(await p.syscall({ op: 'fd-open-vfs', path: '/f', flags: O_RDWR, position: 0 }));
+    const b = json(await p.syscall({ op: 'fd-open-vfs', path: '/f', flags: 0, position: 0 }));
+    expect(
+      json(await p.syscall({ op: 'fd-pwrite', fd: a as number, offset: 5, body: bytes(' world') }))
+    ).toBe(6);
+    const r = await p.syscall({ op: 'fd-pread', fd: b as number, offset: 6, max: 100 });
+    expect(r.ok && r.kind === 'bytes' && text(r.bytes)).toBe('world');
+    expect(json(await p.syscall({ op: 'fd-seek', fd: a as number, offset: 0, whence: 1 }))).toBe(0);
+    await p.syscall({ op: 'fd-resize', fd: a as number, size: 8 });
+    expect(json(await p.syscall({ op: 'fd-vfs-stat', fd: b as number }))).toEqual({
+      path: '/f',
+      size: 8,
+    });
+
+    expect(
+      await p.syscall({ op: 'fd-pwrite', fd: b as number, offset: 0, body: bytes('x') })
+    ).toMatchObject({ errno: 'EBADF' });
+    const pipe = json(await p.syscall({ op: 'fd-pipe' })) as number[];
+    expect(await p.syscall({ op: 'fd-pread', fd: pipe[0]!, offset: 0, max: 1 })).toMatchObject({
+      errno: 'ESPIPE',
+    });
+    await p.exit();
+    expect(files['/f']).toBe('hello wo');
+  });
+
+  it('an unlinked file keeps its bytes and is never written back; a renamed one follows its path', async () => {
+    const files: Record<string, string> = { '/tmp/scratch': 'kept', '/a': 'A', '/b': 'B' };
+    const p = new WasmProcess(1, new FdTable(), { fs: memFs(files) });
+    const scratch = json(
+      await p.syscall({ op: 'fd-open-vfs', path: '/tmp/scratch', flags: O_RDWR, position: 0 })
+    ) as number;
+    await p.syscall({ op: 'fd-path-unlinking', path: '/tmp/scratch' });
+    delete files['/tmp/scratch'];
+    await p.syscall({ op: 'fd-path-unlinked', path: '/tmp/scratch' });
+    await p.syscall({ op: 'fd-write', fd: scratch, body: bytes('!') });
+    const r = await p.syscall({ op: 'fd-pread', fd: scratch, offset: 0, max: 10 });
+    expect(r.ok && r.kind === 'bytes' && text(r.bytes)).toBe('!ept');
+
+    const a = json(
+      await p.syscall({ op: 'fd-open-vfs', path: '/a', flags: O_RDWR, position: 1 })
+    ) as number;
+    const b = json(
+      await p.syscall({ op: 'fd-open-vfs', path: '/b', flags: O_RDWR, position: 1 })
+    ) as number;
+    await p.syscall({ op: 'fd-write', fd: a, body: bytes('a') });
+    await p.syscall({ op: 'fd-write', fd: b, body: bytes('b') });
+
+    files['/b'] = files['/a']!;
+    delete files['/a'];
+    await p.syscall({ op: 'fd-path-renamed', from: '/a', to: '/b' });
+    expect(json(await p.syscall({ op: 'fd-vfs-stat', fd: a }))).toEqual({ path: '/b', size: 2 });
+    await p.exit();
+    expect(files).toEqual({ '/b': 'Aa' });
+  });
+
+  it('flushes what is open at or beneath a path, for a stat of it', async () => {
+    const files: Record<string, string> = {};
+    const p = new WasmProcess(1, new FdTable(), { fs: memFs(files) });
+    const fd = json(
+      await p.syscall({ op: 'fd-open-vfs', path: '/d/new', flags: 1, position: 0, truncate: true })
+    ) as number;
+    await p.syscall({ op: 'fd-write', fd, body: bytes('data') });
+    await p.syscall({ op: 'fd-path-flush', path: '/d' });
+    expect(files).toEqual({ '/d/new': 'data' });
+  });
+});
+
 describe('death by signal', () => {
   it('reports a child a signal ended as WIFSIGNALED, else its exit code', async () => {
     let end!: (code: number) => void;

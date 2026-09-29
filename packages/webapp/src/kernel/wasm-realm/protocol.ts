@@ -6,6 +6,14 @@ export const WASM_PROCESS_INIT = 'wasm-process-init';
 export const WASM_PROCESS_EXIT = 'wasm-process-exit';
 export const WASM_PROCESS_ERROR = 'wasm-process-error';
 
+export const WASM_THREAD_SPAWN = 'wasm-thread-spawn';
+
+export const WASM_THREAD_INIT = 'wasm-thread-init';
+
+export const WASM_THREAD_EXIT = 'wasm-thread-exit';
+
+export const WASM_MAX_THREADS = 64;
+
 export interface WasmProgram {
   abi?: 'emscripten' | 'wasi';
 
@@ -73,6 +81,29 @@ export interface WasmProcessInitMsg {
   fork?: ForkState;
 
   fds?: InheritedFd[];
+}
+
+export interface WasmThread {
+  tid: number;
+  arg: number;
+
+  memory: WebAssembly.Memory;
+
+  ids: SharedArrayBuffer;
+}
+
+export interface WasmThreadSpawnMsg {
+  type: typeof WASM_THREAD_SPAWN;
+  thread: WasmThread;
+}
+
+export interface WasmThreadInitMsg extends Omit<WasmProcessInitMsg, 'type' | 'fork' | 'fds'> {
+  type: typeof WASM_THREAD_INIT;
+  thread: WasmThread;
+}
+
+export interface WasmThreadExitMsg {
+  type: typeof WASM_THREAD_EXIT;
 }
 
 export interface WasmProcessExitMsg {

@@ -61,10 +61,21 @@ export interface KernelFile {
 
   flush?(): Promise<void>;
 
+  pread?(max: number, at: number): Promise<Uint8Array>;
+  pwrite?(bytes: Uint8Array, at: number): Promise<number>;
+
+  resize?(size: number): Promise<void>;
+
+  stat?(): Promise<{ path: string; size: number }>;
+
   tty?: KernelTty;
 
   held?: true;
+
+  heldMeta?: HeldMeta;
 }
+
+export type HeldMeta = { dir: string; preopen?: string } | { device: 'null' | 'zero' | 'urandom' };
 
 export function pollFile(file: KernelFile): PollState {
   return file.poll?.() ?? { readable: !!file.read, writable: !!file.write, hangup: false };
@@ -150,8 +161,8 @@ export function nullFile(): OpenFile {
   });
 }
 
-export function heldFile(): OpenFile {
-  return new OpenFile({ held: true, close: () => {} });
+export function heldFile(meta?: HeldMeta): OpenFile {
+  return new OpenFile({ held: true, ...(meta ? { heldMeta: meta } : {}), close: () => {} });
 }
 
 export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket' | 'held';
@@ -194,6 +205,11 @@ export class FdTable {
   setCloseOnExec(fd: number): void {
     this.get(fd);
     this.cloexec.add(fd);
+  }
+
+  clearCloseOnExec(fd: number): void {
+    this.get(fd);
+    this.cloexec.delete(fd);
   }
 
   closesOnExec(fd: number): boolean {

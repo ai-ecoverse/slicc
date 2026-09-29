@@ -5,6 +5,7 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <spawn.h>
@@ -21,6 +22,17 @@ static void report(const char *what, int status) {
   else if (WIFSIGNALED(status)) printf("%s: signal %d\n", what, WTERMSIG(status));
   else printf("%s: status %#x\n", what, status);
   fflush(stdout);
+}
+
+static void *twice(void *p) {
+  int *v = p;
+  *v *= 2;
+  return NULL;
+}
+
+static void *opener(void *p) {
+  (void)p;
+  return (void *)(long)open("tfile.txt", O_RDONLY);
 }
 
 static jmp_buf env;
@@ -99,6 +111,38 @@ int main(int argc, char **argv) {
     int status;
     waitpid(pid, &status, 0);
     report("subprocess", status);
+    return 0;
+  }
+  if (!strcmp(cmd, "threads")) {
+    /* pthreads on thread_spawn_v2; one descriptor table; a fork of a threaded process. */
+    int fd = open("tfile.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    write(fd, "threaded\n", 9);
+    close(fd);
+    pthread_t t[3];
+    int v[3] = {1, 2, 3};
+    for (int i = 0; i < 3; i++) pthread_create(&t[i], NULL, twice, &v[i]);
+    for (int i = 0; i < 3; i++) pthread_join(t[i], NULL);
+    printf("doubled %d %d %d\n", v[0], v[1], v[2]);
+    pthread_t o;
+    void *r;
+    pthread_create(&o, NULL, opener, NULL);
+    pthread_join(o, &r);
+    int tfd = (int)(long)r;
+    char buf[32];
+    ssize_t n = read(tfd, buf, sizeof buf);
+    printf("read %.*s", (int)n, buf);
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+      lseek(tfd, 0, SEEK_SET);
+      n = read(tfd, buf, sizeof buf);
+      printf("child read %.*s", (int)n, buf);
+      fflush(stdout);
+      _exit(0);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    report("child", status);
     return 0;
   }
   if (!strcmp(cmd, "file")) {

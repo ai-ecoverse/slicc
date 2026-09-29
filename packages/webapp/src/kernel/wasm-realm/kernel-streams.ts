@@ -46,12 +46,14 @@ export interface ProcessSys {
     path: string,
     flags: number,
     position: number,
-    opts?: { contents?: Uint8Array; orphan?: boolean }
+    opts?: { contents?: Uint8Array; orphan?: boolean; truncate?: boolean }
   ): number;
 
   seek(fd: number, offset: number, whence: number): number;
 
   flush(fd: number): void;
+
+  pread?(fd: number, max: number, at: number): Uint8Array;
 
   isatty?(fd: number): boolean;
 

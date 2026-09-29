@@ -13,6 +13,7 @@ function setup(
     wasix?: boolean;
     forked?: ConstructorParameters<typeof WasiHost>[0]['forked'];
     module?: WebAssembly.Module;
+    sharedMemory?: boolean;
   } = {}
 ) {
   const kernel = new FakeKernel();
@@ -26,7 +27,7 @@ function setup(
     fs,
     ...(opts.forked ? { forked: opts.forked } : {}),
   });
-  const g = new Guest();
+  const g = new Guest(opts.sharedMemory);
   host.mem.bind(g.memory);
   const wasix = new WasixHost(host, new AsyncifyDriver(host.mem), opts.module);
   const preview1 = {
@@ -255,6 +256,36 @@ describe('WASIX: dup2 onto a free number', () => {
     expect(t.kernel.out(1)).toBe('via ten\n');
     expect(t.preview1.fd_close(1)).toBe(E.SUCCESS);
     expect(t.write(10, 'still\n')).toBe(E.SUCCESS);
+  });
+});
+
+describe('WASIX: futexes, as Wasmer answers them', () => {
+  it('a wake reports woken with nobody waiting; a wait on a changed value returns woken at once', () => {
+    const t = setup({ sharedMemory: true });
+    const word = t.g.alloc(4);
+    const woken = t.g.alloc(1);
+    t.g.view.setUint32(word, 5, true);
+
+    expect(t.x.futex_wake(word, woken)).toBe(E.SUCCESS);
+    expect(t.g.view.getUint8(woken)).toBe(1);
+    expect(t.x.futex_wake_all(word, woken)).toBe(E.SUCCESS);
+    expect(t.g.view.getUint8(woken)).toBe(1);
+
+    t.g.view.setUint8(woken, 0);
+    expect(t.x.futex_wait(word, 4, 0, woken)).toBe(E.SUCCESS);
+    expect(t.g.view.getUint8(woken)).toBe(1);
+  });
+
+  it('a wait that times out reports not woken', () => {
+    const t = setup({ sharedMemory: true });
+    const word = t.g.alloc(4);
+    const woken = t.g.alloc(1);
+    const timeout = t.g.alloc(16);
+    t.g.view.setUint8(timeout, 1);
+    t.g.view.setBigUint64(timeout + 8, 1_000_000n, true);
+    t.g.view.setUint8(woken, 1);
+    expect(t.x.futex_wait(word, 0, timeout, woken)).toBe(E.SUCCESS);
+    expect(t.g.view.getUint8(woken)).toBe(0);
   });
 });
 

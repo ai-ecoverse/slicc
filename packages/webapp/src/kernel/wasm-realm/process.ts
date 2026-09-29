@@ -9,8 +9,10 @@ import {
 } from './children.js';
 import {
   type FdTable,
+  type HeldMeta,
   heldFile,
   KernelError,
+  type KernelFdKind,
   kernelFdKind,
   openPipe,
   pollFile,
@@ -22,7 +24,7 @@ import { type DefaultAction, defaultAction, isSignal, SIG, sigbit } from './sign
 import { KernelSocket, LoopbackNet } from './socket.js';
 import { SOCKET_OPS, type SocketSyscall, socketSyscall } from './socket-syscalls.js';
 import type { KernelTty, Termios } from './tty.js';
-import { type VfsFileFs, vfsFile } from './vfs-file.js';
+import { type VfsFileFs, VfsNodes, vfsFile } from './vfs-file.js';
 
 export type WasmSyscall =
   | {
@@ -47,12 +49,26 @@ export type WasmSyscall =
       contents?: Uint8Array;
 
       orphan?: boolean;
+
+      truncate?: boolean;
     }
+  | { op: 'fd-pread'; fd: number; offset: number; max: number }
+  | { op: 'fd-pwrite'; fd: number; offset: number; body: Uint8Array }
+  | { op: 'fd-resize'; fd: number; size: number }
+  | { op: 'fd-vfs-stat'; fd: number }
+  | { op: 'fd-path-flush'; path: string }
+  | { op: 'fd-path-unlinking'; path: string }
+  | { op: 'fd-path-unlinked'; path: string }
+  | { op: 'fd-path-renamed'; from: string; to: string }
   | { op: 'fd-seek'; fd: number; offset: number; whence: number }
   | { op: 'fd-select'; read: number[]; write: number[]; timeoutMs: number }
   | { op: 'fd-info'; fd: number }
   | { op: 'fd-dup'; fd: number; min?: number }
-  | { op: 'fd-reserve'; fd?: number; min?: number }
+  | { op: 'fd-reserve'; fd?: number; min?: number; meta?: HeldMeta }
+  | { op: 'fd-meta'; fd: number; meta: HeldMeta }
+  | { op: 'fd-setfl'; fd: number; flags: number }
+  | { op: 'fd-cloexec'; fd: number; on: boolean }
+  | { op: 'fd-list' }
   | { op: 'fd-renumber'; from: number; to: number; keep?: boolean }
   | {
       op: 'fd-promote';
@@ -122,12 +138,45 @@ function isSocketSyscall(req: WasmSyscall): req is SocketSyscall {
   return req.op.startsWith('sock-');
 }
 
+type VfsSyscall = Extract<
+  FdSyscall,
+  {
+    op:
+      | 'fd-pread'
+      | 'fd-pwrite'
+      | 'fd-resize'
+      | 'fd-vfs-stat'
+      | 'fd-path-flush'
+      | 'fd-path-unlinking'
+      | 'fd-path-unlinked'
+      | 'fd-path-renamed';
+  }
+>;
+
+function isVfsSyscall(req: FdSyscall): req is VfsSyscall {
+  return (
+    req.op.startsWith('fd-path-') ||
+    req.op === 'fd-pread' ||
+    req.op === 'fd-pwrite' ||
+    req.op === 'fd-resize' ||
+    req.op === 'fd-vfs-stat'
+  );
+}
+
 function isFdSyscall(req: WasmSyscall): req is FdSyscall {
   return req.op.startsWith('fd-');
 }
 
 function isTtySyscall(req: WasmSyscall): req is TtySyscall {
   return req.op.startsWith('tty-');
+}
+
+export interface FdInfo {
+  tty: boolean;
+  kind: KernelFdKind;
+  meta?: HeldMeta;
+  flags?: number;
+  cloexec?: true;
 }
 
 const SYSCALL_OPS: ReadonlySet<string> = new Set([
@@ -138,10 +187,22 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-poll',
   'fd-open-vfs',
   'fd-seek',
+  'fd-pread',
+  'fd-pwrite',
+  'fd-resize',
+  'fd-vfs-stat',
+  'fd-path-flush',
+  'fd-path-unlinking',
+  'fd-path-unlinked',
+  'fd-path-renamed',
   'fd-select',
   'fd-info',
   'fd-dup',
   'fd-reserve',
+  'fd-meta',
+  'fd-setfl',
+  'fd-cloexec',
+  'fd-list',
   'fd-renumber',
   'fd-promote',
   'fd-open-tty',
@@ -217,12 +278,15 @@ export class WasmProcess {
   private readonly stateListeners: StateListener[] = [];
   private net: LoopbackNet | undefined;
 
+  private readonly nodes: VfsNodes | undefined;
+
   constructor(
     readonly pid: number,
     readonly fds: FdTable,
     private readonly options: WasmProcessOptions = {}
   ) {
     this.children = new ChildTable(fds, options.spawner, options.forker);
+    this.nodes = options.fs ? new VfsNodes(options.fs) : undefined;
     this.children.onChildState = () => this.signal(SIG.CHLD);
   }
 
@@ -335,6 +399,7 @@ export class WasmProcess {
   }
 
   private async fdSyscall(req: FdSyscall): Promise<SyncFsResult> {
+    if (isVfsSyscall(req)) return this.vfsSyscall(req);
     switch (req.op) {
       case 'fd-read':
         return { ok: true, kind: 'bytes', bytes: await this.read(req) };
@@ -359,24 +424,45 @@ export class WasmProcess {
         return { ok: true, kind: 'json', json: pollFile(this.fds.get(req.fd).file) };
       case 'fd-open-vfs': {
         if (!this.options.fs) throw new SpawnError('ENOSYS');
-        const file = vfsFile(this.options.fs, {
-          path: req.path,
-          flags: req.flags,
-          position: req.position,
-          ...(req.contents !== undefined ? { contents: req.contents } : {}),
-          ...(req.orphan ? { orphan: true } : {}),
-        });
+        const file = vfsFile(
+          this.options.fs,
+          {
+            path: req.path,
+            flags: req.flags,
+            position: req.position,
+            ...(req.contents !== undefined ? { contents: req.contents } : {}),
+            ...(req.orphan ? { orphan: true } : {}),
+            ...(req.truncate ? { truncate: true } : {}),
+          },
+          this.nodes
+        );
         return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
       }
-      case 'fd-info': {
+      case 'fd-info':
+        return { ok: true, kind: 'json', json: this.fdInfo(req.fd) };
+      case 'fd-list':
+        return {
+          ok: true,
+          kind: 'json',
+          json: this.fds.numbers().map((fd) => ({ fd, ...this.fdInfo(fd) })),
+        };
+      case 'fd-meta': {
         const file = this.fds.get(req.fd).file;
-        const kind = file instanceof KernelSocket ? 'socket' : kernelFdKind(file);
-        return { ok: true, kind: 'json', json: { tty: file.tty !== undefined, kind } };
+        if (!file.held) throw new KernelError('EBADF');
+        file.heldMeta = req.meta;
+        return { ok: true, kind: 'void' };
       }
+      case 'fd-setfl':
+        this.fds.setStatusFlags(req.fd, req.flags);
+        return { ok: true, kind: 'void' };
+      case 'fd-cloexec':
+        if (req.on) this.fds.setCloseOnExec(req.fd);
+        else this.fds.clearCloseOnExec(req.fd);
+        return { ok: true, kind: 'void' };
       case 'fd-dup':
         return { ok: true, kind: 'json', json: this.fds.dup(req.fd, req.min ?? 3) };
       case 'fd-reserve':
-        return { ok: true, kind: 'json', json: this.reserve(req.fd, req.min) };
+        return { ok: true, kind: 'json', json: this.reserve(req.fd, req.min, req.meta) };
       case 'fd-promote':
         this.promote(req);
         return { ok: true, kind: 'void' };
@@ -410,6 +496,34 @@ export class WasmProcess {
     }
   }
 
+  private async vfsSyscall(req: VfsSyscall): Promise<SyncFsResult> {
+    if ('path' in req || 'from' in req) {
+      const nodes = this.nodes;
+      if (req.op === 'fd-path-flush') await nodes?.flush(req.path);
+      else if (req.op === 'fd-path-unlinking') await nodes?.unlinking(req.path);
+      else if (req.op === 'fd-path-unlinked') nodes?.unlinked(req.path);
+      else if (req.op === 'fd-path-renamed') nodes?.renamed(req.from, req.to);
+      return { ok: true, kind: 'void' };
+    }
+    const file = this.fds.get(req.fd).file;
+    if (!file.pread || !file.pwrite || !file.resize || !file.stat) throw new KernelError('ESPIPE');
+    switch (req.op) {
+      case 'fd-pread':
+        return {
+          ok: true,
+          kind: 'bytes',
+          bytes: await file.pread(Math.min(req.max, MAX_READ), req.offset),
+        };
+      case 'fd-pwrite':
+        return { ok: true, kind: 'json', json: await file.pwrite(req.body, req.offset) };
+      case 'fd-resize':
+        await file.resize(req.size);
+        return { ok: true, kind: 'void' };
+      case 'fd-vfs-stat':
+        return { ok: true, kind: 'json', json: await file.stat() };
+    }
+  }
+
   private promote(req: Extract<WasmSyscall, { op: 'fd-promote' }>): void {
     if (!this.fds.get(req.fd).file.held) throw new KernelError('EBADF');
     if (req.share !== undefined) {
@@ -417,21 +531,37 @@ export class WasmProcess {
       return;
     }
     if (!this.options.fs || req.path === undefined) throw new KernelError('EINVAL');
-    const file = vfsFile(this.options.fs, {
-      path: req.path,
-      flags: req.flags ?? 0,
-      position: req.position ?? 0,
-      ...(req.contents !== undefined ? { contents: req.contents } : {}),
-      ...(req.orphan ? { orphan: true } : {}),
-    });
+    const file = vfsFile(
+      this.options.fs,
+      {
+        path: req.path,
+        flags: req.flags ?? 0,
+        position: req.position ?? 0,
+        ...(req.contents !== undefined ? { contents: req.contents } : {}),
+        ...(req.orphan ? { orphan: true } : {}),
+      },
+      this.nodes
+    );
     this.fds.installAt(req.fd, file);
   }
 
-  private reserve(fd: number | undefined, min = 3): number {
-    if (fd === undefined) return this.fds.install(heldFile(), Math.max(3, min));
+  private reserve(fd: number | undefined, min = 3, meta?: HeldMeta): number {
+    if (fd === undefined) return this.fds.install(heldFile(meta), Math.max(3, min));
     if (this.fds.has(fd)) throw new KernelError('EBADF');
-    this.fds.installAt(fd, heldFile());
+    this.fds.installAt(fd, heldFile(meta));
     return fd;
+  }
+
+  private fdInfo(fd: number): FdInfo {
+    const file = this.fds.get(fd).file;
+    const flags = this.fds.statusFlags(fd);
+    return {
+      tty: file.tty !== undefined,
+      kind: file instanceof KernelSocket ? 'socket' : kernelFdKind(file),
+      ...(file.heldMeta ? { meta: file.heldMeta } : {}),
+      ...(flags !== undefined ? { flags } : {}),
+      ...(this.fds.closesOnExec(fd) ? { cloexec: true } : {}),
+    };
   }
 
   private ttySyscall(req: TtySyscall): SyncFsResult {

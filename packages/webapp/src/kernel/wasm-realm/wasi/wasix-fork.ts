@@ -9,6 +9,8 @@ export interface WasiForkState {
   fds: WasiForkFd[];
   cloexec: number[];
   cwd: string;
+
+  shared?: true;
 }
 
 interface AsyncifyExports {

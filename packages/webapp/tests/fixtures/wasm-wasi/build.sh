@@ -44,3 +44,8 @@ ln -s "$WASIX_SYSROOT/lib/wasm32-wasi/libclang_rt.builtins-wasm32.a" \
 wasm-opt --asyncify -O2 --enable-threads --enable-bulk-memory --enable-mutable-globals \
   --enable-sign-ext --enable-nontrapping-float-to-int "$OUT/wasixtest.wasm" -o "$HERE/wasixtest.wasm"
 ls -la "$HERE/wasixtest.wasm"
+
+
+(cd "$HERE/threadtest-rs" && cargo build --release --target wasm32-wasip1-threads)
+cp "${CARGO_TARGET_DIR:-$HERE/threadtest-rs/target}/wasm32-wasip1-threads/release/threadtest.wasm" "$HERE/threadtest.wasm"
+ls -la "$HERE/threadtest.wasm"

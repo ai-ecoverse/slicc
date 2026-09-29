@@ -90,6 +90,7 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
             position,
             ...(opts?.contents !== undefined ? { contents: opts.contents } : {}),
             ...(opts?.orphan ? { orphan: true } : {}),
+            ...(opts?.truncate ? { truncate: true } : {}),
           },
           `fd-open-vfs ${path}`
         )
@@ -100,6 +101,10 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
     },
     flush(fd) {
       call({ op: 'fd-flush', fd }, `fd-flush ${fd}`);
+    },
+    pread(fd, max, at) {
+      const r = call({ op: 'fd-pread', fd, max, offset: at }, `fd-pread ${fd}`);
+      return r.ok && r.kind === 'bytes' ? r.bytes : new Uint8Array(0);
     },
     isatty(fd) {
       return (
