@@ -119,7 +119,14 @@ It is browser-use's BU Bench V2 format, so public sets and our own evals share o
 For each set, the report has a row per configuration: runs, pass / partial / fail, errors, mean score, mean time and mean cost. After the rows come two lists:
 
 - **What skills add:** for each model, the lift each skills condition gives over `none` (over the first condition when `none` did not run), as percentages of the baseline: score, time and cost, with the absolute change beside each. `report.html` shows it as the paired mean score without and with the skills, the lift, and the time and cost it saves. A lift from fewer than 10 paired tasks is flagged as a small sample.
-- **What models change:** the same comparison between models, for each skills condition.
+- **What models change:** the same paired comparison between models, for each skills condition, in four lists (`models.mjs`):
+  - **against the older version** of the same family (`claude-sonnet-5` → `claude-sonnet-5-5`);
+  - **against the sibling at the other provider**, by tier: haiku ↔ luna, sonnet ↔ terra, opus ↔ sol, fable ↔ astra;
+  - **one tier up at the same provider** (sonnet → opus → fable, luna → terra → sol → astra);
+  - **thinking effort:** an `@low`/`@max` variant against the same model at its default.
+
+  A plain alias and `@default` are one configuration: the report pools their runs (renumbering clashing repeats), so `claude-opus-5-5` and `claude-opus-5-5@default` count as one model with a larger N. Charts color by provider (one hue each), give every model its own shade, and draw older generations less saturated than newer ones.
+
 - **Answered without tools:** per configuration, how many runs made no tool call at all, and so answered from what the model already knew, with their mean score against the runs that used tools. It's a cheap check for an agent winging it. Records carry `tool_calls`, `tool_kinds` (browser, fetch, code, shell, file, skill, other: categories only, never commands), `web_calls` and `answered_without_tools`. A run whose transcript could not be exported counts as unknown, never as "no tools". For runs recorded before these metrics existed, `node packages/bench/scripts/backfill-tools.mjs --out <run dir>` fills them in from the saved traces.
 
 Only runs that both configurations judged, for the same task and repeat, are compared. A run that errored (for example, the leader was unreachable) is listed but never counted as a fail.
