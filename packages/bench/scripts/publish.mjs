@@ -88,16 +88,34 @@ const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
  * task, so their per-item statuses become counts.
  */
 export function publicRecord(r) {
-  const out = { ...r };
+  let out = { ...r };
   if (out.metrics?.tabs) {
     const { tabs: _tabs, ...metrics } = out.metrics;
     out.metrics = metrics;
   }
-  if (!UPSTREAM_SETS.includes(r.benchmark) || !r.statuses) return out;
+  if (!UPSTREAM_SETS.includes(r.benchmark)) return out;
+  // Rubric item ids also surface in free text (a judge's fallback reason names the findings
+  // it could not assess): redact them everywhere, not only in `statuses`.
+  out = redactCriteria(out);
+  if (!r.statuses) return out;
   const counts = {};
   for (const status of Object.values(r.statuses)) counts[status] = (counts[status] ?? 0) + 1;
   delete out.statuses;
   return { ...out, status_counts: counts };
+}
+
+/** A rubric item id as browser-use writes them: `A5_line_fields`, `B12_total`. */
+const CRITERION_ID = /\b[A-Z]\d{1,3}_[A-Za-z0-9_]+/g;
+
+/** A copy with every rubric item id in a string replaced by `[criterion]`. */
+export function redactCriteria(value) {
+  if (typeof value === 'string') return value.replace(CRITERION_ID, '[criterion]');
+  if (Array.isArray(value)) return value.map(redactCriteria);
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, k === 'statuses' ? v : redactCriteria(v)])
+    );
+  return value;
 }
 
 /** Records by their path under `records/`. */
@@ -156,10 +174,18 @@ function stageRun(opts, stage) {
   const base = join(stage, 'runs', opts.run);
   const own = recordsIn(opts.out);
   for (const [f, r] of own) put(join(base, 'records', f), json(r));
+  // The run's own result files and report are copied, not rebuilt: redact rubric item ids in
+  // the ones that cover an upstream set (a failed judge's error can name a finding).
+  const upstreamFile = (f) => UPSTREAM_SETS.some((b) => f.includes(`_bench_${pathSegment(b)}`));
+  const hasUpstream = [...own.values()].some((r) => UPSTREAM_SETS.includes(r.benchmark));
+  const copy = (from, to, redact) => {
+    const text = readFileSync(from, 'utf8');
+    put(to, redact ? redactCriteria(text) : text);
+  };
   for (const f of listFiles(join(opts.out, 'results')))
-    put(join(base, 'results', f), readFileSync(join(opts.out, 'results', f)));
+    copy(join(opts.out, 'results', f), join(base, 'results', f), upstreamFile(f));
   for (const f of ['report.md', 'report.json']) {
-    if (existsSync(join(opts.out, f))) put(join(base, f), readFileSync(join(opts.out, f)));
+    if (existsSync(join(opts.out, f))) copy(join(opts.out, f), join(base, f), hasUpstream);
   }
   const traces = publishableTraces(opts.out);
   for (const t of traces) put(join(base, 'traces', t.path), t.text);
