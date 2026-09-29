@@ -24,7 +24,11 @@ import { SYNC_EXEC_CHANNEL, type SyncExecResultPayload } from './sync-exec-dispa
 import type { SyncExecTransport } from './sync-exec-xhr-bridge.js';
 import type { SyncFsResult } from './sync-fs-dispatch.js';
 import { SYNC_EXEC_XHR_MARGIN_MS, SYNC_FS_REQUEST_TIMEOUT_MS } from './sync-fs-wire.js';
-import { parseSyncFsStat, type SyncFsPosixBridge } from './sync-fs-xhr-bridge.js';
+import {
+  parseSyncFsStat,
+  type SyncFsBridgeStat,
+  type SyncFsPosixBridge,
+} from './sync-fs-xhr-bridge.js';
 import {
   decodeSabResult,
   SAB_I_CHUNK,
@@ -202,6 +206,18 @@ export function createSyncFsSabBridge(
         throw errnoError('EIO', path);
       }
       return list as string[];
+    },
+    readdirStat: (path) => {
+      const list = json({ op: 'readdir-stat', path }, path);
+      if (!Array.isArray(list)) throw errnoError('EIO', path);
+      return list.map((entry): [string, SyncFsBridgeStat | null] => {
+        if (!Array.isArray(entry) || typeof entry[0] !== 'string') throw errnoError('EIO', path);
+        // null is "vanished since the listing"; any other stat must parse.
+        if (entry[1] === null) return [entry[0], null];
+        const stat = parseSyncFsStat(entry[1]);
+        if (!stat) throw errnoError('EIO', path);
+        return [entry[0], stat];
+      });
     },
     exists: (path) => {
       const v = json({ op: 'exists', path }, path);

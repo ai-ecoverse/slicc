@@ -244,6 +244,10 @@ export class FakeFs implements SyncFsPosixBridge {
     return this.statOf(this.node(path, false));
   }
   readdir(path: string): string[] {
+    this.ops.push(`readdir ${path}`);
+    return this.names(path);
+  }
+  protected names(path: string): string[] {
     if (this.node(path).type !== 'dir') throw posix('ENOTDIR');
     const prefix = path === '/' ? '/' : `${path}/`;
     return [...this.nodes.keys()]
@@ -294,6 +298,21 @@ export class FakeFs implements SyncFsPosixBridge {
 }
 
 /** The guest's memory: a bump allocator for strings, iovecs and out-params. */
+/** A FakeFs whose listings carry each entry's lstat, in one call (the SAB bridge's `readdir-stat`). */
+export class ListingFs extends FakeFs {
+  readdirStat(path: string): Array<[string, SyncFsBridgeStat | null]> {
+    this.ops.push(`readdir-stat ${path}`);
+    const base = path === '/' ? '' : path;
+    const n = this.ops.length;
+    const out = this.names(path).map((name): [string, SyncFsBridgeStat | null] => [
+      name,
+      this.lstat(`${base}/${name}`),
+    ]);
+    this.ops.length = n; // the lstats are this call's own
+    return out;
+  }
+}
+
 export class Guest {
   readonly memory = new WebAssembly.Memory({ initial: 64 });
   private top = 1024;

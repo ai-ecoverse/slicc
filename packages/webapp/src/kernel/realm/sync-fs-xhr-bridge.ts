@@ -75,6 +75,11 @@ export interface SyncFsPosixBridge extends SyncFsXhrMutatingBridge {
   readlink(path: string): string;
   chmod(path: string, mode: number): void;
   utimes(path: string, atimeMs: number, mtimeMs: number): void;
+  /**
+   * The names in `path`, each with its lstat (null: gone since the listing),
+   * in one round trip. Optional: the SW transport does not carry it.
+   */
+  readdirStat?(path: string): Array<[string, SyncFsBridgeStat | null]>;
 }
 
 /** JSON arguments of a POSIX op (see `SyncFsRequest`). */

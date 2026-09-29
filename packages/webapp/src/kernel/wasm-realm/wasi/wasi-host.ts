@@ -32,7 +32,14 @@ import {
   wasiErrnoOf,
 } from './wasi-abi.js';
 import { deviceOf, WasiFds, type WasiKernel } from './wasi-fds.js';
-import { normalize, pathInode, resolveUnder, type WasiEntry, WasiError } from './wasi-files.js';
+import {
+  type DirListing,
+  normalize,
+  pathInode,
+  resolveUnder,
+  type WasiEntry,
+  WasiError,
+} from './wasi-files.js';
 import { WasiMemory } from './wasi-memory.js';
 import { pollOneoff } from './wasi-poll.js';
 
@@ -555,9 +562,7 @@ export class WasiHost {
    */
   private readdir(fd: number, buf: number, len: number, cookie: number, usedPtr: number): void {
     const dir = this.fds.dir(fd);
-    if (cookie === 0 || !dir.listing) {
-      dir.listing = { names: ['.', '..', ...this.o.fs.readdir(dir.path)], stats: new Map() };
-    }
+    if (cookie === 0 || !dir.listing) dir.listing = this.list(dir.path);
     const { names, stats } = dir.listing;
     let at = 0;
     for (let i = cookie; i < names.length && at < len; i++) {
@@ -581,6 +586,18 @@ export class WasiHost {
       at += n;
     }
     this.mem.view().setUint32(usedPtr, at, true);
+  }
+
+  /**
+   * A directory's names, with their lstats when the bridge lists them in one
+   * round trip (else each is lstat'ed as `fd_readdir` reaches it): Python's
+   * import system lists `lib/python3.12`, some 300 entries, at start-up.
+   */
+  private list(path: string): DirListing {
+    const { fs } = this.o;
+    if (!fs.readdirStat) return { names: ['.', '..', ...fs.readdir(path)], stats: new Map() };
+    const listed = fs.readdirStat(path);
+    return { names: ['.', '..', ...listed.map(([name]) => name)], stats: new Map(listed) };
   }
 
   private lstatOrNull(path: string): SyncFsBridgeStat | null {

@@ -119,6 +119,8 @@ export type SyncFsOp =
   | 'stat'
   | 'lstat'
   | 'readdir'
+  /** A listing with each entry's lstat (null: gone meanwhile), in one round trip. */
+  | 'readdir-stat'
   | 'mkdir'
   | 'rm'
   | 'rename'
