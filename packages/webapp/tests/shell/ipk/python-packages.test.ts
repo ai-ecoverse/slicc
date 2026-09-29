@@ -68,6 +68,8 @@ describe('slicc.python in a manifest', () => {
     expect(
       matches({ ...pure, requires: { abi: 'cp314', platform: 'emscripten_wasm32' } }, CP314)
     ).toBe(false);
+    // `requires` says it has C extensions; one that names no ABI matches no interpreter.
+    expect(matches({ ...pure, requires: {} }, CP314)).toBe(false);
   });
 
   it('the .pth adds each matching package as a site dir; the others are left out', () => {

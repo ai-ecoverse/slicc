@@ -84,6 +84,8 @@ export function pythonOf(
 export function matches(p: PythonPackage, interp: PythonInterpreter): boolean {
   const r = p.requires;
   if (!r || r.abi === 'none') return true;
+  // It has C extensions, but says for nothing: no interpreter can load them.
+  if (r.abi === undefined && r.platform === undefined) return false;
   return (
     (r.abi === undefined || r.abi === interp.abi) &&
     (r.platform === undefined || r.platform === interp.platform)

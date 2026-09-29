@@ -14,6 +14,7 @@ import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../../../src/shell/ipk/wasm-programs.js';
 import {
+  installedCommands,
   isModuleFile,
   isWasiTarget,
   SECRET_FUNCTION,
@@ -406,6 +407,46 @@ describe('WasmSession', () => {
     delete files['/home/u/.local/lib/python3.14/site-packages/_slicc_packages.pth'];
     await parentSpawner(session);
     expect(Object.keys(files).some((f) => f.endsWith('.pth'))).toBe(false);
+  });
+
+  it('scans the Python packages once per installed set, again after an install', async () => {
+    fakeProcesses();
+    const py = '/shared/lib/node_modules/@ai-ecoverse/py-cpython';
+    const files: Record<string, string> = {
+      [`${py}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/py-cpython',
+        slicc: {
+          abi: 'wasi',
+          commands: { python3: { wasm: 'bin/python.wasm' } },
+          python: { version: '3.14', abi: 'cp314', platform: 'wasix_wasm32' },
+        },
+      }),
+      [`${py}/bin/python.wasm`]: 'W',
+    };
+    const c = ctx(files);
+    const readdir = vi.spyOn(c.fs, 'readdir');
+    // The shell's catalog: the same map until an install or removal replaces it.
+    let catalog = await installedCommands(c);
+    const session = new WasmSession(
+      c,
+      undefined,
+      () => {},
+      undefined,
+      async () => catalog
+    );
+    const target = await session.resolve('python3', 'python3', '/w');
+    const start = () =>
+      session.launch({ ...target!, args: [], env: { HOME: '/home/u' }, cwd: '/w', fds: stdio() });
+    readdir.mockClear();
+    await start();
+    const scans = readdir.mock.calls.length;
+    expect(scans).toBeGreaterThan(0);
+    await start();
+    await start();
+    expect(readdir.mock.calls.length).toBe(scans);
+    catalog = new Map(catalog);
+    await start();
+    expect(readdir.mock.calls.length).toBe(2 * scans);
   });
 
   it("keeps the realm's git system config over a package's GIT_CONFIG_NOSYSTEM default", async () => {

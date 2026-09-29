@@ -342,6 +342,9 @@ function childHandle(handle: WasmProcessHandle): ChildHandle {
   };
 }
 
+/** Python package scans, by the command catalog they were made for. */
+const PYTHON_SCANS = new WeakMap<object, ReturnType<typeof scanPythonPackages>>();
+
 export class WasmSession {
   private readonly live = new Set<WasmProcessHandle>();
   /** The running shell children: each one's abort ends it. */
@@ -436,7 +439,7 @@ export class WasmSession {
       const name = typeof manifest.name === 'string' ? manifest.name : root;
       const interpreter = pythonOf(root, name, manifest.slicc?.python).interpreter;
       if (!interpreter) return;
-      const { packages } = await scanPythonPackages(fs, GLOBAL_NODE_MODULES);
+      const { packages } = await this.pythonScan(fs);
       const skipped = await ensurePth(
         this.ctx.fs as PthFs,
         env.HOME ?? '/home',
@@ -451,6 +454,22 @@ export class WasmSession {
     } catch {
       /* no manifest, an unwritable home: the interpreter starts without them */
     }
+  }
+
+  /**
+   * The installed Python packages, scanned once per installed set: the
+   * command catalog is replaced on an install or removal, and a new one
+   * means a new scan.
+   */
+  private pythonScan(fs: ProgramFs): ReturnType<typeof scanPythonPackages> {
+    return this.commands().then((catalog) => {
+      let scan = PYTHON_SCANS.get(catalog);
+      if (!scan) {
+        scan = scanPythonPackages(fs, GLOBAL_NODE_MODULES);
+        PYTHON_SCANS.set(catalog, scan);
+      }
+      return scan;
+    });
   }
 
   /** Start a loaded program: a new process, or (with `fork`) a forked copy of its parent. */
