@@ -16,7 +16,7 @@ function createHarness(trust: 'full' | 'biscotto') {
   registry.followers.set('peer', {
     bootstrapId: 'peer',
     trust,
-    biscotto: trust === 'biscotto' ? { id: 'seat1', label: 'Anna' } : undefined,
+    biscotto: trust === 'biscotto' ? { id: 'seat1', label: 'Anna', unitJid: 'cone' } : undefined,
     sync: {
       send: (message: LeaderToFollowerMessage) => {
         sent.push(message);

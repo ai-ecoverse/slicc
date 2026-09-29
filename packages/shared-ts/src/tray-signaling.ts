@@ -89,6 +89,8 @@ export interface FollowerBiscottoIdentity {
 
   label: string;
 
+  unitJid?: string;
+
   gates: FollowerBiscottoGates;
 }
 

@@ -166,6 +166,8 @@ export type PanelRpcRequest =
       op: 'tray-mint-biscotto';
       payload: {
         label: string;
+
+        unitJid?: string;
         ttlMs?: number;
         gates?: {
           message: FollowerBiscottoGate;
@@ -564,6 +566,7 @@ export interface PanelRpcResults {
 
     url: string;
     label: string;
+    unitJid?: string;
     expiresAt?: string;
     gates: {
       message: FollowerBiscottoGate;

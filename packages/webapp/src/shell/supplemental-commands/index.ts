@@ -258,8 +258,14 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPdftkCommand('pdftk'),
     createPdftkCommand('pdf'),
 
-    createBiscottoCommand('biscotto'),
-    createBiscottoCommand('biscotti'),
+    createBiscottoCommand('biscotto', {
+      getParentJid: options.getParentJid,
+      isScoop: options.isScoop,
+    }),
+    createBiscottoCommand('biscotti', {
+      getParentJid: options.getParentJid,
+      isScoop: options.isScoop,
+    }),
     createPdftoppmCommand('pdftoppm'),
 
     createPdftoppmCommand('pdftocairo'),

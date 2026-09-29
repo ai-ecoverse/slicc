@@ -19,7 +19,9 @@ function help(name: string): CommandResult {
       `       biscotti\n\n` +
       '  Hand someone a revocable guest seat on this cone. They get a private\n' +
       '  URL showing the live transcript and a composer; what they send is\n' +
-      '  reviewed before it reaches the cone.\n\n' +
+      '  reviewed before it reaches the cone. The seat shares the conversation of\n' +
+      '  the cone that runs this command, and nothing else — switching\n' +
+      '  the UI to another conversation does not show it to the guest.\n\n' +
       '  --label        Who the seat is for. Shown on every approval prompt as the\n' +
       '                 authenticated identity, beside what they actually wrote.\n' +
       '  --expires      How long the seat lives (30m, 12h, 7d). Max 30d.\n' +
@@ -146,7 +148,9 @@ function formatList(biscotti: PanelRpcResults['tray-list-biscotti']['biscotti'])
 export async function runBiscotto(
   name: string,
   args: string[],
-  _ctx: ResolvedCommandContext
+  _ctx: ResolvedCommandContext,
+  unitJid?: string,
+  fromScoop = false
 ): Promise<CommandResult> {
   const fail = (message: string): CommandResult => ({
     stdout: '',
@@ -166,8 +170,21 @@ export async function runBiscotto(
       case 'serve': {
         const parsed = parseServeArgs(rest);
         if (typeof parsed === 'string') return fail(parsed);
+
+        if (!unitJid) {
+          return fail(
+            'cannot tell which conversation to share from this shell; run it from the cone whose thread the guest should see'
+          );
+        }
+
+        if (fromScoop) {
+          return fail(
+            'a seat cannot be minted from a scoop: guests, like users, never talk to a scoop directly. Ask the owning cone to run `biscotto serve`'
+          );
+        }
         const payload: PanelRpcPayloadFor<'tray-mint-biscotto'> = {
           label: parsed.label,
+          unitJid,
           ...(parsed.ttlMs === undefined ? {} : { ttlMs: parsed.ttlMs }),
           gates: parsed.gates,
         };

@@ -60,7 +60,23 @@ export class BiscottoReview {
   }
 
   submit(bootstrapId: string, message: GuestSubmission): void {
-    const unitJid = this.context.options.getScoopJid();
+    const unitJid = message.biscotto.unitJid;
+    if (!unitJid) {
+      this.context.log.warn('Biscotto seat has no bound unit — refusing its message', {
+        bootstrapId,
+        biscottoId: message.biscotto.id,
+      });
+      this.deps.notify(bootstrapId, message.messageId, 'rejected');
+      return;
+    }
+    if (this.isScoopUnit(unitJid)) {
+      this.context.log.warn('Biscotto seat is bound to a scoop — refusing its message', {
+        bootstrapId,
+        biscottoId: message.biscotto.id,
+      });
+      this.deps.notify(bootstrapId, message.messageId, 'rejected');
+      return;
+    }
     const toolGate = toolGateForSeat(message.biscotto, unitJid);
     if (toolGate === null) {
       this.context.log.warn('Seat has unroutable tool gating — refusing its message', {
@@ -95,6 +111,15 @@ export class BiscottoReview {
     void this.drain(seat);
   }
 
+  private isScoopUnit(unitJid: string): boolean {
+    try {
+      const summary = this.context.options.getScoops?.().find((unit) => unit.jid === unitJid);
+      return typeof summary?.parentId === 'string';
+    } catch {
+      return false;
+    }
+  }
+
   private async drain(seat: string): Promise<void> {
     if (this.inFlight.has(seat)) return;
     this.inFlight.add(seat);
@@ -118,15 +143,6 @@ export class BiscottoReview {
           continue;
         }
         if (outcome === 'approved') {
-          const current = this.context.options.getScoopJid();
-          if (current !== next.unitJid) {
-            this.context.log.warn('Selected unit changed during review — not delivering', {
-              submittedFor: next.unitJid,
-              current,
-            });
-            this.deps.notify(bootstrapId, next.messageId, 'rejected');
-            continue;
-          }
           this.deps.deliver(next);
         }
         this.deps.notify(bootstrapId, next.messageId, outcome);

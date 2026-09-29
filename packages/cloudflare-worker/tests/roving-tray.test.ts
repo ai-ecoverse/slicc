@@ -121,7 +121,12 @@ async function mintSeat(t: TestTray, label = 'Anna'): Promise<{ id: string; toke
     new Request(`${HOST}/internal/biscotto/mint`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ controllerToken: t.controllerToken, label, workerBaseUrl: HOST }),
+      body: JSON.stringify({
+        controllerToken: t.controllerToken,
+        label,
+        workerBaseUrl: HOST,
+        unitJid: 'cone',
+      }),
     })
   );
   expect(res.status).toBe(200);

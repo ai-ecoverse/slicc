@@ -125,6 +125,8 @@ export interface BiscottoRecord {
   revokedAt?: string;
   gates: BiscottoGates;
 
+  unitJid?: string;
+
   lastSeenAt?: string;
 }
 

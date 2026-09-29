@@ -3,6 +3,7 @@ import {
   parseApprover,
   parseDuration,
   parseServeArgs,
+  runBiscotto,
 } from '../../../src/shell/supplemental-commands/biscotto/run.js';
 
 describe('parseDuration', () => {
@@ -109,5 +110,72 @@ describe('parseServeArgs', () => {
     expect(parseServeArgs(['--label', 'A', '--expires'])).toBe(
       '--expires needs a duration (30m, 12h, 7d)'
     );
+  });
+});
+
+describe('runBiscotto serve binds the seat to the unit that ran it', () => {
+  const g = globalThis as unknown as { __slicc_panelRpc?: unknown };
+
+  function withRpc() {
+    const calls: Array<{ op: string; payload: unknown }> = [];
+    g.__slicc_panelRpc = {
+      call: async (op: string, payload: unknown) => {
+        calls.push({ op, payload });
+        return {
+          id: 'seat1',
+          url: 'https://www.sliccy.ai/join/x',
+          label: 'Anna',
+          gates: { message: { approver: 'user' }, tool: { approver: 'user' } },
+        };
+      },
+    };
+    return calls;
+  }
+
+  it('sends the calling unit with the mint', async () => {
+    const calls = withRpc();
+    try {
+      const result = await runBiscotto(
+        'biscotto',
+        ['serve', '--label', 'Anna'],
+        {} as never,
+        'cone_helix'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(calls[0]?.op).toBe('tray-mint-biscotto');
+      expect(calls[0]?.payload).toMatchObject({ label: 'Anna', unitJid: 'cone_helix' });
+    } finally {
+      delete g.__slicc_panelRpc;
+    }
+  });
+
+  it('refuses to mint from a scoop, and never reaches the leader', async () => {
+    const calls = withRpc();
+    try {
+      const result = await runBiscotto(
+        'biscotto',
+        ['serve', '--label', 'Anna'],
+        {} as never,
+        'scoop_reviewer',
+        true
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('cannot be minted from a scoop');
+      expect(calls).toHaveLength(0);
+    } finally {
+      delete g.__slicc_panelRpc;
+    }
+  });
+
+  it('refuses to mint from a shell that belongs to no unit, rather than guessing one', async () => {
+    const calls = withRpc();
+    try {
+      const result = await runBiscotto('biscotto', ['serve', '--label', 'Anna'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('which conversation to share');
+      expect(calls).toHaveLength(0);
+    } finally {
+      delete g.__slicc_panelRpc;
+    }
   });
 });

@@ -116,20 +116,33 @@ const BROADCAST_ERROR_THROTTLE_MS = 60_000;
 function restrictOutbound(
   sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>,
   trust: FollowerTrust,
-  log: Logger
+  log: Logger,
+  seatUnitJid?: string
 ): TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage> {
   if (trust !== 'biscotto') return sync;
   return new Proxy(sync, {
     get(target, prop, receiver) {
       if (prop !== 'send') return Reflect.get(target, prop, receiver);
       return (message: LeaderToFollowerMessage): boolean => {
-        if (isMessageSendableToTrust('biscotto', message.type)) return target.send(message);
+        if (
+          isMessageSendableToTrust('biscotto', message.type) &&
+          isForSeatUnit(message, seatUnitJid)
+        ) {
+          return target.send(message);
+        }
         log.debug('Withholding a message a biscotto may not receive', { type: message.type });
 
         return true;
       };
     },
   });
+}
+
+function isForSeatUnit(message: LeaderToFollowerMessage, seatUnitJid: string | undefined): boolean {
+  const tagged = message as { scoopJid?: unknown };
+  if (!('scoopJid' in tagged)) return true;
+  if (message.type === 'user_message_ack' && tagged.scoopJid === '') return true;
+  return seatUnitJid !== undefined && tagged.scoopJid === seatUnitJid;
 }
 
 export class FollowerRegistry {
@@ -152,7 +165,12 @@ export class FollowerRegistry {
   ): ConnectedFollower {
     this.removeFollower(bootstrapId);
     const trust = meta?.trust ?? 'full';
-    const sync = restrictOutbound(createLeaderSyncChannel(channel), trust, this.options.log);
+    const sync = restrictOutbound(
+      createLeaderSyncChannel(channel),
+      trust,
+      this.options.log,
+      meta?.biscotto?.unitJid
+    );
     const unsubscribe = sync.onMessage((message) => this.options.onMessage(bootstrapId, message));
     const keepalive = new DataChannelKeepalive({
       sendPing: () => sync.send({ type: 'ping' }),
@@ -370,7 +388,7 @@ export class FollowerRegistry {
       (follower) => {
         const reading =
           follower.trust === 'biscotto'
-            ? displayedScoopJid
+            ? follower.biscotto?.unitJid
             : (follower.selectedScoopJid ?? displayedScoopJid);
         return reading === scoopJid;
       }

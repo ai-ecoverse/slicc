@@ -9,6 +9,8 @@ export interface BiscottoListItem {
   lastSeenAt?: string;
   gates: BiscottoGatesWire;
 
+  unitJid?: string;
+
   active: boolean;
 }
 
@@ -22,6 +24,8 @@ export interface MintBiscottoArgs {
   label: string;
   ttlMs?: number;
   gates?: BiscottoGatesWire;
+
+  unitJid?: string;
 }
 
 export interface MintBiscottoResult {
@@ -31,6 +35,7 @@ export interface MintBiscottoResult {
   label: string;
   expiresAt?: string;
   gates: BiscottoGatesWire;
+  unitJid?: string;
 }
 
 async function workerError(prefix: string, response: Response): Promise<Error> {
@@ -56,7 +61,12 @@ export async function mintBiscottoViaWorker(
       'Content-Type': 'application/json',
     },
 
-    body: JSON.stringify({ label: args.label, ttlMs: args.ttlMs, gates: args.gates }),
+    body: JSON.stringify({
+      label: args.label,
+      ttlMs: args.ttlMs,
+      gates: args.gates,
+      unitJid: args.unitJid,
+    }),
   });
   if (!res.ok) throw await workerError('Biscotto mint failed', res);
   return res.json() as Promise<MintBiscottoResult>;

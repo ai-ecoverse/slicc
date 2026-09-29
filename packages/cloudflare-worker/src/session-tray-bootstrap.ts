@@ -342,6 +342,8 @@ export class BootstrapCoordinator {
         id: bootstrap.biscottoId,
         label: record?.label ?? '',
         expiresAt: record?.expiresAt,
+
+        ...(record?.unitJid ? { unitJid: record.unitJid } : {}),
         gates: {
           message: normalizeBiscottoGate(record?.gates.message),
           tool: normalizeBiscottoGate(record?.gates.tool),

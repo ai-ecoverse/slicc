@@ -99,13 +99,13 @@ export class BroadcastManager {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower) return;
 
+    if (follower.trust === 'biscotto') {
+      await this.sendSeatSnapshot(bootstrapId, follower);
+      return;
+    }
     const { options } = this.context;
     const activeJid = options.getScoopJid();
-
-    let targetJid =
-      follower.trust === 'biscotto'
-        ? activeJid
-        : (scoopJid ?? follower.selectedScoopJid ?? activeJid);
+    let targetJid = scoopJid ?? follower.selectedScoopJid ?? activeJid;
     try {
       const scoops = options.getScoops?.();
       if (scoops && !scoops.some((scoop) => scoop.jid === targetJid)) targetJid = activeJid;
@@ -138,6 +138,43 @@ export class BroadcastManager {
       messageCount: messages.length,
       scoopJid: targetJid,
     });
+  }
+
+  private async sendSeatSnapshot(bootstrapId: string, follower: ConnectedFollower): Promise<void> {
+    const seatJid = follower.biscotto?.unitJid;
+    if (!seatJid) {
+      this.context.log.warn('Biscotto seat has no bound unit — sending no snapshot', {
+        bootstrapId,
+        biscottoId: follower.biscotto?.id,
+      });
+      return;
+    }
+    const { options } = this.context;
+    let messages: ChatMessage[] = [];
+    try {
+      const scoops = options.getScoops?.();
+      const exists = !scoops || scoops.some((scoop) => scoop.jid === seatJid);
+      if (!exists) {
+        this.context.log.warn('Biscotto seat unit no longer exists — sending an empty snapshot', {
+          bootstrapId,
+        });
+      } else if (seatJid === options.getScoopJid()) {
+        messages = options.getMessages();
+      } else if (options.getMessagesForScoop) {
+        messages = await Promise.resolve(options.getMessagesForScoop(seatJid));
+      }
+    } catch (err) {
+      this.context.log.warn('Could not read the seat unit transcript — sending an empty snapshot', {
+        bootstrapId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      messages = [];
+    }
+
+    const current = this.context.followers.followers.get(bootstrapId);
+    if (current !== follower) return;
+    follower.selectedScoopJid = seatJid;
+    sendSnapshot(follower.sync, messages, seatJid);
   }
 
   broadcastSnapshot(): void {

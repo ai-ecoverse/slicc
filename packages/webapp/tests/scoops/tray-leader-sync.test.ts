@@ -327,6 +327,7 @@ describe('LeaderSyncManager', () => {
     const seat = (approver: 'off' | 'user') => ({
       id: 'seat1',
       label: 'Anna',
+      unitJid: 'cone',
       gates: { message: { approver }, tool: { approver: 'user' as const } },
     });
 
@@ -750,6 +751,7 @@ describe('LeaderSyncManager', () => {
       biscotto: {
         id: 'seat-1',
         label: 'Anna',
+        unitJid: 'cone',
         gates: { message: { approver: 'user' }, tool: { approver: 'user' } },
       },
     });
@@ -787,6 +789,7 @@ describe('LeaderSyncManager', () => {
       biscotto: {
         id: 'seat-1',
         label: 'Anna',
+        unitJid: 'cone',
         gates: { message: { approver: 'user' }, tool: { approver: 'user' } },
       },
     });
