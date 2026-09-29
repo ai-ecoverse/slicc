@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Packument } from '../../../src/shell/ipk/registry.js';
 import {
   type InstallNode,
   type PackumentSupplier,
   resolveDependencyTree,
-} from '../../../src/shell/ipk/resolver.js';
+} from '../../../src/shell/ipk/install-plan.js';
+import type { Packument } from '../../../src/shell/ipk/registry.js';
+import { trackInFlight } from './helpers/in-flight.js';
 
 interface PackumentInput {
   name: string;
@@ -443,3 +444,120 @@ function countNodes(root: Record<string, InstallNode>): number {
   for (const top of Object.values(root)) visit(top);
   return count;
 }
+
+describe('resolveDependencyTree: concurrent packument fetching', () => {
+  const WIDE: PackumentInput[] = [
+    { name: 'a', versions: ['1.0.0'], deps: { '1.0.0': { b: '^1', c: '^1', d: '^1', e: '^1' } } },
+    ...['b', 'c', 'd', 'e'].map((name) => ({
+      name,
+      versions: ['1.0.0'],
+      deps: { '1.0.0': { [`${name}-dep`]: '^1' } },
+    })),
+    ...['b', 'c', 'd', 'e'].map((name) => ({ name: `${name}-dep`, versions: ['1.0.0'] })),
+  ];
+
+  it('fetches independent packuments concurrently, at most `concurrency` at a time', async () => {
+    const tracked = trackInFlight(makeSupplier(WIDE));
+    await resolveDependencyTree({
+      rootDependencies: { a: '^1' },
+      fetchPackument: tracked.fn,
+      concurrency: 3,
+    });
+    expect(tracked.stats.max).toBe(3);
+  });
+
+  it('fetches each packument once even when speculation and placement both ask', async () => {
+    const supplier = makeSupplier(WIDE);
+    const calls: string[] = [];
+    await resolveDependencyTree({
+      rootDependencies: { a: '^1', b: '^1' },
+      fetchPackument: (name) => {
+        calls.push(name);
+        return supplier(name);
+      },
+    });
+    expect(calls.sort()).toEqual(
+      ['a', 'b', 'b-dep', 'c', 'c-dep', 'd', 'd-dep', 'e', 'e-dep'].sort()
+    );
+  });
+
+  it('builds the same plan whatever order the fetches complete in', async () => {
+    const input: PackumentInput[] = [
+      { name: 'left', versions: ['1.0.0'], deps: { '1.0.0': { shared: '^1.0.0' } } },
+      { name: 'right', versions: ['1.0.0'], deps: { '1.0.0': { shared: '^2.0.0' } } },
+      { name: 'shared', versions: ['1.0.0', '2.0.0'] },
+    ];
+    const supplier = makeSupplier(input);
+    const delays: Record<string, number> = { left: 30, right: 1, shared: 15 };
+    const delayed: PackumentSupplier = async (name) => {
+      await new Promise((resolve) => setTimeout(resolve, delays[name] ?? 0));
+      return supplier(name);
+    };
+    const roots = { left: '^1', right: '^1' };
+    const sequential = await resolveDependencyTree({
+      rootDependencies: roots,
+      fetchPackument: supplier,
+      concurrency: 1,
+    });
+    const parallel = await resolveDependencyTree({
+      rootDependencies: roots,
+      fetchPackument: delayed,
+    });
+    expect(parallel).toEqual(sequential);
+    expect(parallel.root.shared?.version).toBe('1.0.0');
+    expect(parallel.root.right?.dependencies.shared?.version).toBe('2.0.0');
+  });
+
+  it('ignores a failed speculative fetch that placement never needs', async () => {
+    const supplier = makeSupplier([
+      { name: 'a', versions: ['1.0.0'], deps: { '1.0.0': { b: '1.0.0' } } },
+      { name: 'b', versions: ['1.0.0', '1.1.0'], deps: { '1.1.0': { ghost: '^1' } } },
+    ]);
+    const asked: string[] = [];
+    const plan = await resolveDependencyTree({
+      rootDependencies: { a: '^1', b: '^1' },
+      fetchPackument: async (name) => {
+        asked.push(name);
+        return supplier(name);
+      },
+    });
+    expect(asked).toContain('ghost');
+    expect(plan.root.b?.version).toBe('1.0.0');
+    expect(plan.root.ghost).toBeUndefined();
+  });
+
+  it('drops speculative fetches still queued when resolution finishes', async () => {
+    const ghosts = Array.from({ length: 10 }, (_, i) => `g${i}`);
+    const supplier = makeSupplier([
+      { name: 'a', versions: ['1.0.0'], deps: { '1.0.0': { b: '1.0.0' } } },
+      {
+        name: 'b',
+        versions: ['1.0.0', '1.1.0'],
+        deps: { '1.1.0': Object.fromEntries(ghosts.map((g) => [g, '^1'])) },
+      },
+      ...ghosts.map((name) => ({ name, versions: ['1.0.0'] })),
+    ]);
+    const asked: string[] = [];
+    await resolveDependencyTree({
+      rootDependencies: { a: '^1', b: '^1' },
+      fetchPackument: async (name) => {
+        asked.push(name);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return supplier(name);
+      },
+      concurrency: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(asked.filter((n) => n.startsWith('g')).length).toBeLessThanOrEqual(1);
+  });
+
+  it('still reports a needed packument that fails to fetch', async () => {
+    const supplier = makeSupplier([
+      { name: 'a', versions: ['1.0.0'], deps: { '1.0.0': { missing: '^1' } } },
+    ]);
+    await expect(
+      resolveDependencyTree({ rootDependencies: { a: '^1' }, fetchPackument: supplier })
+    ).rejects.toThrow(/failed to resolve missing@\^1: unknown package: missing/);
+  });
+});
