@@ -10,6 +10,7 @@ import {
   main,
   parsePublishCli,
   publicRecord,
+  redactCriteria,
   REPORT_MARKER,
   stage,
   taskSetEnvelope,
@@ -108,6 +109,27 @@ describe('what may be published', () => {
     expect(own.metrics.tabs).toHaveLength(1);
     const errored = { benchmark: 'BU_Bench_V1', error: 'x' };
     expect(publicRecord(errored)).toEqual(errored);
+  });
+
+  it('redacts upstream rubric item ids wherever they appear, not only in statuses', () => {
+    const reason =
+      'judge output is invalid: finding A5_line_fields is not_assessable without a reason; finding A12_total_is_canonical too';
+    const up = publicRecord(
+      record('BU_Bench_V2', 'claude-opus-5-5', 't', {
+        judge: { model: 'j', fallback_reason: reason },
+        statuses: { A5_line_fields: 'met' },
+      })
+    );
+    expect(up.judge.fallback_reason).toBe(
+      'judge output is invalid: finding [criterion] is not_assessable without a reason; finding [criterion] too'
+    );
+    expect(JSON.stringify(up)).not.toMatch(/A\d+_[a-z]/);
+    expect(up.model_id ?? up.config?.model).not.toContain('[criterion]');
+    // Our own sets keep their text.
+    const own = publicRecord(
+      record('SLICC_Smoke', 'm', 't', { judge: { model: 'j', fallback_reason: reason } })
+    );
+    expect(own.judge.fallback_reason).toBe(reason);
   });
 
   it('publishes our own task sets and refuses upstream ones', () => {
