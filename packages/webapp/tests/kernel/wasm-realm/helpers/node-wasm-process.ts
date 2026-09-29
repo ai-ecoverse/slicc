@@ -10,7 +10,12 @@ import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { build } from 'esbuild';
 import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
-import { FdTable, nullFile, sinkFile } from '../../../../src/kernel/wasm-realm/fd-table.js';
+import {
+  bytesSource,
+  FdTable,
+  nullFile,
+  sinkFile,
+} from '../../../../src/kernel/wasm-realm/fd-table.js';
 import {
   type SpawnWasmOptions,
   spawnWasmProcess,
@@ -126,7 +131,7 @@ export interface RunningProgram {
 
 /**
  * Start `program` with `args` and `env` on the loopback network `net`, over
- * a filesystem of `files`; stdin is /dev/null. Every child it spawns runs `program` again (with the argv it
+ * a filesystem of `files`; stdin is `stdin` (default /dev/null). Every child it spawns runs `program` again (with the argv it
  * asked for) on the descriptors the kernel built for it, and writes where
  * those lead: stdout / stderr here, unless redirected.
  */
@@ -137,7 +142,8 @@ export function runProgram(
   net: LoopbackNet,
   argv0 = 'socktest',
   env: Record<string, string> = {},
-  files: Readonly<Record<string, string>> = {}
+  files: Readonly<Record<string, string>> = {},
+  stdin?: Uint8Array
 ): RunningProgram {
   const fs = memoryFs(files);
   const out: string[] = [];
@@ -145,7 +151,7 @@ export function runProgram(
   const waiters: Array<() => void> = [];
   const decoder = new TextDecoder();
   const fds = new FdTable();
-  fds.installAt(0, nullFile());
+  fds.installAt(0, stdin ? bytesSource(stdin) : nullFile());
   fds.installAt(
     1,
     sinkFile((bytes) => {
