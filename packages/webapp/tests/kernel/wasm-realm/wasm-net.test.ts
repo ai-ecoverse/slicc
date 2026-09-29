@@ -63,6 +63,38 @@ describe('wasm-realm network (real programs)', () => {
     );
   }, 30_000);
 
+  it('a C client sends any request it reads on stdin through the proxy (socktest pipe)', async () => {
+    const { net, seen, stop } = network((req) =>
+      reply(
+        206,
+        [
+          ['Content-Range', 'bytes 2-4/10'],
+          ['Set-Cookie', 'a=1'],
+          ['Set-Cookie', 'b=2'],
+        ],
+        `${req.headers.find(([n]) => n === 'Range')?.[1]} ${req.headers.find(([n]) => n === 'Authorization')?.[1]}`
+      )
+    );
+    const request =
+      'GET http://example.com/r HTTP/1.0\r\nRange: bytes=2-4\r\nAuthorization: Bearer m\r\n\r\n';
+    const run = runProgram(
+      worker.file,
+      socktest,
+      ['pipe', '127.0.0.1', '3128'],
+      net,
+      'socktest',
+      {},
+      {},
+      new TextEncoder().encode(request)
+    );
+    expect(await run.exited).toBe(0);
+    stop();
+    expect(seen.map((r) => r.url)).toEqual(['http://example.com/r']);
+    expect(run.stdout()).toBe(
+      'HTTP/1.1 206 \r\nContent-Range: bytes 2-4/10\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\nConnection: close\r\n\r\nbytes=2-4 Bearer m'
+    );
+  }, 30_000);
+
   // curl 8.22.0 built with the toolchain's shims is 0.5 MB: not a fixture. Build it with
   // the toolchain's build/loopback-3571/build-curl-http.sh and point SLICC_WASM_CURL at curl.js.
   it.skipIf(!process.env.SLICC_WASM_CURL)(
