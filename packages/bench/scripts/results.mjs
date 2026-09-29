@@ -222,9 +222,12 @@ export function reportData(input) {
       );
     };
     const base = skillsBaseline(skills);
+
+    const finished = (m, s) =>
+      rs.some((r) => r.config.model === m && r.config.skills === s && ran(r));
     const skillDeltas = [];
-    for (const m of models) {
-      for (const s of skills.filter((x) => x !== base)) {
+    for (const m of models.filter((x) => finished(x, base))) {
+      for (const s of skills.filter((x) => x !== base && finished(m, x))) {
         skillDeltas.push(delta(rs, cfg(m, base), cfg(m, s), { model: m, from: base, to: s }));
       }
     }
