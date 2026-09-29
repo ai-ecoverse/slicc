@@ -7,6 +7,7 @@
  *   socktest server PORT COUNT    echo COUNT connections, upper-cased
  *   socktest client HOST PORT MSG non-blocking connect, send MSG, print the reply
  *   socktest http HOST PORT PATH  GET PATH over read/write, print the response
+ *   socktest pipe HOST PORT       send stdin (a whole request), print the response
  *   socktest errors PORT          connect refused / unreachable, unknown host
  *   socktest unix PATH            AF_UNIX listener, client and socketpair in one process
  */
@@ -132,6 +133,23 @@ static int http(const char *host, const char *port, const char *path) {
   return 0;
 }
 
+/* Send everything stdin holds, then copy the reply to stdout until the peer closes. */
+static int pipe_request(const char *host, const char *port) {
+  int s = connect_to(host, port, 0);
+  if (s < 0) return 1;
+  char buf[4096];
+  for (ssize_t n; (n = read(0, buf, sizeof buf)) > 0;) {
+    for (ssize_t off = 0; off < n;) {
+      ssize_t w = write(s, buf + off, n - off);
+      if (w < 0) return fail("write");
+      off += w;
+    }
+  }
+  for (ssize_t r; (r = read(s, buf, sizeof buf)) > 0;) fwrite(buf, 1, r, stdout);
+  close(s);
+  return 0;
+}
+
 static int errors(const char *port) {
   struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(atoi(port))};
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -175,8 +193,9 @@ int main(int argc, char **argv) {
   if (argc == 4 && strcmp(argv[1], "server") == 0) return server(atoi(argv[2]), atoi(argv[3]));
   if (argc == 5 && strcmp(argv[1], "client") == 0) return client(argv[2], argv[3], argv[4]);
   if (argc == 5 && strcmp(argv[1], "http") == 0) return http(argv[2], argv[3], argv[4]);
+  if (argc == 4 && strcmp(argv[1], "pipe") == 0) return pipe_request(argv[2], argv[3]);
   if (argc == 3 && strcmp(argv[1], "errors") == 0) return errors(argv[2]);
   if (argc == 3 && strcmp(argv[1], "unix") == 0) return unix_sockets(argv[2]);
-  fprintf(stderr, "usage: socktest server|client|http|errors|unix ...\n");
+  fprintf(stderr, "usage: socktest server|client|http|pipe|errors|unix ...\n");
   return 2;
 }

@@ -9,6 +9,7 @@ import { gzipSync, zstdCompressSync } from 'node:zlib';
 import { build } from 'esbuild';
 import puppeteer from 'puppeteer-core';
 import { findChromeExecutable } from '../../node-server/src/chrome-launch.js';
+import { prepareRealmCase } from './extension-realm-proxy-case.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const TOKEN = 'ghp_rawCheckToken0123456789abcd';
@@ -89,8 +90,13 @@ function respond(path: string, req: IncomingMessage, res: ServerResponse, body: 
   }
 }
 
-async function startUpstream(): Promise<{ origin: string; close: () => void }> {
-  const server = createServer((req, res) => {
+async function startUpstream(): Promise<{
+  origin: string;
+  port: number;
+  handler: (req: IncomingMessage, res: ServerResponse) => void;
+  close: () => void;
+}> {
+  const handler = (req: IncomingMessage, res: ServerResponse): void => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
@@ -105,11 +111,12 @@ async function startUpstream(): Promise<{ origin: string; close: () => void }> {
       });
       respond(path, req, res, body);
     });
-  });
+  };
+  const server = createServer(handler);
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : 0;
-  return { origin: `http://127.0.0.1:${port}`, close: () => server.close() };
+  return { origin: `http://127.0.0.1:${port}`, port, handler, close: () => server.close() };
 }
 
 async function bundleClient(): Promise<string> {
@@ -174,6 +181,7 @@ async function main(): Promise<void> {
   cpSync(extSrc, ext, { recursive: true });
   const profile = join(work, 'profile');
   const upstream = await startUpstream();
+  const realm = await prepareRealmCase(repoRoot, upstream.handler);
   const client = await bundleClient();
   const chromeProc = spawn(
     chromePath,
@@ -185,6 +193,7 @@ async function main(): Promise<void> {
       '--headless=new',
       `--disable-extensions-except=${ext}`,
       `--load-extension=${ext}`,
+      ...realm.chromeArgs,
       'about:blank',
     ],
     { stdio: 'ignore' }
@@ -210,11 +219,23 @@ async function main(): Promise<void> {
     await page.evaluate('globalThis.__name = (f) => f');
     await page.evaluate(client);
     await runChecks(page, upstream.origin);
+    await realm.run({
+      repoRoot,
+      browser,
+      extensionId: new URL(sw.url()).host,
+      optionsPage: page,
+      upstreamPort: upstream.port,
+      handler: upstream.handler,
+      seen,
+      rangeBody: RANGE_BODY,
+      check,
+    });
     await browser.disconnect();
   } finally {
     clearTimeout(hardStop);
     chromeProc.kill('SIGKILL');
     upstream.close();
+    realm.close();
     rmSync(work, { recursive: true, force: true });
   }
 }
