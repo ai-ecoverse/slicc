@@ -22,6 +22,9 @@ import {
 
 const url = 'https://github.com/o/r.git/info/refs?service=git-upload-pack';
 
+/** A text type forces the buffered path (the float unmasks secrets in it). */
+const textType: [string, string][] = [['Content-Type', 'application/json']];
+
 const redirectHead: RawFetchResponseHead = {
   status: 302,
   statusText: 'Found',
@@ -78,7 +81,7 @@ const probeOk = () =>
   new Response(
     JSON.stringify({
       rawFetch: 1,
-      requestBodyStreaming: false,
+      requestBodyStreaming: true,
       maxRequestBodyBytes: RAW_FETCH_BRIDGE_REQUEST_BODY_CAP,
     }),
     { headers: { 'content-type': 'application/json' } }
@@ -115,7 +118,7 @@ describe('raw proxied fetch — bridge floats (CLI, cloud)', () => {
   it('asks the bridge once what raw mode it supports', async () => {
     expect(await getRawFetchCapabilities()).toEqual({
       supported: true,
-      requestBodyStreaming: false,
+      requestBodyStreaming: true,
       maxRequestBodyBytes: RAW_FETCH_BRIDGE_REQUEST_BODY_CAP,
     });
     await getRawFetchCapabilities();
@@ -183,6 +186,7 @@ describe('raw proxied fetch — bridge floats (CLI, cloud)', () => {
     const controller = new AbortController();
     const pending = createProxiedStreamingFetch({ mode: 'raw' })(url, {
       method: 'PUT',
+      headers: textType,
       body,
       signal: controller.signal,
     });
@@ -323,7 +327,7 @@ describe('raw proxied fetch — bridge floats (CLI, cloud)', () => {
       cancel: onCancel,
     });
     await expect(
-      createProxiedStreamingFetch({ mode: 'raw' })(url, { method: 'PUT', body })
+      createProxiedStreamingFetch({ mode: 'raw' })(url, { method: 'PUT', headers: textType, body })
     ).rejects.toMatchObject({ code: 'request-body-too-large', status: 413 });
     expect(sent).toBeGreaterThan(RAW_FETCH_BRIDGE_REQUEST_BODY_CAP);
     expect(onCancel).toHaveBeenCalled();
@@ -332,7 +336,11 @@ describe('raw proxied fetch — bridge floats (CLI, cloud)', () => {
     const oversized = { size: RAW_FETCH_BRIDGE_REQUEST_BODY_CAP + 1 } as Blob;
     Object.setPrototypeOf(oversized, Blob.prototype);
     await expect(
-      createProxiedStreamingFetch({ mode: 'raw' })(url, { method: 'PUT', body: oversized })
+      createProxiedStreamingFetch({ mode: 'raw' })(url, {
+        method: 'PUT',
+        headers: textType,
+        body: oversized,
+      })
     ).rejects.toMatchObject({ code: 'request-body-too-large' });
   });
 
@@ -345,9 +353,51 @@ describe('raw proxied fetch — bridge floats (CLI, cloud)', () => {
         controller.close();
       },
     });
-    await createProxiedStreamingFetch({ mode: 'raw' })(url, { method: 'POST', body });
+    await createProxiedStreamingFetch({ mode: 'raw' })(url, {
+      method: 'POST',
+      headers: textType,
+      body,
+    });
     const init = fetchSpy.mock.calls[0]![1];
     expect([...new Uint8Array(await (init.body as Blob).arrayBuffer())]).toEqual([1, 2, 3]);
+    expect(init.duplex).toBeUndefined();
+  });
+
+  it('streams a binary upload of unknown length, replaying it once after a refusal', async () => {
+    const received: number[][] = [];
+    fetchSpy
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+        received.push([...new Uint8Array(await new Response(init.body).arrayBuffer())]);
+        return bridgeResponse(frameWith({ ...redirectHead, status: 200 }));
+      });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([7, 8]));
+        controller.enqueue(new Uint8Array([9]));
+        controller.close();
+      },
+    });
+    const resp = await createProxiedStreamingFetch({ mode: 'raw' })(url, {
+      method: 'POST',
+      headers: [['Content-Type', 'application/x-git-receive-pack-request']],
+      body,
+    });
+    expect(resp.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[1]![1]).toMatchObject({ method: 'POST', duplex: 'half' });
+    expect(received).toEqual([[7, 8, 9]]);
+  });
+
+  it('keeps small binary bodies buffered so the bridge sees their length', async () => {
+    fetchSpy.mockResolvedValue(bridgeResponse(frameWith({ ...redirectHead, status: 200 })));
+    await createProxiedStreamingFetch({ mode: 'raw' })(url, {
+      method: 'PUT',
+      body: new Uint8Array(1024),
+    });
+    const init = fetchSpy.mock.calls[0]![1];
+    expect(init.body).toBeInstanceOf(Blob);
+    expect(init.duplex).toBeUndefined();
   });
 
   it('leaves the default streaming mode on the X-Target-URL route', async () => {

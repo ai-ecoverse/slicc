@@ -89,9 +89,10 @@ export function parseRawFetchProbeReply(value: unknown): RawFetchProbeReply | nu
 export const RAW_FETCH_CONTENT_TYPE = 'application/vnd.slicc.raw-fetch';
 
 /**
- * Request-body ceiling on the node-server hop (CLI and cloud). This hop
- * buffers the upload on both ends for now; past this size the bridge answers
- * 413 and the webapp refuses before sending.
+ * Request-body ceiling for the uploads the node-server hop (CLI and cloud)
+ * buffers: text and HMAC-signed bodies, and binary bodies below the stream
+ * threshold (see `raw-fetch-upload.ts`). Past it the bridge answers 413 and
+ * the webapp refuses before sending.
  */
 export const RAW_FETCH_BRIDGE_REQUEST_BODY_CAP = 256 * 1024 * 1024;
 
