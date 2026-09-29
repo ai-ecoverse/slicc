@@ -8,7 +8,13 @@ import {
   REGISTRY_NPMJS_HOST as REGISTRY_HOST_INTERNAL,
   validateNpmPackageName,
 } from '../supplemental-commands/cdn-url-builder.js';
-import { isValidRange, maxSatisfying } from './semver.js';
+import {
+  exactVersion,
+  isValidRange,
+  maxOnReleaseLine,
+  maxSatisfying,
+  satisfies,
+} from './semver.js';
 
 export const REGISTRY_NPMJS_HOST = REGISTRY_HOST_INTERNAL;
 export const EXPECTED_TARBALL_HOST = REGISTRY_HOST_INTERNAL;
@@ -173,19 +179,6 @@ function buildResolveContext(packument: Packument): ResolveContext {
   };
 }
 
-function pickLatest(ctx: ResolveContext): string {
-  const latest = ctx.distTags.latest;
-  if (latest && ctx.versionMap[latest]) return latest;
-  if (latest) {
-    throw new Error(
-      `resolveVersion(${ctx.packageName}): 'latest' dist-tag points to ${latest} but that version is missing from the packument`
-    );
-  }
-  const best = maxSatisfying(ctx.versions, '*');
-  if (best) return best;
-  throw new Error(`resolveVersion(${ctx.packageName}): cannot resolve a latest version`);
-}
-
 function pickDistTag(ctx: ResolveContext, tag: string): string {
   const tagVersion = ctx.distTags[tag];
   if (tagVersion && ctx.versionMap[tagVersion]) return tagVersion;
@@ -194,35 +187,62 @@ function pickDistTag(ctx: ResolveContext, tag: string): string {
   );
 }
 
-function maxSatisfyingLive(ctx: ResolveContext, range: string): string | null {
-  const live = ctx.versions.filter((v) => !ctx.versionMap[v]?.deprecated);
-  return maxSatisfying(live, range) ?? maxSatisfying(ctx.versions, range);
+function isDeprecated(ctx: ResolveContext, version: string): boolean {
+  return Boolean(ctx.versionMap[version]?.deprecated);
+}
+
+function nonDeprecatedPick(ctx: ResolveContext, picked: string, range: string): string | null {
+  if (!isDeprecated(ctx, picked) || ctx.versions.length <= 1) return null;
+  const live = ctx.versions.filter((v) => !isDeprecated(ctx, v));
+  if (range === '*' && !satisfies(picked, '*')) {
+    const sameLine = maxOnReleaseLine(live, picked);
+    if (sameLine) return sameLine;
+  }
+  return maxSatisfying(live, range);
+}
+
+function pickFromRange(ctx: ResolveContext, range: string): string | null {
+  const latest = ctx.distTags.latest;
+  if (latest && (range === '*' || satisfies(latest, range))) {
+    return nonDeprecatedPick(ctx, latest, range) ?? latest;
+  }
+  const best = maxSatisfying(ctx.versions, range);
+  if (!best) return null;
+  return nonDeprecatedPick(ctx, best, range) ?? best;
+}
+
+function noVersionError(ctx: ResolveContext, requested: string): Error {
+  const n = ctx.versions.length;
+  return new Error(
+    `resolveVersion(${ctx.packageName}): no version satisfies '${requested}' (have ${n} version${n === 1 ? '' : 's'})`
+  );
 }
 
 export function resolveVersion(packument: Packument, range: string): string {
   const ctx = buildResolveContext(packument);
   const requested = (range ?? '').trim();
-
   if (requested === '' || requested === 'latest') {
-    return pickLatest(ctx);
+    if (ctx.distTags.latest === undefined) {
+      throw new Error(`resolveVersion(${ctx.packageName}): packument has no 'latest' dist-tag`);
+    }
+    return pickDistTag(ctx, 'latest');
   }
-  if (ctx.versionMap[requested]) return requested;
+
+  const exact = exactVersion(requested);
+  if (exact !== null) {
+    if (ctx.versionMap[exact]) return exact;
+    throw noVersionError(ctx, requested);
+  }
 
   if (isValidRange(requested)) {
-    let best: string | null = null;
-    try {
-      best = maxSatisfyingLive(ctx, requested);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+    const picked = pickFromRange(ctx, requested === 'x' ? '*' : requested);
+    if (picked === null) throw noVersionError(ctx, requested);
+    if (!ctx.versionMap[picked]) {
       throw new Error(
-        `resolveVersion(${ctx.packageName}): invalid version or range '${requested}' (${reason})`
+        `resolveVersion(${ctx.packageName}): 'latest' dist-tag points to ${picked} but that version is missing from the packument`
       );
     }
-    if (best) return best;
-    const n = ctx.versions.length;
-    throw new Error(
-      `resolveVersion(${ctx.packageName}): no version satisfies '${requested}' (have ${n} version${n === 1 ? '' : 's'})`
-    );
+    return picked;
   }
 
   if (Object.prototype.hasOwnProperty.call(ctx.distTags, requested)) {
