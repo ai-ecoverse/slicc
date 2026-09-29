@@ -9,6 +9,8 @@
  * (`sync-sab-req` / `sync-sab-next`, see `realm/sync-sab-wire.ts`).
  */
 import type { KernelFdKind } from './fd-table.js';
+import type { ImportedMemory } from './wasi/wasi-module.js';
+import type { WasiForkState } from './wasi/wasix-fork.js';
 
 export const WASM_PROCESS_INIT = 'wasm-process-init';
 export const WASM_PROCESS_EXIT = 'wasm-process-exit';
@@ -25,6 +27,12 @@ export interface WasmProgram {
   glue: string;
   /** Compiled on the kernel side (a large module would OOM a worker). */
   module: WebAssembly.Module;
+  /**
+   * WASI: the memory the module imports (every WASIX binary imports a shared
+   * `env.memory`), read from its bytes when it was compiled — browsers do not
+   * reflect an import's type.
+   */
+  memory?: ImportedMemory;
 }
 
 /**
@@ -45,6 +53,8 @@ export interface ForkState {
   streams?: ForkStream[];
   /** The parent's working directory (filled in by the runtime). */
   cwd?: string;
+  /** A WASIX program's fork: its globals, Asyncify data and descriptor table. */
+  wasi?: WasiForkState;
 }
 
 /**
@@ -91,6 +101,8 @@ export interface WasmProcessInitMsg {
   cwd: string;
   /** The Atomics/SAB bridge for syscalls and the live VFS. */
   sab: SharedArrayBuffer;
+  /** Its parent's pid (getppid); absent: the invocation's own parent. */
+  ppid?: number;
   /** A forked child: the parent's state to resume from, instead of running main. */
   fork?: ForkState;
   /**

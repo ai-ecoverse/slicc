@@ -98,6 +98,15 @@ export class FileBuffer {
     this.orphaned = true;
   }
 
+  isOrphan(): boolean {
+    return this.orphaned;
+  }
+
+  /** The current bytes (a copy), for a handoff to the kernel. */
+  contents(): Uint8Array {
+    return this.load().slice(0, this.length);
+  }
+
   /** Write back what changed. */
   flush(): void {
     if (this.orphaned || !this.dirty || !this.data) return;

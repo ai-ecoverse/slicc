@@ -26,8 +26,22 @@ export class WasiMemory {
     return new Uint8Array(this.buffer(), ptr, len);
   }
 
+  /** A (ptr, len) string; decoded from a copy (TextDecoder refuses a view of a shared memory). */
   string(ptr: number, len: number): string {
-    return decoder.decode(this.bytes(ptr, len));
+    return decoder.decode(this.bytes(ptr, len).slice());
+  }
+
+  /** A NUL-terminated string at `ptr`. */
+  cString(ptr: number): string {
+    const bytes = new Uint8Array(this.buffer());
+    let end = ptr;
+    while (end < bytes.length && bytes[end] !== 0) end++;
+    return decoder.decode(bytes.slice(ptr, end));
+  }
+
+  /** The memory's size in bytes (grows). */
+  size(): number {
+    return this.buffer().byteLength;
   }
 
   /** `[base, length]` of each of `count` iovecs at `ptr`. */

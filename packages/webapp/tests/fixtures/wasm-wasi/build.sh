@@ -24,3 +24,23 @@ mkdir -p "$OUT"
 cp "$OUT/wasitest-em.js" "$HERE/wasitest-em"
 cp "$OUT/wasitest-em.wasm" "$HERE/wasitest-em.wasm"
 ls -la "$HERE/wasitest-em" "$HERE/wasitest-em.wasm"
+# wasixtest: a WASIX program (wasix-libc, phase 5c), then Asyncify for fork and
+# setjmp. WASIX_SYSROOT: wasix-libc's sysroot (github.com/wasix-org/wasix-libc
+# releases), whose builtins stand in for clang's; wasm-opt from binaryen.
+WASIX_SYSROOT="${WASIX_SYSROOT:-$TOOLCHAIN/tmp-wasi/wasix/sysroot/wasix-sysroot/sysroot}"
+RES="$OUT/wasix-resource-dir"
+rm -rf "$RES" && mkdir -p "$RES/lib/wasm32-unknown-wasi"
+ln -s "$("$TOOLCHAIN/install/bin/clang" -print-resource-dir)/include" "$RES/include"
+ln -s "$WASIX_SYSROOT/lib/wasm32-wasi/libclang_rt.builtins-wasm32.a" \
+  "$RES/lib/wasm32-unknown-wasi/libclang_rt.builtins.a"
+"$TOOLCHAIN/install/bin/clang" --target=wasm32-wasi --sysroot="$WASIX_SYSROOT" -resource-dir "$RES" \
+  -O2 -Wno-deprecated -D_WASI_EMULATED_PROCESS_CLOCKS -matomics -mbulk-memory -mmutable-globals \
+  -pthread -mthread-model posix -ftls-model=local-exec \
+  -Wl,--shared-memory -Wl,--import-memory -Wl,--max-memory=4294967296 \
+  -Wl,--export=__data_end -Wl,--export=__heap_base -Wl,--export=__stack_pointer \
+  -Wl,--export-if-defined=__tls_base -Wl,--export-if-defined=__wasm_init_tls \
+  -Wl,--export-if-defined=__wasm_signal -Wl,--export-if-defined=wasi_thread_start \
+  -o "$OUT/wasixtest.wasm" "$HERE/wasixtest.c" -lwasi-emulated-process-clocks
+wasm-opt --asyncify -O2 --enable-threads --enable-bulk-memory --enable-mutable-globals \
+  --enable-sign-ext --enable-nontrapping-float-to-int "$OUT/wasixtest.wasm" -o "$HERE/wasixtest.wasm"
+ls -la "$HERE/wasixtest.wasm"

@@ -70,6 +70,8 @@ export interface SpawnWasmOptions {
   forker?: ChildForker;
   /** A forked child: resume from the parent's state instead of running main. */
   fork?: ForkState;
+  /** Its parent's pid (what getppid() answers). */
+  ppid?: number;
   /** kill(2) the program sends another process (a negative pid: a group): false when there is none (ESRCH). */
   kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
   /** Process groups and sessions of its invocation. */
@@ -210,6 +212,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     env: opts.env,
     cwd: opts.cwd,
     sab,
+    ...(opts.ppid !== undefined ? { ppid: opts.ppid } : {}),
     ...(opts.fork ? { fork: opts.fork } : { fds: inheritedFds(opts.fds) }),
   };
   // A fork's memory copy is the child's alone: hand it over instead of cloning it.

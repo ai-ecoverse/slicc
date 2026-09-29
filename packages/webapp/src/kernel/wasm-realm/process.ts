@@ -66,10 +66,28 @@ export type WasmSyscall =
   | { op: 'fd-info'; fd: number }
   /** dup(2): the lowest free fd >= `min` (default 3) on the same description. */
   | { op: 'fd-dup'; fd: number; min?: number }
-  /** Take a number for a descriptor the process's worker holds itself (WASI): `fd`, or the lowest free >= 3. */
-  | { op: 'fd-reserve'; fd?: number }
-  /** WASI fd_renumber: `to` becomes `from`'s description (what was at `to` closes), `from` closes. */
-  | { op: 'fd-renumber'; from: number; to: number }
+  /** Take a number for a descriptor the process's worker holds itself (WASI): `fd`, or the lowest free >= `min` (3). */
+  | { op: 'fd-reserve'; fd?: number; min?: number }
+  /**
+   * WASI fd_renumber: `to` becomes `from`'s description (what was at `to`
+   * closes), `from` closes — unless `keep` (WASIX's, which is dup2).
+   */
+  | { op: 'fd-renumber'; from: number; to: number; keep?: boolean }
+  /**
+   * A worker-held VFS file becomes a kernel description at its own number
+   * (a WASIX fork or exec shares it): `share` another promoted fd's
+   * description, or open one from `path` at `position` with `contents`.
+   */
+  | {
+      op: 'fd-promote';
+      fd: number;
+      share?: number;
+      path?: string;
+      flags?: number;
+      position?: number;
+      contents?: Uint8Array;
+      orphan?: boolean;
+    }
   /** open("/dev/tty"): a new descriptor on the controlling terminal (ENXIO without one). */
   | { op: 'fd-open-tty' }
   | { op: 'tty-get'; fd: number }
@@ -152,6 +170,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-dup',
   'fd-reserve',
   'fd-renumber',
+  'fd-promote',
   'fd-open-tty',
   'tty-get',
   'tty-set',
@@ -418,11 +437,14 @@ export class WasmProcess {
       case 'fd-dup':
         return { ok: true, kind: 'json', json: this.fds.dup(req.fd, req.min ?? 3) };
       case 'fd-reserve':
-        return { ok: true, kind: 'json', json: this.reserve(req.fd) };
+        return { ok: true, kind: 'json', json: this.reserve(req.fd, req.min) };
+      case 'fd-promote':
+        this.promote(req);
+        return { ok: true, kind: 'void' };
       case 'fd-renumber':
         if (req.from !== req.to) {
           this.fds.dup2(req.from, req.to);
-          await Promise.resolve(this.fds.close(req.from));
+          if (!req.keep) await Promise.resolve(this.fds.close(req.from));
         }
         return { ok: true, kind: 'void' };
       case 'fd-open-tty': {
@@ -449,9 +471,27 @@ export class WasmProcess {
     }
   }
 
+  /** fd-promote: the held number `fd` becomes a VFS file description (or shares one). */
+  private promote(req: Extract<WasmSyscall, { op: 'fd-promote' }>): void {
+    if (!this.fds.get(req.fd).file.held) throw new KernelError('EBADF');
+    if (req.share !== undefined) {
+      this.fds.dup2(req.share, req.fd);
+      return;
+    }
+    if (!this.options.fs || req.path === undefined) throw new KernelError('EINVAL');
+    const file = vfsFile(this.options.fs, {
+      path: req.path,
+      flags: req.flags ?? 0,
+      position: req.position ?? 0,
+      ...(req.contents !== undefined ? { contents: req.contents } : {}),
+      ...(req.orphan ? { orphan: true } : {}),
+    });
+    this.fds.installAt(req.fd, file);
+  }
+
   /** A held number: exactly `fd` (EBADF when taken), else the lowest free one >= 3. */
-  private reserve(fd: number | undefined): number {
-    if (fd === undefined) return this.fds.install(heldFile(), 3);
+  private reserve(fd: number | undefined, min = 3): number {
+    if (fd === undefined) return this.fds.install(heldFile(), Math.max(3, min));
     if (this.fds.has(fd)) throw new KernelError('EBADF');
     this.fds.installAt(fd, heldFile());
     return fd;
