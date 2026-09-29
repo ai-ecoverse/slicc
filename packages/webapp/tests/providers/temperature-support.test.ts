@@ -82,6 +82,7 @@ describe('non-Claude Bedrock models that reject temperature', () => {
     ['global.openai.gpt-6-luna'],
     ['us.openai.gpt-6-luna'],
     ['global.openai.gpt-6-astra'],
+    ['global.openai.gpt-6.1-sol'],
     ['us.openai.gpt-6-astra'],
     ['global.moonshotai.kimi-k3'],
     ['us.moonshotai.kimi-k3'],
@@ -93,6 +94,7 @@ describe('non-Claude Bedrock models that reject temperature', () => {
     const arn = 'arn:aws:bedrock:us-west-2:1:application-inference-profile/x';
     expect(modelSupportsTemperature(arn, 'GPT-5.6 Sol (Global)')).toBe(false);
     expect(modelSupportsTemperature(arn, 'GPT-6 Astra (US)')).toBe(false);
+    expect(modelSupportsTemperature(arn, 'GPT-6.1 Sol (Global)')).toBe(false);
     expect(modelSupportsTemperature(arn, 'Kimi K3 (Global)')).toBe(false);
   });
 
@@ -105,7 +107,7 @@ describe('non-Claude Bedrock models that reject temperature', () => {
 
   it.each([
     ['global.openai.gpt-6-terra'],
-    ['global.openai.gpt-6.1-sol'],
+    ['global.openai.gpt-6.1-sol-pro'],
     ['global.moonshotai.kimi-k3.5'],
     ['global.moonshotai.kimi-k30'],
     ['global.moonshotai.kimi-k2.5'],

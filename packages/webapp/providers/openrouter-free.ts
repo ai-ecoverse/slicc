@@ -13,6 +13,7 @@ import {
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai/compat';
 import { getApiKeyForProvider } from '../src/providers/account-store.js';
+import { toPiTranscriptContext } from '../src/providers/pi-transcript-context.js';
 import type {
   InterceptingOAuthLauncher,
   OAuthLoginOptions,
@@ -93,7 +94,7 @@ const streamOpenRouterFree = (
   if (!isModelInFreeCatalog(model.id)) {
     return refuseNonFreeModel(model);
   }
-  return streamOpenAICompletions(asOpenRouterModel(model), context, {
+  return streamOpenAICompletions(asOpenRouterModel(model), toPiTranscriptContext(context), {
     ...options,
     apiKey: getApiKeyForProvider(PROVIDER_ID) ?? options.apiKey,
     headers: withAttribution(options.headers),
@@ -108,7 +109,7 @@ const streamSimpleOpenRouterFree = (
   if (!isModelInFreeCatalog(model.id)) {
     return refuseNonFreeModel(model);
   }
-  return streamSimpleOpenAICompletions(asOpenRouterModel(model), context, {
+  return streamSimpleOpenAICompletions(asOpenRouterModel(model), toPiTranscriptContext(context), {
     ...options,
     apiKey: getApiKeyForProvider(PROVIDER_ID) ?? options.apiKey,
     headers: withAttribution(options.headers),

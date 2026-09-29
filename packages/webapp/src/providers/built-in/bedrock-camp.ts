@@ -29,6 +29,7 @@ import {
   claudeSupportsNativeXhighEffort,
   claudeSupportsPromptCaching,
 } from '../claude-model-version.js';
+import { toLegacyPiContext, toPiTranscriptContext } from '../pi-transcript-context.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
 import {
@@ -55,7 +56,7 @@ const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac|au|jp)\./;
 const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?:[4-9]|\d\d)/;
 
 const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
-  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra))|moonshotai\.kimi-k3)$/;
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3)$/;
 
 const BEDROCK_RUNTIME_HOST_RE =
   /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/i;
@@ -995,9 +996,11 @@ export const streamBedrockCamp = (
 ): AssistantMessageEventStream => {
   const stream = createAssistantMessageEventStream();
   const output = createInitialOutput(model);
-  void runBedrockCampStream(model, context, options, output, stream).catch((error) => {
-    handleStreamError(error, output, options, stream);
-  });
+  void runBedrockCampStream(model, toLegacyPiContext(context), options, output, stream).catch(
+    (error) => {
+      handleStreamError(error, output, options, stream);
+    }
+  );
   return stream;
 };
 
@@ -1016,9 +1019,11 @@ export const streamSimpleBedrockCamp = (
   context: Context,
   options?: BedrockCampSimpleOptions
 ): AssistantMessageEventStream => {
-  const base = (buildBaseOptions as Function)(model, context, options) as ReturnType<
-    typeof buildBaseOptions
-  >;
+  const base = buildBaseOptions(
+    model,
+    toPiTranscriptContext(context),
+    options as SimpleStreamOptions
+  );
   const extras = options ? pickCampExtras(options) : {};
   if (!options?.reasoning) {
     return streamBedrockCamp(model, context, { ...base, ...extras, reasoning: undefined });
@@ -1045,7 +1050,7 @@ export const streamSimpleBedrockCamp = (
       reasoning: options.reasoning,
       thinkingBudgets: {
         ...(options.thinkingBudgets || {}),
-        [clampReasoning(options.reasoning)!]: adjusted.budgetTokens,
+        [clampReasoning(options.reasoning)!]: adjusted.thinkingBudget,
       },
     });
   }

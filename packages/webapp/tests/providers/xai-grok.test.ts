@@ -1,4 +1,5 @@
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -36,7 +37,7 @@ import { registerProviderConfig } from '../../src/providers/index.js';
 
 const XAI_API = 'xai-grok-openai' as Api;
 const XAI_BASE_URL = 'https://api.x.ai/v1';
-const context = { systemPrompt: '', messages: [], tools: [] };
+const context = normalizeContext({ systemPrompt: '', messages: [], tools: [] });
 
 const nativeModels = [
   {

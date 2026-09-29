@@ -1,4 +1,5 @@
 import type {
+  AgentHarnessToolInvocation,
   EditToolInput,
   ExecutionEnv,
   ExecutionError,
@@ -6,6 +7,11 @@ import type {
   FileErrorCode,
   FileInfo,
 } from '@earendil-works/pi-agent-core';
+import {
+  type Context as PiContext,
+  TODO_CONTEXT,
+  withAbortSignal,
+} from '@earendil-works/pi-agent-core/harness/context';
 import { FsError, joinPath, normalizePath, splitPath, type VirtualFS } from '../fs/index.js';
 import type { EditArguments } from './edit-tool.js';
 import type { ToolResult } from './types.js';
@@ -82,20 +88,20 @@ function aborted<T>(signal: AbortSignal | undefined, path?: string): Result<T, F
   return signal?.aborted ? err(new VfsFileError('aborted', 'aborted', path)) : null;
 }
 
-class VfsEditExecutionEnv implements ExecutionEnv {
+class VfsEditExecutionEnv {
   constructor(
     private readonly fs: VirtualFS,
     readonly cwd: string
   ) {}
 
-  async absolutePath(path: string, signal?: AbortSignal): Promise<Result<string, FileError>> {
-    const stopped = aborted<string>(signal, path);
+  async absolutePath(path: string, context: PiContext): Promise<Result<string, FileError>> {
+    const stopped = aborted<string>(context.abortSignal, path);
     if (stopped) return stopped;
     return ok(normalizePath(path.startsWith('/') ? path : joinPath(this.cwd, path)));
   }
 
-  async canonicalPath(path: string, signal?: AbortSignal): Promise<Result<string, FileError>> {
-    const absolute = await this.absolutePath(path, signal);
+  async canonicalPath(path: string, context: PiContext): Promise<Result<string, FileError>> {
+    const absolute = await this.absolutePath(path, context);
     if (!absolute.ok) return absolute;
     try {
       return ok(await this.fs.realpath(absolute.value));
@@ -104,8 +110,8 @@ class VfsEditExecutionEnv implements ExecutionEnv {
     }
   }
 
-  async fileInfo(path: string, signal?: AbortSignal): Promise<Result<FileInfo, FileError>> {
-    const absolute = await this.absolutePath(path, signal);
+  async fileInfo(path: string, context: PiContext): Promise<Result<FileInfo, FileError>> {
+    const absolute = await this.absolutePath(path, context);
     if (!absolute.ok) return absolute;
     try {
       const stats = await this.fs.lstat(absolute.value);
@@ -121,12 +127,12 @@ class VfsEditExecutionEnv implements ExecutionEnv {
     }
   }
 
-  async readTextFile(path: string, signal?: AbortSignal): Promise<Result<string, FileError>> {
-    const absolute = await this.absolutePath(path, signal);
+  async readTextFile(path: string, context: PiContext): Promise<Result<string, FileError>> {
+    const absolute = await this.absolutePath(path, context);
     if (!absolute.ok) return absolute;
     try {
       const content = await this.fs.readTextFile(absolute.value);
-      return aborted<string>(signal, absolute.value) ?? ok(content);
+      return aborted<string>(context.abortSignal, absolute.value) ?? ok(content);
     } catch (error) {
       return err(asFileError(error, absolute.value));
     }
@@ -135,9 +141,9 @@ class VfsEditExecutionEnv implements ExecutionEnv {
   async writeFile(
     path: string,
     content: string | Uint8Array,
-    signal?: AbortSignal
+    context: PiContext
   ): Promise<Result<void, FileError>> {
-    const absolute = await this.absolutePath(path, signal);
+    const absolute = await this.absolutePath(path, context);
     if (!absolute.ok) return absolute;
     try {
       await this.fs.writeFile(absolute.value, content);
@@ -147,7 +153,7 @@ class VfsEditExecutionEnv implements ExecutionEnv {
           return err(new VfsFileError('unknown', durabilityError, absolute.value));
         }
       }
-      return aborted<void>(signal, absolute.value) ?? ok(undefined);
+      return aborted<void>(context.abortSignal, absolute.value) ?? ok(undefined);
     } catch (error) {
       return err(asFileError(error, absolute.value));
     }
@@ -167,7 +173,10 @@ class VfsEditExecutionEnv implements ExecutionEnv {
     path: string,
     options?: { maxLines?: number; abortSignal?: AbortSignal }
   ): Promise<Result<string[], FileError>> {
-    const result = await this.readTextFile(path, options?.abortSignal);
+    const result = await this.readTextFile(
+      path,
+      options?.abortSignal ? withAbortSignal(options.abortSignal, TODO_CONTEXT) : TODO_CONTEXT
+    );
     if (!result.ok) return result;
     const lines = result.value.split(/\r?\n/);
     return ok(options?.maxLines === undefined ? lines : lines.slice(0, options.maxLines));
@@ -235,9 +244,23 @@ export async function executePiEdit(
   signal?: AbortSignal
 ): Promise<ToolResult> {
   const piTool = await loadPiEditTool();
-  const result = await piTool.execute('slicc-edit', input as EditToolInput, signal, undefined, {
-    env: editEnvironment(fs, cwd),
-  });
+  const invocation: AgentHarnessToolInvocation = {
+    invocationId: 'slicc-edit',
+    operationId: 'slicc-edit',
+    turnId: 'slicc-edit',
+    getMemo: async () => undefined,
+    setMemo: async () => {},
+  };
+  const result = await piTool.execute(
+    'slicc-edit',
+    input as EditToolInput,
+    () => {},
+    {
+      env: editEnvironment(fs, cwd) as unknown as ExecutionEnv,
+    },
+    invocation,
+    signal ? withAbortSignal(signal, TODO_CONTEXT) : TODO_CONTEXT
+  );
   return {
     content: result.content
       .filter((block) => block.type === 'text')

@@ -1,4 +1,4 @@
-import type { AssistantMessage } from '../core/types.js';
+import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { canonicalModelId, representativeModelId } from '../providers/claude-model-version.js';
 import type { ScoopCostData } from '../shell/supplemental-commands/cost-command.js';
 import { isRootUnit } from '../work-unit/policy.js';

@@ -31,6 +31,7 @@ import { fetchAdobeUsage } from '../src/providers/adobe-usage.js';
 import { clearBudgetWindowCache } from '../src/providers/budget-usage-source.js';
 import { findFamilyCost } from '../src/providers/family-cost.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
+import { toPiTranscriptContext } from '../src/providers/pi-transcript-context.js';
 import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import { withSupportedTemperature } from '../src/providers/temperature-support.js';
@@ -794,7 +795,7 @@ async function pumpAdobeStream(
 
       const inner = streamOpenAICompletions(
         proxyModel as unknown as Model<'openai-completions'>,
-        context,
+        toPiTranscriptContext(context),
         withSliccVersionHeader(
           ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamAdobe[openai]')
         ) as unknown as OpenAICompletionsOptions
@@ -809,7 +810,7 @@ async function pumpAdobeStream(
 
       const inner = streamAnthropic(
         proxyModel as unknown as Model<'anthropic-messages'>,
-        context,
+        toPiTranscriptContext(context),
         withSliccVersionHeader(
           ensureSessionIdHeader(
             withAdaptiveThinkingShim(
@@ -863,7 +864,7 @@ async function pumpSimpleAdobeStream(
 
       const inner = streamSimpleOpenAICompletions(
         proxyModel as unknown as Model<'openai-completions'>,
-        context,
+        toPiTranscriptContext(context),
         withSliccVersionHeader(
           ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamSimpleAdobe[openai]')
         ) as unknown as SimpleStreamOptions
@@ -878,7 +879,7 @@ async function pumpSimpleAdobeStream(
 
       const inner = streamSimpleAnthropic(
         proxyModel as unknown as Model<'anthropic-messages'>,
-        context,
+        toPiTranscriptContext(context),
         withSliccVersionHeader(
           ensureSessionIdHeader(
             withAdaptiveThinkingShim(

@@ -131,6 +131,41 @@ describe('createCompactContext with the real estimator', () => {
     mockCompleteSimple.mockResolvedValue(llmResponse('summary'));
   });
 
+  it('does not summarize a system-only prefix when one story fits in the recent tail', async () => {
+    const system = {
+      role: 'system',
+      content: 'system instructions '.repeat(5_000),
+      timestamp: 0,
+    } as AgentMessage;
+    const messages = [system, createUser('story one'), createTextTurn('story '.repeat(10_000))];
+
+    const result = await createCompactContext(mockConfig)(messages, undefined, { force: true });
+
+    expect(result).toBe(messages);
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
+  });
+
+  it('summarizes conversation once two stories exceed the recent tail', async () => {
+    const system = {
+      role: 'system',
+      content: 'system instructions '.repeat(5_000),
+      timestamp: 0,
+    } as AgentMessage;
+    const messages = [
+      system,
+      createUser('story one'),
+      createTextTurn('story '.repeat(10_000)),
+      createUser('story two'),
+      createTextTurn('sequel '.repeat(10_000)),
+    ];
+
+    const result = await createCompactContext(mockConfig)(messages, undefined, { force: true });
+
+    expect(mockCompleteSimple).toHaveBeenCalledOnce();
+    expect(result[0]).toMatchObject({ role: 'system' });
+    expect(JSON.stringify(result)).toContain('<context-summary>');
+  });
+
   it('triggers compaction when one ~1 MB toolResult dominates the window', async () => {
     const oneMb = 'x'.repeat(1_000_000);
     const messages: AgentMessage[] = [

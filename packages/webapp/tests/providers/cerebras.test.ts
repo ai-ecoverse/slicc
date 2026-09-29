@@ -1,3 +1,5 @@
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
+
 import type { Api, Model } from '@earendil-works/pi-ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,7 +42,7 @@ import { config, register } from '../../providers/cerebras.js';
 
 const STORAGE_KEY = 'slicc-cerebras-models';
 const CEREBRAS_API = 'cerebras-openai' as Api;
-const context = { systemPrompt: '', messages: [], tools: [] };
+const context = normalizeContext({ systemPrompt: '', messages: [], tools: [] });
 
 function endedStream() {
   const stream = createAssistantMessageEventStream();

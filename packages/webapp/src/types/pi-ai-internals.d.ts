@@ -15,19 +15,21 @@ declare module '@earendil-works/pi-ai/dist/api/simple-options.js' {
     StreamOptions,
     ThinkingBudgets,
     ThinkingLevel,
+    TranscriptContext,
   } from '@earendil-works/pi-ai';
   export function buildBaseOptions(
     model: Model<Api>,
+    context: TranscriptContext,
     options?: SimpleStreamOptions,
     apiKey?: string
   ): StreamOptions;
   export function clampReasoning(
     effort: ThinkingLevel | undefined
-  ): Exclude<ThinkingLevel, 'xhigh'> | undefined;
+  ): Exclude<ThinkingLevel, 'xhigh' | 'max'> | undefined;
   export function adjustMaxTokensForThinking(
-    baseMaxTokens: number,
+    baseMaxTokens: number | undefined,
     modelMaxTokens: number,
     reasoningLevel: ThinkingLevel,
     customBudgets?: ThinkingBudgets
-  ): { maxTokens: number; budgetTokens: number | undefined };
+  ): { maxTokens: number; thinkingBudget: number };
 }

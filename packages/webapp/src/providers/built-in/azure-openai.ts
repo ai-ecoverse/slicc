@@ -23,6 +23,7 @@ import type {
 } from 'openai/resources/chat/completions';
 import type { FunctionParameters } from 'openai/resources/shared';
 import { getApiVersionForProvider, getDeploymentForProvider } from '../account-store.js';
+import { toLegacyPiContext, toPiTranscriptContext } from '../pi-transcript-context.js';
 import type { ProviderConfig } from '../types.js';
 
 const PROVIDER_ID = 'azure-openai';
@@ -412,7 +413,7 @@ const streamAzureOpenAI = (
 ): AssistantMessageEventStream => {
   const stream = createAssistantMessageEventStream();
   const output = createInitialOutput(model);
-  void runAzureStream(stream, output, model, context, options).catch((error) => {
+  void runAzureStream(stream, output, model, toLegacyPiContext(context), options).catch((error) => {
     emitStreamError(stream, output, error, Boolean(options.signal?.aborted));
   });
   return stream;
@@ -425,7 +426,7 @@ const streamSimpleAzureOpenAI = (
 ): AssistantMessageEventStream => {
   const apiKey = options?.apiKey;
   if (!apiKey) throw new Error('Azure API key is required');
-  const base = buildBaseOptions(model, options, apiKey);
+  const base = buildBaseOptions(model, toPiTranscriptContext(context), options, apiKey);
   return streamAzureOpenAI(model, context, { ...base });
 };
 

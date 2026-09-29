@@ -12,6 +12,7 @@ import {
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai/compat';
 import { getApiKeyForProvider } from '../src/providers/account-store.js';
+import { toPiTranscriptContext } from '../src/providers/pi-transcript-context.js';
 import type {
   InterceptingOAuthLauncher,
   OAuthLoginOptions,
@@ -47,7 +48,7 @@ const streamOpenRouter = (
   context: Context,
   options: ProviderStreamOptions = {}
 ) =>
-  streamOpenAICompletions(asOpenRouterModel(model), context, {
+  streamOpenAICompletions(asOpenRouterModel(model), toPiTranscriptContext(context), {
     ...options,
     apiKey: getApiKeyForProvider(PROVIDER_ID) ?? options.apiKey,
     headers: withAttribution(options.headers),
@@ -58,7 +59,7 @@ const streamSimpleOpenRouter = (
   context: Context,
   options: SimpleStreamOptions = {}
 ) =>
-  streamSimpleOpenAICompletions(asOpenRouterModel(model), context, {
+  streamSimpleOpenAICompletions(asOpenRouterModel(model), toPiTranscriptContext(context), {
     ...options,
     apiKey: getApiKeyForProvider(PROVIDER_ID) ?? options.apiKey,
     headers: withAttribution(options.headers),

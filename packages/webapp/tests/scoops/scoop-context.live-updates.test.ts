@@ -1,4 +1,5 @@
 import type { Api } from '@earendil-works/pi-ai';
+import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent, Model } from '../../src/core/index.js';
 import type { VirtualFS } from '../../src/fs/index.js';
@@ -52,7 +53,9 @@ function scoopRecord(overrides: Partial<RegisteredScoop> = {}): RegisteredScoop 
 }
 
 function fakeAgent(state: Partial<Agent['state']> = {}): Agent {
-  return { state: { model: REASONING, thinkingLevel: 'off', systemPrompt: '', ...state } } as Agent;
+  return {
+    state: { model: REASONING, thinkingLevel: 'off', systemPrompt: '', messages: [], ...state },
+  } as Agent;
 }
 
 const store = new Map<string, string>();
@@ -139,6 +142,42 @@ describe('applyThinkingLevel', () => {
 });
 
 describe('rebuildSystemPrompt', () => {
+  it('keeps the active shell and browser declarations for the next provider request', async () => {
+    const scoop = scoopRecord();
+    const shell = { name: 'shell', description: 'Run commands', parameters: { type: 'object' } };
+    const browser = { name: 'browser', description: 'Open pages', parameters: { type: 'object' } };
+    const retired = { name: 'retired', description: 'Old tool', parameters: { type: 'object' } };
+    const agent = fakeAgent({
+      messages: [
+        { role: 'system', content: 'old prompt', toolsAdded: [shell, retired], timestamp: 1 },
+        { role: 'user', content: 'do work', timestamp: 2 },
+        {
+          role: 'system',
+          content: 'new tools',
+          toolsRemoved: [{ name: 'retired' }],
+          toolsAdded: [browser],
+          timestamp: 3,
+        },
+      ] as Agent['state']['messages'],
+    });
+    const fs = { readFile: vi.fn(async () => '') } as unknown as VirtualFS;
+
+    await rebuildSystemPrompt(agent, {
+      scoop,
+      unit: toDescriptor(scoop),
+      fs,
+      skillsFs: null,
+      getGlobalMemory: async () => '',
+    });
+
+    expect(getCurrentTools(agent.state.messages).map((tool) => tool.name)).toEqual([
+      'shell',
+      'browser',
+    ]);
+    expect(agent.state.messages.filter((message) => message.role === 'system')).toHaveLength(1);
+    expect(agent.state.messages[1]).toMatchObject({ role: 'user', content: 'do work' });
+  });
+
   it('rebuilds from re-read memories and freshly loaded skills', async () => {
     const scoop = scoopRecord();
     const agent = fakeAgent({ systemPrompt: 'stale' });
@@ -154,10 +193,11 @@ describe('rebuildSystemPrompt', () => {
       getGlobalMemory: async () => 'GLOBAL NOTES',
     });
 
-    expect(agent.state.systemPrompt).not.toBe('stale');
-    expect(agent.state.systemPrompt).toContain('GLOBAL NOTES');
-    expect(agent.state.systemPrompt).toContain('CONE NOTES');
-    expect(agent.state.systemPrompt).toContain('SKILLS: demo');
+    const prompt = (agent.state.messages[0] as { content: string }).content;
+    expect(prompt).not.toBe('stale');
+    expect(prompt).toContain('GLOBAL NOTES');
+    expect(prompt).toContain('CONE NOTES');
+    expect(prompt).toContain('SKILLS: demo');
   });
 
   it('survives a unit with no memory file yet', async () => {
@@ -177,6 +217,6 @@ describe('rebuildSystemPrompt', () => {
       getGlobalMemory: async () => '',
     });
 
-    expect(agent.state.systemPrompt).toContain('SKILLS: demo');
+    expect((agent.state.messages[0] as { content: string }).content).toContain('SKILLS: demo');
   });
 });

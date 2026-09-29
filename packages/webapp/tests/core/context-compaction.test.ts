@@ -1,5 +1,6 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getLogLevel,
@@ -274,6 +275,27 @@ describe('createCompactContext', () => {
   beforeEach(() => {
     mockCompleteSimple.mockReset();
     mockCompleteSimple.mockResolvedValue(llmResponse('## Goal\ntesting\n\n## Progress\ndone'));
+  });
+
+  it('keeps the current prompt and tool declarations after summarizing a transcript', async () => {
+    const compact = createCompactContext(mockConfig);
+    const shell = { name: 'shell', description: 'Run commands', parameters: { type: 'object' } };
+    const browser = { name: 'browser', description: 'Open pages', parameters: { type: 'object' } };
+    const messages = [
+      { role: 'system', content: 'Work carefully', toolsAdded: [shell], timestamp: 1 },
+      createMessage('user', 'x'.repeat(30_000)),
+      { role: 'system', content: 'Use browser when needed', toolsAdded: [browser], timestamp: 2 },
+      ...Array.from({ length: 3 }, () => createMessage('user', 'y'.repeat(30_000))),
+    ] as AgentMessage[];
+
+    const result = await compact(messages, undefined, { force: true });
+
+    expect(result[0]).toMatchObject({
+      role: 'system',
+      content: expect.stringContaining('Work carefully'),
+    });
+    expect(getCurrentTools(result).map((tool) => tool.name)).toEqual(['shell', 'browser']);
+    expect(result.filter((message) => message.role === 'system')).toHaveLength(1);
   });
 
   it('returns messages unchanged when under threshold', async () => {

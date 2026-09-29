@@ -1,6 +1,7 @@
 import {
   BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
   BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  BEDROCK_CAMP_GPT61_EFFORT_MAP,
 } from './bedrock-camp-compat.js';
 
 interface BedrockCampCostRates {
@@ -122,6 +123,21 @@ const EXTRA_MODEL_SPECS: readonly ExtraModelSpec[] = [
     contextWindow: 1_050_000,
     maxTokens: 128_000,
     thinkingLevelMap: BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  },
+  {
+    baseId: 'openai.gpt-6.1-sol',
+    name: 'GPT-6.1 Sol',
+    profiles: ['global'],
+    globalCost: {
+      input: 2,
+      output: 10,
+      cacheRead: 0.1,
+      cacheWrite: 2.5,
+      tiers: [{ inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }],
+    },
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
+    thinkingLevelMap: BEDROCK_CAMP_GPT61_EFFORT_MAP,
   },
   {
     baseId: 'openai.gpt-6-luna',

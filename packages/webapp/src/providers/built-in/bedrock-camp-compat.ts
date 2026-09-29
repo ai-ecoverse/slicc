@@ -2,7 +2,7 @@ const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac|au|jp)\./;
 const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?:[4-9]|\d\d)/;
 
 const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
-  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra))|moonshotai\.kimi-k3)$/;
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3)$/;
 
 const BEDROCK_RUNTIME_HOST_RE =
   /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/i;
@@ -52,6 +52,11 @@ export const BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP: BedrockCampEffortMap = Object.f
   off: null,
 });
 
+export const BEDROCK_CAMP_GPT61_EFFORT_MAP: BedrockCampEffortMap = Object.freeze({
+  ...BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  off: null,
+});
+
 export function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
   const values = modelName ? [modelId, modelName] : [modelId];
   return values.flatMap((value) => {
@@ -60,11 +65,13 @@ export function getModelMatchCandidates(modelId: string, modelName?: string): st
   });
 }
 
-const BEDROCK_CAMP_GPT6_RE = /(?:^|[.-]openai[.-])gpt-6-(sol|luna|astra)(?:-\([^)]+\))?$/;
+const BEDROCK_CAMP_GPT6_RE =
+  /(?:^|[.-]openai[.-])gpt-6(?:-(sol|luna|astra)|[.-]1-sol)(?:-\([^)]+\))?$/;
 
 function bedrockCampGpt6Variant(model: { id: string; name?: string }): string | undefined {
   for (const candidate of getModelMatchCandidates(model.id, model.name)) {
-    const variant = BEDROCK_CAMP_GPT6_RE.exec(candidate)?.[1];
+    const match = BEDROCK_CAMP_GPT6_RE.exec(candidate);
+    const variant = match && (match[1] ?? '6.1-sol');
     if (variant) return variant;
   }
   return undefined;
@@ -80,6 +87,7 @@ export function bedrockCampOpenAIEffortMap(model: {
 }): BedrockCampEffortMap | null {
   const variant = bedrockCampGpt6Variant(model);
   if (!variant) return null;
+  if (variant === '6.1-sol') return BEDROCK_CAMP_GPT61_EFFORT_MAP;
   return variant === 'astra' ? BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP : BEDROCK_CAMP_GPT6_EFFORT_MAP;
 }
 

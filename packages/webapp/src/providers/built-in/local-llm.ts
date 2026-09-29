@@ -15,6 +15,7 @@ import {
 } from '@earendil-works/pi-ai/compat';
 import { createLogger } from '../../base/logger.js';
 import { getDeploymentForProvider } from '../account-store.js';
+import { toPiTranscriptContext } from '../pi-transcript-context.js';
 import type { ProviderConfig } from '../types.js';
 
 const log = createLogger('local-llm');
@@ -123,7 +124,11 @@ const streamLocalLlmOpenAI = (
   if (!model.baseUrl) {
     return errorStream(model, 'Local LLM base URL is required (e.g. http://localhost:11434/v1).');
   }
-  return streamOpenAICompletions(asOpenAIModel(model), context, ensureApiKey(options));
+  return streamOpenAICompletions(
+    asOpenAIModel(model),
+    toPiTranscriptContext(context),
+    ensureApiKey(options)
+  );
 };
 
 const streamSimpleLocalLlmOpenAI = (
@@ -140,7 +145,11 @@ const streamSimpleLocalLlmOpenAI = (
   if (!model.baseUrl) {
     return errorStream(model, 'Local LLM base URL is required (e.g. http://localhost:11434/v1).');
   }
-  return streamSimpleOpenAICompletions(asOpenAIModel(model), context, ensureApiKey(options));
+  return streamSimpleOpenAICompletions(
+    asOpenAIModel(model),
+    toPiTranscriptContext(context),
+    ensureApiKey(options)
+  );
 };
 
 function errorStream(model: Model<Api>, message: string): AssistantMessageEventStream {

@@ -1,6 +1,7 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model, Usage, UserMessage } from '@earendil-works/pi-ai';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
+import { getCurrentSystemMessage } from '@earendil-works/pi-ai/utils/transcript';
 
 import {
   DEFAULT_COMPACTION_SETTINGS,
@@ -10,6 +11,16 @@ import {
 import { createLogger } from '../base/logger.js';
 
 const log = createLogger('context-compaction');
+
+function preserveTranscriptSystemState(
+  before: AgentMessage[],
+  after: AgentMessage[]
+): AgentMessage[] {
+  if (before === after) return after;
+  const currentSystem = getCurrentSystemMessage(before);
+  if (!currentSystem) return after;
+  return [currentSystem, ...after.filter((message) => message.role !== 'system')];
+}
 
 const DEFAULT_CONTEXT_WINDOW = 200000;
 
@@ -984,13 +995,16 @@ export function createCompactContext(
       settings
     );
     if (hopeless.earlyReturn) {
-      return finishEarlyElision(
-        config,
+      return preserveTranscriptSystemState(
         messages,
-        hopeless.earlyReturn,
-        trigger,
-        detail,
-        options?.allowNaiveDrop
+        finishEarlyElision(
+          config,
+          messages,
+          hopeless.earlyReturn,
+          trigger,
+          detail,
+          options?.allowNaiveDrop
+        )
       );
     }
     const workingMessages = hopeless.messages;
@@ -1003,7 +1017,8 @@ export function createCompactContext(
       messageCount: workingMessages.length,
     });
 
-    const slices = selectCompactionSlices(workingMessages, keepRecentTokens);
+    const conversationMessages = workingMessages.filter((message) => message.role !== 'system');
+    const slices = selectCompactionSlices(conversationMessages, keepRecentTokens);
     if (!slices) return options?.allowNaiveDrop === false ? messages : workingMessages;
     const { messagesToSummarize, messagesToKeep } = slices;
 
@@ -1026,20 +1041,26 @@ export function createCompactContext(
     );
     if (attempt.kind === 'summarized') {
       const [summaryHead, ...tail] = attempt.messages;
-      return [summaryHead, ...elideTailImages([summaryHead], tail, contextWindow, settings)];
+      return preserveTranscriptSystemState(messages, [
+        summaryHead,
+        ...elideTailImages([summaryHead], tail, contextWindow, settings),
+      ]);
     }
 
-    return finishFailedSummary(
-      config,
+    return preserveTranscriptSystemState(
       messages,
-      messagesToKeep,
-      contextWindow,
-      settings,
-      signal,
-      options,
-      trigger,
-      detail,
-      attempt.failure
+      finishFailedSummary(
+        config,
+        messages,
+        messagesToKeep,
+        contextWindow,
+        settings,
+        signal,
+        options,
+        trigger,
+        detail,
+        attempt.failure
+      )
     );
   };
 }
@@ -1121,5 +1142,5 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
     compactedMessages: result.length,
   });
 
-  return result;
+  return preserveTranscriptSystemState(messages, result);
 }

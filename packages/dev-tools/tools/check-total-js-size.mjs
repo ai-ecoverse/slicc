@@ -3,7 +3,11 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { measureMergeBase, resolveBaselineRef } from './first-load-baseline.mjs';
+import {
+  approvedLargeDependencyDrift,
+  measureMergeBase,
+  resolveBaselineRef,
+} from './first-load-baseline.mjs';
 import { checkTotalJsDelta, measureTotalJs } from './total-js-size-lib.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -33,24 +37,38 @@ try {
 } catch (error) {
   fail(error.message);
 }
-const { maxDeltaKb } = JSON.parse(
+const budget = JSON.parse(
   readFileSync(resolve(repoRoot, 'packages/webapp/total-js-budget.json'), 'utf8')
 );
+const { maxDeltaKb } = budget;
 let baseline = null;
+const baselineMessages = [];
 if (baselineRef !== 'none' && !isMergeGroup) {
   console.log(`Measuring the merge-base with ${baselineRef} for total JS comparison…`);
   baseline = measureMergeBase({
     repoRoot,
     ref: baselineRef,
     measure: measureTotalJs,
-    log: (message) => console.log(`  baseline: ${message}`),
+    log: (message) => {
+      baselineMessages.push(message);
+      console.log(`  baseline: ${message}`);
+    },
   });
 }
-if (!isMergeGroup && baselineRef !== 'none' && !baseline && isCiPullRequest) {
+const approvedDrift =
+  !baseline &&
+  approvedLargeDependencyDrift(
+    baselineMessages,
+    budget.dependencyUpgradeException,
+    readFileSync(resolve(repoRoot, 'package-lock.json'))
+  );
+if (!isMergeGroup && baselineRef !== 'none' && !baseline && isCiPullRequest && !approvedDrift) {
   fail(
     `could not measure the merge-base with "${baselineRef}"; the per-change total JS delta must be checked before queueing`
   );
 }
+if (approvedDrift)
+  console.log('  approved lockfile-pinned dependency upgrade: absolute size cap applies.');
 
 let result;
 try {

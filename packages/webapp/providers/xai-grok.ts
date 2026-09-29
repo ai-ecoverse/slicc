@@ -20,6 +20,7 @@ import {
   bridgeRefreshBlocked,
   noteBridgeTokenRequired,
 } from '../src/providers/bridge-token-required.js';
+import { toPiTranscriptContext } from '../src/providers/pi-transcript-context.js';
 import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../src/providers/pkce.js';
 import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
 import type {
@@ -282,8 +283,8 @@ async function pumpXaiStream(
     };
     const inner =
       nativeModel.api === 'openai-responses'
-        ? streamOpenAIResponses(nativeModel, context, forwardedOptions)
-        : streamOpenAICompletions(nativeModel, context, forwardedOptions);
+        ? streamOpenAIResponses(nativeModel, toPiTranscriptContext(context), forwardedOptions)
+        : streamOpenAICompletions(nativeModel, toPiTranscriptContext(context), forwardedOptions);
     for await (const event of inner) stream.push(event);
     stream.end();
   } catch (error) {
@@ -310,8 +311,12 @@ async function pumpSimpleXaiStream(
     };
     const inner =
       nativeModel.api === 'openai-responses'
-        ? streamSimpleOpenAIResponses(nativeModel, context, forwardedOptions)
-        : streamSimpleOpenAICompletions(nativeModel, context, forwardedOptions);
+        ? streamSimpleOpenAIResponses(nativeModel, toPiTranscriptContext(context), forwardedOptions)
+        : streamSimpleOpenAICompletions(
+            nativeModel,
+            toPiTranscriptContext(context),
+            forwardedOptions
+          );
     for await (const event of inner) stream.push(event);
     stream.end();
   } catch (error) {

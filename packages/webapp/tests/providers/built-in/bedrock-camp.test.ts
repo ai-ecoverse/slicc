@@ -1,4 +1,5 @@
 import { getApiProvider } from '@earendil-works/pi-ai/compat';
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -65,6 +66,30 @@ afterEach(() => {
 });
 
 describe('bedrock-camp built-in provider', () => {
+  it('replays Pi transcript system and tool declarations into Converse', async () => {
+    vi.stubGlobal('fetch', mockOkResponse());
+    let payload: any;
+    const transcript = normalizeContext({
+      systemPrompt: 'Use the available tool',
+      tools: [
+        {
+          name: 'screenshot',
+          description: 'Capture page',
+          parameters: { type: 'object', properties: {} },
+        },
+      ],
+      messages: [{ role: 'user', content: 'Inspect the page', timestamp: 1 }],
+    });
+    await streamSimpleBedrockCamp(baseModel(), transcript, {
+      apiKey: 'ABSK-test',
+      onPayload(body) {
+        payload = body;
+      },
+    }).result();
+    expect(payload.system[0]).toEqual({ text: 'Use the available tool' });
+    expect(payload.toolConfig.tools[0].toolSpec.name).toBe('screenshot');
+    expect(payload.messages[0].content[0]).toEqual({ text: 'Inspect the page' });
+  });
   it('exports a valid ProviderConfig', () => {
     expect(config).toBeDefined();
     expect(config.id).toBe('bedrock-camp');
@@ -485,6 +510,7 @@ describe('bedrock-camp built-in provider', () => {
     ['Luna', 'global.openai.gpt-6-luna', 'GPT-6 Luna (Global)'],
     ['Sol', 'global.openai.gpt-6-sol', 'GPT-6 Sol (Global)'],
     ['Astra', 'global.openai.gpt-6-astra', 'GPT-6 Astra (Global)'],
+    ['6.1 Sol', 'global.openai.gpt-6.1-sol', 'GPT-6.1 Sol (Global)'],
     [
       'opaque Luna profile',
       'arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/opaque',
@@ -593,6 +619,7 @@ describe('allowlisted non-Claude models get no Claude-shaped fields', () => {
     ['global.openai.gpt-6-sol', 'GPT-6 Sol (Global)'],
     ['us.openai.gpt-6-luna', 'GPT-6 Luna (US)'],
     ['global.openai.gpt-6-astra', 'GPT-6 Astra (Global)'],
+    ['global.openai.gpt-6.1-sol', 'GPT-6.1 Sol (Global)'],
     ['us.moonshotai.kimi-k3', 'Kimi K3 (US)'],
   ] as const;
 
@@ -706,5 +733,29 @@ describe('GPT-6 reasoning effort', () => {
       { reasoning: 'xhigh', effort: 'max' }
     );
     expect(payload.additionalModelRequestFields.output_config).toEqual({ effort: 'max' });
+  });
+});
+
+describe('GPT-6.1 Sol reasoning effort', () => {
+  const model = () =>
+    baseModel({
+      id: 'global.openai.gpt-6.1-sol',
+      name: 'GPT-6.1 Sol (Global)',
+      reasoning: true,
+    });
+
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'])(
+    'sends supported %s effort',
+    async (effort) => {
+      const payload = await capturePayload(model(), { reasoning: effort });
+      expect(payload.additionalModelRequestFields).toEqual({ reasoning: { effort } });
+    }
+  );
+
+  it('omits reasoning when off and maps minimal up to low', async () => {
+    expect((await capturePayload(model(), {})).additionalModelRequestFields).toBeUndefined();
+    expect(
+      (await capturePayload(model(), { reasoning: 'minimal' })).additionalModelRequestFields
+    ).toEqual({ reasoning: { effort: 'low' } });
   });
 });

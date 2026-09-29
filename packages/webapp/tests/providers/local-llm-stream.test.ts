@@ -1,3 +1,5 @@
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = new Map<string, string>();
@@ -62,7 +64,7 @@ describe('local-llm api registration and delegation', () => {
   it('dispatching with model.api="local-llm-openai" reaches our handler (no api mismatch throw)', () => {
     const provider = getApiProvider(LOCAL_LLM_API)!;
     const model = makeModel();
-    const ctx = { systemPrompt: '', messages: [], tools: [] };
+    const ctx = normalizeContext({ systemPrompt: '', messages: [], tools: [] });
 
     expect(() => provider.streamSimple(model, ctx, { apiKey: 'k' })).not.toThrow();
   });
@@ -70,7 +72,7 @@ describe('local-llm api registration and delegation', () => {
   it('streamSimple delegates to pi-ai with model.api rewritten to "openai-completions"', () => {
     const provider = getApiProvider(LOCAL_LLM_API)!;
     const model = makeModel();
-    const ctx = { systemPrompt: '', messages: [], tools: [] };
+    const ctx = normalizeContext({ systemPrompt: '', messages: [], tools: [] });
     provider.streamSimple(model, ctx, { apiKey: 'k' });
 
     expect(mockStreamSimple).toHaveBeenCalledTimes(1);
@@ -86,7 +88,7 @@ describe('local-llm api registration and delegation', () => {
   it('stream() also rewrites api before delegating', () => {
     const provider = getApiProvider(LOCAL_LLM_API)!;
     const model = makeModel();
-    const ctx = { systemPrompt: '', messages: [], tools: [] };
+    const ctx = normalizeContext({ systemPrompt: '', messages: [], tools: [] });
     provider.stream(model, ctx, { apiKey: 'k' });
 
     expect(mockStreamOpenAICompletions).toHaveBeenCalledTimes(1);
@@ -96,7 +98,7 @@ describe('local-llm api registration and delegation', () => {
   it('injects the placeholder apiKey when caller supplies an empty one', () => {
     const provider = getApiProvider(LOCAL_LLM_API)!;
     const model = makeModel();
-    const ctx = { systemPrompt: '', messages: [], tools: [] };
+    const ctx = normalizeContext({ systemPrompt: '', messages: [], tools: [] });
     provider.streamSimple(model, ctx, {});
 
     const forwardedOpts = mockStreamSimple.mock.calls[0][2];
@@ -106,7 +108,7 @@ describe('local-llm api registration and delegation', () => {
   it('preserves a user-supplied apiKey instead of clobbering with the placeholder', () => {
     const provider = getApiProvider(LOCAL_LLM_API)!;
     const model = makeModel();
-    const ctx = { systemPrompt: '', messages: [], tools: [] };
+    const ctx = normalizeContext({ systemPrompt: '', messages: [], tools: [] });
     provider.streamSimple(model, ctx, { apiKey: 'real-token' });
 
     const forwardedOpts = mockStreamSimple.mock.calls[0][2];
@@ -116,7 +118,7 @@ describe('local-llm api registration and delegation', () => {
   it('returns an error stream (does NOT delegate) when baseUrl is missing', async () => {
     const provider = getApiProvider(LOCAL_LLM_API)!;
     const model = makeModel({ baseUrl: '' });
-    const ctx = { systemPrompt: '', messages: [], tools: [] };
+    const ctx = normalizeContext({ systemPrompt: '', messages: [], tools: [] });
     const stream = provider.streamSimple(model, ctx, { apiKey: 'k' });
 
     expect(mockStreamSimple).not.toHaveBeenCalled();
@@ -129,7 +131,7 @@ describe('local-llm api registration and delegation', () => {
   it('returns an error stream when the unconfigured-placeholder model id leaks through', async () => {
     const provider = getApiProvider(LOCAL_LLM_API)!;
     const model = makeModel({ id: 'local-llm-unconfigured' });
-    const ctx = { systemPrompt: '', messages: [], tools: [] };
+    const ctx = normalizeContext({ systemPrompt: '', messages: [], tools: [] });
     const stream = provider.streamSimple(model, ctx, { apiKey: 'k' });
 
     expect(mockStreamSimple).not.toHaveBeenCalled();

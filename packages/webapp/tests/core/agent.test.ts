@@ -288,7 +288,7 @@ describe('Agent (pi-mono)', () => {
       initialState: { model: testModel() },
       streamFn: createMockStreamFn([textResponse('hi')]),
     });
-    agent.state.systemPrompt = 'Be concise';
+    agent.state.messages = [{ role: 'system', content: 'Be concise', timestamp: Date.now() }];
     expect(agent.state.systemPrompt).toBe('Be concise');
   });
 

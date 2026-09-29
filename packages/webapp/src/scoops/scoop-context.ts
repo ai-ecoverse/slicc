@@ -1,4 +1,5 @@
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import { getCurrentSystemMessage } from '@earendil-works/pi-ai/utils/transcript';
 import { isGelatiereUnit } from '../base/gelatiere-constants.js';
 import {
   type CompactionSnapshot,
@@ -551,7 +552,8 @@ export class ScoopContext {
 
   clearMessages(): void {
     if (this.agent) {
-      this.agent.state.messages = [];
+      const system = getCurrentSystemMessage(this.agent.state.messages);
+      this.agent.state.messages = system ? [system] : [];
     }
   }
 

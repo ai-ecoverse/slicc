@@ -3,7 +3,11 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { measureMergeBase, resolveBaselineRef } from './first-load-baseline.mjs';
+import {
+  approvedLargeDependencyDrift,
+  measureMergeBase,
+  resolveBaselineRef,
+} from './first-load-baseline.mjs';
 import {
   bytesToKb,
   checkFirstLoad,
@@ -91,6 +95,7 @@ if (jsonOnly) {
 const limits = JSON.parse(readFileSync(limitsPath, 'utf8'));
 
 let baseline = null;
+const baselineMessages = [];
 if (baselineRef !== 'none' && !isMergeGroup) {
   console.log(`Measuring the merge-base with ${baselineRef} for comparison…`);
   baseline = measureMergeBase({
@@ -100,17 +105,29 @@ if (baselineRef !== 'none' && !isMergeGroup) {
       const m = measureUiDir(uiDir);
       return { page: m.page, worker: m.worker };
     },
-    log: (m) => console.log(`  baseline: ${m}`),
+    log: (message) => {
+      baselineMessages.push(message);
+      console.log(`  baseline: ${message}`);
+    },
   });
 }
 
-if (!isMergeGroup && baselineRef !== 'none' && !baseline && isCiPullRequest) {
+const approvedDrift =
+  !baseline &&
+  approvedLargeDependencyDrift(
+    baselineMessages,
+    limits.dependencyUpgradeException,
+    readFileSync(resolve(repoRoot, 'package-lock.json'))
+  );
+if (!isMergeGroup && baselineRef !== 'none' && !baseline && isCiPullRequest && !approvedDrift) {
   fail(
     `could not measure the merge-base with "${baselineRef}", so the per-change delta could ` +
       `not be checked. The merge queue does not re-check it, so this cannot be waved through. ` +
       `See the baseline log above; re-run if it was transient.`
   );
 }
+if (approvedDrift)
+  console.log('  approved lockfile-pinned dependency upgrade: absolute eager ceilings apply.');
 
 const { failures, notes, rows } = checkFirstLoad(limits, head, baseline?.bytes ?? null, {
   baselineNote: isMergeGroup ? MERGE_GROUP_NOTE : undefined,
@@ -137,7 +154,9 @@ if (failures.length > 0) {
 }
 const allowance = isMergeGroup
   ? 'ceilings only on a queue batch'
-  : `allowance ${limits.maxDeltaKb} kB per change`;
+  : approvedDrift
+    ? 'absolute ceilings only for this lockfile-pinned dependency upgrade'
+    : `allowance ${limits.maxDeltaKb} kB per change`;
 console.log(
   `First-load OK (${allowance}; total ${bytesToKb(head.page + head.worker)} kB across both graphs).`
 );
