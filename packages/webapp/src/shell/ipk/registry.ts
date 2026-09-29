@@ -67,6 +67,14 @@ export interface RegistryFetchOptions {
   timeoutMs?: number;
 }
 
+export interface PackumentFetchOptions extends RegistryFetchOptions {
+  full?: boolean;
+}
+
+const ABBREVIATED_ACCEPT =
+  'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*';
+const FULL_ACCEPT = 'application/json';
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -88,11 +96,35 @@ function describeStatus(result: FetchResult, fallback: string): string {
 export async function fetchPackument(
   name: string,
   fetch: SecureFetch,
-  opts: RegistryFetchOptions = {}
+  opts: PackumentFetchOptions = {}
 ): Promise<Packument> {
   if (!name || typeof name !== 'string') {
     throw new Error('fetchPackument: package name is required');
   }
+  if (!opts.full) {
+    const abbreviated = await requestPackument(name, fetch, opts, ABBREVIATED_ACCEPT);
+    if (hasInstallMetadata(abbreviated)) return abbreviated;
+  }
+  return requestPackument(name, fetch, opts, FULL_ACCEPT);
+}
+
+function hasInstallMetadata(packument: Packument): boolean {
+  const tags = packument['dist-tags'];
+  if (!tags || typeof tags !== 'object') return false;
+  for (const entry of Object.values(packument.versions)) {
+    const dist = entry?.dist;
+    if (!dist || typeof dist.tarball !== 'string') return false;
+    if (typeof dist.integrity !== 'string' && typeof dist.shasum !== 'string') return false;
+  }
+  return true;
+}
+
+async function requestPackument(
+  name: string,
+  fetch: SecureFetch,
+  opts: RegistryFetchOptions,
+  accept: string
+): Promise<Packument> {
   const label = `fetchPackument(${name})`;
   const built = registryUrl(name);
   if (built.host !== REGISTRY_NPMJS_HOST) {
@@ -108,7 +140,7 @@ export async function fetchPackument(
     result = await withTimeout(
       fetch(url, {
         method: 'GET',
-        headers: { Accept: 'application/json' },
+        headers: { Accept: accept },
         timeoutMs,
       }),
       timeoutMs,

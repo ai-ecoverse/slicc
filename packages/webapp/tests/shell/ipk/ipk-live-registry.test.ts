@@ -1,11 +1,18 @@
 import 'fake-indexeddb/auto';
+import type { SecureFetch } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { installPackage } from '../../../src/shell/ipk/installer.js';
-import { fetchPackument, resolveVersion } from '../../../src/shell/ipk/registry.js';
+import {
+  fetchPackument,
+  type PackumentVersion,
+  resolveVersion,
+} from '../../../src/shell/ipk/registry.js';
 import { LIVE_REGISTRY, nodeFetch } from './helpers/live-registry.js';
 
 let dbCounter = 0;
+
+type RawFetch = (url: string, opts?: unknown) => Promise<{ body: Uint8Array }>;
 
 describe.skipIf(!LIVE_REGISTRY)('ipk against the live npm registry', () => {
   it('verifies every tarball of a real tree and installs it', async () => {
@@ -45,4 +52,60 @@ describe.skipIf(!LIVE_REGISTRY)('ipk against the live npm registry', () => {
     await expect(fs.exists('/work/node_modules/body-parser/package.json')).resolves.toBe(true);
     await fs.dispose();
   }, 120_000);
+
+  it('abbreviated packuments carry every field ipk reads, identical to the full ones', async () => {
+    const FIELDS = [
+      'deprecated',
+      'dependencies',
+      'optionalDependencies',
+      'peerDependencies',
+      'bin',
+      'engines',
+      'os',
+      'cpu',
+    ] as const;
+
+    const present = (value: unknown) =>
+      value && typeof value === 'object' && Object.keys(value).length === 0 ? undefined : value;
+    const pick = (v: PackumentVersion) => ({
+      ...Object.fromEntries(FIELDS.map((f) => [f, present(v[f])])),
+      tarball: v.dist?.tarball,
+      integrity: v.dist?.integrity,
+      shasum: v.dist?.shasum,
+    });
+    for (const name of [
+      'typescript',
+      'esbuild',
+      '@esbuild/darwin-arm64',
+      'request',
+      '@ai-ecoverse/wasm-zlib',
+    ]) {
+      let abbreviatedBytes = 0;
+      let fullBytes = 0;
+      const counting = (sink: (n: number) => void) =>
+        (async (url: string, opts?: unknown) => {
+          const res = await (nodeFetch as unknown as RawFetch)(url, opts);
+          sink(res.body.length);
+          return res;
+        }) as unknown as SecureFetch;
+      const abbreviated = await fetchPackument(
+        name,
+        counting((n) => (abbreviatedBytes += n))
+      );
+      const full = await fetchPackument(
+        name,
+        counting((n) => (fullBytes += n)),
+        { full: true }
+      );
+      console.log(`[ipk-live] ${name}: abbreviated ${abbreviatedBytes} B, full ${fullBytes} B`);
+      expect(abbreviated['dist-tags'], name).toEqual(full['dist-tags']);
+      expect(Object.keys(abbreviated.versions).sort(), name).toEqual(
+        Object.keys(full.versions).sort()
+      );
+      for (const [version, entry] of Object.entries(full.versions)) {
+        expect(pick(abbreviated.versions[version]), `${name}@${version}`).toEqual(pick(entry));
+      }
+      expect(abbreviatedBytes, name).toBeLessThan(fullBytes);
+    }
+  }, 180_000);
 });
