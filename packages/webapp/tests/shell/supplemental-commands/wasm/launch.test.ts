@@ -347,6 +347,34 @@ describe('WasmSession', () => {
     });
   });
 
+  it("keeps the realm's git system config over a package's GIT_CONFIG_NOSYSTEM default", async () => {
+    fakeProcesses();
+    const files = {
+      ...installed,
+      [`${PKG}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-gnu',
+        slicc: {
+          env: { GIT_CONFIG_NOSYSTEM: '1' },
+          commands: { tac: { glue: 'bin/core', wasm: 'bin/core.wasm', argv0: 'tac' } },
+        },
+      }),
+    };
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    const target = await session.resolve('tac', 'tac', '/w');
+    const launch = (env: Record<string, string>) =>
+      session.launch({ ...target!, args: [], env, cwd: '/w', fds: stdio() });
+    const realm = { GIT_CONFIG_SYSTEM: '/home/u/.config/slicc/gitconfig' };
+    // The credential helper and SLICC's identity live in that file.
+    await launch(realm);
+    expect(spawn.mock.calls.at(-1)![0].env).toEqual(realm);
+    // Another system config, or none from the realm: the package's default holds.
+    await launch({ GIT_CONFIG_SYSTEM: '/etc/mine' });
+    expect(spawn.mock.calls.at(-1)![0].env.GIT_CONFIG_NOSYSTEM).toBe('1');
+    // An exported GIT_CONFIG_NOSYSTEM always wins.
+    await launch({ ...realm, GIT_CONFIG_NOSYSTEM: '1' });
+    expect(spawn.mock.calls.at(-1)![0].env.GIT_CONFIG_NOSYSTEM).toBe('1');
+  });
+
   it('starts a wasm child as a process parented to its spawner', async () => {
     const ends = fakeProcesses();
     const { pm, config } = processConfig();

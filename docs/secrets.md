@@ -80,7 +80,7 @@ Native git in the wasm realm reaches remotes through the realm's HTTP proxy (see
 
 Its command policy is `git`'s: a scoop whose `allowedCommands` name `git` can use it (one without `git` cannot), and under a sudo `Cmnd` policy it never asks for an approval of its own, since the git call that runs it already passed the gate. That widens nothing: it only prints masks the agent can already see, each only for a host its domains cover. The username is the URL's, else `x-access-token`. Git sends the pair as `Authorization: Basic`, which the fetch path unmasks at egress like any header, so the remote gets the real token while `git credential fill`, `GIT_TRACE_CURL` and error messages show only the mask. `store` does nothing; `erase` (the remote rejected the credential) renews the OAuth token when it was the one rejected.
 
-The identity lines carry the `user.name` / `user.email` the built-in `git` commits with (the global config the GitHub login seeds, else its defaults). Being system scope, both lines lose to the user's `~/.gitconfig` and a repository's config: set `credential.helper =` (empty) there to drop the slicc helper, or export `GIT_CONFIG_SYSTEM` to use another file.
+The identity lines carry the `user.name` / `user.email` the built-in `git` commits with (the global config the GitHub login seeds, else its defaults). Being system scope, both lines lose to the user's `~/.gitconfig` and a repository's config: set `credential.helper =` (empty) there to drop the slicc helper, or export `GIT_CONFIG_SYSTEM` to use another file. A package's own `GIT_CONFIG_NOSYSTEM` default (wasm-git sets one) does not switch this file off; an exported `GIT_CONFIG_NOSYSTEM` does.
 
 ### Shell-env naming convention
 

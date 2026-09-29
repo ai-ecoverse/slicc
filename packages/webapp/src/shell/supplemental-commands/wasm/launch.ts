@@ -25,7 +25,10 @@ import {
 import { type FdTable, KernelError, type OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import { JobTable } from '../../../kernel/wasm-realm/jobs.js';
-import { enableRealmNetwork } from '../../../kernel/wasm-realm/net/realm-network.js';
+import {
+  enableRealmNetwork,
+  isRealmDefault,
+} from '../../../kernel/wasm-realm/net/realm-network.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
 import { type LoopbackNet, loopbackNet, ownerKey } from '../../../kernel/wasm-realm/socket.js';
@@ -56,6 +59,25 @@ export const SECRET_FUNCTION =
  * process is bash (as `bash` or `sh`): every one, the command's own or one a
  * program starts (make's recipe shell), unless its environment has one.
  */
+/**
+ * A command's environment defaults under the caller's environment, which wins.
+ * A package's `GIT_CONFIG_NOSYSTEM` would also switch off the system config
+ * the realm points git at (its credential helper and SLICC's identity), so
+ * it does not apply over that one; exported, it does.
+ */
+function withDefaults(
+  defaults: Readonly<Record<string, string>> | undefined,
+  env: Record<string, string>
+): Record<string, string> {
+  if (!defaults) return env;
+  const realmGitConfig =
+    env.GIT_CONFIG_SYSTEM !== undefined &&
+    isRealmDefault('GIT_CONFIG_SYSTEM', env.GIT_CONFIG_SYSTEM);
+  if (!realmGitConfig || !('GIT_CONFIG_NOSYSTEM' in defaults)) return { ...defaults, ...env };
+  const { GIT_CONFIG_NOSYSTEM: _off, ...rest } = defaults;
+  return { ...rest, ...env };
+}
+
 function withSecretFunction(argv0: string, env: Record<string, string>): Record<string, string> {
   if (!/^(ba)?sh$/.test(baseName(argv0)) || SECRET_FUNCTION_ENV in env) return env;
   return { ...env, [SECRET_FUNCTION_ENV]: SECRET_FUNCTION };
@@ -290,10 +312,7 @@ export class WasmSession {
       await req.fds.closeAll();
       throw e;
     }
-    const env = withSecretFunction(
-      req.argv0,
-      req.defaults ? { ...req.defaults, ...req.env } : req.env
-    );
+    const env = withSecretFunction(req.argv0, withDefaults(req.defaults, req.env));
     return this.start({ ...req, env, program: { glue, module } });
   }
 
