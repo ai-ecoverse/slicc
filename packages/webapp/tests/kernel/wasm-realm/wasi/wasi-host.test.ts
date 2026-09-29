@@ -539,3 +539,90 @@ describe('WasiHost: clocks, randomness, poll, exit', () => {
     expect(fs.text('/workspace/p/a.txt')).toBe('Qello\n');
   });
 });
+
+describe('WasiHost: review round (#3638)', () => {
+  it('two opens of one file share its buffer: two O_APPEND writers both land', () => {
+    const { open, write, call, fs } = setup();
+    const [, a] = open('a.txt', 0, RIGHTS.ALL, FDFLAGS.APPEND);
+    const [, b] = open('a.txt', 0, RIGHTS.ALL, FDFLAGS.APPEND);
+    write(a, 'one\n');
+    write(b, 'two\n');
+    call('fd_close', a);
+    call('fd_close', b);
+    expect(fs.text('/workspace/p/a.txt')).toBe('hello\none\ntwo\n');
+  });
+
+  it('a second open sees what the first wrote before any write-back; each keeps its own offset', () => {
+    const { open, write, read, call } = setup();
+    const [, a] = open('a.txt');
+    write(a, 'HE');
+    const [, b] = open('a.txt');
+    expect(read(b, 3)).toEqual([E.SUCCESS, 'HEl']);
+    expect(read(a, 2)).toEqual([E.SUCCESS, 'll']);
+    // O_TRUNC through one truncates what the other sees.
+    const [, c] = open('a.txt', OFLAGS.TRUNC, RIGHTS.ALL);
+    call('fd_close', c);
+    expect(read(b, 10)).toEqual([E.SUCCESS, '']);
+  });
+
+  it('renaming a directory retargets the files open beneath it', () => {
+    const { open, write, call, fs, path, g } = setup();
+    fs.dir('/workspace/p/d').file('/workspace/p/d/f.txt', 'x');
+    const [, f] = open('d/f.txt');
+    const [to, tl] = g.str('e');
+    expect(path(3, 'd', 'path_rename', 3, to, tl)).toBe(E.SUCCESS);
+    // Written after the move: the write-back must go where the file is now.
+    write(f, 'Y');
+    call('fd_close', f);
+    expect(fs.text('/workspace/p/e/f.txt')).toBe('Y');
+    expect(fs.exists('/workspace/p/d/f.txt')).toBe(false);
+  });
+
+  it('renaming over a file that is open detaches that handle: its close does not overwrite', () => {
+    const { open, write, call, fs, path, g } = setup();
+    fs.file('/workspace/p/b.txt', 'bbb');
+    const [, old] = open('b.txt');
+    write(old, 'OLD');
+    const [to, tl] = g.str('b.txt');
+    expect(path(3, 'a.txt', 'path_rename', 3, to, tl)).toBe(E.SUCCESS);
+    call('fd_close', old);
+    expect(fs.text('/workspace/p/b.txt')).toBe('hello\n');
+  });
+
+  it('a failed unlink leaves open handles writing back', () => {
+    const { open, write, call, fs, path } = setup();
+    const [, fd] = open('a.txt');
+    (fs as unknown as { unlink: () => never }).unlink = () => {
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    };
+    expect(path(3, 'a.txt', 'path_unlink_file')).toBe(E.ACCES);
+    write(fd, 'K');
+    call('fd_close', fd);
+    expect(fs.text('/workspace/p/a.txt')).toBe('Kello\n');
+  });
+
+  it('fd_pread / fd_pwrite honor the access mode (EBADF)', () => {
+    const { open, call, g } = setup();
+    const out = g.alloc(4);
+    const [, wo] = open('a.txt', 0, RIGHTS.FD_WRITE);
+    const [iov, n] = g.iov(4);
+    expect(call('fd_pread', wo, iov, n, 0n, out)).toBe(E.BADF);
+    const [, ro] = open('a.txt', 0, RIGHTS.FD_READ);
+    const [wiov, wn] = g.iov('Z');
+    expect(call('fd_pwrite', ro, wiov, wn, 0n, out)).toBe(E.BADF);
+  });
+
+  it('proc_raise maps every WASI signal to its POSIX number; an unknown one is EINVAL', () => {
+    const { call, kernel } = setup();
+    call('proc_raise', 27); // WASI SIGWINCH
+    call('proc_raise', 20); // WASI SIGTTIN
+    call('proc_raise', 30); // WASI SIGSYS
+    expect(kernel.killed).toEqual([
+      [9, 28],
+      [9, 21],
+      [9, 31],
+    ]);
+    expect(call('proc_raise', 31)).toBe(E.INVAL);
+    expect(call('proc_raise', 0)).toBe(E.INVAL);
+  });
+});

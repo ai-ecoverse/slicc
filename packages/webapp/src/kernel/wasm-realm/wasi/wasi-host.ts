@@ -163,12 +163,11 @@ export class WasiHost {
       proc_exit: (code: number) => {
         throw new WasiExit(code);
       },
-      proc_raise: (sig: number) =>
-        void this.o.kernel.call({
-          op: 'proc-kill',
-          pid: this.o.pid,
-          sig: WASI_SIGNAL_TO_POSIX[sig] ?? sig,
-        }),
+      proc_raise: (sig: number) => {
+        const posix = WASI_SIGNAL_TO_POSIX[sig];
+        if (posix === undefined) throw new WasiError('EINVAL');
+        this.o.kernel.call({ op: 'proc-kill', pid: this.o.pid, sig: posix });
+      },
     };
   }
 
@@ -182,11 +181,13 @@ export class WasiHost {
         mem.view().setUint32(out, mem.scatter(iovs, n, data), true);
       },
       fd_pread: (fd: number, iovs: number, n: number, at: bigint, out: number) => {
-        const data = this.file(fd).pread(mem.capacity(iovs, n), Number(at));
+        const data = this.file(fd, 'read').pread(mem.capacity(iovs, n), Number(at));
         mem.view().setUint32(out, mem.scatter(iovs, n, data), true);
       },
       fd_pwrite: (fd: number, iovs: number, n: number, at: bigint, out: number) =>
-        void mem.view().setUint32(out, this.file(fd).pwrite(mem.gather(iovs, n), Number(at)), true),
+        void mem
+          .view()
+          .setUint32(out, this.file(fd, 'write').pwrite(mem.gather(iovs, n), Number(at)), true),
       fd_seek: (fd: number, offset: bigint, whence: number, out: number) =>
         void mem.view().setBigUint64(out, BigInt(this.seek(fd, Number(offset), whence)), true),
       fd_tell: (fd: number, out: number) =>
@@ -282,6 +283,7 @@ export class WasiHost {
         if (o.fs.lstat(path).isDirectory) throw new WasiError('EISDIR');
         fds.unlinking(path);
         o.fs.unlink(path);
+        fds.unlinked(path);
       },
       path_rename: (fd: number, p: number, l: number, fd2: number, p2: number, l2: number) => {
         const from = at(fd, p, l);
@@ -312,10 +314,16 @@ export class WasiHost {
 
   // ---------------------------------------------------------------- descriptors
 
-  private file(fd: number) {
+  /** A buffered file's description; `access`: EBADF unless it was opened for that. */
+  private file(fd: number, access?: 'read' | 'write') {
     const e = this.fds.get(fd);
-    if (e.type === 'file') return e.file;
-    throw new WasiError(e.type === 'dir' ? 'EISDIR' : e.type === 'kernel' ? 'ESPIPE' : 'EINVAL');
+    if (e.type !== 'file') {
+      throw new WasiError(e.type === 'dir' ? 'EISDIR' : e.type === 'kernel' ? 'ESPIPE' : 'EINVAL');
+    }
+    if ((access === 'read' && !e.file.readable) || (access === 'write' && !e.file.writable)) {
+      throw new WasiError('EBADF');
+    }
+    return e.file;
   }
 
   private write(fd: number, data: Uint8Array): number {
@@ -330,9 +338,7 @@ export class WasiHost {
       }
     }
     if (e.type === 'device') return data.length;
-    const file = this.file(fd);
-    if (!file.writable) throw new WasiError('EBADF');
-    return file.write(data);
+    return this.file(fd, 'write').write(data);
   }
 
   private read(fd: number, max: number): Uint8Array {
@@ -345,9 +351,7 @@ export class WasiHost {
       const out = new Uint8Array(Math.min(max, 65536));
       return e.device === 'zero' ? out : crypto.getRandomValues(out);
     }
-    const file = this.file(fd);
-    if (!file.readable) throw new WasiError('EBADF');
-    return file.read(max);
+    return this.file(fd, 'read').read(max);
   }
 
   private seek(fd: number, offset: number, whence: number): number {

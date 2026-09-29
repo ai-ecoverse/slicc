@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { E, wasiErrnoOf } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
 import {
   cachingBridge,
+  FileBuffer,
   LocalFile,
   normalize,
   pathInode,
@@ -42,7 +43,7 @@ describe('paths', () => {
 describe('LocalFile', () => {
   it('loads on first use, zero-fills a gap, and writes back only what changed', () => {
     const fs = new FakeFs().file('/f', 'abc');
-    const f = new LocalFile(fs, '/f', true, true, false, false);
+    const f = new LocalFile(new FileBuffer(fs, '/f', false), true, true, false);
     expect(fs.ops).toEqual([]);
     f.flush(); // nothing loaded, nothing to write
     expect(fs.ops).toEqual([]);
@@ -57,7 +58,7 @@ describe('LocalFile', () => {
 
   it('a new (or truncated) file starts empty without reading the old bytes', () => {
     const fs = new FakeFs().file('/f', 'old');
-    const f = new LocalFile(fs, '/f', true, true, false, true);
+    const f = new LocalFile(new FileBuffer(fs, '/f', true), true, true, false);
     expect(f.read(10)).toEqual(new Uint8Array(0));
     f.flush();
     expect(fs.text('/f')).toBe('');

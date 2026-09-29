@@ -19,7 +19,14 @@ import type { KernelFdKind } from '../fd-table.js';
 import type { ProcessSys } from '../kernel-streams.js';
 import type { WasmSyscall } from '../process.js';
 import { FDFLAGS, OFLAGS, RIGHTS } from './wasi-abi.js';
-import { LocalFile, normalize, resolveUnder, type WasiEntry, WasiError } from './wasi-files.js';
+import {
+  FileBuffer,
+  LocalFile,
+  normalize,
+  resolveUnder,
+  type WasiEntry,
+  WasiError,
+} from './wasi-files.js';
 
 /** The kernel as the WASI host calls it. */
 export interface WasiKernel {
@@ -48,8 +55,15 @@ export function deviceOf(path: string): Device | undefined {
   return DEVICES[path];
 }
 
+/** `path` itself, or anything beneath it. */
+function within(path: string, root: string): boolean {
+  return path === root || path.startsWith(root === '/' ? '/' : `${root}/`);
+}
+
 export class WasiFds {
   private readonly table = new Map<number, WasiEntry>();
+  /** The buffered files open in this process, by path: every open of a path shares one. */
+  private readonly buffers = new Map<string, FileBuffer>();
 
   constructor(
     private readonly kernel: WasiKernel,
@@ -141,7 +155,7 @@ export class WasiFds {
     const e = this.get(fd);
     this.table.delete(fd);
     this.kernel.sys.close(fd);
-    release(e);
+    this.release(e);
   }
 
   /** fd_renumber: `to` becomes `from` (what was at `to` closes), `from` is gone. */
@@ -152,7 +166,17 @@ export class WasiFds {
     this.kernel.call({ op: 'fd-renumber', from, to });
     this.table.delete(from);
     this.table.set(to, e);
-    release(old);
+    this.release(old);
+  }
+
+  /** The worker's side of a close: a description's last fd writes it back; the last open of a path drops its buffer. */
+  private release(e: WasiEntry): void {
+    if (e.type !== 'file' || --e.file.refs > 0) return;
+    const { buffer } = e.file;
+    buffer.flush();
+    if (--buffer.opens === 0 && this.buffers.get(buffer.path) === buffer) {
+      this.buffers.delete(buffer.path);
+    }
   }
 
   /** The kernel's kind of a kernel descriptor (asked once). */
@@ -169,30 +193,47 @@ export class WasiFds {
 
   /** Write back every buffered file (at exit). */
   flushAll(): void {
-    for (const e of this.table.values()) if (e.type === 'file') e.file.flush();
+    for (const buffer of this.buffers.values()) buffer.flush();
   }
 
-  /** Before a path-level op sees a file this process has buffered, write it back. */
+  /** Before a path-level op sees `path` (or, for a directory, what is beneath it), write back its buffers. */
   flushPath(path: string): void {
-    for (const file of this.filesAt(path)) file.flush();
+    for (const [p, buffer] of this.buffers) if (within(p, path)) buffer.flush();
   }
 
-  /** The files open at `path`. */
-  private filesAt(path: string): LocalFile[] {
-    const out: LocalFile[] = [];
-    for (const e of this.table.values())
-      if (e.type === 'file' && e.file.path === path) out.push(e.file);
-    return out;
-  }
-
-  /** `path` is about to be unlinked: its open files keep their bytes and are never written back. */
+  /** `path` is about to be unlinked: load its bytes, so its open fds keep them if the unlink succeeds. */
   unlinking(path: string): void {
-    for (const file of this.filesAt(path)) file.orphan();
+    this.buffers.get(path)?.load();
   }
 
-  /** `from` was renamed to `to`: its open files follow it (written back there). */
+  /** `path` was unlinked: its open fds keep their bytes and never write them back. */
+  unlinked(path: string): void {
+    const buffer = this.buffers.get(path);
+    if (!buffer) return;
+    buffer.orphan();
+    this.buffers.delete(path);
+  }
+
+  /**
+   * `from` was renamed to `to`: what was open at `to` (or beneath it) is
+   * replaced and never written back; what was open at `from` (or beneath
+   * it, for a directory) follows it.
+   */
   renamed(from: string, to: string): void {
-    for (const file of this.filesAt(from)) file.path = to;
+    if (from === to) return;
+    const moved: Array<[string, FileBuffer]> = [];
+    for (const [p, buffer] of this.buffers) {
+      if (within(p, from)) moved.push([p, buffer]);
+      else if (within(p, to)) {
+        buffer.orphan();
+        this.buffers.delete(p);
+      }
+    }
+    for (const [p, buffer] of moved) {
+      this.buffers.delete(p);
+      buffer.path = to + p.slice(from.length);
+      this.buffers.set(buffer.path, buffer);
+    }
   }
 
   /** `path` given with directory fd `dirfd`; an absolute path stands on its own. */
@@ -233,11 +274,18 @@ export class WasiFds {
     const writable =
       (rights & RIGHTS.FD_WRITE) !== 0n || (oflags & (OFLAGS.CREAT | OFLAGS.TRUNC)) !== 0;
     const readable = (rights & RIGHTS.FD_READ) !== 0n || !writable;
-    // Created at once, so a readdir that follows sees it.
-    if (!existing) this.fs.writeFile(path, new Uint8Array(0));
-    const empty = !existing || (oflags & OFLAGS.TRUNC) !== 0;
-    const append = (fdflags & FDFLAGS.APPEND) !== 0;
-    return new LocalFile(this.fs, path, readable, writable, append, empty);
+    let buffer = this.buffers.get(path);
+    if (buffer) {
+      // Another open of the path: share its bytes (O_TRUNC truncates them for both).
+      if (oflags & OFLAGS.TRUNC) buffer.truncate(0);
+    } else {
+      // Created at once, so a readdir that follows sees it.
+      if (!existing) this.fs.writeFile(path, new Uint8Array(0));
+      buffer = new FileBuffer(this.fs, path, !existing || (oflags & OFLAGS.TRUNC) !== 0);
+      this.buffers.set(path, buffer);
+    }
+    buffer.opens++;
+    return new LocalFile(buffer, readable, writable, (fdflags & FDFLAGS.APPEND) !== 0);
   }
 
   private statOrMissing(path: string): SyncFsBridgeStat | undefined {
@@ -264,9 +312,4 @@ export class WasiFds {
 
 function kernelEntry(): Extract<WasiEntry, { type: 'kernel' }> {
   return { type: 'kernel', nonblock: false, append: false };
-}
-
-/** The worker's side of a close: a buffered file's last fd writes it back. */
-function release(e: WasiEntry): void {
-  if (e.type === 'file' && --e.file.refs === 0) e.file.flush();
 }

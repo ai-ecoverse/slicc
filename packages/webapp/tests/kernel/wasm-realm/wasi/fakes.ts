@@ -237,8 +237,12 @@ export class FakeFs implements SyncFsPosixBridge {
   }
   rename(from: string, to: string): void {
     this.ops.push(`rename ${from} ${to}`);
-    this.nodes.set(to, this.node(from, false));
-    this.nodes.delete(from);
+    this.node(from, false);
+    for (const [p, n] of [...this.nodes]) {
+      if (p !== from && !p.startsWith(`${from}/`)) continue;
+      this.nodes.delete(p);
+      this.nodes.set(to + p.slice(from.length), n);
+    }
   }
   unlink(path: string): void {
     this.node(path, false);

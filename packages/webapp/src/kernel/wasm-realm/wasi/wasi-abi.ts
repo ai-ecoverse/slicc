@@ -107,25 +107,11 @@ export const SIZE = {
   EVENT: 32,
 } as const;
 
-/** WASI's signal numbers (proc_raise) — Linux's for 1-15, then its own order. */
-export const WASI_SIGNAL_TO_POSIX: Readonly<Record<number, number>> = {
-  1: 1,
-  2: 2,
-  3: 3,
-  4: 4,
-  5: 5,
-  6: 6,
-  7: 7,
-  8: 8,
-  9: 9,
-  10: 10,
-  11: 11,
-  12: 12,
-  13: 13,
-  14: 14,
-  15: 15,
-  16: 17, // CHLD
-  17: 18, // CONT
-  18: 19, // STOP
-  19: 20, // TSTP
-};
+/**
+ * WASI's signal numbers (proc_raise) as POSIX's: the same for 1-15, then
+ * one apart — WASI has no SIGSTKFLT, so its CHLD (16) is Linux's 17, and so
+ * on up to SYS (30, Linux 31).
+ */
+export const WASI_SIGNAL_TO_POSIX: Readonly<Record<number, number>> = Object.fromEntries(
+  Array.from({ length: 30 }, (_, i) => [i + 1, i + 1 < 16 ? i + 1 : i + 2])
+);

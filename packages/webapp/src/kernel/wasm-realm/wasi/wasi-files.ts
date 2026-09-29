@@ -20,22 +20,23 @@ export class WasiError extends Error {
   }
 }
 
-/** A VFS file buffered in the worker; `/dev/fd/N` of it shares it (and its offset). */
-export class LocalFile {
+/**
+ * One VFS file's bytes as this process holds them, shared by every open of
+ * its path (so two descriptors on one file see each other's writes, as on
+ * Unix): loaded on first use, written back on a flush.
+ */
+export class FileBuffer {
   private data: Uint8Array | undefined;
   private length = 0;
   private dirty = false;
-  offset = 0;
-  refs = 1;
-  /** Unlinked while open: it lives on in memory and is never written back. */
+  /** Unlinked or replaced while open: it lives on in memory and is never written back. */
   private orphaned = false;
+  /** Open file descriptions on it. */
+  opens = 0;
 
   constructor(
     private readonly fs: SyncFsPosixBridge,
     public path: string,
-    readonly readable: boolean,
-    readonly writable: boolean,
-    public append: boolean,
     /** Created or truncated by the open: start empty, never read the old bytes. */
     empty: boolean
   ) {
@@ -45,7 +46,7 @@ export class LocalFile {
     }
   }
 
-  private load(): Uint8Array {
+  load(): Uint8Array {
     if (!this.data) {
       this.data = this.fs.readFile(this.path);
       this.length = this.data.length;
@@ -64,12 +65,6 @@ export class LocalFile {
     return bytes.subarray(at, at + n);
   }
 
-  read(max: number): Uint8Array {
-    const out = this.pread(max, this.offset);
-    this.offset += out.length;
-    return out;
-  }
-
   pwrite(bytes: Uint8Array, at: number): number {
     this.load();
     const end = at + bytes.length;
@@ -80,13 +75,6 @@ export class LocalFile {
     this.length = Math.max(this.length, end);
     this.dirty = true;
     return bytes.length;
-  }
-
-  write(bytes: Uint8Array): number {
-    if (this.append) this.offset = this.size();
-    const n = this.pwrite(bytes, this.offset);
-    this.offset += n;
-    return n;
   }
 
   truncate(size: number): void {
@@ -105,9 +93,8 @@ export class LocalFile {
     this.data = grown;
   }
 
-  /** Its path is about to be unlinked: keep the bytes, and never write them back. */
+  /** Its path is gone (unlinked, or another file renamed over it): keep the bytes, never write them back. */
   orphan(): void {
-    this.load();
     this.orphaned = true;
   }
 
@@ -116,6 +103,56 @@ export class LocalFile {
     if (this.orphaned || !this.dirty || !this.data) return;
     this.fs.writeFile(this.path, this.data.slice(0, this.length));
     this.dirty = false;
+  }
+}
+
+/** One open file description of a buffered file: its offset and access mode. `/dev/fd/N` shares it. */
+export class LocalFile {
+  offset = 0;
+  refs = 1;
+
+  constructor(
+    readonly buffer: FileBuffer,
+    readonly readable: boolean,
+    readonly writable: boolean,
+    public append: boolean
+  ) {}
+
+  get path(): string {
+    return this.buffer.path;
+  }
+
+  size(): number {
+    return this.buffer.size();
+  }
+
+  pread(max: number, at: number): Uint8Array {
+    return this.buffer.pread(max, at);
+  }
+
+  read(max: number): Uint8Array {
+    const out = this.buffer.pread(max, this.offset);
+    this.offset += out.length;
+    return out;
+  }
+
+  pwrite(bytes: Uint8Array, at: number): number {
+    return this.buffer.pwrite(bytes, at);
+  }
+
+  write(bytes: Uint8Array): number {
+    if (this.append) this.offset = this.buffer.size();
+    const n = this.buffer.pwrite(bytes, this.offset);
+    this.offset += n;
+    return n;
+  }
+
+  truncate(size: number): void {
+    this.buffer.truncate(size);
+  }
+
+  flush(): void {
+    this.buffer.flush();
   }
 }
 
