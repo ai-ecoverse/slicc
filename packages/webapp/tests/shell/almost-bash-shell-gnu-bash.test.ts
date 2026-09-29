@@ -15,10 +15,12 @@ vi.mock('../../src/shell/supplemental-commands/wasm/run.js', async (importOrigin
   runWasmCommand: run,
 }));
 
+import { parseSudoers } from '../../src/base/sudoers.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 import { GLOBAL_NODE_MODULES } from '../../src/shell/ipk/global-prefix.js';
 import type { NativeGate } from '../../src/shell/supplemental-commands/wasm/launch.js';
+import type { SudoBroker } from '../../src/sudo/types.js';
 
 const PKG = `${GLOBAL_NODE_MODULES}/wasm-bash`;
 
@@ -254,5 +256,39 @@ describe('AlmostBashShellHeadless on GNU bash', () => {
       exitCode: 127,
     });
     expect(await gate('echo', ['hi'], {})).toBeNull();
+  });
+
+  it("runs git's transport helpers under git's command list, and asks no approval of their own", async () => {
+    await installBash(fs);
+    // A scoop that may run git: git runs these for a local clone / push and for HTTPS.
+    const scoop = new AlmostBashShellHeadless({ fs, gnuBash: true, allowedCommands: ['git'] });
+    fakeBash('', () => null);
+    await scoop.executeCommand('git clone ../a b');
+    const gate = (run.mock.calls[0]![2] as RunOptions).gate!;
+    for (const helper of ['git-upload-pack', 'git-receive-pack', 'git-remote-https']) {
+      expect(await gate(helper, ['/w/a'], {}), helper).toBeNull();
+    }
+    // git-shell is no plumbing of git's.
+    expect((await gate('git-shell', [], {}))?.exitCode).toBe(127);
+
+    // Under a Cmnd policy, the git call is what gets approved.
+    const broker: SudoBroker = {
+      requestApproval: vi.fn(async () => ({ decision: 'deny' as const })),
+    };
+    run.mockClear();
+    const gated = new AlmostBashShellHeadless({
+      fs,
+      gnuBash: true,
+      sudo: {
+        getPolicy: () => parseSudoers('Cmnd  git *'),
+        broker,
+        defaultDisposition: 'require-approval',
+      },
+    });
+    await gated.executeCommand('true');
+    const sudoGate = (run.mock.calls[0]![2] as RunOptions).gate!;
+    expect(await sudoGate('git-upload-pack', ['/w/a'], {})).toBeNull();
+    expect(broker.requestApproval).not.toHaveBeenCalled();
+    expect((await sudoGate('git-shell', ['-c', 'x'], {}))?.exitCode).toBe(77);
   });
 });
