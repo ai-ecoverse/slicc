@@ -5,9 +5,11 @@ import {
   encodeRawRequestHead,
   encodeRawResponseFrame,
   foldRawRequestHeaders,
+  isDecodedPartialResponse,
   parseRawFetchProbeReply,
   RAW_FETCH_MAX_HEAD_BYTES,
   type RawFetchResponseHead,
+  rawAcceptEncoding,
   rawResponseHasBody,
   rawResponseHeaders,
   stripRawRequestHeaders,
@@ -121,6 +123,24 @@ describe('raw request headers', () => {
         ['cookie', 'b=2'],
       ])
     ).toEqual({ 'x-repeat': 'a, b', cookie: 'a=1; b=2' });
+  });
+});
+
+describe('ranged requests', () => {
+  it('offer no compressed coding whenever Range or If-Range goes upstream', () => {
+    expect(rawAcceptEncoding({})).toBe('gzip, deflate, br');
+    expect(rawAcceptEncoding({ range: 'bytes=0-9' })).toBeUndefined();
+    expect(rawAcceptEncoding({ 'if-range': '"etag"' })).toBeUndefined();
+  });
+
+  it('spot a partial response whose coding the float undid', () => {
+    const gz: Array<[string, string]> = [['Content-Encoding', 'gzip']];
+    expect(isDecodedPartialResponse({ status: 206, headers: gz })).toBe(true);
+    expect(isDecodedPartialResponse({ status: 200, headers: gz })).toBe(false);
+    expect(isDecodedPartialResponse({ status: 206, headers: [] })).toBe(false);
+    expect(
+      isDecodedPartialResponse({ status: 206, headers: [['content-encoding', 'identity']] })
+    ).toBe(false);
   });
 });
 

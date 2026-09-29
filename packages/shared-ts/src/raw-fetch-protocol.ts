@@ -135,6 +135,40 @@ const DECODED_CODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
 /** `Accept-Encoding` a float sends upstream: exactly the codings it decodes. */
 export const RAW_FETCH_ACCEPT_ENCODING = 'gzip, deflate, br';
 
+/**
+ * The `Accept-Encoding` a float sets for a request with these (folded,
+ * lowercase) headers, or `undefined` to set none. A ranged request (`Range`,
+ * `If-Range`) must not offer a compressed coding: a 206 over a compressed
+ * representation carries `Content-Range` offsets into the compressed bytes,
+ * which no longer describe the body once the float decodes it, so a resumed
+ * or ranged download would assemble corrupt data. With no `Accept-Encoding`
+ * set, `fetch` itself sends `identity` for a request carrying `Range` (Fetch
+ * standard, HTTP-network-or-cache fetch), in Node and in Chrome alike.
+ */
+export function rawAcceptEncoding(headers: Record<string, string>): string | undefined {
+  return headers.range !== undefined || headers['if-range'] !== undefined
+    ? undefined
+    : RAW_FETCH_ACCEPT_ENCODING;
+}
+
+/**
+ * Whether a partial response came back with a coding the float undid
+ * (an origin that ignored `Accept-Encoding: identity`). Its `Content-Range`
+ * counts encoded bytes the caller never sees, so the float must refuse it
+ * rather than deliver it.
+ */
+export function isDecodedPartialResponse(input: {
+  status: number;
+  headers: RawHeaderList;
+}): boolean {
+  if (input.status !== 206) return false;
+  const encoding = input.headers
+    .filter(([name]) => name.toLowerCase() === 'content-encoding')
+    .map(([, value]) => value)
+    .join(',');
+  return codingsWereDecoded(encoding);
+}
+
 /** Statuses whose responses never carry a body. */
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 

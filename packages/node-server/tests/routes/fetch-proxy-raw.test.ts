@@ -259,6 +259,55 @@ describe('raw /api/fetch-proxy', () => {
     expect(result.body.equals(bytes)).toBe(true);
   });
 
+  describe('ranged requests', () => {
+    const whole = Buffer.from('0123456789abcdefghij'.repeat(50));
+
+    /** An origin that serves a range over gzip whenever the request allows gzip. */
+    function rangeOrigin(alwaysGzip = false) {
+      return (req: IncomingMessage, res: ServerResponse) => {
+        const [, from, to] = /bytes=(\d+)-(\d+)/.exec(String(req.headers.range)) ?? [];
+        const gzip = alwaysGzip || /gzip/.test(String(req.headers['accept-encoding']));
+        const representation = gzip ? gzipSync(whole) : whole;
+        const slice = representation.subarray(Number(from), Number(to) + 1);
+        res.writeHead(206, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Range': `bytes ${from}-${to}/${representation.length}`,
+          'Content-Length': String(slice.length),
+          ...(gzip ? { 'Content-Encoding': 'gzip' } : {}),
+        });
+        res.end(slice);
+      };
+    }
+
+    it('asks for identity so the 206 bytes match their Content-Range', async () => {
+      const h = await harness(rangeOrigin());
+      const result = await rawFetch(h, `${h.origin}/file`, {
+        headers: [
+          ['Range', 'bytes=10-29'],
+          ['Accept-Encoding', 'gzip'],
+        ],
+      });
+      expect(h.seen[0]?.headers['accept-encoding']).toBe('identity');
+      expect(result.head.status).toBe(206);
+      expect(values(result.head.headers, 'content-range')).toEqual([`bytes 10-29/${whole.length}`]);
+      expect(values(result.head.headers, 'content-encoding')).toEqual([]);
+      expect(result.body.equals(whole.subarray(10, 30))).toBe(true);
+    });
+
+    it('refuses a 206 the origin encoded anyway', async () => {
+      const h = await harness(rangeOrigin(true));
+      await expect(
+        rawFetch(h, `${h.origin}/file`, { headers: [['Range', 'bytes=0-9']] })
+      ).rejects.toMatchObject({ status: 502 });
+    });
+
+    it('keeps compression for whole-body requests', async () => {
+      const h = await harness((_req, res) => res.end('ok'));
+      await rawFetch(h, `${h.origin}/whole`);
+      expect(h.seen[0]?.headers['accept-encoding']).toBe('gzip, deflate, br');
+    });
+  });
+
   it('keeps the representation headers of a HEAD response', async () => {
     const h = await harness((_req, res) => {
       res.writeHead(200, { 'Content-Encoding': 'gzip', 'Content-Length': '1234' });

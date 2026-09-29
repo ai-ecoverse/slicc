@@ -25,8 +25,8 @@ import {
   encodeRawResponseFrame,
   foldRawRequestHeaders,
   HMAC_SIGN_HEADER,
+  isDecodedPartialResponse,
   isTextContentType,
-  RAW_FETCH_ACCEPT_ENCODING,
   RAW_FETCH_BRIDGE_REQUEST_BODY_CAP,
   RAW_FETCH_CONTENT_TYPE,
   RAW_FETCH_PROBE_HEADER,
@@ -35,6 +35,7 @@ import {
   type RawFetchProbeReply,
   type RawFetchRequestHead,
   type RawHeaderList,
+  rawAcceptEncoding,
   rawResponseHasBody,
   rawResponseHeaders,
   stripRawRequestHeaders,
@@ -106,7 +107,8 @@ async function prepareUpstream(
   const headers = foldRawRequestHeaders(stripRawRequestHeaders(head.headers));
   const hmacSpec = headers[HMAC_SIGN_HEADER];
   delete headers[HMAC_SIGN_HEADER];
-  headers['accept-encoding'] = RAW_FETCH_ACCEPT_ENCODING;
+  const acceptEncoding = rawAcceptEncoding(headers);
+  if (acceptEncoding !== undefined) headers['accept-encoding'] = acceptEncoding;
 
   let hostname = '';
   try {
@@ -235,6 +237,15 @@ export async function handleRawFetchProxy(
     return;
   }
   logger.log(`[fetch-proxy:raw] ${head.method} ${head.url} ← ${upstream.status}`);
+  if (
+    isDecodedPartialResponse({ status: upstream.status, headers: upstreamHeaderList(upstream) })
+  ) {
+    upstreamAbort.detach();
+    await upstream.body?.cancel().catch(() => undefined);
+    logger.warn(`[fetch-proxy:raw] ${head.method} ${head.url} ← 206 encoded despite identity`);
+    sendProxyError(res, 502, 'Upstream answered a range request with an encoded partial body');
+    return;
+  }
   relayUpstream(res, head, upstream, secretProxy, upstreamAbort.detach);
 }
 
