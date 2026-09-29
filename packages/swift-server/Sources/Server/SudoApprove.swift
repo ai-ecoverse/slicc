@@ -76,7 +76,8 @@ enum SudoApprove {
     /// reason — `detail` and `reason` are untrusted and must not come first.
     static func describeRequest(_ req: ApproveRequest) -> String {
         let requester = req.requester?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let head = requester.isEmpty
+        let head =
+            requester.isEmpty
             ? "\(req.kind): \(req.detail)"
             : "\(req.kind) from \(requester): \(req.detail)"
         let reason = req.reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
