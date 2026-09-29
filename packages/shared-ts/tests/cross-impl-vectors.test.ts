@@ -473,7 +473,8 @@ const RAW_UPLOAD_STREAMS: Array<{
 
 describe('cross-implementation raw-fetch contract', () => {
   it.each(RAW_FRAMES)('frames a $head.status head byte for byte', ({ head, hex }) => {
-    expect(Buffer.from(encodeRawResponseFrame(head)).toString('hex')).toBe(hex);
+    const bytes = [...encodeRawResponseFrame(head)];
+    expect(bytes.map((b) => b.toString(16).padStart(2, '0')).join('')).toBe(hex);
   });
 
   it.each(RAW_RESPONSE_HEADERS)('response head: $name', (vector) => {
