@@ -73,6 +73,7 @@ export async function initTelemetry(opts: { isExtensionRealm?: boolean } = {}): 
       sampleRUM = mod.default as SampleRUM;
       bindRuntimeErrorListeners(self);
     } else if (mode === 'extension') {
+      wrapSendBeacon({ filterViteNoise: false });
       const mod = await import('./rum.js');
       sampleRUM = mod.default as SampleRUM;
 
@@ -84,7 +85,7 @@ export async function initTelemetry(opts: { isExtensionRealm?: boolean } = {}): 
         window.SAMPLE_PAGEVIEWS_AT_RATE = 'high';
       }
 
-      wrapSendBeaconForViteFilter();
+      wrapSendBeacon({ filterViteNoise: true });
       interceptHelixPojoErrors();
       const mod = await import('@adobe/helix-rum-js');
       sampleRUM = mod.sampleRUM as SampleRUM;
@@ -222,6 +223,20 @@ function sanitizeError(msg: string): string | null {
 
 const SENDBEACON_WRAPPED = Symbol.for('slicc.telemetry.sendBeacon.wrapped');
 
+const CAPABILITY_PATTERNS: ReadonlyArray<[RegExp, string]> = [
+  [/(\/|%2F)(join|controller)(\/|%2F)[^/?#&"\s\\]+/gi, '$1$2$3redacted'],
+  [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[0-9a-f]{16,}/gi, 'redacted'],
+  [/\b[0-9a-f]{32}--[0-9a-f]{16,}\b/gi, 'redacted'],
+];
+
+function redactCapabilityTokens(text: string): string {
+  let out = text;
+  for (const [pattern, replacement] of CAPABILITY_PATTERNS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
 type ParsedBeacon = { checkpoint?: string; source?: unknown; target?: unknown };
 
 type FieldOutcome =
@@ -273,7 +288,25 @@ function sanitizeErrorBeaconBody(parsed: ParsedBeacon): true | string | null {
   return mutated ? JSON.stringify(parsed) : null;
 }
 
-function wrapSendBeaconForViteFilter(): void {
+function readBeaconText(data: BodyInit | null | undefined): string | null {
+  try {
+    if (typeof data === 'string') return data;
+    if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+  } catch {}
+  return null;
+}
+
+function filterErrorBeacon(text: string): true | string | null {
+  if (text.charCodeAt(0) !== 123) return null;
+  try {
+    const parsed = JSON.parse(text) as ParsedBeacon;
+    return parsed?.checkpoint === 'error' ? sanitizeErrorBeaconBody(parsed) : null;
+  } catch {
+    return null;
+  }
+}
+
+function wrapSendBeacon(opts: { filterViteNoise: boolean }): void {
   if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') return;
   const current = navigator.sendBeacon as typeof navigator.sendBeacon & {
     [SENDBEACON_WRAPPED]?: boolean;
@@ -281,23 +314,17 @@ function wrapSendBeaconForViteFilter(): void {
   if (current[SENDBEACON_WRAPPED]) return;
   const original = current.bind(navigator);
   const wrapped = ((url, data) => {
-    try {
-      const text =
-        typeof data === 'string'
-          ? data
-          : data instanceof ArrayBuffer
-            ? new TextDecoder().decode(data)
-            : null;
-      if (text && text.length > 0 && text.charCodeAt(0) === 123) {
-        const parsed = JSON.parse(text) as ParsedBeacon;
-        if (parsed?.checkpoint === 'error') {
-          const outcome = sanitizeErrorBeaconBody(parsed);
-          if (outcome === true) return true;
-          if (outcome !== null) return original(url, outcome);
-        }
-      }
-    } catch {}
-    return original(url, data);
+    const text = readBeaconText(data);
+    if (text === null) {
+      return original(url, data);
+    }
+    const redacted = redactCapabilityTokens(text);
+    if (opts.filterViteNoise) {
+      const outcome = filterErrorBeacon(redacted);
+      if (outcome === true) return true;
+      if (outcome !== null) return original(url, outcome);
+    }
+    return original(url, redacted === text ? data : redacted);
   }) as typeof navigator.sendBeacon & { [SENDBEACON_WRAPPED]?: boolean };
   wrapped[SENDBEACON_WRAPPED] = true;
   navigator.sendBeacon = wrapped;

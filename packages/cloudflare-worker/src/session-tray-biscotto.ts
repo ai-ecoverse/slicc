@@ -98,6 +98,10 @@ function normalizeGates(gates: Partial<BiscottoGates> | undefined): BiscottoGate
   };
 }
 
+function biscottoSeatUrl(workerBaseUrl: string, token: string): string {
+  return `${workerBaseUrl.replace(/\/+$/, '')}/join/${token}`;
+}
+
 export async function mintBiscotto(
   req: MintBiscottoRequest,
   deps: BiscottoDeps
@@ -125,7 +129,6 @@ export async function mintBiscotto(
     );
   }
 
-  const { buildPreviewUrl } = await import('@slicc/shared-ts');
   const token = createCapabilityToken(tray.trayId, 10);
   const record: BiscottoRecord = {
     id: crypto.randomUUID().slice(0, 8),
@@ -140,7 +143,7 @@ export async function mintBiscotto(
 
   return {
     id: record.id,
-    url: buildPreviewUrl(req.workerBaseUrl, token, '/'),
+    url: biscottoSeatUrl(req.workerBaseUrl, token),
     label: record.label,
     expiresAt: record.expiresAt,
     gates: record.gates,

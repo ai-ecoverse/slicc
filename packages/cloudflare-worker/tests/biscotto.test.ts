@@ -138,7 +138,7 @@ describe('mintBiscotto', () => {
     tray = createTray();
   });
 
-  it('mints a seat with a private sliccy.now URL and persists it', async () => {
+  it('mints a seat whose URL is the hub join door for its token, and persists it', async () => {
     const deps = createDeps(tray);
     const result = await mintBiscotto(
       {
@@ -150,9 +150,26 @@ describe('mintBiscotto', () => {
     );
 
     expect(result.label).toBe('Anna');
-    expect(result.url).toMatch(/^https:\/\/tray1--[0-9a-f]{20}\.sliccy\.now\/$/);
     expect(tray.biscotti).toHaveLength(1);
+
+    expect(result.url).toBe(`https://www.sliccy.ai/join/${tray.biscotti![0].token}`);
+    expect(result.url).toMatch(/^https:\/\/www\.sliccy\.ai\/join\/tray-1\.[0-9a-f]{20}$/);
+    expect(new URL(result.url).hostname).not.toMatch(/sliccy\.now$/);
     expect(deps.persisted).toBe(1);
+  });
+
+  it('builds the seat URL on the calling origin, tolerating a trailing slash', async () => {
+    const deps = createDeps(tray);
+    const result = await mintBiscotto(
+      {
+        controllerToken: tray.controllerToken,
+        label: 'Anna',
+        workerBaseUrl: 'http://localhost:8787/',
+      },
+      deps
+    );
+
+    expect(result.url).toBe(`http://localhost:8787/join/${tray.biscotti![0].token}`);
   });
 
   it('refuses a caller without the controller token', async () => {
