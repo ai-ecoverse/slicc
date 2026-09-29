@@ -143,6 +143,15 @@ describe('ranged requests', () => {
     expect(
       isDecodedPartialResponse({ status: 206, headers: [['content-encoding', 'identity']] })
     ).toBe(false);
+    const zstd: Array<[string, string]> = [['Content-Encoding', 'zstd']];
+    expect(isDecodedPartialResponse({ status: 206, headers: zstd })).toBe(false);
+    expect(
+      isDecodedPartialResponse({
+        status: 206,
+        headers: zstd,
+        decodedCodings: BROWSER_DECODED_CODINGS,
+      })
+    ).toBe(true);
   });
 });
 

@@ -29,6 +29,7 @@ import {
   base64ToUint8,
   foldRawRequestHeaders,
   HMAC_SIGN_HEADER,
+  isDecodedPartialResponse,
   isTextContentType,
   isTextRequestContentType,
   RAW_FETCH_BUFFERED_REQUEST_BODY_CAP,
@@ -410,6 +411,20 @@ class RawSession {
     }
     const status = captured?.status ?? upstream.status;
     const upstreamHeaders = captured?.headers ?? [...upstream.headers];
+    if (
+      isDecodedPartialResponse({
+        status,
+        headers: upstreamHeaders,
+        decodedCodings: BROWSER_DECODED_CODINGS,
+      })
+    ) {
+      await upstream.body?.cancel().catch(() => undefined);
+      throw new RawError(
+        'upstream',
+        502,
+        'raw fetch: the upstream answered a range request with an encoded partial body'
+      );
+    }
     const isText = isTextContentType(contentTypeOf(upstreamHeaders));
     const headers = rawResponseHeaders({
       method,

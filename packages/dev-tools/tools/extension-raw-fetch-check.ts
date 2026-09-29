@@ -10,7 +10,8 @@
  *
  * Checks: a manual 302 with `Set-Cookie` and repeated headers; 12 concurrent
  * same-URL fetches whose captured heads match their bodies; gzip and zstd
- * decoded with the coding headers dropped; a 20 MiB binary download that
+ * decoded with the coding headers dropped; a ranged read whose bytes match
+ * its `Content-Range` (Chrome sends `identity`); a 20 MiB binary download that
  * keeps `Content-Length`; a 12 MiB upload streamed chunked; a session secret
  * unmasked upstream (header and text body) and scrubbed from the echo and
  * `Location`; `User-Agent` and `Cookie` sent as given with Chrome's jar kept
@@ -51,6 +52,7 @@ interface Seen {
 }
 
 const seen: Seen[] = [];
+const RANGE_BODY = Buffer.from('0123456789abcdefghij'.repeat(50));
 let bigWritten = 0;
 
 function respond(path: string, req: IncomingMessage, res: ServerResponse, body: Buffer): void {
@@ -95,6 +97,19 @@ function respond(path: string, req: IncomingMessage, res: ServerResponse, body: 
       res.end();
     };
     pump();
+  } else if (path === '/range') {
+    // Serves the range over gzip whenever the request allows gzip, like an
+    // origin that picks the compressed representation for a ranged read.
+    const [, from, to] = /bytes=(\d+)-(\d+)/.exec(String(req.headers.range)) ?? [];
+    const gzip = /gzip/.test(String(req.headers['accept-encoding']));
+    const representation = gzip ? gzipSync(RANGE_BODY) : RANGE_BODY;
+    const slice = representation.subarray(Number(from), Number(to) + 1);
+    res.writeHead(206, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Range': `bytes ${from}-${to}/${representation.length}`,
+      ...(gzip ? { 'Content-Encoding': 'gzip' } : {}),
+    });
+    res.end(slice);
   } else if (path === '/echo') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end(`auth=${req.headers.authorization ?? ''} body=${body.toString()}`);
@@ -218,7 +233,7 @@ async function main(): Promise<void> {
     const browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${cdpPort}` });
     const sw = await browser.waitForTarget(
       (t) => t.type() === 'service_worker' && t.url().includes('service-worker.js'),
-      { timeout: 30_000 }
+      { timeout: 60_000 }
     );
     const page = await browser.newPage();
     await page.goto(`chrome-extension://${new URL(sw.url()).host}/secrets.html`);
@@ -348,6 +363,33 @@ async function runChecks(page: Page, origin: string): Promise<void> {
     '12 MiB binary upload is streamed (chunked) and complete',
     up?.len === 12 * 1024 * 1024 && up.te === 'chunked' && upload === `{"len":${12 * 1024 * 1024}}`,
     { up: up && { len: up.len, te: up.te }, upload }
+  );
+
+  const ranged = await page.evaluate(async (o) => {
+    const connect = () => chrome.runtime.connect({ name: 'fetch-proxy.fetch' });
+    try {
+      const r = await rawFetchViaPort(connect, `${o}/range`, {
+        headers: [['Range', 'bytes=10-29']],
+      });
+      const body = new TextDecoder().decode(await new Response(r.body).arrayBuffer());
+      const range = r.headers.find(([n]) => n.toLowerCase() === 'content-range')?.[1];
+      return { status: r.status, range, body };
+    } catch (e) {
+      return { error: (e as { code?: string }).code ?? String(e) };
+    }
+  }, origin);
+  const rangeReq = seen.filter((s) => s.path === '/range').at(-1);
+  console.log(
+    `INFO Chrome sent Accept-Encoding "${rangeReq?.headers['accept-encoding']}" with Range`
+  );
+  check(
+    'a ranged read gets bytes that match its Content-Range, or a clean upstream error',
+    ('error' in ranged && ranged.error === 'upstream') ||
+      ('body' in ranged &&
+        ranged.status === 206 &&
+        ranged.body === RANGE_BODY.subarray(10, 30).toString() &&
+        ranged.range === `bytes 10-29/${RANGE_BODY.length}`),
+    ranged
   );
 
   await secretChecks(page, origin);

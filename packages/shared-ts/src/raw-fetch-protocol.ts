@@ -174,13 +174,15 @@ export function rawAcceptEncoding(headers: Record<string, string>): string | und
 export function isDecodedPartialResponse(input: {
   status: number;
   headers: RawHeaderList;
+  /** Codings the float's fetch undid; defaults to {@link NODE_DECODED_CODINGS}. */
+  decodedCodings?: ReadonlySet<string>;
 }): boolean {
   if (input.status !== 206) return false;
   const encoding = input.headers
     .filter(([name]) => name.toLowerCase() === 'content-encoding')
     .map(([, value]) => value)
     .join(',');
-  return codingsWereDecoded(encoding);
+  return codingsWereDecoded(encoding, input.decodedCodings ?? NODE_DECODED_CODINGS);
 }
 
 /** Statuses whose responses never carry a body. */

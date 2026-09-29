@@ -253,6 +253,32 @@ describe('raw fetch-proxy Port', () => {
     expect(new TextDecoder().decode(base64ToUint8(chunk.dataBase64))).toBe(`echo ${masked}`);
   });
 
+  it('refuses a 206 whose coding Chrome undid', async () => {
+    const f = stubFetch(
+      capture,
+      () => new Response(new Uint8Array([1, 2, 3]), { status: 206 }),
+      () => ({
+        status: 206,
+        statusText: 'Partial Content',
+        headers: [
+          ['Content-Encoding', 'zstd'],
+          ['Content-Range', 'bytes 0-2/99'],
+        ],
+      })
+    );
+    const p = open({ fetchImpl: f.impl });
+    p.send({
+      type: 'raw-request',
+      head: { url: 'https://example.com/file', method: 'GET', headers: [['Range', 'bytes=0-2']] },
+      hasBody: false,
+      credits: 4,
+    });
+    await settle();
+    expect(p.posts).toEqual([
+      expect.objectContaining({ type: 'raw-response-error', code: 'upstream', status: 502 }),
+    ]);
+  });
+
   it('refuses a secret on a foreign domain without fetching', async () => {
     const f = stubFetch(capture, () => new Response('nope'));
     const p = open({ fetchImpl: f.impl });
