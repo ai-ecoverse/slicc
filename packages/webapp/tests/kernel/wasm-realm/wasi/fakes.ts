@@ -34,6 +34,10 @@ interface FakeFd {
   shut?: number[];
   /** The other end is gone (select reports a hangup). */
   hangup?: boolean;
+  /** Thrown by a read once `input` is drained (EAGAIN, EINTR), instead of end of file. */
+  drained?: string;
+  /** The `max` of every read. */
+  reads?: number[];
 }
 
 export class FakeKernel implements WasiKernel {
@@ -75,7 +79,9 @@ export class FakeKernel implements WasiKernel {
   readonly sys: ProcessSys = {
     read: (fd, max, opts) => {
       const e = this.get(fd);
+      (e.reads ??= []).push(max);
       const chunk = e.input.shift();
+      if (!chunk && e.drained) throw posix(e.drained);
       if (!chunk) {
         if (opts?.nonblock && e.kind === 'stream' && e.ready === false) throw posix('EAGAIN');
         return new Uint8Array(0);
@@ -289,7 +295,7 @@ export class FakeFs implements SyncFsPosixBridge {
 
 /** The guest's memory: a bump allocator for strings, iovecs and out-params. */
 export class Guest {
-  readonly memory = new WebAssembly.Memory({ initial: 4 });
+  readonly memory = new WebAssembly.Memory({ initial: 64 });
   private top = 1024;
 
   get view(): DataView {

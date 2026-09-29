@@ -347,22 +347,11 @@ export class WasiHost {
       ) => {
         const e = this.socket(fd);
         const peek = (riflags & RIFLAGS.PEEK) !== 0;
-        const want = Math.min(mem.capacity(iovs, n), MAX_READ);
-        let data = o.kernel.sys.read(fd, want, { nonblock: e.nonblock, peek });
-        // MSG_WAITALL: until the buffer is full or the peer is done.
-        while (
-          (riflags & RIFLAGS.WAITALL) !== 0 &&
-          !peek &&
-          data.length > 0 &&
-          data.length < want
-        ) {
-          const more = o.kernel.sys.read(fd, want - data.length, { nonblock: e.nonblock });
-          if (more.length === 0) break;
-          const joined = new Uint8Array(data.length + more.length);
-          joined.set(data);
-          joined.set(more, data.length);
-          data = joined;
-        }
+        const want = mem.capacity(iovs, n);
+        const data =
+          (riflags & RIFLAGS.WAITALL) !== 0 && !peek
+            ? this.recvAll(fd, want, e.nonblock)
+            : o.kernel.sys.read(fd, Math.min(want, MAX_READ), { nonblock: e.nonblock, peek });
         mem.view().setUint32(outLen, mem.scatter(iovs, n, data), true);
         mem.view().setUint16(outFlags, 0, true);
       },
@@ -384,6 +373,36 @@ export class WasiHost {
         });
       },
     };
+  }
+
+  /**
+   * MSG_WAITALL: read until `want` bytes (in reads of at most MAX_READ) or the
+   * peer is done. Once some bytes are in, a failing read (EAGAIN on a
+   * non-blocking socket, EINTR) ends the loop with what was read: those
+   * bytes are gone from the connection, so they must reach the program.
+   */
+  private recvAll(fd: number, want: number, nonblock: boolean): Uint8Array {
+    const chunks: Uint8Array[] = [];
+    let got = 0;
+    while (got < want) {
+      let chunk: Uint8Array;
+      try {
+        chunk = this.o.kernel.sys.read(fd, Math.min(want - got, MAX_READ), { nonblock });
+      } catch (err) {
+        if (got === 0) throw err;
+        break;
+      }
+      if (chunk.length === 0) break;
+      chunks.push(chunk);
+      got += chunk.length;
+    }
+    const out = new Uint8Array(got);
+    let at = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------- descriptors

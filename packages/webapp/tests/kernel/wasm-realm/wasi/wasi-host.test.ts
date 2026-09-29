@@ -701,6 +701,34 @@ describe('WasiHost: sockets (5b)', () => {
     void kernel;
   });
 
+  it('MSG_WAITALL keeps what it read when a later read fails (EAGAIN, EINTR): a short count, no error', () => {
+    for (const drained of ['EAGAIN', 'EINTR']) {
+      const { call, g, kernel, fd } = listening([['ab']]);
+      const out = g.alloc(4);
+      call('sock_accept', fd, 0, out);
+      const conn = g.u32(out);
+      (kernel.table.get(conn) as { drained?: string }).drained = drained;
+      const [iov, n, buf] = g.iov(4);
+      const len = g.alloc(4);
+      expect(call('sock_recv', conn, iov, n, RIFLAGS.WAITALL, len, g.alloc(2))).toBe(E.SUCCESS);
+      expect(g.read(buf, g.u32(len))).toBe('ab');
+    }
+  });
+
+  it('MSG_WAITALL fills a buffer larger than one read (1 MiB), each kernel read within that cap', () => {
+    const MiB = 1024 * 1024;
+    const { call, g, kernel, fd } = listening([['a'.repeat(MiB), 'b'.repeat(MiB / 2)]]);
+    const out = g.alloc(4);
+    call('sock_accept', fd, 0, out);
+    const conn = g.u32(out);
+    const [iov, n, buf] = g.iov(MiB + MiB / 2);
+    const len = g.alloc(4);
+    expect(call('sock_recv', conn, iov, n, RIFLAGS.WAITALL, len, g.alloc(2))).toBe(E.SUCCESS);
+    expect(g.u32(len)).toBe(MiB + MiB / 2);
+    expect(g.read(buf + MiB, 1)).toBe('b');
+    expect(Math.max(...(kernel.table.get(conn)?.reads ?? []))).toBeLessThanOrEqual(MiB);
+  });
+
   it('a peer gone is EPIPE for sock_send (no SIGPIPE); a socket call on a non-socket is ENOTSOCK', () => {
     const { call, g, kernel, fd } = listening([['x']]);
     const out = g.alloc(4);
