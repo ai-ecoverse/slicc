@@ -1,14 +1,15 @@
 /**
- * Gesture-gated USB / HID / serial acquisition for sprinkle `request()`.
+ * Gesture-gated USB / HID / serial acquisition for sprinkle and trusted-dip
+ * `request()`.
  *
- * A sprinkle iframe's call arrives across an async `postMessage` hop that
- * drops transient activation, so a raw `requestDevice` / `requestPort` on
- * the leader rejects with a SecurityError. Prefer the leader
- * `<slicc-permissions>` surface via `prompt()` (not `request()`): the Grant
- * Allow click re-supplies the gesture that opens the OS chooser — same path
- * as `acquireSprinkleCaptureStream` / #3604 / #3574. Fall back to the bare
- * navigator picker only when no surface is mounted (cherry follower /
- * headless harness).
+ * A sprinkle or trusted-dip iframe's call arrives across an async
+ * `postMessage` hop that drops transient activation, so a raw
+ * `requestDevice` / `requestPort` on the leader rejects with a SecurityError.
+ * Prefer the leader `<slicc-permissions>` surface via `prompt()` (not
+ * `request()`): the Grant Allow click re-supplies the gesture that opens the
+ * OS chooser — same path as `acquireSprinkleCaptureStream` / #3604 / #3574 /
+ * #3609 / #3631. Fall back to the bare navigator picker only when no surface
+ * is mounted (cherry follower / headless harness).
  */
 import type { PermissionGrant } from '@slicc/webcomponents';
 import type { HidApi, HidDevice, HidDeviceFilter } from '../kernel/hid-device-registry.js';
@@ -44,7 +45,7 @@ async function grantThroughSprinklePrompt<K extends PromptedKind>(
   if (!surface) return null;
   const result = await surface.prompt({
     kinds: [kind],
-    description: `A sprinkle asks to ${WHAT[kind]}.`,
+    description: `A sprinkle or dip asks to ${WHAT[kind]}.`,
     requestOptions: { [kind]: { filters } },
   });
   const grant =

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 /**
- * Pins that sprinkle `slicc.{usb,hid,serial}.request()` acquires devices
- * through the leader `<slicc-permissions>` Grant prompt when mounted (#3605),
- * so the Allow click supplies the user gesture the sprinkle→leader postMessage
- * hop otherwise drops. Sibling of #3604 / #3574 — must use `prompt()`, not
- * `request()` (request invokes the OS chooser immediately with no Allow UI).
+ * Pins that sprinkle / trusted-dip `slicc.{usb,hid,serial}.request()` acquires
+ * devices through the leader `<slicc-permissions>` Grant prompt when mounted
+ * (#3605 / #3631), so the Allow click supplies the user gesture the
+ * iframe→leader postMessage hop otherwise drops. Sibling of #3604 / #3574 —
+ * must use `prompt()`, not `request()` (request invokes the OS chooser
+ * immediately with no Allow UI).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -58,7 +59,7 @@ describe('acquireSprinkleUsbDevice / Hid / Serial', () => {
     expect(await acquireSprinkleUsbDevice(usb, filters)).toBe(device);
     expect(surfaceMock.prompt).toHaveBeenCalledWith({
       kinds: ['usb'],
-      description: 'A sprinkle asks to use a USB device.',
+      description: 'A sprinkle or dip asks to use a USB device.',
       requestOptions: { usb: { filters } },
     });
     expect(surfaceMock.request).not.toHaveBeenCalled();
@@ -80,7 +81,7 @@ describe('acquireSprinkleUsbDevice / Hid / Serial', () => {
     expect(surfaceMock.prompt).toHaveBeenCalledWith(
       expect.objectContaining({
         kinds: ['hid'],
-        description: 'A sprinkle asks to use a HID device.',
+        description: 'A sprinkle or dip asks to use a HID device.',
       })
     );
     expect(surfaceMock.request).not.toHaveBeenCalled();
@@ -101,7 +102,7 @@ describe('acquireSprinkleUsbDevice / Hid / Serial', () => {
     expect(await acquireSprinkleSerialPort(serial, filters)).toBe(port);
     expect(surfaceMock.prompt).toHaveBeenCalledWith({
       kinds: ['serial'],
-      description: 'A sprinkle asks to use a serial port.',
+      description: 'A sprinkle or dip asks to use a serial port.',
       requestOptions: { serial: { filters } },
     });
     expect(surfaceMock.request).not.toHaveBeenCalled();
