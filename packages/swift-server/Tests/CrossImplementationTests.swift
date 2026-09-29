@@ -373,4 +373,43 @@ final class CrossImplementationTests: XCTestCase {
                 + "line-oriented and would truncate it to the first line"
         )
     }
+
+    
+
+    
+    
+    
+    
+    private static let scopeHostnames: [(String, String)] = [
+        ("https://bücher.example:8443/x", "xn--bcher-kva.example"),
+        ("https://u:p@BÜCHER.Example/", "xn--bcher-kva.example"),
+        ("https://xn--bcher-kva.example/", "xn--bcher-kva.example"),
+        ("https://API.GitHub.com/", "api.github.com"),
+        ("http://upstream.test:65209/a", "upstream.test"),
+        ("http://[::1]:5710/", "[::1]"),
+    ]
+
+    private static let scopeMatches: [(String, [String], Bool)] = [
+        ("https://bücher.example/", ["xn--bcher-kva.example"], true),
+        ("https://uploads.github.com:8443/", ["*.github.com"], true),
+        ("https://github.com/", ["*.github.com"], false),
+        ("https://x:y@upstream.test:65209/", ["upstream.test"], true),
+        ("https://evil.test:8443/", ["upstream.test"], false),
+    ]
+
+    func testSecretScopeHostnameMatchesPinnedTable() {
+        for (url, hostname) in Self.scopeHostnames {
+            XCTAssertEqual(secretScopeHostname(url), hostname, url)
+        }
+    }
+
+    func testSecretScopeMatchingMatchesPinnedTable() {
+        for (url, patterns, allowed) in Self.scopeMatches {
+            XCTAssertEqual(
+                isAllowedDomain(patterns: patterns, hostname: secretScopeHostname(url)),
+                allowed,
+                url
+            )
+        }
+    }
 }

@@ -117,6 +117,14 @@ export function domainMatches(pattern: string, hostname: string): boolean {
   return h.length > suffix.length && h.endsWith(suffix);
 }
 
+export function secretScopeHostname(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
 export function isAllowedDomain(patterns: string[], hostname: string): boolean {
   return patterns.some((p) => domainMatches(p, hostname));
 }

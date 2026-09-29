@@ -19,6 +19,7 @@ import {
   rawResponseHeaders,
   rawUploadStreams,
   type SecretsPipeline,
+  secretScopeHostname,
   stripRawRequestHeaders,
   supportsRequestStreams,
   uint8ToBase64,
@@ -128,7 +129,7 @@ function forbidden(f: { secretName: string; hostname: string }): RawError {
 function prepareHead(pipeline: SecretsPipeline, head: RawFetchRequestHead): PreparedRaw {
   const creds = pipeline.extractAndUnmaskUrlCredentials(head.url);
   if (creds.forbidden) throw forbidden(creds.forbidden);
-  const host = new URL(creds.url).host;
+  const host = secretScopeHostname(creds.url);
   const headers = foldRawRequestHeaders(stripRawRequestHeaders(head.headers));
   const hmacSpec = headers[HMAC_SIGN_HEADER];
   delete headers[HMAC_SIGN_HEADER];

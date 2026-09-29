@@ -5,7 +5,24 @@ import {
   isAllowedDomain,
   MIN_MASKABLE_SECRET_LENGTH,
   mask,
+  secretScopeHostname,
 } from '../src/secret-masking.js';
+
+describe('secretScopeHostname()', () => {
+  it('is the URL hostname: no port or userinfo, lowercase, IDN in punycode', () => {
+    expect(secretScopeHostname('http://upstream.test:65209/x')).toBe('upstream.test');
+    expect(secretScopeHostname('https://u:p@API.GitHub.com/')).toBe('api.github.com');
+    expect(secretScopeHostname('https://bücher.example/')).toBe('xn--bcher-kva.example');
+    expect(secretScopeHostname('http://[::1]:5710/')).toBe('[::1]');
+    expect(secretScopeHostname('not a url')).toBe('');
+  });
+
+  it('feeds domainMatches the same way on every float', () => {
+    const host = secretScopeHostname('https://uploads.github.com:8443/a');
+    expect(isAllowedDomain(['*.github.com'], host)).toBe(true);
+    expect(isAllowedDomain(['github.com'], host)).toBe(false);
+  });
+});
 
 describe('mask()', () => {
   it('produces deterministic output for same inputs', async () => {

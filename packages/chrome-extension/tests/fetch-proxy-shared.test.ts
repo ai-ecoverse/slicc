@@ -47,6 +47,57 @@ describe('handleFetchProxyConnection', () => {
     masked = await pipeline.maskOne('GITHUB_TOKEN', 'ghp_realtoken');
   });
 
+  async function sendThrough(p: SecretsPipeline, url: string, authorization: string) {
+    const fetchSpy = vi.fn(
+      async (_u: RequestInfo | URL, _init?: RequestInit) => new Response('ok')
+    );
+    (globalThis as { fetch?: typeof fetch }).fetch = fetchSpy as unknown as typeof fetch;
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, p);
+    port.fireMessage({ type: 'request', url, method: 'GET', headers: { authorization } });
+    await new Promise((r) => setTimeout(r, 10));
+    const sent = fetchSpy.mock.calls[0]?.[1]?.headers as Record<string, string> | undefined;
+    return { sent, posts };
+  }
+
+  it('matches a secret on the hostname, whatever the port (as node-server does)', async () => {
+    const { sent, posts } = await sendThrough(
+      pipeline,
+      'https://api.github.com:8443/user',
+      `Bearer ${masked}`
+    );
+    expect(posts[0]).toMatchObject({ type: 'response-head', status: 200 });
+    expect(sent?.authorization).toBe('Bearer ghp_realtoken');
+  });
+
+  it('applies wildcard domains to the hostname and still refuses other hosts', async () => {
+    const wild = new SecretsPipeline({
+      sessionId: 'session-wild',
+      source: {
+        get: async () => undefined,
+        listAll: async () => [
+          { name: 'API_KEY', value: 'real-api-key-123', domains: ['*.example.com'] },
+        ],
+      },
+    });
+    await wild.reload();
+    const wildMasked = await wild.maskOne('API_KEY', 'real-api-key-123');
+    const allowed = await sendThrough(
+      wild,
+      'http://api.example.com:65209/x',
+      `Bearer ${wildMasked}`
+    );
+    expect(allowed.sent?.authorization).toBe('Bearer real-api-key-123');
+    const refused = await sendThrough(wild, 'http://example.com:65209/x', `Bearer ${wildMasked}`);
+    expect(refused.posts).toEqual([
+      expect.objectContaining({
+        type: 'response-error',
+        error: 'forbidden: API_KEY on example.com',
+      }),
+    ]);
+  });
+
   it('streams a multi-chunk response back and ends with response-end', async () => {
     const chunks = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])];
     const stream = new ReadableStream<Uint8Array>({

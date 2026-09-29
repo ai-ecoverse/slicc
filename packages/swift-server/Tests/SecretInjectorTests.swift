@@ -321,6 +321,25 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertEqual(decoded, "x-access-token:ghp_realToken123")
     }
 
+    func testUrlCredsScopeAnIdnHostInPunycodeLikeTypeScript() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["xn--bcher-kva.example"]
+            )
+        ])
+        let url = "https://x-access-token:ghp_masked999abc@Bücher.example:8443/repo.git"
+        let result = injector.extractAndUnmaskUrlCredentials(rawUrl: url)
+        XCTAssertNil(result.forbidden)
+        XCTAssertNotNil(result.syntheticAuthorization)
+
+        let refused = injector.extractAndUnmaskUrlCredentials(
+            rawUrl: "https://x:ghp_masked999abc@other.example/"
+        )
+        XCTAssertEqual(refused.forbidden?.hostname, "other.example")
+    }
+
     func testUrlCredsUnmasksUsernameAsWellAsPassword() {
         let injector = makeInjector(secrets: [
             makeSecret(

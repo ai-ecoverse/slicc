@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { isTextRequestContentType } from '../src/content-type.js';
 import { unmaskFormBody } from '../src/form-body-unmask.js';
 import { isSingleLineSecretValue, multilineSecretValueError } from '../src/secret-env-schema.js';
-import { mask } from '../src/secret-masking.js';
+import { isAllowedDomain, mask, secretScopeHostname } from '../src/secret-masking.js';
 import { type FetchProxySecretSource, SecretsPipeline } from '../src/secrets-pipeline.js';
 
 const PINNED = [
@@ -137,5 +137,32 @@ describe('cross-implementation multiline secret-value rejection', () => {
     expect(multilineSecretValueError('PEM_KEY')).toBe(
       'Secret "PEM_KEY" value cannot contain newlines; the secret store is line-oriented and would truncate it to the first line'
     );
+  });
+});
+
+const SCOPE_HOSTNAMES = [
+  { url: 'https://bücher.example:8443/x', hostname: 'xn--bcher-kva.example' },
+  { url: 'https://u:p@BÜCHER.Example/', hostname: 'xn--bcher-kva.example' },
+  { url: 'https://xn--bcher-kva.example/', hostname: 'xn--bcher-kva.example' },
+  { url: 'https://API.GitHub.com/', hostname: 'api.github.com' },
+  { url: 'http://upstream.test:65209/a', hostname: 'upstream.test' },
+  { url: 'http://[::1]:5710/', hostname: '[::1]' },
+];
+
+const SCOPE_MATCHES = [
+  { url: 'https://bücher.example/', patterns: ['xn--bcher-kva.example'], allowed: true },
+  { url: 'https://uploads.github.com:8443/', patterns: ['*.github.com'], allowed: true },
+  { url: 'https://github.com/', patterns: ['*.github.com'], allowed: false },
+  { url: 'https://x:y@upstream.test:65209/', patterns: ['upstream.test'], allowed: true },
+  { url: 'https://evil.test:8443/', patterns: ['upstream.test'], allowed: false },
+];
+
+describe('cross-implementation secret-scope hostnames', () => {
+  it.each(SCOPE_HOSTNAMES)('$url → $hostname', ({ url, hostname }) => {
+    expect(secretScopeHostname(url)).toBe(hostname);
+  });
+
+  it.each(SCOPE_MATCHES)('$url against $patterns → $allowed', ({ url, patterns, allowed }) => {
+    expect(isAllowedDomain(patterns, secretScopeHostname(url))).toBe(allowed);
   });
 });

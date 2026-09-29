@@ -269,6 +269,26 @@ describe('raw fetch-proxy Port', () => {
     ]);
   });
 
+  it('matches a secret on the hostname, whatever the port', async () => {
+    const f = stubFetch(capture, () => new Response('ok'));
+    const p = open({ fetchImpl: f.impl });
+    p.send({
+      type: 'raw-request',
+      head: {
+        url: 'https://api.github.com:8443/login',
+        method: 'GET',
+        headers: [['Authorization', `Bearer ${masked}`]],
+      },
+      hasBody: false,
+      credits: 4,
+    });
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(p.posts.some((m) => m.type === 'raw-response-error')).toBe(false);
+    expect((f.calls[0]?.init.headers as Record<string, string>).authorization).toBe(
+      `Bearer ${REAL}`
+    );
+  });
+
   it('refuses a secret on a foreign domain without fetching', async () => {
     const f = stubFetch(capture, () => new Response('nope'));
     const p = open({ fetchImpl: f.impl });

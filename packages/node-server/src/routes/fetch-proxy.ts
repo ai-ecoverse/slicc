@@ -6,6 +6,7 @@ import {
   isLoopbackOrigin,
   isTextContentType,
   isTextRequestContentType,
+  secretScopeHostname,
   unmaskFormBody,
 } from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
@@ -292,12 +293,7 @@ export function registerFetchProxyRoute(app: Express, deps: FetchProxyDeps): voi
       const fetchInit: RequestInit = { method: req.method, redirect: 'follow' };
       const headers = buildForwardHeaders(req, targetUrl);
 
-      let targetHostname: string;
-      try {
-        targetHostname = new URL(targetUrl).hostname;
-      } catch {
-        targetHostname = '';
-      }
+      const targetHostname = secretScopeHostname(targetUrl);
 
       const injection = injectRequestSecrets(secretProxy, headers, targetUrl, targetHostname);
       if ('forbidden' in injection) {

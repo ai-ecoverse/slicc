@@ -170,6 +170,30 @@ public func domainMatches(pattern: String, hostname: String) -> Bool {
 }
 
 
+
+
+
+
+
+
+
+
+
+
+public func secretScopeHostname(_ rawUrl: String) -> String {
+    if let encoded = URLComponents(string: rawUrl)?.encodedHost, !encoded.isEmpty,
+        encoded.allSatisfy(\.isASCII), !encoded.contains("%")
+    {
+        return encoded.lowercased()
+    }
+    guard let host = URL(string: rawUrl)?.host(percentEncoded: false), !host.isEmpty,
+        host.allSatisfy(\.isASCII)
+    else { return "" }
+    let lowered = host.lowercased()
+    return lowered.contains(":") && !lowered.hasPrefix("[") ? "[\(lowered)]" : lowered
+}
+
+
 public func isAllowedDomain(patterns: [String], hostname: String) -> Bool {
     patterns.contains { domainMatches(pattern: $0, hostname: hostname) }
 }

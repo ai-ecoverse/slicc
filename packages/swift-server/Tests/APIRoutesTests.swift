@@ -793,6 +793,54 @@ final class APIRoutesTests: XCTestCase {
     
     
     
+    func testFetchProxyScopesHeaderSecretsByTheTypeScriptHostname() async throws {
+        let injector = SecretInjector(secrets: [
+            .init(name: "LOCAL_TOKEN", realValue: "real-local-token-123", maskedValue: "masked-local-token", domains: ["[::1]"])
+        ])
+        let received = AuthorizationBox()
+        let upstreamRouter = Router()
+        upstreamRouter.get("/resource") { request, _ in
+            await received.set(request.headers[.authorization])
+            return Response(status: .ok)
+        }
+        let upstreamApp = Application(
+            responder: upstreamRouter.buildResponder(),
+            configuration: .init(address: .hostname("::1", port: 0))
+        )
+        try await self.withHTTPClient { httpClient in
+            try await upstreamApp.test(.live) { upstreamClient in
+                let upstreamPort = try XCTUnwrap(upstreamClient.port)
+                let router = Router()
+                registerAPIRoutes(
+                    router: router,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient,
+                    secretInjector: injector
+                )
+                let app = Application(responder: router.buildResponder())
+                try await app.test(.router) { client in
+                    try await client.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .get,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: "http://[::1]:\(upstreamPort)/resource",
+                            .authorization: "Bearer masked-local-token",
+                        ]
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok)
+                    }
+                }
+            }
+        }
+        let authorization = await received.value
+        XCTAssertEqual(authorization, "Bearer real-local-token-123")
+    }
+
+    
+    
+    
+    
     
     
     
@@ -1620,4 +1668,9 @@ private actor ProxySurfaceCaptureBox {
     func snapshot() -> [Snapshot] {
         values
     }
+}
+
+private actor AuthorizationBox {
+    private(set) var value: String?
+    func set(_ value: String?) { self.value = value }
 }

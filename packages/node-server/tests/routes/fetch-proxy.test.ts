@@ -181,6 +181,22 @@ describe('registerFetchProxyRoute', () => {
     expect(stripped.referer).toBeUndefined();
   });
 
+  it('scopes URL credentials by hostname, not host:port', async () => {
+    let received: string | undefined;
+    await setup((req, res) => {
+      received = req.headers.authorization;
+      res.end('ok');
+    });
+    const target = new URL(`${upstreamUrl}/repo.git/info/refs`);
+    target.username = 'x-access-token';
+    target.password = masked;
+    const resp = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'X-Target-URL': target.toString() },
+    });
+    expect(resp.status).toBe(200);
+    expect(received).toBe(`Basic ${btoa(`x-access-token:${REAL_TOKEN}`)}`);
+  });
+
   it('injects URL credentials as Basic authorization', async () => {
     await setup((_req, res) => res.end('ok'));
     const result = injectRequestSecrets(

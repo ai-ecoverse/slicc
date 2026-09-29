@@ -152,6 +152,16 @@ describe('extractAndUnmaskUrlCredentials', () => {
     expect(decoded).toBe('x-access-token:ghp_realToken123');
   });
 
+  it('matches the domain list against the hostname, ignoring the port', () => {
+    const url = `https://x-access-token:${masked}@GitHub.com:8443/owner/repo.git`;
+    const result = pipeline.extractAndUnmaskUrlCredentials(url);
+    expect(result.forbidden).toBeUndefined();
+    expect(result.url).toBe('https://github.com:8443/owner/repo.git');
+    expect(result.syntheticAuthorization).toBeDefined();
+    const other = pipeline.extractAndUnmaskUrlCredentials(`https://u:${masked}@evil.test:8443/`);
+    expect(other.forbidden).toEqual({ secretName: 'GITHUB_TOKEN', hostname: 'evil.test' });
+  });
+
   it('forbids when URL host is not allowed for the secret', () => {
     const result = pipeline.extractAndUnmaskUrlCredentials(`https://u:${masked}@evil.example.com/`);
     expect(result.forbidden).toEqual({ secretName: 'GITHUB_TOKEN', hostname: 'evil.example.com' });
