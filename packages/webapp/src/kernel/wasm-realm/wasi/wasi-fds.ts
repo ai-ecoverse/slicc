@@ -185,6 +185,12 @@ export class WasiFds {
 
   /** FD_CLOEXEC, per fd: what an exec or spawn leaves behind. */
   readonly cloexec = new Set<number>();
+  /**
+   * Every fd above stdio is close-on-exec: a program whose libc cannot say
+   * which are (no `fd_fdflags_set` — Wasmer's Python, coreutils) believes
+   * they all are, and Python's subprocess waits for its error pipe's EOF.
+   */
+  implicitCloexec = false;
 
   /** dup(2) / F_DUPFD: the lowest free fd >= `min` on the same description. */
   dup(fd: number, min: number, cloexec: boolean): number {
@@ -281,7 +287,9 @@ export class WasiFds {
   inheritable(): Map<number, number> {
     const out = new Map<number, number>();
     for (const [fd, e] of this.table) {
-      if (e.type === 'kernel' && !this.cloexec.has(fd)) out.set(fd, fd);
+      if (e.type !== 'kernel' || this.cloexec.has(fd)) continue;
+      if (this.implicitCloexec && fd > 2) continue;
+      out.set(fd, fd);
     }
     return out;
   }
@@ -301,7 +309,8 @@ export class WasiFds {
    */
   renumber(from: number, to: number, keep = false): void {
     const e = this.get(from);
-    const old = this.get(to);
+    // dup2 may target a free number; preview1's fd_renumber needs `to` open.
+    const old = keep ? this.table.get(to) : this.get(to);
     if (from === to) return;
     this.kernel.call({ op: 'fd-renumber', from, to, ...(keep ? { keep } : {}) });
     this.cloexec.delete(to);
@@ -313,7 +322,7 @@ export class WasiFds {
       this.table.set(to, e);
       if (this.cloexec.delete(from)) this.cloexec.add(to);
     }
-    this.release(old);
+    if (old) this.release(old);
   }
 
   /** The worker's side of a close: a description's last fd writes it back; the last open of a path drops its buffer. */

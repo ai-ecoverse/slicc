@@ -70,6 +70,37 @@ int main(int argc, char **argv) {
     report("upper", status);
     return 0;
   }
+  if (!strcmp(cmd, "subprocess")) {
+    /*
+     * Python's subprocess: a close-on-exec error pipe the parent reads to
+     * EOF (the exec happened) before it writes the child's stdin.
+     */
+    int in[2], err[2];
+    if (pipe(in) || pipe2(err, O_CLOEXEC)) return perror("pipe"), 1;
+    pid_t pid = fork();
+    if (pid == 0) {
+      dup2(in[0], 0);
+      close(in[0]);
+      close(in[1]);
+      close(err[0]);
+      char *args[] = {"wasitest", "upper", NULL};
+      execvp("wasitest", args);
+      _exit(127);
+    }
+    close(in[0]);
+    close(err[1]);
+    char buf[16];
+    ssize_t n = read(err[0], buf, sizeof buf);
+    printf("errpipe EOF %d\n", n == 0);
+    fflush(stdout);
+    close(err[0]);
+    write(in[1], "hi\n", 3);
+    close(in[1]);
+    int status;
+    waitpid(pid, &status, 0);
+    report("subprocess", status);
+    return 0;
+  }
   if (!strcmp(cmd, "file")) {
     /* One open file across a fork: one offset, so writes append in order. */
     int fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);

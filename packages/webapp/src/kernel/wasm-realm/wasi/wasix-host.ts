@@ -51,9 +51,14 @@ export class WasixHost {
 
   constructor(
     private readonly host: WasiHost,
-    private readonly driver: AsyncifyDriver
+    private readonly driver: AsyncifyDriver,
+    module?: WebAssembly.Module
   ) {
     this.process = new WasixProcess(host, driver);
+    // A libc without fd_fdflags_set cannot mark fds close-on-exec, and takes them all to be.
+    if (module && !WebAssembly.Module.imports(module).some((i) => i.name === 'fd_fdflags_set')) {
+      host.fds.implicitCloexec = true;
+    }
   }
 
   private get mem() {

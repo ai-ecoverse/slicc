@@ -148,7 +148,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
   });
   const driver = new AsyncifyDriver(host.mem);
   const wasixHost = WebAssembly.Module.imports(module).some((i) => i.module === WASIX)
-    ? new WasixHost(host, driver)
+    ? new WasixHost(host, driver, module)
     : undefined;
   const preview1 = { ...host.imports(), ...wasixHost?.preview1() };
   const wasix = wasixHost?.imports();

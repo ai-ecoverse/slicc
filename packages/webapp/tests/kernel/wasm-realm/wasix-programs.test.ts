@@ -208,6 +208,12 @@ describe('WASIX (wasixtest, C/wasix-libc)', () => {
     expect(r.stdout).toBe('THROUGH A PIPE\nAND AN EXEC\nupper: exit 0\n');
   });
 
+  it('a close-on-exec error pipe reaches EOF at the exec, then the child reads its stdin to EOF', async () => {
+    const r = await run('wasixtest', ['subprocess']);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toBe('errpipe EOF 1\nHI\nsubprocess: exit 0\n');
+  });
+
   it('a file open across a fork keeps one offset (the buffered file is handed to the kernel)', async () => {
     const r = await run('wasixtest', ['file', '/tmp/abc.txt']);
     expect(r.code).toBe(0);
@@ -274,5 +280,12 @@ describe.skipIf(!PYTHON || !COREUTILS)('WASIX python (wasmer/python, stdlib on t
     ]);
     expect(sub.stderr).toBe('');
     expect(sub.stdout).toBe("['pear', 'apple', 'fig']\n");
+    // input=: a pipe into the child's stdin, written once Python's
+    // close-on-exec error pipe says the exec happened.
+    const piped = await run('python', [
+      '-c',
+      'import subprocess; print(subprocess.run(["tr", "a-z", "A-Z"], input=b"hi", capture_output=True).stdout)',
+    ]);
+    expect(piped).toMatchObject({ code: 0, stdout: "b'HI'\n", stderr: '' });
   }, 120_000);
 });

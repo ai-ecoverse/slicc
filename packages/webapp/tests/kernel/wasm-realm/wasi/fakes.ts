@@ -38,12 +38,16 @@ interface FakeFd {
   drained?: string;
   /** The `max` of every read. */
   reads?: number[];
+  /** A VFS file's path (`openVfs`). */
+  path?: string;
 }
 
 export class FakeKernel implements WasiKernel {
   readonly table = new Map<number, FakeFd>();
   readonly calls: WasmSyscall[] = [];
   readonly killed: Array<[number, number]> = [];
+  /** Paths `openVfs` opened, in order. */
+  readonly opened: string[] = [];
   tty = false;
 
   constructor() {
@@ -99,9 +103,20 @@ export class FakeKernel implements WasiKernel {
       this.get(fd);
       this.table.delete(fd);
     },
-    pipe: () => [0, 0],
+    pipe: () => {
+      const r = this.free(3);
+      this.add(r, 'stream');
+      const w = this.free(3);
+      this.add(w, 'stream');
+      return [r, w];
+    },
     poll: () => ({ readable: true, writable: true, hangup: false }),
-    openVfs: () => 0,
+    openVfs: (path) => {
+      this.opened.push(path);
+      const fd = this.free(3);
+      this.add(fd, 'file').path = path;
+      return fd;
+    },
     seek: (fd, offset) => {
       const e = this.get(fd);
       e.offset = offset;

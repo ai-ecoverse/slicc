@@ -35,6 +35,11 @@ export interface ChildRequest {
   ops?: readonly SpawnFdOp[];
 }
 
+/** `path` from `cwd` (an absolute one as is). */
+function resolveFrom(cwd: string, path: string): string {
+  return normalize(path.startsWith('/') ? path : `${cwd}/${path}`);
+}
+
 const POSIX_TO_WASI_SIGNAL: Readonly<Record<number, number>> = Object.fromEntries(
   Object.entries(WASI_SIGNAL_TO_POSIX).map(([wasi, posix]) => [posix, Number(wasi)])
 );
@@ -88,19 +93,26 @@ export class WasixProcess {
     const map = fds.inheritable();
     const opened: number[] = [];
     let cwd = this.host.cwd;
-    for (const op of ops) {
-      if (op.cmd === 'close') map.delete(op.fd);
-      else if (op.cmd === 'dup2') {
-        const src = map.get(op.srcFd);
-        if (src === undefined) throw Object.assign(new Error('EBADF'), { code: 'EBADF' });
-        map.set(op.fd, src);
-      } else if (op.cmd === 'open') {
-        const kfd = this.openFor(op);
-        opened.push(kfd);
-        map.set(op.fd, kfd);
-      } else if (op.cmd === 'chdir')
-        cwd = op.path.startsWith('/') ? normalize(op.path) : normalize(`${cwd}/${op.path}`);
-      else cwd = fds.dir(op.fd).path;
+    try {
+      for (const op of ops) {
+        if (op.cmd === 'close') map.delete(op.fd);
+        else if (op.cmd === 'dup2') {
+          // A close-on-exec source still dups (dup2 clears the flag on the copy).
+          const src =
+            map.get(op.srcFd) ?? (fds.find(op.srcFd)?.type === 'kernel' ? op.srcFd : undefined);
+          if (src === undefined) throw Object.assign(new Error('EBADF'), { code: 'EBADF' });
+          map.set(op.fd, src);
+        } else if (op.cmd === 'open') {
+          const kfd = this.openFor(op, cwd);
+          opened.push(kfd);
+          map.set(op.fd, kfd);
+        } else if (op.cmd === 'chdir') cwd = resolveFrom(cwd, op.path);
+        else cwd = fds.dir(op.fd).path;
+      }
+    } catch (e) {
+      // The spawn fails: what its earlier opens took goes back.
+      for (const kfd of opened) this.host.o.kernel.sys.close(kfd);
+      throw e;
     }
     const stdio: ChildStdio[] = [0, 1, 2].map((fd) => {
       const k = map.get(fd);
@@ -112,11 +124,9 @@ export class WasixProcess {
     return { stdio, inherit, cwd, opened };
   }
 
-  /** A spawn's `open` fd operation: a kernel VFS description of its own. */
-  private openFor(op: SpawnFdOp): number {
-    const path = op.path.startsWith('/')
-      ? normalize(op.path)
-      : normalize(`${this.host.cwd}/${op.path}`);
+  /** A spawn's `open` fd operation (relative to the actions' `cwd` so far): a kernel VFS description of its own. */
+  private openFor(op: SpawnFdOp, cwd: string): number {
+    const path = resolveFrom(cwd, op.path);
     if (!this.host.o.fs.exists(path) && !(op.oflags & OFLAG_CREAT)) {
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }

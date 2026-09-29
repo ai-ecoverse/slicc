@@ -15,7 +15,11 @@ import { FakeFs, FakeKernel, Guest } from './fakes.js';
 type Imports = Record<string, (...a: Array<number | bigint>) => number>;
 
 function setup(
-  opts: { wasix?: boolean; forked?: ConstructorParameters<typeof WasiHost>[0]['forked'] } = {}
+  opts: {
+    wasix?: boolean;
+    forked?: ConstructorParameters<typeof WasiHost>[0]['forked'];
+    module?: WebAssembly.Module;
+  } = {}
 ) {
   const kernel = new FakeKernel();
   const fs = new FakeFs().dir('/workspace').dir('/tmp').file('/workspace/a.txt', 'one\n');
@@ -30,7 +34,7 @@ function setup(
   });
   const g = new Guest();
   host.mem.bind(g.memory);
-  const wasix = new WasixHost(host, new AsyncifyDriver(host.mem));
+  const wasix = new WasixHost(host, new AsyncifyDriver(host.mem), opts.module);
   const preview1 = {
     ...host.imports(),
     ...(opts.wasix === false ? {} : wasix.preview1()),
@@ -120,6 +124,146 @@ describe('WASIX: descriptors', () => {
     expect(t.host.fds.dir(3).path).toBe('/workspace/sub');
     expect([...t.host.fds.cloexec]).toEqual([7]);
     expect(t.host.fds.inheritable().has(7)).toBe(false);
+  });
+});
+
+/** A module importing `wasix_32v1` functions `names` (each `() -> ()`). */
+function importing(names: string[]): WebAssembly.Module {
+  const enc = new TextEncoder();
+  const str = (s: string) => [s.length, ...enc.encode(s)];
+  const section = (id: number, body: number[]) => [id, body.length, ...body];
+  return new WebAssembly.Module(
+    new Uint8Array([
+      ...[0, 0x61, 0x73, 0x6d, 1, 0, 0, 0],
+      ...section(1, [1, 0x60, 0, 0]),
+      ...section(2, [
+        names.length,
+        ...names.flatMap((n) => [...str('wasix_32v1'), ...str(n), 0, 0]),
+      ]),
+    ])
+  );
+}
+
+describe("WASIX: what an exec'd program inherits", () => {
+  /** exec `prog` (it is missing: the spawn request is what counts); what it was handed beyond stdio. */
+  function execInherits(t: ReturnType<typeof setup>): unknown {
+    const [n, nl] = t.g.str('/usr/bin/prog');
+    const [a, al] = t.g.str('prog');
+    expect(() => t.x.proc_exec(n, nl, a, al)).toThrow(WasiExit);
+    return t.kernel.calls.find((c) => c.op === 'proc-spawn');
+  }
+
+  it('a libc with fd_fdflags_set marks close-on-exec itself: other fds are inherited', () => {
+    const t = setup({ module: importing(['proc_fork', 'fd_fdflags_set']) });
+    const [r, w] = t.host.fds.pipe();
+    t.host.fds.cloexec.add(w);
+    expect(execInherits(t)).toMatchObject({ inherit: [{ fd: r, kernel: r }] });
+  });
+
+  it("one without it takes every fd for close-on-exec: only stdio (Python's error pipe reaches EOF)", () => {
+    const t = setup({ module: importing(['proc_fork', 'proc_exec']) });
+    t.host.fds.pipe();
+    expect(execInherits(t)).toMatchObject({
+      inherit: [],
+      stdio: [{ fd: 0 }, { fd: 1 }, { fd: 2 }],
+    });
+  });
+
+  it('a spawn dup2 from a close-on-exec fd still hands the copy over', () => {
+    const t = setup({ module: importing(['proc_fork']) });
+    const [r] = t.host.fds.pipe();
+    t.host.fds.cloexec.add(r);
+    const [n, nl] = t.g.str('prog');
+    const ops = t.g.alloc(56);
+    const v = t.g.view;
+    v.setUint8(ops, 1); // dup2
+    v.setUint32(ops + 4, 0, true); // fd
+    v.setUint32(ops + 8, r, true); // src_fd
+    const out = t.g.alloc(4);
+    t.x.proc_spawn2(n, nl, 0, 0, 0, 0, ops, 1, 0, 0, 1, ...t.g.str('/usr/bin'), out);
+    expect(t.kernel.calls.find((c) => c.op === 'proc-spawn')).toMatchObject({
+      stdio: [{ fd: r }, { fd: 1 }, { fd: 2 }],
+    });
+  });
+});
+
+describe('WASIX: spawn fd operations', () => {
+  /** A `__wasi_proc_spawn_fd_op_t` array: [cmd, fd, srcFd, path?, oflags?] per op. */
+  function ops(
+    t: ReturnType<typeof setup>,
+    list: Array<[number, number, number, string?, number?]>
+  ): number {
+    const at = t.g.alloc(56 * list.length);
+    const v = t.g.view;
+    list.forEach(([cmd, fd, src, path, oflags], i) => {
+      const p = at + i * 56;
+      v.setUint8(p, cmd);
+      v.setUint32(p + 4, fd, true);
+      v.setUint32(p + 8, src, true);
+      if (path !== undefined) {
+        const [s, l] = t.g.str(path);
+        v.setUint32(p + 12, s, true);
+        v.setUint32(p + 16, l, true);
+      }
+      v.setUint16(p + 24, oflags ?? 0, true);
+    });
+    return at;
+  }
+  const CLOSE = 0;
+  const DUP2 = 1;
+  const OPEN = 2;
+  const CHDIR = 3;
+  function spawn(t: ReturnType<typeof setup>, at: number, count: number): number {
+    const [n, nl] = t.g.str('prog');
+    const [p, pl] = t.g.str('/usr/bin');
+    return t.x.proc_spawn2(n, nl, 0, 0, 0, 0, at, count, 0, 0, 1, p, pl, t.g.alloc(4));
+  }
+
+  it('an open after a chdir resolves from the new directory', () => {
+    const t = setup();
+    t.fs.dir('/workspace/sub').file('/workspace/sub/in.txt', 'x');
+    spawn(
+      t,
+      ops(t, [
+        [CHDIR, 0, 0, 'sub'],
+        [OPEN, 0, 0, 'in.txt'],
+      ]),
+      2
+    );
+    expect([...t.kernel.table.values()].map((f) => f.path).filter(Boolean)).toEqual([]);
+    expect(t.kernel.calls.find((c) => c.op === 'proc-spawn')).toMatchObject({
+      cwd: '/workspace/sub',
+    });
+    expect(t.kernel.opened).toEqual(['/workspace/sub/in.txt']);
+  });
+
+  it('a failing action closes what earlier opens took (no leaked kernel fds)', () => {
+    const t = setup();
+    const before = t.kernel.table.size;
+    expect(
+      spawn(
+        t,
+        ops(t, [
+          [OPEN, 0, 0, 'a.txt'],
+          [DUP2, 1, 77],
+        ]),
+        2
+      )
+    ).toBe(E.BADF);
+    expect(t.kernel.table.size).toBe(before);
+    expect(t.kernel.calls.some((c) => c.op === 'proc-spawn')).toBe(false);
+    void CLOSE;
+  });
+});
+
+describe('WASIX: dup2 onto a free number', () => {
+  it('fd_renumber (dup2) may target an unused descriptor', () => {
+    const t = setup();
+    expect(t.preview1.fd_renumber(1, 10)).toBe(E.SUCCESS);
+    expect(t.write(10, 'via ten\n')).toBe(E.SUCCESS);
+    expect(t.kernel.out(1)).toBe('via ten\n');
+    expect(t.preview1.fd_close(1)).toBe(E.SUCCESS);
+    expect(t.write(10, 'still\n')).toBe(E.SUCCESS);
   });
 });
 
