@@ -605,6 +605,17 @@ differs here. `tests/shell/ipk/pnpm-picker-oracle.test.ts` checks these rules
 against pnpm 12's own picker, via a committed fixture whose generator
 (`fixtures/generate-pnpm-picker-oracle.mjs`) is not run in CI.
 
+### `ipk install`: parallel fetching
+
+`ipk install` fetches packuments and tarballs concurrently, at most eight of
+each at a time (`shell/ipk/concurrency.ts`). Resolution still places packages
+depth-first in declaration order, so the `node_modules` layout doesn't depend on
+which response arrives first. While the tree is walked, packuments for the
+dependencies each range would pick are prefetched; a speculative fetch that
+turns out to be unneeded, or that fails, is ignored. A package is extracted
+before anything nested inside it, and after the first failure no further
+tarball starts. At most eight tarballs are held in memory at once.
+
 ### `ipk install -g` / `npm install -g`
 
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared

@@ -41,4 +41,15 @@ describe.skipIf(!LIVE_REGISTRY)('ipk against the live npm registry', () => {
     const zlib = await fetchPackument('@ai-ecoverse/wasm-zlib', nodeFetch);
     expect(resolveVersion(zlib, '^1.3.1-1')).not.toBe('1.3.1');
   }, 60_000);
+
+  it('installs express@^4 (68 packages) with parallel fetching', async () => {
+    const fs = await VirtualFS.create({ dbName: `ipk-live-${dbCounter++}`, wipe: true });
+    const t0 = performance.now();
+    const result = await installPackage('express@^4', { fs, fetch: nodeFetch, cwd: '/work' });
+    const ms = Math.round(performance.now() - t0);
+    console.log(`[ipk-live] express@${result.version}: ${ms} ms`);
+    expect(result.version).toMatch(/^4\./);
+    await expect(fs.exists('/work/node_modules/body-parser/package.json')).resolves.toBe(true);
+    await fs.dispose();
+  }, 120_000);
 });
