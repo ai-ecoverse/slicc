@@ -490,6 +490,33 @@ function sanitizeErrorBeaconBody(parsed: ParsedBeacon): true | string | null {
   return mutated ? JSON.stringify(parsed) : null;
 }
 
+/** Beacon body as text, or `null` for an opaque (Blob / view) body. */
+function readBeaconText(data: BodyInit | null | undefined): string | null {
+  try {
+    if (typeof data === 'string') return data;
+    if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+  } catch {
+    // Undecodable body — treat as opaque.
+  }
+  return null;
+}
+
+/**
+ * Vite-noise filter for an error-checkpoint beacon body: `true` = drop,
+ * a string = send this rewritten body, `null` = not an error beacon or
+ * nothing to change.
+ */
+function filterErrorBeacon(text: string): true | string | null {
+  if (text.charCodeAt(0) !== 123 /* '{' */) return null;
+  try {
+    const parsed = JSON.parse(text) as ParsedBeacon;
+    return parsed?.checkpoint === 'error' ? sanitizeErrorBeaconBody(parsed) : null;
+  } catch {
+    // Non-JSON body.
+    return null;
+  }
+}
+
 /**
  * Wrap `navigator.sendBeacon`, the one chokepoint every RUM sender shares
  * (helix-rum-js, its enhancer, and the inlined rum.js all resolve it at call
@@ -514,17 +541,7 @@ function wrapSendBeacon(opts: { filterViteNoise: boolean }): void {
   if (current[SENDBEACON_WRAPPED]) return;
   const original = current.bind(navigator);
   const wrapped = ((url, data) => {
-    let text: string | null = null;
-    try {
-      text =
-        typeof data === 'string'
-          ? data
-          : data instanceof ArrayBuffer
-            ? new TextDecoder().decode(data)
-            : null;
-    } catch {
-      text = null;
-    }
+    const text = readBeaconText(data);
     if (text === null) {
       // Opaque body — send as-is.
       // TODO: a same-origin self-host (see docs/operational-telemetry.md
@@ -533,17 +550,10 @@ function wrapSendBeacon(opts: { filterViteNoise: boolean }): void {
       return original(url, data);
     }
     const redacted = redactCapabilityTokens(text);
-    if (opts.filterViteNoise && redacted.charCodeAt(0) === 123 /* '{' */) {
-      try {
-        const parsed = JSON.parse(redacted) as ParsedBeacon;
-        if (parsed?.checkpoint === 'error') {
-          const outcome = sanitizeErrorBeaconBody(parsed);
-          if (outcome === true) return true;
-          if (outcome !== null) return original(url, outcome);
-        }
-      } catch {
-        // Non-JSON body — fall through and send the redacted text.
-      }
+    if (opts.filterViteNoise) {
+      const outcome = filterErrorBeacon(redacted);
+      if (outcome === true) return true;
+      if (outcome !== null) return original(url, outcome);
     }
     return original(url, redacted === text ? data : redacted);
   }) as typeof navigator.sendBeacon & { [SENDBEACON_WRAPPED]?: boolean };
