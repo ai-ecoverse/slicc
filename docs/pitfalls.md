@@ -1388,6 +1388,10 @@ feature names churn, both launchers also seed version-stable prefs into
 `tab_freezing_enabled: false`,
 `performance_tuning.high_efficiency_mode.state: 0`, and
 `performance_tuning.tab_discarding.exceptions` for the leader origins. The
+read is fail-closed: only a missing Preferences file (`ENOENT`) is treated
+as empty and rewritten; EIO/EACCES/EBUSY, a partial read, or a JSON parse
+error leave the existing file untouched so a transient fault cannot wipe
+the user's persistent profile (#3625). The
 extension float cannot control launch flags; its parity equivalent is
 `chrome.tabs.update(leaderTab, {autoDiscardable: false})` (applied wherever a
 leader tabId is learned — Chrome's `FreezingFollowsDiscardOptOut` makes the

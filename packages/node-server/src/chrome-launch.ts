@@ -592,13 +592,31 @@ export function findChromeExecutable(options: FindChromeExecutableOptions = {}):
     : (chromeForTesting ?? installedChrome);
 }
 
-async function readJsonFile(filePath: string): Promise<JsonObject> {
+/**
+ * Read a Chrome profile JSON file for a subsequent write-back.
+ *
+ * - Missing file (`ENOENT`) → `{}` so callers can seed a first-run scaffold.
+ * - Any other read fault (EIO/EACCES/EBUSY/…) or JSON parse / non-object
+ *   result → `null`. Callers MUST fail closed and leave the existing file
+ *   untouched — collapsing those faults to `{}` and rewriting would wipe the
+ *   user's persistent Preferences (#3625).
+ */
+async function readJsonFile(
+  filePath: string,
+  readFileImpl: (path: string) => Promise<string> = (path) => readFile(path, 'utf8')
+): Promise<JsonObject | null> {
+  let raw: string;
   try {
-    const raw = await readFile(filePath, 'utf8');
+    raw = await readFileImpl(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    return null;
+  }
+  try {
     const parsed = JSON.parse(raw) as unknown;
-    return isJsonObject(parsed) ? parsed : {};
+    return isJsonObject(parsed) ? parsed : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -661,11 +679,16 @@ export async function ensureQaProfileScaffold(projectRoot: string): Promise<Chro
 
     const localStatePath = join(profile.userDataDir, 'Local State');
     const preferencesPath = join(profile.userDataDir, 'Default', 'Preferences');
-    const localState = seedLocalState(await readJsonFile(localStatePath), definition);
-    const preferences = seedPreferences(await readJsonFile(preferencesPath), definition);
-
-    await writeJsonFile(localStatePath, localState);
-    await writeJsonFile(preferencesPath, preferences);
+    // Fail closed per file: a transient read fault must not clobber the
+    // existing scaffold (#3625). Missing files still seed from {}.
+    const localStateBase = await readJsonFile(localStatePath);
+    if (localStateBase !== null) {
+      await writeJsonFile(localStatePath, seedLocalState(localStateBase, definition));
+    }
+    const preferencesBase = await readJsonFile(preferencesPath);
+    if (preferencesBase !== null) {
+      await writeJsonFile(preferencesPath, seedPreferences(preferencesBase, definition));
+    }
   }
 
   return profiles;
@@ -868,12 +891,23 @@ export const TAB_LIFECYCLE_EXEMPT_SITES = [
  *   FreezingFollowsDiscardOptOut) freeze policy.
  *
  * Merges into existing prefs (the profile persists logins across runs) and
- * never throws — a failure here must not block a launch.
+ * never throws — a failure here must not block a launch. Read faults other
+ * than a missing file fail closed: the existing Preferences are left
+ * untouched rather than rewritten from an empty default (#3625).
  */
-export async function seedChromeProfilePreferences(userDataDir: string): Promise<void> {
+/** Injectable seams for {@link seedChromeProfilePreferences} (tests). */
+export interface SeedChromeProfilePreferencesDeps {
+  readFileImpl?: (path: string) => Promise<string>;
+}
+
+export async function seedChromeProfilePreferences(
+  userDataDir: string,
+  deps: SeedChromeProfilePreferencesDeps = {}
+): Promise<void> {
   const prefsPath = join(userDataDir, 'Default', 'Preferences');
   try {
-    const prefs = await readJsonFile(prefsPath);
+    const prefs = await readJsonFile(prefsPath, deps.readFileImpl);
+    if (prefs === null) return; // fail closed — do not overwrite durable prefs
     prefs['tab_freezing_enabled'] = false;
     const performanceTuning = ensureObject(prefs, 'performance_tuning');
     const highEfficiencyMode = ensureObject(performanceTuning, 'high_efficiency_mode');
