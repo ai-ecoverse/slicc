@@ -94,7 +94,10 @@ struct RawFetchProxy: Sendable {
             return try frame(upstream, for: head)
         } catch let refusal as Refusal {
             var response = try rawProxyError(status: refusal.status, message: refusal.message)
-            // An unread upload cannot share the connection with the next request.
+            // Hummingbird discards whatever a handler left of the request body
+            // before reading the next request (`HTTPChannelHandler`), so an
+            // early refusal never desyncs the connection. An oversized upload
+            // is the exception worth avoiding: close instead of draining it.
             if refusal.status == .contentTooLarge { response.headers[.connection] = "close" }
             return response
         }
