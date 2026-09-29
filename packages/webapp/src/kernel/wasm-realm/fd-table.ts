@@ -86,6 +86,12 @@ export interface KernelFile {
   flush?(): Promise<void>;
   /** A terminal: its termios and window size (isatty, tcgetattr, TIOCGWINSZ). */
   tty?: KernelTty;
+  /**
+   * Held by the process's own worker (a WASI program's buffered VFS file,
+   * directory or device): the kernel only keeps its number taken, so the
+   * program's fds and the kernel's stay one numbering.
+   */
+  held?: true;
 }
 
 /** A description's readiness: its own answer, or ready in whatever direction it serves. */
@@ -178,14 +184,20 @@ export function nullFile(): OpenFile {
   });
 }
 
+/** A number a WASI program's worker holds a descriptor under (see {@link KernelFile.held}). */
+export function heldFile(): OpenFile {
+  return new OpenFile({ held: true, close: () => {} });
+}
+
 /**
  * How a process's runtime backs a kernel descriptor: a terminal, a seekable
- * VFS file, a socket, or a stream.
+ * VFS file, a socket, a stream, or one its worker holds itself.
  */
-export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket';
+export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket' | 'held';
 
 /** The kind of a descriptor that is no socket (the host tells sockets apart). */
 export function kernelFdKind(file: KernelFile): Exclude<KernelFdKind, 'socket'> {
+  if (file.held) return 'held';
   if (file.tty) return 'tty';
   return file.seek ? 'file' : 'stream';
 }

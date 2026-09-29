@@ -148,7 +148,7 @@ describe('terminal syscalls', () => {
     expect(await p.syscall({ op: 'fd-info', fd: 0 })).toEqual({
       ok: true,
       kind: 'json',
-      json: { tty: true },
+      json: { tty: true, kind: 'tty' },
     });
     expect(await p.syscall({ op: 'fd-info', fd: 1 })).toMatchObject({ json: { tty: false } });
     expect(await p.syscall({ op: 'tty-winsz', fd: 0 })).toMatchObject({ json: [20, 90] });

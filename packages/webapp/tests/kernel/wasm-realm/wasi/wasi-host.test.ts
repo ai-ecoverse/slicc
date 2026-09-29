@@ -1,0 +1,628 @@
+/**
+ * The WASI preview1 host's imports, in-process, over a fake kernel and a fake
+ * sync-fs bridge (`fakes.ts`): what each import asks of them and what it
+ * leaves in the program's memory. Real programs: `../wasi-programs.test.ts`.
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  CLOCK,
+  E,
+  EVENTTYPE,
+  FDFLAGS,
+  FILETYPE,
+  FSTFLAGS,
+  OFLAGS,
+  RIGHTS,
+  SIZE,
+  WHENCE,
+} from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
+import { WasiExit, WasiHost } from '../../../../src/kernel/wasm-realm/wasi/wasi-host.js';
+import { FakeFs, FakeKernel, Guest } from './fakes.js';
+
+type Call = (name: string, ...args: Array<number | bigint>) => number;
+
+function setup(opts: { inherited?: number[]; env?: Record<string, string> } = {}) {
+  const kernel = new FakeKernel();
+  for (const fd of opts.inherited ?? []) kernel.add(fd, 'stream', ['inherited\n']);
+  const fs = new FakeFs()
+    .dir('/workspace')
+    .dir('/workspace/p')
+    .dir('/tmp')
+    .file('/workspace/p/a.txt', 'hello\n')
+    .file('/root-file', 'not a dir');
+  const host = new WasiHost({
+    args: ['prog', 'x'],
+    env: opts.env ?? { HOME: '/h' },
+    cwd: '/workspace/p',
+    pid: 9,
+    kernel,
+    fs,
+    ...(opts.inherited ? { inherited: opts.inherited } : {}),
+  });
+  const g = new Guest();
+  host.mem.bind(g.memory);
+  const imports = host.imports() as Record<string, (...a: Array<number | bigint>) => number>;
+  const call: Call = (name, ...args) => imports[name](...args);
+  /** path_open relative to `dirfd`; [errno, fd]. */
+  const open = (
+    path: string,
+    oflags = 0,
+    rights: bigint = RIGHTS.ALL,
+    fdflags = 0,
+    dirfd = 3
+  ): [number, number] => {
+    const [p, l] = g.str(path);
+    const out = g.alloc(4);
+    const errno = call('path_open', dirfd, 1, p, l, oflags, rights, RIGHTS.ALL, fdflags, out);
+    return [errno, g.u32(out)];
+  };
+  const write = (fd: number, text: string): [number, number] => {
+    const [iov, n] = g.iov(text);
+    const out = g.alloc(4);
+    return [call('fd_write', fd, iov, n, out), g.u32(out)];
+  };
+  const read = (fd: number, size: number): [number, string] => {
+    const [iov, n, buf] = g.iov(size);
+    const out = g.alloc(4);
+    const errno = call('fd_read', fd, iov, n, out);
+    return [errno, g.read(buf, g.u32(out))];
+  };
+  const path = (dirfd: number, name: string, fn: string, ...rest: Array<number | bigint>) => {
+    const [p, l] = g.str(name);
+    return call(fn, dirfd, p, l, ...rest);
+  };
+  return { kernel, fs, host, g, call, open, write, read, path };
+}
+
+describe('WasiHost: preopens and start-up', () => {
+  it('fd 3 is `.` (the cwd), then /dev and each top-level directory; EBADF after them', () => {
+    const { call, g } = setup();
+    const names: string[] = [];
+    for (let fd = 3; ; fd++) {
+      const out = g.alloc(8);
+      const errno = call('fd_prestat_get', fd, out);
+      if (errno !== E.SUCCESS) {
+        expect(errno).toBe(E.BADF);
+        break;
+      }
+      const len = g.u32(out + 4);
+      const buf = g.alloc(len);
+      expect(call('fd_prestat_dir_name', fd, buf, len)).toBe(E.SUCCESS);
+      names.push(g.read(buf, len));
+    }
+    // /root-file is no directory: no preopen.
+    expect(names).toEqual(['.', '/dev', '/tmp', '/workspace']);
+  });
+
+  it('reserves the preopens’ numbers in the kernel, and moves an inherited fd out of their way', () => {
+    const { kernel, read } = setup({ inherited: [3] });
+    expect(kernel.table.get(3)?.kind).toBe('held');
+    // fd 3 moved to the first free number above the preopens (3..6).
+    expect(kernel.calls).toContainEqual({ op: 'fd-dup', fd: 3, min: 7 });
+    expect(read(7, 64)).toEqual([E.SUCCESS, 'inherited\n']);
+  });
+
+  it('args and environ, with $PWD from the cwd unless set', () => {
+    const { call, g } = setup();
+    const count = g.alloc(4);
+    const size = g.alloc(4);
+    expect(call('args_sizes_get', count, size)).toBe(E.SUCCESS);
+    expect([g.u32(count), g.u32(size)]).toEqual([2, 7]);
+    const ptrs = g.alloc(8);
+    const buf = g.alloc(7);
+    call('args_get', ptrs, buf);
+    expect(g.read(g.u32(ptrs + 4), 1)).toBe('x');
+    call('environ_sizes_get', count, size);
+    const env = g.alloc(g.u32(size));
+    const envp = g.alloc(g.u32(count) * 4);
+    call('environ_get', envp, env);
+    expect(g.read(env, g.u32(size))).toBe('PWD=/workspace/p\0HOME=/h\0');
+    const own = setup({ env: { PWD: '/elsewhere' } });
+    own.call('environ_sizes_get', count, size);
+    expect(own.g.u32(count)).toBe(1);
+  });
+});
+
+describe('WasiHost: files', () => {
+  it('creates, writes (buffered), and writes back on close', () => {
+    const { open, write, call, fs, kernel } = setup();
+    const [errno, fd] = open('new.txt', OFLAGS.CREAT | OFLAGS.TRUNC);
+    expect(errno).toBe(E.SUCCESS);
+    expect(kernel.table.get(fd)?.kind).toBe('held');
+    // Created at once (a readdir sees it), empty until the write-back.
+    expect(fs.text('/workspace/p/new.txt')).toBe('');
+    expect(write(fd, 'abc')).toEqual([E.SUCCESS, 3]);
+    expect(fs.text('/workspace/p/new.txt')).toBe('');
+    expect(call('fd_close', fd)).toBe(E.SUCCESS);
+    expect(fs.text('/workspace/p/new.txt')).toBe('abc');
+    expect(kernel.table.has(fd)).toBe(false);
+  });
+
+  it('reads, seeks, tells, preads and pwrites', () => {
+    const { open, read, call, g, fs } = setup();
+    const [, fd] = open('a.txt');
+    expect(read(fd, 3)).toEqual([E.SUCCESS, 'hel']);
+    const out = g.alloc(8);
+    call('fd_tell', fd, out);
+    expect(g.u64(out)).toBe(3n);
+    call('fd_seek', fd, -2n, WHENCE.END, out);
+    expect(g.u64(out)).toBe(4n);
+    expect(read(fd, 10)).toEqual([E.SUCCESS, 'o\n']);
+    expect(call('fd_seek', fd, -100n, WHENCE.CUR, out)).toBe(E.INVAL);
+    const [iov, n, buf] = g.iov(4);
+    call('fd_pread', fd, iov, n, 1n, out);
+    expect(g.read(buf, g.u32(out))).toBe('ello');
+    const [wiov, wn] = g.iov('J');
+    call('fd_pwrite', fd, wiov, wn, 0n, out);
+    call('fd_sync', fd);
+    expect(fs.text('/workspace/p/a.txt')).toBe('Jello\n');
+  });
+
+  it('appends with FDFLAGS.APPEND, and with fd_fdstat_set_flags', () => {
+    const { open, write, call, fs } = setup();
+    const [, fd] = open('a.txt', 0, RIGHTS.ALL, FDFLAGS.APPEND);
+    write(fd, 'more\n');
+    call('fd_close', fd);
+    expect(fs.text('/workspace/p/a.txt')).toBe('hello\nmore\n');
+    const [, fd2] = open('a.txt');
+    call('fd_fdstat_set_flags', fd2, FDFLAGS.APPEND);
+    write(fd2, 'end\n');
+    call('fd_datasync', fd2);
+    expect(fs.text('/workspace/p/a.txt')).toBe('hello\nmore\nend\n');
+  });
+
+  it('refuses what open(2) would: EEXIST, ENOENT, ENOTDIR, EISDIR on a read', () => {
+    const { open, read } = setup();
+    expect(open('a.txt', OFLAGS.CREAT | OFLAGS.EXCL)[0]).toBe(E.EXIST);
+    expect(open('missing')[0]).toBe(E.NOENT);
+    expect(open('a.txt', OFLAGS.DIRECTORY)[0]).toBe(E.NOTDIR);
+    expect(open('missing', OFLAGS.DIRECTORY)[0]).toBe(E.NOENT);
+    const [, dir] = open('/tmp');
+    expect(read(dir, 4)[0]).toBe(E.ISDIR);
+  });
+
+  it('a read-only fd cannot write, a write-only one cannot read', () => {
+    const { open, read, write } = setup();
+    const [, ro] = open('a.txt', 0, RIGHTS.FD_READ);
+    expect(write(ro, 'x')[0]).toBe(E.BADF);
+    const [, wo] = open('a.txt', 0, RIGHTS.FD_WRITE);
+    expect(read(wo, 4)[0]).toBe(E.BADF);
+  });
+
+  it('truncates, allocates and reports the buffered size before the write-back', () => {
+    const { open, write, call, g } = setup();
+    const [, fd] = open('a.txt');
+    write(fd, 'HELLO WORLD');
+    const st = g.alloc(SIZE.FILESTAT);
+    call('fd_filestat_get', fd, st);
+    expect(g.view.getUint8(st + 16)).toBe(FILETYPE.REGULAR_FILE);
+    expect(g.u64(st + 32)).toBe(11n);
+    call('fd_filestat_set_size', fd, 4n);
+    call('fd_filestat_get', fd, st);
+    expect(g.u64(st + 32)).toBe(4n);
+    call('fd_allocate', fd, 0n, 20n);
+    call('fd_filestat_get', fd, st);
+    expect(g.u64(st + 32)).toBe(20n);
+    expect(call('fd_advise', fd, 0n, 0n, 0)).toBe(E.SUCCESS);
+    expect(call('fd_filestat_set_size', 1, 0n)).toBe(E.SPIPE);
+  });
+
+  it('a file unlinked while open keeps its bytes and never comes back', () => {
+    const { open, call, g, path, fs, read } = setup();
+    const [, fd] = open('a.txt');
+    expect(path(3, 'a.txt', 'path_unlink_file')).toBe(E.SUCCESS);
+    const st = g.alloc(SIZE.FILESTAT);
+    expect(call('fd_filestat_get', fd, st)).toBe(E.SUCCESS);
+    expect(g.u64(st + 32)).toBe(6n);
+    // Its bytes live on for the fd, and closing it does not bring the path back.
+    expect(read(fd, 10)[1]).toBe('hello\n');
+    call('fd_close', fd);
+    expect(fs.exists('/workspace/p/a.txt')).toBe(false);
+  });
+
+  it('a renamed open file is written back where it went', () => {
+    const { open, call, g, path, fs, write } = setup();
+    const [, fd] = open('a.txt');
+    const [to, tl] = g.str('moved.txt');
+    expect(path(3, 'a.txt', 'path_rename', 3, to, tl)).toBe(E.SUCCESS);
+    write(fd, 'Y');
+    call('fd_close', fd);
+    expect(fs.text('/workspace/p/moved.txt')).toBe('Yello\n');
+    expect(fs.exists('/workspace/p/a.txt')).toBe(false);
+  });
+});
+
+describe('WasiHost: paths', () => {
+  it('absolute paths resolve from the root whatever the dir fd (Zig sends them to fd 3)', () => {
+    const { open, read } = setup();
+    const [errno, fd] = open('/workspace/p/a.txt', 0, RIGHTS.ALL, 0, 3);
+    expect(errno).toBe(E.SUCCESS);
+    expect(read(fd, 10)[1]).toBe('hello\n');
+    // `..` never climbs above the root.
+    expect(open('../../../workspace/p/a.txt')[0]).toBe(E.SUCCESS);
+  });
+
+  it('mkdir, rmdir, unlink, rename, symlink, readlink', () => {
+    const { path, fs, g, open, write, call } = setup();
+    expect(path(3, 'd', 'path_create_directory')).toBe(E.SUCCESS);
+    expect(path(3, 'd', 'path_create_directory')).toBe(E.EXIST);
+    expect(path(3, 'd', 'path_unlink_file')).toBe(E.ISDIR);
+    expect(path(3, 'd', 'path_remove_directory')).toBe(E.SUCCESS);
+    // A rename writes back the source first.
+    const [, fd] = open('a.txt');
+    write(fd, 'X');
+    const [to, tl] = g.str('b.txt');
+    expect(path(3, 'a.txt', 'path_rename', 3, to, tl)).toBe(E.SUCCESS);
+    expect(fs.text('/workspace/p/b.txt')).toBe('Xello\n');
+    const [target, targetLen] = g.str('b.txt');
+    const [lp, ll] = g.str('link');
+    expect(call('path_symlink', target, targetLen, 3, lp, ll)).toBe(E.SUCCESS);
+    const buf = g.alloc(16);
+    const used = g.alloc(4);
+    expect(path(3, 'link', 'path_readlink', buf, 16, used)).toBe(E.SUCCESS);
+    expect(g.read(buf, g.u32(used))).toBe('b.txt');
+    expect(path(3, 'a.txt', 'path_link', 3, 0, 0)).toBe(E.NOTSUP);
+  });
+
+  it('path_filestat_get follows symlinks or not; devices are character devices', () => {
+    const { path, g, fs, call } = setup();
+    fs.symlink('a.txt', '/workspace/p/ln');
+    const st = g.alloc(SIZE.FILESTAT);
+    const [p, l] = g.str('ln');
+    expect(call('path_filestat_get', 3, 0, p, l, st)).toBe(E.SUCCESS);
+    expect(g.view.getUint8(st + 16)).toBe(FILETYPE.SYMBOLIC_LINK);
+    // With lookupflags SYMLINK_FOLLOW.
+    expect(call('path_filestat_get', 3, 1, p, l, st)).toBe(E.SUCCESS);
+    expect(g.view.getUint8(st + 16)).toBe(FILETYPE.REGULAR_FILE);
+    expect(g.u64(st + 32)).toBe(6n);
+    const [dp, dl] = g.str('/dev/null');
+    call('path_filestat_get', 3, 1, dp, dl, st);
+    expect(g.view.getUint8(st + 16)).toBe(FILETYPE.CHARACTER_DEVICE);
+    const [np, nl] = g.str('nope');
+    expect(call('path_filestat_get', 3, 1, np, nl, st)).toBe(E.NOENT);
+    void path;
+  });
+
+  it('sets times: explicit, now, or kept', () => {
+    const { fs, call, open, g } = setup();
+    const [p, l] = g.str('a.txt');
+    const both = FSTFLAGS.ATIM | FSTFLAGS.MTIM;
+    expect(call('path_filestat_set_times', 3, 0, p, l, 5_000_000_000n, 7_000_000_000n, both)).toBe(
+      E.SUCCESS
+    );
+    expect(fs.ops).toContain('utimes /workspace/p/a.txt 7000');
+    call('path_filestat_set_times', 3, 0, p, l, 0n, 0n, FSTFLAGS.ATIM_NOW);
+    expect(fs.ops).toContain('utimes /workspace/p/a.txt 7000'); // mtime kept
+    const [, fd] = open('a.txt');
+    call('fd_filestat_set_times', fd, 0n, 9_000_000_000n, FSTFLAGS.MTIM);
+    expect(fs.ops).toContain('utimes /workspace/p/a.txt 9000');
+    call('fd_filestat_set_times', 3, 0n, 0n, FSTFLAGS.MTIM_NOW);
+    expect(fs.ops.some((op) => op.startsWith('utimes /workspace/p '))).toBe(true);
+  });
+});
+
+describe('WasiHost: directories', () => {
+  it('lists `.`, `..` and the names with their types, resuming at a cookie', () => {
+    const s = setup();
+    s.fs.file('/tmp/f', 'x').dir('/tmp/d');
+    const [, fd] = s.open('/tmp');
+    const buf = s.g.alloc(1024);
+    const used = s.g.alloc(4);
+    expect(s.call('fd_readdir', fd, buf, 1024, 0n, used)).toBe(E.SUCCESS);
+    const entries = parseDirents(s.g, buf, s.g.u32(used));
+    expect(entries.map((e) => [e.name, e.type])).toEqual([
+      ['.', FILETYPE.DIRECTORY],
+      ['..', FILETYPE.DIRECTORY],
+      ['f', FILETYPE.REGULAR_FILE],
+      ['d', FILETYPE.DIRECTORY],
+    ]);
+    s.call('fd_readdir', fd, buf, 1024, BigInt(entries[2].next), used);
+    expect(parseDirents(s.g, buf, s.g.u32(used)).map((e) => e.name)).toEqual(['d']);
+  });
+
+  it('fills a small buffer to the brim: a cut-off entry tells libc to grow it', () => {
+    const s = setup();
+    const buf = s.g.alloc(64);
+    const used = s.g.alloc(4);
+    s.call('fd_readdir', 3, buf, 30, 0n, used);
+    expect(s.g.u32(used)).toBe(30);
+    expect(s.call('fd_readdir', 0, buf, 30, 0n, used)).toBe(E.NOTDIR);
+  });
+});
+
+function parseDirents(g: Guest, buf: number, used: number) {
+  const out: Array<{ next: number; name: string; type: number }> = [];
+  for (let at = buf; at + SIZE.DIRENT <= buf + used; ) {
+    const len = g.u32(at + 16);
+    out.push({
+      next: Number(g.u64(at)),
+      name: g.read(at + SIZE.DIRENT, len),
+      type: g.view.getUint8(at + 20),
+    });
+    at += SIZE.DIRENT + len;
+  }
+  return out;
+}
+
+describe('WasiHost: kernel descriptors', () => {
+  it('stdout writes go to the kernel; EPIPE ends the program with 141', () => {
+    const { write, kernel, call } = setup();
+    expect(write(1, 'out')).toEqual([E.SUCCESS, 3]);
+    expect(kernel.out(1)).toBe('out');
+    (kernel.table.get(1) as { broken?: boolean }).broken = true;
+    const [iov, n] = new Guest().iov('x');
+    expect(() => call('fd_write', 1, iov, n, 0)).toThrow(WasiExit);
+    try {
+      write(1, 'x');
+    } catch (e) {
+      expect((e as WasiExit).code).toBe(141);
+    }
+  });
+
+  it('reads stdin, non-blocking once asked (EAGAIN)', () => {
+    const { kernel, read, call } = setup();
+    kernel.table.get(0)?.input.push(new TextEncoder().encode('line\n'));
+    expect(read(0, 64)).toEqual([E.SUCCESS, 'line\n']);
+    call('fd_fdstat_set_flags', 0, FDFLAGS.NONBLOCK);
+    (kernel.table.get(0) as { ready?: boolean }).ready = false;
+    expect(read(0, 64)[0]).toBe(E.AGAIN);
+  });
+
+  it('fdstat: a terminal has no seek rights (isatty), a pipe neither, a kernel file seeks', () => {
+    const { kernel, call, g } = setup();
+    kernel.add(1, 'tty');
+    kernel.add(20, 'file');
+    kernel.add(21, 'socket');
+    const out = g.alloc(SIZE.FDSTAT);
+    const stat = (fd: number) => {
+      expect(call('fd_fdstat_get', fd, out)).toBe(E.SUCCESS);
+      return { type: g.view.getUint8(out), seek: (g.u64(out + 8) & RIGHTS.FD_SEEK) !== 0n };
+    };
+    expect(stat(1)).toEqual({ type: FILETYPE.CHARACTER_DEVICE, seek: false });
+    expect(stat(0)).toEqual({ type: FILETYPE.UNKNOWN, seek: false });
+    expect(stat(3)).toEqual({ type: FILETYPE.DIRECTORY, seek: true });
+    expect(call('fd_seek', 0, 0n, WHENCE.CUR, out)).toBe(E.SPIPE);
+  });
+
+  it('seeks a kernel-held VFS file and flushes it on fd_sync', () => {
+    const s = setup({ inherited: [20] });
+    s.kernel.table.set(20, { kind: 'file', input: [], output: [] });
+    const out = s.g.alloc(8);
+    expect(s.call('fd_seek', 20, 5n, WHENCE.SET, out)).toBe(E.SUCCESS);
+    expect(s.g.u64(out)).toBe(5n);
+    expect(s.call('fd_sync', 20)).toBe(E.SUCCESS);
+    const st = s.g.alloc(SIZE.FILESTAT);
+    s.call('fd_filestat_get', 20, st);
+    expect(s.g.view.getUint8(st + 16)).toBe(FILETYPE.REGULAR_FILE);
+  });
+
+  it('renumbers through the kernel; closing what was at the target', () => {
+    const { open, call, kernel, fs, write } = setup();
+    const [, a] = open('a.txt');
+    write(a, 'Z');
+    const [, b] = open('/tmp', OFLAGS.DIRECTORY);
+    expect(call('fd_renumber', a, b)).toBe(E.SUCCESS);
+    expect(kernel.calls).toContainEqual({ op: 'fd-renumber', from: a, to: b });
+    expect(call('fd_close', a)).toBe(E.BADF);
+    call('fd_close', b);
+    expect(fs.text('/workspace/p/a.txt')).toBe('Zello\n');
+    expect(call('fd_renumber', 1, 1)).toBe(E.SUCCESS);
+  });
+});
+
+describe('WasiHost: devices and /dev/fd', () => {
+  it('/dev/null swallows, /dev/zero and /dev/urandom fill', () => {
+    const { open, read, write, call, g } = setup();
+    const [, nul] = open('/dev/null');
+    expect(write(nul, 'gone')).toEqual([E.SUCCESS, 4]);
+    expect(read(nul, 8)).toEqual([E.SUCCESS, '']);
+    const [, zero] = open('/dev/zero');
+    expect(read(zero, 3)).toEqual([E.SUCCESS, '\0\0\0']);
+    const [, rnd] = open('/dev/urandom');
+    const [iov, n] = g.iov(16);
+    const got = g.alloc(4);
+    expect(call('fd_read', rnd, iov, n, got)).toBe(E.SUCCESS);
+    expect(g.u32(got)).toBe(16);
+  });
+
+  it('/dev/fd/N dups a kernel fd, and shares a buffered file (one offset)', () => {
+    const { open, read, kernel } = setup();
+    const [, out] = open('/dev/stdout');
+    expect(kernel.calls).toContainEqual({ op: 'fd-dup', fd: 1 });
+    expect(kernel.table.get(out)).toBe(kernel.table.get(1));
+    const [, f] = open('a.txt');
+    read(f, 2);
+    const [, again] = open(`/dev/fd/${f}`);
+    expect(read(again, 10)[1]).toBe('llo\n');
+    expect(open('/dev/fd/99')[0]).toBe(E.BADF);
+    const [, dir] = open('/dev/fd/3');
+    expect(dir).toBeGreaterThan(3);
+  });
+
+  it('/dev/tty is the controlling terminal, ENXIO without one', () => {
+    const s = setup();
+    expect(s.open('/dev/tty')[0]).toBe(E.NXIO);
+    s.kernel.tty = true;
+    const [errno, fd] = s.open('/dev/tty');
+    expect(errno).toBe(E.SUCCESS);
+    expect(s.kernel.table.get(fd)?.kind).toBe('tty');
+  });
+});
+
+describe('WasiHost: clocks, randomness, poll, exit', () => {
+  it('clocks: realtime from the epoch, monotonic from the start; 1 µs resolution', () => {
+    const { call, g } = setup();
+    const out = g.alloc(8);
+    call('clock_time_get', CLOCK.REALTIME, 0n, out);
+    expect(Number(g.u64(out) / 1_000_000n)).toBeGreaterThan(Date.now() - 1000);
+    call('clock_time_get', CLOCK.MONOTONIC, 0n, out);
+    expect(g.u64(out)).toBeLessThan(10_000_000_000n);
+    call('clock_res_get', CLOCK.MONOTONIC, out);
+    expect(g.u64(out)).toBe(1000n);
+    const buf = g.alloc(70000);
+    expect(call('random_get', buf, 70000)).toBe(E.SUCCESS);
+    expect(call('sched_yield')).toBe(E.SUCCESS);
+  });
+
+  it('proc_exit unwinds with the code; proc_raise signals the process itself', () => {
+    const { call, kernel } = setup();
+    expect(() => call('proc_exit', 3)).toThrow(new WasiExit(3));
+    expect(call('proc_raise', 16)).toBe(E.SUCCESS); // WASI's SIGCHLD
+    expect(kernel.killed).toEqual([[9, 17]]);
+  });
+
+  it('poll_oneoff: a clock sleeps through fd-select; files are ready at once; kernel fds as select says', () => {
+    const s = setup();
+    const subs = s.g.alloc(SIZE.SUBSCRIPTION * 3);
+    const events = s.g.alloc(SIZE.EVENT * 3);
+    const n = s.g.alloc(4);
+    const v = s.g.view;
+    const sub = (i: number, userdata: bigint, type: number, fdOrTimeout: number | bigint) => {
+      const p = subs + i * SIZE.SUBSCRIPTION;
+      v.setBigUint64(p, userdata, true);
+      v.setUint8(p + 8, type);
+      if (type === EVENTTYPE.CLOCK) {
+        v.setUint32(p + 16, CLOCK.MONOTONIC, true);
+        v.setBigUint64(p + 24, BigInt(fdOrTimeout), true);
+        v.setUint16(p + 40, 0, true);
+      } else v.setUint32(p + 16, Number(fdOrTimeout), true);
+    };
+    sub(0, 7n, EVENTTYPE.CLOCK, 0n);
+    expect(s.call('poll_oneoff', subs, events, 1, n)).toBe(E.SUCCESS);
+    expect(s.kernel.calls.at(-1)).toMatchObject({
+      op: 'fd-select',
+      read: [],
+      write: [],
+      timeoutMs: 0,
+    });
+    expect(s.g.u32(n)).toBe(1);
+    expect(s.g.u64(events)).toBe(7n);
+    // A file (always ready), stdin (select says ready), and a bad fd.
+    const [, f] = s.open('a.txt');
+    sub(0, 1n, EVENTTYPE.FD_READ, f);
+    sub(1, 2n, EVENTTYPE.FD_READ, 0);
+    sub(2, 3n, EVENTTYPE.FD_WRITE, 99);
+    s.call('poll_oneoff', subs, events, 3, n);
+    const got = Array.from({ length: s.g.u32(n) }, (_, i) => [
+      s.g.u64(events + i * SIZE.EVENT),
+      v.getUint16(events + i * SIZE.EVENT + 8, true),
+    ]);
+    expect(got).toEqual([
+      [1n, E.SUCCESS],
+      [3n, E.BADF],
+      [2n, E.SUCCESS],
+    ]);
+    expect(s.call('poll_oneoff', subs, events, 0, n)).toBe(E.INVAL);
+  });
+
+  it('sockets are phase 5b: ENOTSUP', () => {
+    const { call } = setup();
+    for (const name of ['sock_accept', 'sock_recv', 'sock_send', 'sock_shutdown']) {
+      expect(call(name, 0, 0, 0, 0, 0, 0)).toBe(E.NOTSUP);
+    }
+  });
+
+  it('an address outside memory is EFAULT; an error without a code propagates', () => {
+    const { call, fs } = setup();
+    expect(call('fd_write', 1, 0x7fffffff, 1, 0)).toBe(E.FAULT);
+    (fs as unknown as { readdir: () => never }).readdir = () => {
+      throw new TypeError('boom');
+    };
+    expect(() => call('fd_readdir', 3, 0, 10, 0n, 0)).toThrow('boom');
+  });
+
+  it('flushAll writes back every open file', () => {
+    const { open, write, host, fs } = setup();
+    const [, fd] = open('a.txt');
+    write(fd, 'Q');
+    host.flushAll();
+    expect(fs.text('/workspace/p/a.txt')).toBe('Qello\n');
+  });
+});
+
+describe('WasiHost: review round (#3638)', () => {
+  it('two opens of one file share its buffer: two O_APPEND writers both land', () => {
+    const { open, write, call, fs } = setup();
+    const [, a] = open('a.txt', 0, RIGHTS.ALL, FDFLAGS.APPEND);
+    const [, b] = open('a.txt', 0, RIGHTS.ALL, FDFLAGS.APPEND);
+    write(a, 'one\n');
+    write(b, 'two\n');
+    call('fd_close', a);
+    call('fd_close', b);
+    expect(fs.text('/workspace/p/a.txt')).toBe('hello\none\ntwo\n');
+  });
+
+  it('a second open sees what the first wrote before any write-back; each keeps its own offset', () => {
+    const { open, write, read, call } = setup();
+    const [, a] = open('a.txt');
+    write(a, 'HE');
+    const [, b] = open('a.txt');
+    expect(read(b, 3)).toEqual([E.SUCCESS, 'HEl']);
+    expect(read(a, 2)).toEqual([E.SUCCESS, 'll']);
+    // O_TRUNC through one truncates what the other sees.
+    const [, c] = open('a.txt', OFLAGS.TRUNC, RIGHTS.ALL);
+    call('fd_close', c);
+    expect(read(b, 10)).toEqual([E.SUCCESS, '']);
+  });
+
+  it('renaming a directory retargets the files open beneath it', () => {
+    const { open, write, call, fs, path, g } = setup();
+    fs.dir('/workspace/p/d').file('/workspace/p/d/f.txt', 'x');
+    const [, f] = open('d/f.txt');
+    const [to, tl] = g.str('e');
+    expect(path(3, 'd', 'path_rename', 3, to, tl)).toBe(E.SUCCESS);
+    // Written after the move: the write-back must go where the file is now.
+    write(f, 'Y');
+    call('fd_close', f);
+    expect(fs.text('/workspace/p/e/f.txt')).toBe('Y');
+    expect(fs.exists('/workspace/p/d/f.txt')).toBe(false);
+  });
+
+  it('renaming over a file that is open detaches that handle: its close does not overwrite', () => {
+    const { open, write, call, fs, path, g } = setup();
+    fs.file('/workspace/p/b.txt', 'bbb');
+    const [, old] = open('b.txt');
+    write(old, 'OLD');
+    const [to, tl] = g.str('b.txt');
+    expect(path(3, 'a.txt', 'path_rename', 3, to, tl)).toBe(E.SUCCESS);
+    call('fd_close', old);
+    expect(fs.text('/workspace/p/b.txt')).toBe('hello\n');
+  });
+
+  it('a failed unlink leaves open handles writing back', () => {
+    const { open, write, call, fs, path } = setup();
+    const [, fd] = open('a.txt');
+    (fs as unknown as { unlink: () => never }).unlink = () => {
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    };
+    expect(path(3, 'a.txt', 'path_unlink_file')).toBe(E.ACCES);
+    write(fd, 'K');
+    call('fd_close', fd);
+    expect(fs.text('/workspace/p/a.txt')).toBe('Kello\n');
+  });
+
+  it('fd_pread / fd_pwrite honor the access mode (EBADF)', () => {
+    const { open, call, g } = setup();
+    const out = g.alloc(4);
+    const [, wo] = open('a.txt', 0, RIGHTS.FD_WRITE);
+    const [iov, n] = g.iov(4);
+    expect(call('fd_pread', wo, iov, n, 0n, out)).toBe(E.BADF);
+    const [, ro] = open('a.txt', 0, RIGHTS.FD_READ);
+    const [wiov, wn] = g.iov('Z');
+    expect(call('fd_pwrite', ro, wiov, wn, 0n, out)).toBe(E.BADF);
+  });
+
+  it('proc_raise maps every WASI signal to its POSIX number; an unknown one is EINVAL', () => {
+    const { call, kernel } = setup();
+    call('proc_raise', 27); // WASI SIGWINCH
+    call('proc_raise', 20); // WASI SIGTTIN
+    call('proc_raise', 30); // WASI SIGSYS
+    expect(kernel.killed).toEqual([
+      [9, 28],
+      [9, 21],
+      [9, 31],
+    ]);
+    expect(call('proc_raise', 31)).toBe(E.INVAL);
+    expect(call('proc_raise', 0)).toBe(E.INVAL);
+  });
+});

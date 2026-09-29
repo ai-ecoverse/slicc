@@ -28,7 +28,15 @@ if (!port) throw new Error('node-process-worker runs in a worker thread');
 
 port.on('message', (data: { type?: string }) => {
   if (data?.type !== WASM_PROCESS_INIT) return;
-  runWasmProcess(data as WasmProcessInitMsg, { postMessage: (msg) => port.postMessage(msg) }).then(
+  const init = data as WasmProcessInitMsg;
+  const post = { postMessage: (msg: unknown) => port.postMessage(msg) };
+  const run =
+    init.program.abi === 'wasi'
+      ? import('../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js').then((m) =>
+          m.runWasiProcess(init, post)
+        )
+      : runWasmProcess(init, post);
+  run.then(
     (code) => port.postMessage({ type: WASM_PROCESS_EXIT, code }),
     (err: unknown) =>
       port.postMessage({

@@ -12,6 +12,12 @@
  *     }
  *   }
  *
+ * A WASI preview1 program (Zig, Go, Rust, wasi-libc C) has no glue:
+ * `"abi": "wasi"`, on `slicc` or per command (which wins), and a command
+ * names only its `wasm`:
+ *
+ *   "slicc": { "abi": "wasi", "commands": { "rg": { "wasm": "bin/rg.wasm" } } }
+ *
  * `argv0` selects the program of a multi-call binary (default: the command
  * name). `env` (on `slicc`, and per command, which wins) gives the program
  * environment defaults — the caller's environment still wins. A value that
@@ -23,8 +29,13 @@
 import type { FileContent, ReadFileOptions } from '../../fs/types.js';
 import { GLOBAL_NODE_MODULES } from './global-prefix.js';
 
-/** The ABIs the wasm realm runs today. */
-const SUPPORTED_ABI = 'emscripten';
+/** The ABIs the wasm realm runs: Emscripten glue + module, or a WASI preview1 module. */
+export type WasmAbi = 'emscripten' | 'wasi';
+
+function abiOf(raw: unknown, fallback: WasmAbi): WasmAbi | undefined {
+  if (raw === undefined) return fallback;
+  return raw === 'emscripten' || raw === 'wasi' ? raw : undefined;
+}
 
 /** Packages whose `bin/` pairs count as commands even without a manifest. */
 const FALLBACK_SCOPE = '@ai-ecoverse/';
@@ -33,7 +44,9 @@ const FALLBACK_PREFIX = 'wasm-';
 export interface WasmCommand {
   /** The command name (what a shell or a spawn looks up). */
   name: string;
-  /** Absolute path of the Emscripten glue. */
+  /** How the program talks to the kernel (absent: Emscripten). */
+  abi?: WasmAbi;
+  /** Absolute path of the Emscripten glue; a WASI program's is its module (it has none). */
   glue: string;
   /** Absolute path of the module. */
   wasm: string;
@@ -72,6 +85,7 @@ async function readText(fs: ProgramFs, path: string): Promise<string> {
 }
 
 interface CommandEntry {
+  abi?: unknown;
   glue?: unknown;
   wasm?: unknown;
   argv0?: unknown;
@@ -146,7 +160,9 @@ function validCommandName(name: string): boolean {
 export function commandsFromManifest(pkgDir: string, pkg: PackageJson): WasmCommand[] {
   const slicc = pkg.slicc;
   if (!slicc || typeof slicc !== 'object') return [];
-  if (slicc.abi !== undefined && slicc.abi !== SUPPORTED_ABI) return [];
+  // An ABI the realm cannot run (a newer package): none of its commands.
+  const packageAbi = abiOf(slicc.abi, 'emscripten');
+  if (!packageAbi) return [];
   const commands = slicc.commands;
   if (!commands || typeof commands !== 'object') return [];
   const name = typeof pkg.name === 'string' ? pkg.name : pkgDir;
@@ -154,13 +170,15 @@ export function commandsFromManifest(pkgDir: string, pkg: PackageJson): WasmComm
   const out: WasmCommand[] = [];
   for (const [command, raw] of Object.entries(commands as Record<string, CommandEntry>)) {
     if (!validCommandName(command) || !raw || typeof raw !== 'object') continue;
-    const glue = insidePackage(pkgDir, raw.glue);
+    const abi = abiOf(raw.abi, packageAbi);
     const wasm = insidePackage(pkgDir, raw.wasm);
-    if (!glue || !wasm) continue;
+    const glue = abi === 'wasi' ? wasm : insidePackage(pkgDir, raw.glue);
+    if (!abi || !glue || !wasm) continue;
     const argv0 = typeof raw.argv0 === 'string' && raw.argv0 ? raw.argv0 : command;
     const env = { ...packageEnv, ...manifestEnv(pkgDir, raw.env) };
     out.push({
       name: command,
+      abi,
       glue,
       wasm,
       argv0,
@@ -186,7 +204,14 @@ async function fallbackCommands(
   const present = new Set(names);
   return names
     .filter((n) => !n.endsWith('.wasm') && present.has(`${n}.wasm`) && validCommandName(n))
-    .map((n) => ({ name: n, glue: `${bin}/${n}`, wasm: `${bin}/${n}.wasm`, argv0: n, pkg }));
+    .map((n) => ({
+      name: n,
+      abi: 'emscripten' as const,
+      glue: `${bin}/${n}`,
+      wasm: `${bin}/${n}.wasm`,
+      argv0: n,
+      pkg,
+    }));
 }
 
 async function packageCommands(fs: ProgramFs, pkgDir: string): Promise<WasmCommand[]> {
