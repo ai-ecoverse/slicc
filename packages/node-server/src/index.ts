@@ -95,7 +95,9 @@ import { runInstallCli } from './install-cli.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import { AgentActivityTracker } from './routes/agent-activity.js';
 import { registerFetchProxyRoute } from './routes/fetch-proxy.js';
+import { registerRawFetchProxyRoute } from './routes/fetch-proxy-raw.js';
 import { registerHandoffRoute } from './routes/handoff.js';
 import { registerLickApiRoutes } from './routes/lick-api.js';
 import { createLickBridge } from './routes/lick-bridge.js';
@@ -1463,6 +1465,18 @@ function createCdpWebSocketServer(bridgeToken: string | null): WebSocketServer {
   });
 }
 
+/**
+ * Fetch proxy — forwards cross-origin requests from the browser to bypass CORS,
+ * injecting/unmasking secrets and streaming the response with a UTF-8-safe
+ * scrub. Raw mode (#3571) is mounted first and falls through for default
+ * requests; both share one agent-activity window.
+ */
+function mountFetchProxy(app: express.Express, secretProxy: SecretProxyManager): void {
+  const activityTracker = new AgentActivityTracker();
+  registerRawFetchProxyRoute(app, { secretProxy, activityTracker });
+  registerFetchProxyRoute(app, { secretProxy, activityTracker });
+}
+
 async function main() {
   // Resolve ports first; `launchBrowser` is deferred until AFTER
   // `server.listen()` so the /cdp bridge is accepting connections before
@@ -1582,9 +1596,7 @@ async function main() {
   const computerDemo = RUNTIME_FLAGS.computerDemo ? new ComputerDemoState() : null;
   if (computerDemo) registerComputerDemoRoutes(app, computerDemo);
 
-  // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS,
-  // injecting/unmasking secrets and streaming the response with a UTF-8-safe scrub.
-  registerFetchProxyRoute(app, { secretProxy });
+  mountFetchProxy(app, secretProxy);
 
   // node-server serves no UI in any mode: it is a pure /cdp bridge + /api
   // surface. Chrome opens the sliccy.ai-hosted leader which talks to /cdp +

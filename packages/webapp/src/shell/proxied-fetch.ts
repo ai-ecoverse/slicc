@@ -27,6 +27,11 @@ import {
 import type { SecureFetch } from 'just-bash';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes, type SecureFetchRequestBody } from './fetch-body.js';
+import {
+  type RawFetchCapabilities,
+  type RawProxiedFetch,
+  usesFetchProxyEndpoint,
+} from './proxied-fetch-raw-types.js';
 import { isProxyError, readProxyErrorMessage } from './proxy-error.js';
 import {
   decodeForbiddenResponseHeaders as _decodeForbiddenResponseHeaders,
@@ -124,6 +129,32 @@ export {
 /** Resolve the absolute /api/fetch-proxy URL, honoring `setLocalApiBaseUrl`. */
 function resolveFetchProxyUrl(): string {
   return resolveApiUrl('/api/fetch-proxy');
+}
+
+/** Raw mode (#3571): the realm HTTP proxy's view of the proxied fetch. */
+export {
+  type RawFetchCapabilities,
+  RawFetchError,
+  type RawFetchErrorCode,
+  type RawFetchInit,
+  type RawFetchResponse,
+  type RawHeaderList,
+  type RawProxiedFetch,
+} from './proxied-fetch-raw-types.js';
+
+/**
+ * Raw-mode capabilities of the current float, probed from its transport.
+ * Lazy like raw mode itself, so the probe code stays out of the boot graph.
+ */
+export async function getRawFetchCapabilities(): Promise<RawFetchCapabilities> {
+  const raw = await import('./proxied-fetch-raw.js');
+  return raw.getRawFetchCapabilities();
+}
+
+/** Forget the raw-mode probe answers, e.g. after the bridge was replaced. */
+export async function resetRawFetchCapabilities(): Promise<void> {
+  const raw = await import('./proxied-fetch-raw.js');
+  raw.resetRawFetchCapabilities();
 }
 
 /** Shared content-type predicate, re-exported for backwards compatibility. */
@@ -253,6 +284,12 @@ export interface ProxiedFetchOptions {
    * worker's panel-RPC hop only checks it once the page has collected the body.
    */
   maxResponseBytes?: number;
+  /**
+   * `createProxiedStreamingFetch` only. `'raw'` selects the HTTP-client
+   * flavor (`proxied-fetch-raw.ts`); `'default'` (or absent) keeps the
+   * browser-like behavior every other caller relies on.
+   */
+  mode?: 'default' | 'raw';
 }
 
 /** Header carrying the exact upstream size on the CLI proxy path. */
@@ -664,18 +701,6 @@ export type StreamingFetch = (
   options?: Parameters<SecureFetch>[1]
 ) => Promise<StreamedFetchResponse>;
 
-/**
- * Whether this realm reaches the network through the bridge's
- * `/api/fetch-proxy` endpoint (branch 4 of {@link createProxiedFetch}) rather
- * than an extension Port. Keep in step with that function's branch order.
- */
-function usesFetchProxyEndpoint(): boolean {
-  if (getChromeExtensionRealm()) return false;
-  if (!getExtensionDelegateId()) return true;
-  if (typeof chrome === 'undefined') return false;
-  return typeof chrome?.runtime?.connect !== 'function';
-}
-
 async function* singleChunk(bytes: Uint8Array): AsyncGenerator<Uint8Array> {
   if (bytes.byteLength > 0) yield bytes;
 }
@@ -735,10 +760,31 @@ function streamProxyBody(
  * {@link getResponseBodyCap} ceiling does not apply. Extension Port paths
  * still collect the whole body inside the Port collector; they fall back to
  * the buffered fetch and yield it as one chunk.
+ *
+ * `{ mode: 'raw' }` returns the HTTP-client flavor instead (manual redirects,
+ * ordered headers, decoded body, pull-driven stream) for the wasm realm's HTTP
+ * proxy; see `proxied-fetch-raw.ts`.
  */
 export function createProxiedStreamingFetch(
+  fetchOptions: ProxiedFetchOptions & { mode: 'raw' }
+): RawProxiedFetch;
+export function createProxiedStreamingFetch(fetchOptions?: ProxiedFetchOptions): StreamingFetch;
+export function createProxiedStreamingFetch(
   fetchOptions: ProxiedFetchOptions = {}
-): StreamingFetch {
+): StreamingFetch | RawProxiedFetch {
+  if (fetchOptions.mode === 'raw') {
+    // Lazy: raw mode serves the wasm realm's HTTP proxy only, so its
+    // transport stays out of the boot graph.
+    const raw: RawProxiedFetch = async (url, init) => {
+      const { createRawProxiedFetch } = await import('./proxied-fetch-raw.js');
+      return createRawProxiedFetch()(url, init);
+    };
+    return raw;
+  }
+  return createDefaultStreamingFetch(fetchOptions);
+}
+
+function createDefaultStreamingFetch(fetchOptions: ProxiedFetchOptions): StreamingFetch {
   const progress = fetchOptions.progress;
   if (!usesFetchProxyEndpoint()) {
     const buffered = createProxiedFetch(fetchOptions);
