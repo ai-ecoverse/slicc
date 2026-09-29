@@ -3,6 +3,7 @@
  * and their placement in the layout.
  */
 
+import type { PermissionGrant } from '@slicc/webcomponents';
 import { createLogger } from '../base/logger.js';
 import { SPRINKLE_ROOTS } from '../base/sprinkle-roots.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
@@ -26,8 +27,35 @@ import {
 } from './sprinkle-bridge.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
+import { getLeaderPermissionsSurface } from './wc/wc-permissions-registry.js';
 
 const log = createLogger('sprinkle-manager');
+
+/**
+ * Acquire a display-media stream for sprinkle `captureScreen`.
+ *
+ * Prefer the leader `<slicc-permissions>` surface (`screenshare` kind) so the
+ * Allow click supplies the user gesture — a sprinkle iframe's call arrives
+ * across an async `postMessage` hop that drops transient activation. Fall
+ * back to direct `getDisplayMedia` only when no surface is mounted (cherry
+ * follower / headless harness), matching `wc-attach.ts` `captureScreenshot`.
+ */
+export async function acquireSprinkleCaptureStream(): Promise<MediaStream> {
+  const surface = getLeaderPermissionsSurface();
+  if (surface) {
+    const grant = await surface.request('screenshare', {
+      constraints: { video: true, audio: false },
+    });
+    if (!grant) {
+      throw new Error('Screen capture cancelled');
+    }
+    return (grant as Extract<PermissionGrant, { kind: 'screenshare' }>).stream;
+  }
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error('Screen capture not supported in this browser');
+  }
+  return navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+}
 
 export interface AddSprinkleOptions {
   /**
@@ -397,16 +425,15 @@ export class SprinkleManager implements SprinkleManagerHandle {
         throw new Error('Screen capture unavailable in this environment');
       }
 
-      if (local && !navigator.mediaDevices?.getDisplayMedia) {
-        throw new Error('Screen capture not supported in this browser');
-      }
-
       let bytes: ArrayBuffer;
       let width: number;
       let height: number;
 
       if (local) {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        // Route through `<slicc-permissions>` when mounted — direct
+        // getDisplayMedia fails after the sprinkle→leader postMessage hop
+        // because transient user activation is already gone (#3604 / #3574).
+        const stream = await acquireSprinkleCaptureStream();
         try {
           const video = document.createElement('video');
           video.srcObject = stream;
