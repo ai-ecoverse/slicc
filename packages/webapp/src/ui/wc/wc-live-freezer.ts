@@ -86,17 +86,21 @@ interface ArchiveConeSessionDeps {
  */
 async function captureCompleteSnapshotFor(
   root: RegisteredScoop | undefined,
-  frozen: FrozenSession
+  frozen: FrozenSession,
+  signal: AbortSignal
 ): Promise<void> {
   const { getTranscriptExportService } = await import('../../transcript/export-provider.js');
-  await getTranscriptExportService().captureFrozen({
-    sessionId: frozen.sessionId ?? frozen.archive.id,
-    title: frozen.archive.title,
-    frozenAt: frozen.archive.frozenAt,
-    createdAt: frozen.archive.createdAt,
-    updatedAt: frozen.archive.updatedAt,
-    ...(root ? { rootJid: root.jid } : {}),
-  });
+  await getTranscriptExportService().captureFrozen(
+    {
+      sessionId: frozen.sessionId ?? frozen.archive.id,
+      title: frozen.archive.title,
+      frozenAt: frozen.archive.frozenAt,
+      createdAt: frozen.archive.createdAt,
+      updatedAt: frozen.archive.updatedAt,
+      ...(root ? { rootJid: root.jid } : {}),
+    },
+    signal
+  );
 }
 
 /**
@@ -138,8 +142,8 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   // `jid` rides along so an agentic curator pass is parented to the cone it
   // curates (#2271); every other freezer step keys off `folder`.
   const cone = root ? archiveConeTarget(root) : undefined;
-  const captureCompleteSnapshot = (frozen: FrozenSession): Promise<void> =>
-    captureCompleteSnapshotFor(root, frozen);
+  const captureCompleteSnapshot = (frozen: FrozenSession, signal: AbortSignal): Promise<void> =>
+    captureCompleteSnapshotFor(root, frozen, signal);
   // A session has ended: once its archive is settled, tell the gelatiere
   // (gated on the `memory-v2` flag and its own interval). Lazy: the store
   // module drags the bundled GELATIERE.md along, which has no place on the
@@ -381,7 +385,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     await runNewSessionArchiveOnly({
       vfs: writer,
       cone: archiveConeTarget(root),
-      captureCompleteSnapshot: (frozen) => captureCompleteSnapshotFor(root, frozen),
+      captureCompleteSnapshot: (frozen, signal) => captureCompleteSnapshotFor(root, frozen, signal),
     });
     refreshFreezer();
   };

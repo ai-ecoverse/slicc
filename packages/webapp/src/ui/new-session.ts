@@ -47,6 +47,9 @@ const FREEZER_SESSION_ANCHOR = 'ui-new-session';
  */
 const DEFAULT_ENRICHMENT_RACE_MS = 20_000;
 
+/** A complete export must not hold New chat behind a working child scoop. */
+const COMPLETE_SNAPSHOT_TIMEOUT_MS = 5_000;
+
 /** How often the race timer reports progress (ms) to drive the spinner ring. */
 const ENRICHMENT_PROGRESS_TICK_MS = 250;
 
@@ -148,20 +151,7 @@ async function runAgenticMemoryFreeze(
     cone: opts.cone,
   });
   if (!frozen) return null;
-  if (opts.captureCompleteSnapshot) {
-    try {
-      await opts.captureCompleteSnapshot(frozen);
-    } catch (err) {
-      const code = (err as { code?: string } | null)?.code ?? 'unknown';
-      log.warn('captureCompleteSnapshot failed', { code });
-      frozen.completeSnapshotUnavailable = true;
-      try {
-        await markSnapshotUnavailable(opts.vfs, frozen.filename);
-      } catch {
-        // Best-effort — the Markdown archive is still present.
-      }
-    }
-  }
+  await captureCompleteSnapshotBestEffort(opts, frozen);
   void runAgenticBackgroundPass(opts, sessionStore, model, apiKey, headers, spawn, frozen);
   return frozen;
 }
@@ -272,21 +262,47 @@ export interface RunNewSessionFreezeOptions {
    */
   onSessionSettled?: (entry: FrozenSessionIndexEntry | null) => void;
   /**
-   * Non-blocking hook called after the Markdown archive write succeeds and
-   * before the caller clears histories. Used to produce and persist the full
-   * sanitized transcript snapshot (JSON + redacted attachments).
-   *
-   * Failures are caught, the error code is logged, and the index entry is
-   * updated with `completeSnapshotUnavailable: true`. The Markdown archive
-   * is always retained; this hook never writes a raw fallback.
+   * Best-effort sanitized transcript capture after the durable Markdown
+   * archive. The signal is aborted after five seconds so a working child
+   * scoop cannot keep New chat waiting indefinitely.
    */
-  captureCompleteSnapshot?: (frozen: FrozenSession) => Promise<void>;
+  captureCompleteSnapshot?: (frozen: FrozenSession, signal: AbortSignal) => Promise<void>;
   /**
    * Which cone's chat to freeze (#2272). The freezer defaults to the primary
    * cone when omitted, so callers that predate multiple cones are unchanged;
    * the WC rail passes the currently selected root.
    */
   cone?: FreezerConeRef;
+}
+
+/** Keep a stalled complete export from delaying the already-durable archive's clear. */
+async function captureCompleteSnapshotBestEffort(
+  opts: RunNewSessionFreezeOptions,
+  frozen: FrozenSession
+): Promise<void> {
+  if (!opts.captureCompleteSnapshot) return;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(Object.assign(new Error('Complete snapshot timed out'), { code: 'snapshot-timeout' }));
+    }, COMPLETE_SNAPSHOT_TIMEOUT_MS);
+  });
+  try {
+    await Promise.race([opts.captureCompleteSnapshot(frozen, controller.signal), deadline]);
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code ?? 'unknown';
+    log.warn('captureCompleteSnapshot failed', { code });
+    frozen.completeSnapshotUnavailable = true;
+    try {
+      await markSnapshotUnavailable(opts.vfs, frozen.filename);
+    } catch {
+      // The Markdown archive remains available even if the index update fails.
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 type NewSessionTmpVfs = Pick<WritableVfsClient, 'listMountPoints' | 'mkdir' | 'readDir' | 'rm'>;
@@ -451,26 +467,9 @@ export async function runNewSessionFreeze(
   });
   if (!frozen) return null; // short session / write failure — nothing to do.
 
-  // 1b. Complete-snapshot hook — called after Markdown write succeeds,
-  // before the caller clears histories. Failures are caught; the index
-  // entry is updated with `completeSnapshotUnavailable: true`.
-  // Never writes a raw fallback.
-  if (opts.captureCompleteSnapshot) {
-    try {
-      await opts.captureCompleteSnapshot(frozen);
-    } catch (err) {
-      const code = (err as { code?: string } | null)?.code ?? 'unknown';
-      log.warn('captureCompleteSnapshot failed', { code });
-      // Best-effort index update: mark entry so the UI knows the snapshot
-      // bundle was not produced. Ignore failures here.
-      frozen.completeSnapshotUnavailable = true;
-      try {
-        await markSnapshotUnavailable(opts.vfs, frozen.filename);
-      } catch {
-        // Best-effort — the Markdown archive is still present.
-      }
-    }
-  }
+  // Attempt the complete snapshot before clearing, but bound the attempt:
+  // a child scoop can remain busy long after the cone starts a new chat.
+  await captureCompleteSnapshotBestEffort(opts, frozen);
 
   // No credentials → nothing to enrich now; leave a durable
   // `pending-*.md` archive. Auto-finish was removed (see #1226);
@@ -601,23 +600,7 @@ async function runQuickFreeze(
     ...(memory ? { memory } : {}),
   });
 
-  // Complete-snapshot hook — same non-blocking pattern as runNewSessionFreeze.
-  // Failures are caught; the index entry is updated with completeSnapshotUnavailable.
-  // Never writes a raw fallback.
-  if (frozen && opts.captureCompleteSnapshot) {
-    try {
-      await opts.captureCompleteSnapshot(frozen);
-    } catch (err) {
-      const code = (err as { code?: string } | null)?.code ?? 'unknown';
-      log.warn('captureCompleteSnapshot failed (quick-freeze)', { code });
-      frozen.completeSnapshotUnavailable = true;
-      try {
-        await markSnapshotUnavailable(opts.vfs, frozen.filename);
-      } catch {
-        // Best-effort — the Markdown archive is still present.
-      }
-    }
-  }
+  if (frozen) await captureCompleteSnapshotBestEffort(opts, frozen);
 
   if (frozen) opts.onSessionSettled?.(frozen);
   return frozen;

@@ -81,14 +81,17 @@ Future breaking changes will bump `schemaVersion`.
 
 ## Session states and export behavior
 
-| Session state     | Source data                                                                                                                             | Completeness                                                                     |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| **Active**        | Live agent history from IndexedDB (`agent-sessions` store). May be partial if the loop is mid-turn.                                     | Complete if the turn finished; partial otherwise (`tool-data-may-be-truncated`). |
-| **Newly frozen**  | Snapshot written by "Save & start new" or "New chat — skip memory". The export re-redacts from the sanitized snapshot.                  | Always complete.                                                                 |
-| **Legacy frozen** | Markdown archive at `/sessions/<slug>.md` (`slicc:session-data` comment block). No agent-history snapshot; reconstructed from UI state. | Always partial (`complete-snapshot-unavailable`).                                |
+| Session state     | Source data                                                                                                                             | Completeness                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **Active**        | Live agent history from IndexedDB (`agent-sessions` store). May be partial if the loop is mid-turn.                                     | Complete if the turn finished; partial otherwise (`tool-data-may-be-truncated`).     |
+| **Newly frozen**  | Snapshot attempted by "Save & start new" or "New chat — skip memory". The export re-redacts from the sanitized snapshot when available. | Complete when capture succeeds; otherwise partial (`complete-snapshot-unavailable`). |
+| **Legacy frozen** | Markdown archive at `/sessions/<slug>.md` (`slicc:session-data` comment block). No agent-history snapshot; reconstructed from UI state. | Always partial (`complete-snapshot-unavailable`).                                    |
 
 > The legacy path is present for backward compatibility with sessions saved before the v1 snapshot
-> format. New sessions always produce new-frozen snapshots.
+> format. New chat bounds complete-snapshot capture to five seconds before clearing the cone.
+> A working scoop may prevent a complete snapshot; the Markdown archive remains in the Freezer.
+> Snapshot publication keeps an in-progress marker until all files are durable. If capture is
+> interrupted during that copy, export uses the Markdown archive and reports partial completeness.
 
 ---
 
