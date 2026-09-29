@@ -321,6 +321,8 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
 
     assertValid(finalDoc);
 
+    if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
+
     await this.deps.snapshotStore.write(metadata.sessionId, {
       document: finalDoc,
       attachments: bundleFiles,
