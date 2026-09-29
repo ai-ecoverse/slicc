@@ -294,6 +294,24 @@ describe('skill deltas', () => {
     expect(lifts.map((d) => d.model)).toEqual(['claude-sonnet-5-5']);
     expect(lifts[0]).toMatchObject({ from: 'none', to: 'builtin', n: 1 });
   });
+
+  it('needs a finished run in both conditions, not just a record', () => {
+    const errored = {
+      benchmark: 'B',
+      task_id: 't1',
+      repeat: 1,
+      config: S('claude-opus-5-5', 'none'),
+      error: 'leader unreachable',
+      error_stage: 'run',
+    };
+    const data = reportData([
+      errored,
+      rec('t1', 'claude-opus-5-5', 'builtin', 0.7),
+      rec('t1', 'claude-sonnet-5-5', 'none', 0.4),
+      rec('t1', 'claude-sonnet-5-5', 'builtin', 0.6),
+    ]);
+    expect(data.benchmarks[0].skill_deltas.map((d) => d.model)).toEqual(['claude-sonnet-5-5']);
+  });
 });
 
 describe('canonicalRecords', () => {
