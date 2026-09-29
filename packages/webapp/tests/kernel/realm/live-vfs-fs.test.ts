@@ -115,6 +115,22 @@ describe('SLICC_LIVE_FS', () => {
     expect(calls).toEqual(['stat']);
   });
 
+  it('numbers inodes by VFS path: the same in every mount, one per file', () => {
+    const ino = (p: string) => py(`__import__('os').stat('${p}').st_ino`) as number;
+    const before = ino('/work/hello.txt');
+    expect(before).not.toBe(ino('/work/sub'));
+    // Another mount of the same tree (another process, in effect) creates its
+    // nodes afresh and in another order, but agrees.
+    FS.mkdir('/again');
+    FS.mount(plugin, { root: '/work', bridge: hostBridge(host).bridge }, '/again');
+    try {
+      expect(ino('/again/sub')).toBe(ino('/work/sub'));
+      expect(ino('/again/hello.txt')).toBe(before);
+    } finally {
+      FS.unmount('/again');
+    }
+  });
+
   it('reads an existing file and lists directories lazily', () => {
     expect(py(`open('/work/hello.txt').read()`)).toBe('hello from the vfs\n');
     expect(py(`','.join(sorted(__import__('os').listdir('/work')))`)).toBe('hello.txt,sub');
