@@ -40,6 +40,7 @@ function toStat(s: nodeFs.Stats): SyncFsBridgeStat {
     size: s.size,
     mode: s.mode,
     mtimeMs: s.mtimeMs,
+    ino: s.ino,
   };
 }
 
@@ -115,19 +116,50 @@ describe('SLICC_LIVE_FS', () => {
     expect(calls).toEqual(['stat']);
   });
 
-  it('numbers inodes by VFS path: the same in every mount, one per file', () => {
+  it('reports the backing file’s inode: a file replaced at its path, same size and mtime, is a new one', () => {
     const ino = (p: string) => py(`__import__('os').stat('${p}').st_ino`) as number;
     const before = ino('/work/hello.txt');
-    expect(before).not.toBe(ino('/work/sub'));
-    // Another mount of the same tree (another process, in effect) creates its
-    // nodes afresh and in another order, but agrees.
-    FS.mkdir('/again');
-    FS.mount(plugin, { root: '/work', bridge: hostBridge(host).bridge }, '/again');
+    expect(before).toBe(nodeFs.statSync(join(host, 'hello.txt')).ino);
+    // Atomically replaced, keeping size and mtime (a timestamp-preserving save):
+    // only the inode tells git the file is not the one it hashed.
+    const { mtime } = nodeFs.statSync(join(host, 'hello.txt'));
+    nodeFs.writeFileSync(join(host, 'next.tmp'), 'HELLO FROM THE VFS\n');
+    nodeFs.utimesSync(join(host, 'next.tmp'), mtime, mtime);
+    nodeFs.renameSync(join(host, 'next.tmp'), join(host, 'hello.txt'));
+    FS.mkdir('/fresh');
+    FS.mount(plugin, { root: '/work', bridge: hostBridge(host).bridge }, '/fresh');
     try {
-      expect(ino('/again/sub')).toBe(ino('/work/sub'));
-      expect(ino('/again/hello.txt')).toBe(before);
+      expect(ino('/fresh/hello.txt')).not.toBe(before);
     } finally {
-      FS.unmount('/again');
+      FS.unmount('/fresh');
+    }
+  });
+
+  it('numbers inodes by VFS path where the backend names none: the same in every mount', () => {
+    const ino = (p: string) => py(`__import__('os').stat('${p}').st_ino`) as number;
+    // A backend without inodes (S3, DA): each mount (another process, in
+    // effect) creates its nodes afresh and in another order, but agrees.
+    const anonymous = (): SyncFsPosixBridge => {
+      const { bridge } = hostBridge(host);
+      const strip = ({ ino: _ino, ...st }: SyncFsBridgeStat) => st;
+      return {
+        ...bridge,
+        stat: (p) => strip(bridge.stat(p)),
+        lstat: (p) => strip(bridge.lstat(p)),
+      };
+    };
+    FS.mkdir('/one');
+    FS.mkdir('/two');
+    FS.mount(plugin, { root: '/work', bridge: anonymous() }, '/one');
+    FS.mount(plugin, { root: '/work', bridge: anonymous() }, '/two');
+    try {
+      const file = ino('/one/hello.txt');
+      expect(file).not.toBe(ino('/one/sub'));
+      expect(ino('/two/sub')).toBe(ino('/one/sub'));
+      expect(ino('/two/hello.txt')).toBe(file);
+    } finally {
+      FS.unmount('/one');
+      FS.unmount('/two');
     }
   });
 

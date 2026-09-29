@@ -114,9 +114,12 @@ export interface SyncFsStatJson {
   size: number;
   mode: number;
   mtimeMs: number;
+  /** The backing entry's inode, when the backend names one. */
+  ino?: number;
 }
 
 function statJson(s: FsStat): SyncFsStatJson {
+  const ino = typeof s.ino === 'bigint' ? Number(s.ino) : s.ino;
   return {
     isDirectory: s.isDirectory,
     isFile: s.isFile,
@@ -124,6 +127,7 @@ function statJson(s: FsStat): SyncFsStatJson {
     size: s.size,
     mode: s.mode,
     mtimeMs: s.mtime instanceof Date ? s.mtime.getTime() : 0,
+    ...(typeof ino === 'number' && Number.isSafeInteger(ino) ? { ino } : {}),
   };
 }
 
