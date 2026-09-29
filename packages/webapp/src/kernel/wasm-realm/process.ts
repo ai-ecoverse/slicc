@@ -98,6 +98,8 @@ export type WasmSyscall =
   | { op: 'fd-list' }
   /** The process's dynamic-link records (5g): `append` one, answer those from `from` on. */
   | { op: 'dl-log'; append?: LinkRecord; from: number }
+  /** setitimer(2) / alarm(2): raise `sig` in `ms` (0: cancel), again every `ms` if `repeat`. */
+  | { op: 'proc-alarm'; sig: number; ms: number; repeat: boolean }
   /**
    * WASI fd_renumber: `to` becomes `from`'s description (what was at `to`
    * closes), `from` closes — unless `keep` (WASIX's, which is dup2).
@@ -247,6 +249,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-cloexec',
   'fd-list',
   'dl-log',
+  'proc-alarm',
   'fd-renumber',
   'fd-promote',
   'fd-open-tty',
@@ -295,6 +298,15 @@ export interface WasmProcessOptions {
   onPending?: (sig: number) => void;
   /** Whether a published signal still waits for the worker (it interrupts the next blocking call). */
   hasPending?: () => boolean;
+  /**
+   * The published signals still waiting, as bits. With it, a terminating
+   * signal that arrives while the same one still waits takes its default
+   * action (a WASI program runs handlers only at a syscall: a second ^C
+   * ends a loop that makes none).
+   */
+  pendingBits?: () => number;
+  /** Raise `sig` in this process (an alarm's signal). */
+  raise?: (sig: number) => void;
   /** Process groups, sessions and terminal foreground of its invocation (job control). */
   jobs?: JobTable;
   /** The loopback network its sockets live on (its owner's); a private one when absent. */
@@ -370,6 +382,9 @@ export class WasmProcess {
       const action = defaultAction(sig);
       return action === 'stop' ? this.stop(sig) : action;
     }
+    const action = defaultAction(sig);
+    const waiting = ((this.options.pendingBits?.() ?? 0) & bit) !== 0;
+    if (waiting && action === 'terminate') return action;
     this.options.onPending?.(sig);
     const blocked = this.interrupt;
     this.interrupt = new AbortController();
@@ -801,6 +816,9 @@ export class WasmProcess {
       case 'dl-log':
         if (req.append) this.dlLog.push(req.append);
         return { ok: true, kind: 'json', json: this.dlLog.slice(req.from) };
+      case 'proc-alarm':
+        this.setAlarm(req.sig, req.ms, req.repeat);
+        return { ok: true, kind: 'void' };
       case 'sig-mask':
         this.caught = req.caught;
         this.ignored = req.ignored;
@@ -814,9 +832,23 @@ export class WasmProcess {
   private readonly dlLog: LinkRecord[] = [];
 
   /** The process is gone (exit, crash, SIGKILL): release its descriptors once. */
+  private alarm: ReturnType<typeof setTimeout> | undefined;
+
+  private setAlarm(sig: number, ms: number, repeat: boolean): void {
+    if (!isSignal(sig)) throw new KernelError('EINVAL');
+    clearTimeout(this.alarm);
+    clearInterval(this.alarm);
+    this.alarm = undefined;
+    if (ms <= 0) return;
+    const fire = () => this.options.raise?.(sig);
+    this.alarm = repeat ? setInterval(fire, ms) : setTimeout(fire, ms);
+  }
+
   async exit(): Promise<void> {
     if (this.exited) return;
     this.exited = true;
+    clearTimeout(this.alarm);
+    clearInterval(this.alarm);
     await this.fds.closeAll();
   }
 }

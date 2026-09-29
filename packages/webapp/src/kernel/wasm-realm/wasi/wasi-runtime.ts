@@ -19,7 +19,7 @@ import { SAB_HEADER_I32 } from '../../realm/sync-sab-wire.js';
 import { SyscallError } from '../kernel-streams.js';
 import type { WasmSyscall } from '../process.js';
 import { kernelSys } from '../process-runtime.js';
-import { SignalGate } from '../process-signals.js';
+import { SignalGate, type SignalHooks } from '../process-signals.js';
 import {
   WASM_PROCESS_ERROR,
   WASM_PROCESS_EXIT,
@@ -30,6 +30,7 @@ import { dylinkInfo } from './dylink.js';
 import { cachingBridge } from './wasi-files.js';
 import { WasiExit, type WasiFunction, WasiHost } from './wasi-host.js';
 import type { ImportedMemory } from './wasi-module.js';
+import { WasiSignals } from './wasi-signals.js';
 import { WasiStats } from './wasi-stats.js';
 import { MAIN_TID, ThreadExit, threadCap, WasiThreads } from './wasi-threads.js';
 import { AsyncifyDriver } from './wasix-fork.js';
@@ -122,12 +123,16 @@ function importedMemory(
 }
 
 /** The kernel over a worker's SAB bridge: its syscalls, and stderr for a word of our own. */
-function kernelOf(init: { sab: SharedArrayBuffer; argv0: string }, port: SabPostLike) {
-  // No handlers to run: the kernel applies each signal's default action itself.
+function kernelOf(
+  init: { sab: SharedArrayBuffer; argv0: string },
+  port: SabPostLike,
+  // Without a program's handlers the kernel applies each signal's default action itself.
+  hooks: SignalHooks = { masks: () => null, raise: () => {} }
+) {
   const transport = new SignalGate(
     createSyncSabTransport(init.sab, port),
     new Int32Array(init.sab, 0, SAB_HEADER_I32),
-    { masks: () => null, raise: () => {} }
+    hooks
   ).transport();
   const sys = kernelSys(transport);
   const call = (req: WasmSyscall): unknown => {
@@ -174,14 +179,20 @@ async function instantiate(
   module: WebAssembly.Module,
   memory: WebAssembly.Memory | undefined,
   threads: WasiThreads | undefined,
-  thread = false,
-  stats?: WasiStats
+  {
+    thread = false,
+    stats,
+    signals,
+  }: { thread?: boolean; stats?: WasiStats; signals?: WasiSignals } = {}
 ): Promise<{ instance: WebAssembly.Instance; driver: AsyncifyDriver }> {
   const driver = new AsyncifyDriver(host.mem);
   const wasixHost = WebAssembly.Module.imports(module).some((i) => i.module === WASIX)
     ? new WasixHost(host, driver, module)
     : undefined;
-  if (wasixHost) wasixHost.threads = threads;
+  if (wasixHost) {
+    wasixHost.threads = threads;
+    wasixHost.signals = signals;
+  }
   let preview1: Record<string, WasiFunction> = traced(stats, 'wasi', {
     ...host.imports(),
     ...wasixHost?.preview1(),
@@ -317,7 +328,13 @@ class LinkSync {
 const DL_GEN = 3;
 
 export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike): Promise<number> {
-  const { transport, sys, call: kernelCall, say } = kernelOf(init, port);
+  // A WASIX program's handlers run at syscall boundaries; without one, its
+  // default action is the kernel's (raised again, now reported uncaught).
+  const signals = new WasiSignals((sig) => {
+    call({ op: 'proc-kill', pid: init.pid, sig });
+    throw new WasiExit(128 + sig);
+  });
+  const { transport, sys, call: kernelCall, say } = kernelOf(init, port, signals);
   // SLICC_WASI_STATS=1: every call counted and timed, the table on stderr at the end.
   const stats = init.env.SLICC_WASI_STATS === '1' ? new WasiStats() : undefined;
   const call = stats ? timedCalls(stats, kernelCall) : kernelCall;
@@ -355,7 +372,9 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
       if (!host.fds.isShared) host.fds.share(threads.ids, false);
     };
   }
-  const { instance, driver } = await instantiate(host, module, memory, threads, false, stats);
+  const { instance, driver } = await instantiate(host, module, memory, threads, { stats, signals });
+  signals.bind(instance.exports);
+  host.onRaise = (sig) => signals.raised(sig);
   const exports = instance.exports as { _start: () => void };
   driver.bind(instance.exports);
   try {
@@ -405,7 +424,9 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
   });
   // Fork and setjmp need the program's own stack for Asyncify: a thread gets
   // ENOSYS for them (its driver is never bound).
-  const { instance } = await instantiate(host, init.program.module, thread.memory, threads, true);
+  const { instance } = await instantiate(host, init.program.module, thread.memory, threads, {
+    thread: true,
+  });
   const start = instance.exports.wasi_thread_start as (tid: number, arg: number) => void;
   try {
     start(thread.tid, thread.arg);

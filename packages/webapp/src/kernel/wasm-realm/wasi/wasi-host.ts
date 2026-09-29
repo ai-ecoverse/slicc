@@ -75,6 +75,8 @@ export interface WasiHostOptions {
 export type WasiFunction = (...args: never[]) => number | undefined;
 
 const NS_PER_MS = 1_000_000n;
+/** The monotonic clock's zero: the time origin, in ns. */
+const MONOTONIC_BASE = BigInt(Math.round(performance.timeOrigin)) * NS_PER_MS;
 /** The largest read one syscall serves (the kernel's own cap). */
 const MAX_READ = 1024 * 1024;
 const SIGPIPE_EXIT = 141;
@@ -133,6 +135,10 @@ export class WasiHost {
   /** The sockets the process inherited, where the preopens left them. */
   private readonly listening: number[];
   private readonly startCwd: string;
+  /** A signal ends a poll as its clocks firing (the older wasix-libc; see `pollOneoff`). */
+  interruptWakes = false;
+  /** raise(sig) in the program: true when the signal delivery took it over. */
+  onRaise: ((sig: number) => boolean) | undefined;
 
   constructor(readonly o: WasiHostOptions) {
     this.startCwd = o.cwd;
@@ -157,7 +163,13 @@ export class WasiHost {
       ...this.pathImports(),
       poll_oneoff: (inPtr: number, outPtr: number, n: number, nevents: number) =>
         pollOneoff(
-          { mem: this.mem, fds: this.fds, kernel: this.o.kernel, now: (id) => this.now(id) },
+          {
+            mem: this.mem,
+            fds: this.fds,
+            kernel: this.o.kernel,
+            now: (id) => this.now(id),
+            interruptWakes: this.interruptWakes,
+          },
           inPtr,
           outPtr,
           n,
@@ -171,6 +183,13 @@ export class WasiHost {
   /** Nanoseconds: realtime since the epoch, the others since the process started. */
   now(id: number): bigint {
     if (id === CLOCK.REALTIME) return BigInt(Date.now()) * NS_PER_MS;
+    // Monotonic from the time origin, as a host's counts from boot: never
+    // under a second. The wasix-libc in Wasmer's Python turns an absolute
+    // deadline of {0 s, n ns} into 1 ns, so a clock that starts at 0 made
+    // every sleep in a process's first second return at once.
+    if (id === CLOCK.MONOTONIC) {
+      return MONOTONIC_BASE + BigInt(Math.round(performance.now() * 1e6));
+    }
     return BigInt(Math.round((performance.now() - this.started) * 1e6)) + 1n;
   }
 
@@ -206,6 +225,7 @@ export class WasiHost {
       proc_raise: (sig: number) => {
         const posix = WASI_SIGNAL_TO_POSIX[sig];
         if (posix === undefined) throw new WasiError('EINVAL');
+        if (this.onRaise?.(posix)) return;
         this.o.kernel.call({ op: 'proc-kill', pid: this.o.pid, sig: posix });
       },
     };
@@ -469,8 +489,12 @@ export class WasiHost {
   }
 
   /** A kernel VFS file's path (where it is now) and size, its unwritten bytes included. */
-  private kernelStat(fd: number): { path?: string; size: number } {
-    return this.o.kernel.call({ op: 'fd-vfs-stat', fd }) as { path?: string; size: number };
+  private kernelStat(fd: number): { path?: string; size: number; orphan?: true } {
+    return this.o.kernel.call({ op: 'fd-vfs-stat', fd }) as {
+      path?: string;
+      size: number;
+      orphan?: true;
+    };
   }
 
   private write(fd: number, data: Uint8Array): number {
@@ -563,20 +587,24 @@ export class WasiHost {
     if (e.type === 'file') return this.statOrphanable(e.file.path, e.file.size());
     const kind = e.type === 'kernel' ? this.fds.kind(fd, e) : undefined;
     if (kind === 'file') {
+      // A kernel VFS description (a threaded process's file, one handed over at a fork).
       const vfs = this.kernelStat(fd);
-      if (vfs.path) return this.statOrphanable(vfs.path, vfs.size);
+      if (vfs.path) return this.statOrphanable(vfs.path, vfs.size, vfs.orphan);
     }
     const filetype = kind ? kernelFiletype(kind).filetype : FILETYPE.CHARACTER_DEVICE;
     return { filetype, size: 0n, ino: BigInt(fd + 1), mtimeNs: 0n };
   }
 
   /** An open file's stat: its path's (none once unlinked), with the buffered size, the truth until the write-back. */
-  private statOrphanable(path: string, size: number): Filestat {
+  private statOrphanable(path: string, size: number, orphan = false): Filestat {
     let s: SyncFsBridgeStat | undefined;
-    try {
-      s = this.o.fs.stat(path);
-    } catch {
-      /* unlinked while open */
+    // An orphan's path is gone, or another file's now.
+    if (!orphan) {
+      try {
+        s = this.o.fs.stat(path);
+      } catch {
+        /* unlinked while open */
+      }
     }
     return {
       ...filestatOf(path, s ?? { isFile: true, isDirectory: false, size: 0 }),
