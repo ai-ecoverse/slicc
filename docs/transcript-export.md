@@ -90,6 +90,8 @@ Future breaking changes will bump `schemaVersion`.
 > The legacy path is present for backward compatibility with sessions saved before the v1 snapshot
 > format. New chat bounds complete-snapshot capture to five seconds before clearing the cone.
 > A working scoop may prevent a complete snapshot; the Markdown archive remains in the Freezer.
+> Snapshot publication keeps an in-progress marker until all files are durable. If capture is
+> interrupted during that copy, export uses the Markdown archive and reports partial completeness.
 
 ---
 

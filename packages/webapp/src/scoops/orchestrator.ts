@@ -1916,10 +1916,10 @@ export class Orchestrator implements ConeApprovalRouter {
       // that cannot import VirtualFS, so the bridge is asserted here.
       snapshotStore: {
         read: (sessionId) => readSnapshot(fs as unknown as LocalVfsClient, sessionId),
-        write: (sessionId, snapshot) =>
+        write: (sessionId, snapshot, signal) =>
           // SAFETY: same structural bridge as above — VirtualFS satisfies the
           // WritableVfsClient write surface.
-          writeSnapshot(fs as unknown as WritableVfsClient, sessionId, snapshot),
+          writeSnapshot(fs as unknown as WritableVfsClient, sessionId, snapshot, signal),
       },
       // SAFETY: same structural bridge as above — VirtualFS satisfies the
       // LocalVfsClient read surface.

@@ -483,6 +483,36 @@ describe('DefaultTranscriptExportService — legacy path', () => {
     expect(doc.session.completeness.missing).toContain('complete-snapshot-unavailable');
   });
 
+  it('falls back to the archive while a snapshot is still publishing', async () => {
+    const markdown = makeArchiveMarkdown('Interrupted Session', [
+      { role: 'user', content: 'saved message' },
+    ]);
+    const snapshotStore = makeEmptySnapshotStore();
+    snapshotStore.read.mockRejectedValue(new TranscriptExportError('session-not-found'));
+    const deps = makeDeps({
+      snapshotStore,
+      vfs: makeVfs({
+        indexJson: JSON.stringify([
+          {
+            filename: 'interrupted.md',
+            sessionId: 'sess-interrupted',
+            title: 'Interrupted Session',
+            frozenAt: '2024-01-01T00:00:00.000Z',
+            messageCount: 1,
+          },
+        ]),
+        sessionMarkdown: new Map([['interrupted.md', markdown]]),
+      }) as any,
+    });
+    const result = await new DefaultTranscriptExportService(deps).export({
+      kind: 'frozen',
+      sessionId: 'sess-interrupted',
+    });
+    const files = unzipSync(await collectChunks(result.chunks));
+    const doc = JSON.parse(strFromU8(files['transcript.json']!));
+    expect(doc.session.completeness.missing).toContain('complete-snapshot-unavailable');
+  });
+
   it('throws session-not-found when sessionId is not in index', async () => {
     const deps = makeDeps({
       snapshotStore: makeEmptySnapshotStore(),
@@ -618,14 +648,18 @@ describe('DefaultTranscriptExportService — captureFrozen', () => {
     const snapshotStore = makeEmptySnapshotStore();
     const deps = makeDeps({ snapshotStore });
     const svc = new DefaultTranscriptExportService(deps);
+    const controller = new AbortController();
 
-    await svc.captureFrozen({
-      sessionId: 'sess-freeze-001',
-      title: 'Frozen Title',
-      frozenAt: '2024-06-01T12:00:00.000Z',
-      createdAt: 1_000,
-      updatedAt: 2_000,
-    });
+    await svc.captureFrozen(
+      {
+        sessionId: 'sess-freeze-001',
+        title: 'Frozen Title',
+        frozenAt: '2024-06-01T12:00:00.000Z',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+      controller.signal
+    );
 
     expect(snapshotStore.write).toHaveBeenCalledWith(
       'sess-freeze-001',
@@ -637,7 +671,8 @@ describe('DefaultTranscriptExportService — captureFrozen', () => {
             state: 'frozen',
           }),
         }),
-      })
+      }),
+      controller.signal
     );
   });
 

@@ -73,7 +73,11 @@ export interface ExportServiceDeps {
   knownSecrets: KnownSecretBatchRedactor;
   snapshotStore: {
     read(sessionId: string): Promise<SanitizedTranscriptSnapshot | null>;
-    write(sessionId: string, snapshot: SanitizedTranscriptSnapshot): Promise<void>;
+    write(
+      sessionId: string,
+      snapshot: SanitizedTranscriptSnapshot,
+      signal?: AbortSignal
+    ): Promise<void>;
   };
   /** Read-only VFS — used for sessions index and legacy archive markdown. */
   vfs: LocalVfsClient;
@@ -323,10 +327,14 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
 
     if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
 
-    await this.deps.snapshotStore.write(metadata.sessionId, {
-      document: finalDoc,
-      attachments: bundleFiles,
-    });
+    await this.deps.snapshotStore.write(
+      metadata.sessionId,
+      {
+        document: finalDoc,
+        attachments: bundleFiles,
+      },
+      signal
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -368,7 +376,13 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
     signal?: AbortSignal,
     onProgress?: (p: TranscriptExportProgress) => void
   ): Promise<SnapshotResult> {
-    const stored = await this.deps.snapshotStore.read(sessionId);
+    let stored: SanitizedTranscriptSnapshot | null;
+    try {
+      stored = await this.deps.snapshotStore.read(sessionId);
+    } catch (err) {
+      if (!(err instanceof TranscriptExportError) || err.code !== 'session-not-found') throw err;
+      stored = null;
+    }
 
     if (stored) {
       onProgress?.({ phase: 'redacting' });
