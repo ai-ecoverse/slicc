@@ -51,7 +51,7 @@ describe('acquireSprinkleUsbDevice / Hid / Serial', () => {
     expect(await acquireSprinkleUsbDevice(usb, filters)).toBe(device);
     expect(surfaceMock.prompt).toHaveBeenCalledWith({
       kinds: ['usb'],
-      description: 'A sprinkle asks to use a USB device.',
+      description: 'A sprinkle or dip asks to use a USB device.',
       requestOptions: { usb: { filters } },
     });
     expect(surfaceMock.request).not.toHaveBeenCalled();
@@ -73,7 +73,7 @@ describe('acquireSprinkleUsbDevice / Hid / Serial', () => {
     expect(surfaceMock.prompt).toHaveBeenCalledWith(
       expect.objectContaining({
         kinds: ['hid'],
-        description: 'A sprinkle asks to use a HID device.',
+        description: 'A sprinkle or dip asks to use a HID device.',
       })
     );
     expect(surfaceMock.request).not.toHaveBeenCalled();
@@ -94,7 +94,7 @@ describe('acquireSprinkleUsbDevice / Hid / Serial', () => {
     expect(await acquireSprinkleSerialPort(serial, filters)).toBe(port);
     expect(surfaceMock.prompt).toHaveBeenCalledWith({
       kinds: ['serial'],
-      description: 'A sprinkle asks to use a serial port.',
+      description: 'A sprinkle or dip asks to use a serial port.',
       requestOptions: { serial: { filters } },
     });
     expect(surfaceMock.request).not.toHaveBeenCalled();

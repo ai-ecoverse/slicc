@@ -32,7 +32,7 @@ async function grantThroughSprinklePrompt<K extends PromptedKind>(
   if (!surface) return null;
   const result = await surface.prompt({
     kinds: [kind],
-    description: `A sprinkle asks to ${WHAT[kind]}.`,
+    description: `A sprinkle or dip asks to ${WHAT[kind]}.`,
     requestOptions: { [kind]: { filters } },
   });
   const grant =
