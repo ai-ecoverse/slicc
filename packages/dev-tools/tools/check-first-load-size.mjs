@@ -26,10 +26,11 @@
  *
  * That split only holds if the per-PR delta is actually enforced upstream of
  * the queue, so a `pull_request` run in CI treats an unmeasurable baseline as
- * a FAILURE rather than degrading to ceilings-only. Otherwise a PR whose
- * baseline build broke would sail through both stages with its delta never
- * checked. Outside CI the graceful degradation stays: a developer on a
- * shallow clone should get the ceilings and a clear note, not a hard stop.
+ * a FAILURE. A reviewed dependency-family upgrade may pin its exact lockfile
+ * hash in the budget to use the absolute ceilings when realignment exceeds
+ * the dependency-count guard. Other baseline failures remain fatal in CI.
+ * Outside CI the graceful degradation stays: a developer on a shallow clone
+ * should get the ceilings and a clear note, not a hard stop.
  *
  * It used to be an absolute ratchet, and that shape failed: the number was
  * set to main's exact measurement, main measured 1 kB larger on Linux CI
@@ -53,7 +54,11 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { measureMergeBase, resolveBaselineRef } from './first-load-baseline.mjs';
+import {
+  approvedLargeDependencyDrift,
+  measureMergeBase,
+  resolveBaselineRef,
+} from './first-load-baseline.mjs';
 import {
   bytesToKb,
   checkFirstLoad,
@@ -144,6 +149,7 @@ if (jsonOnly) {
 const limits = JSON.parse(readFileSync(limitsPath, 'utf8'));
 
 let baseline = null;
+const baselineMessages = [];
 if (baselineRef !== 'none' && !isMergeGroup) {
   console.log(`Measuring the merge-base with ${baselineRef} for comparison…`);
   baseline = measureMergeBase({
@@ -153,20 +159,32 @@ if (baselineRef !== 'none' && !isMergeGroup) {
       const m = measureUiDir(uiDir);
       return { page: m.page, worker: m.worker };
     },
-    log: (m) => console.log(`  baseline: ${m}`),
+    log: (message) => {
+      baselineMessages.push(message);
+      console.log(`  baseline: ${message}`);
+    },
   });
 }
 
 // In CI on a pull request the baseline is not optional: degrading to
 // ceilings-only there would let the change reach the merge queue, which
 // deliberately does not re-check the delta, with its growth never measured.
-if (!isMergeGroup && baselineRef !== 'none' && !baseline && isCiPullRequest) {
+const approvedDrift =
+  !baseline &&
+  approvedLargeDependencyDrift(
+    baselineMessages,
+    limits.dependencyUpgradeException,
+    readFileSync(resolve(repoRoot, 'package-lock.json'))
+  );
+if (!isMergeGroup && baselineRef !== 'none' && !baseline && isCiPullRequest && !approvedDrift) {
   fail(
     `could not measure the merge-base with "${baselineRef}", so the per-change delta could ` +
       `not be checked. The merge queue does not re-check it, so this cannot be waved through. ` +
       `See the baseline log above; re-run if it was transient.`
   );
 }
+if (approvedDrift)
+  console.log('  approved lockfile-pinned dependency upgrade: absolute eager ceilings apply.');
 
 const { failures, notes, rows } = checkFirstLoad(limits, head, baseline?.bytes ?? null, {
   baselineNote: isMergeGroup ? MERGE_GROUP_NOTE : undefined,
@@ -193,7 +211,9 @@ if (failures.length > 0) {
 }
 const allowance = isMergeGroup
   ? 'ceilings only on a queue batch'
-  : `allowance ${limits.maxDeltaKb} kB per change`;
+  : approvedDrift
+    ? 'absolute ceilings only for this lockfile-pinned dependency upgrade'
+    : `allowance ${limits.maxDeltaKb} kB per change`;
 console.log(
   `First-load OK (${allowance}; total ${bytesToKb(head.page + head.worker)} kB across both graphs).`
 );

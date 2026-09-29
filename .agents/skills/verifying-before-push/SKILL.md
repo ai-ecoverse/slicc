@@ -209,7 +209,11 @@ If the merge-base cannot be built (shallow clone, unknown ref) the delta is repo
 SKIPPED and only the ceilings are enforced, so you are not blocked locally. **In CI on a
 pull request that same condition is a hard failure** — the merge queue deliberately does not
 re-check the delta, so a PR whose baseline could not be built must not be waved through with
-its growth unmeasured. Re-run if it looks transient.
+its growth unmeasured. Re-run if it looks transient. A reviewed dependency-family upgrade
+that exceeds the baseline's 25-package realignment guard may pin its exact lockfile SHA-256
+in both webapp budget files, with a written reason; only that guard failure can then use the
+absolute caps in CI. Verify this path with `GITHUB_EVENT_NAME=pull_request
+GITHUB_BASE_REF=main npm run bundle-size`, and remove the exception after the upgrade merges.
 
 **On `merge_group` the delta is deliberately not applied.** A queue branch is cumulative — it
 carries every PR up to its position — so its delta is the SUM of the batch, not one change's

@@ -59,6 +59,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
@@ -702,4 +703,28 @@ export function measureMergeBase({ repoRoot, ref, measure, log = () => {} }) {
   }
   const bytes = measureAtCommit({ repoRoot, sha, measure, log });
   return bytes ? { sha, bytes } : null;
+}
+
+/**
+ * One-off escape for a reviewed dependency-family upgrade too large to
+ * realign. It applies only to the exact committed lockfile and only when the
+ * baseline failed at the dependency-count guard. Other baseline failures
+ * still stop a pull request; the absolute bundle caps remain in force.
+ */
+export function approvedLargeDependencyDrift(logMessages, exception, lockfileText) {
+  if (
+    !exception ||
+    !/^[a-f0-9]{64}$/.test(exception.lockfileSha256 ?? '') ||
+    typeof exception.reason !== 'string' ||
+    exception.reason.trim().length < 20
+  )
+    return false;
+  const exceeded = logMessages.some((message) =>
+    new RegExp(
+      `^\\d+ dependencies differ from the base lockfile \\(limit ${MAX_REALIGNABLE_DRIFT}\\) — too many to attribute a size delta to one change$`
+    ).test(message)
+  );
+  return (
+    exceeded && createHash('sha256').update(lockfileText).digest('hex') === exception.lockfileSha256
+  );
 }
