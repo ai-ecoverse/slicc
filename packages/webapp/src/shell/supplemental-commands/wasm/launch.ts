@@ -252,8 +252,10 @@ export class WasmSession {
     private readonly lookup?: InstalledCommandsLookup
   ) {
     this.net = loopbackNet(ownerKey(processConfig?.owner));
-    // The owner's HTTP proxy, started by a program's first connection to it.
-    enableRealmNetwork(this.net, { process: processConfig });
+    // The owner's HTTP proxy, started by a program's first connection to it;
+    // it terminates TLS with a leaf from the owner's CA.
+    const owner = ownerKey(processConfig?.owner);
+    enableRealmNetwork(this.net, { process: processConfig, tls: { owner } });
   }
 
   /**

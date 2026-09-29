@@ -234,17 +234,17 @@ All HTTP requests from the agent route through a server-side fetch proxy (`/api/
 
 Different types of HTTP traffic route through different code paths:
 
-| Request shape                               | Goes through                                                                                                                                                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read/write to /mnt/r2/foo.txt` (VFS API)   | mount backend → `s3-sign-and-forward` (CLI) or `mount.s3-sign-and-forward` (SW); SigV4-signed                                                                                                           |
-| `mount --source da://...` / `aem://...` ops | mount backend → `da-sign-and-forward`; IMS bearer attached server/SW-side. The envelope's `origin` picks `admin.da.live` or `api.aem.live`; the allow-list keeps that set closed                        |
-| `git push` / `git clone` over HTTPS         | isomorphic-git → `createProxiedFetch` → `/api/fetch-proxy` (CLI) or `fetch-proxy.fetch` (SW); Basic-auth unmask                                                                                         |
-| `curl`, `wget`, `node fetch(...)`           | shell → `createProxiedFetch` → fetch proxy (CLI/SW); header-substring + Basic + URL-creds unmask                                                                                                        |
-| native `curl` / libcurl / git (wasm realm)  | realm HTTP proxy on `127.0.0.1:3128` (`http_proxy`) → `createProxiedFetch` → fetch proxy (CLI/SW); same unmask/scrub as the shell's `curl` (`docs/kernel/process-model.md`, Network)                    |
-| raw fetch mode (the realm proxy's raw path) | `createProxiedStreamingFetch({ mode: 'raw' })` → raw `/api/fetch-proxy` (CLI/cloud) or `raw-*` on `fetch-proxy.fetch` (SW); same unmask and HMAC signing, refused on a foreign domain; manual redirects |
-| `upskill <github-url>`                      | `createProxiedFetch` → fetch proxy; `Authorization: Bearer <masked>` unmasked at boundary                                                                                                               |
-| LLM provider streaming (Anthropic, etc.)    | direct `fetch()` from page; routed via `llm-proxy-sw.ts` to `/api/fetch-proxy` (CLI) or extension `host_permissions` (CORS bypass; no secret injection — provider holds real key in webapp memory)      |
-| `aws s3 cp` from agent shell (raw S3 HTTP)  | shell → `createProxiedFetch` → upstream. NOT signed. **Use `mount` instead.**                                                                                                                           |
+| Request shape                               | Goes through                                                                                                                                                                                                 |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `read/write to /mnt/r2/foo.txt` (VFS API)   | mount backend → `s3-sign-and-forward` (CLI) or `mount.s3-sign-and-forward` (SW); SigV4-signed                                                                                                                |
+| `mount --source da://...` / `aem://...` ops | mount backend → `da-sign-and-forward`; IMS bearer attached server/SW-side. The envelope's `origin` picks `admin.da.live` or `api.aem.live`; the allow-list keeps that set closed                             |
+| `git push` / `git clone` over HTTPS         | isomorphic-git → `createProxiedFetch` → `/api/fetch-proxy` (CLI) or `fetch-proxy.fetch` (SW); Basic-auth unmask                                                                                              |
+| `curl`, `wget`, `node fetch(...)`           | shell → `createProxiedFetch` → fetch proxy (CLI/SW); header-substring + Basic + URL-creds unmask                                                                                                             |
+| native `curl` / libcurl / git (wasm realm)  | realm HTTP proxy on `127.0.0.1:3128` (`http_proxy`; HTTPS terminated there) → `createProxiedFetch` → fetch proxy (CLI/SW); same unmask/scrub as the shell's `curl` (`docs/kernel/process-model.md`, Network) |
+| raw fetch mode (the realm proxy's raw path) | `createProxiedStreamingFetch({ mode: 'raw' })` → raw `/api/fetch-proxy` (CLI/cloud) or `raw-*` on `fetch-proxy.fetch` (SW); same unmask and HMAC signing, refused on a foreign domain; manual redirects      |
+| `upskill <github-url>`                      | `createProxiedFetch` → fetch proxy; `Authorization: Bearer <masked>` unmasked at boundary                                                                                                                    |
+| LLM provider streaming (Anthropic, etc.)    | direct `fetch()` from page; routed via `llm-proxy-sw.ts` to `/api/fetch-proxy` (CLI) or extension `host_permissions` (CORS bypass; no secret injection — provider holds real key in webapp memory)           |
+| `aws s3 cp` from agent shell (raw S3 HTTP)  | shell → `createProxiedFetch` → upstream. NOT signed. **Use `mount` instead.**                                                                                                                                |
 
 ## HMAC request signing
 

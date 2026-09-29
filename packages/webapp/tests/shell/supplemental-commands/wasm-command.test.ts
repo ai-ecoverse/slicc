@@ -512,3 +512,25 @@ describe('GNU bash’s secret function', () => {
     expect(envs[3][SECRET_FUNCTION_ENV]).toBe('() { :; }');
   });
 });
+
+describe('withoutRealmDefaults', () => {
+  it('keeps the realm’s defaults out of what the shell carries, but not what it exported', async () => {
+    const { withoutRealmDefaults } = await import(
+      '../../../src/shell/supplemental-commands/wasm/run.js'
+    );
+    const ran = {
+      ...realmNetworkEnv(),
+      SSL_CERT_FILE: '/home/user/.config/slicc/realm-ca-cone.pem',
+      GIT_SSL_CAINFO: '/etc/ssl/mine.pem',
+      http_proxy: 'http://corp:8080',
+      A: '1',
+    };
+    expect(withoutRealmDefaults(ran, {})).toEqual({
+      GIT_SSL_CAINFO: '/etc/ssl/mine.pem',
+      http_proxy: 'http://corp:8080',
+      A: '1',
+    });
+    // A default the shell had exported itself stays.
+    expect(withoutRealmDefaults(ran, { no_proxy: 'x' }).no_proxy).toBe(realmNetworkEnv().no_proxy);
+  });
+});

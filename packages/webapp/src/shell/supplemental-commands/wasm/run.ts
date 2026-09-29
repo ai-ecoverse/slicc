@@ -26,7 +26,13 @@ import {
   sinkFile,
 } from '../../../kernel/wasm-realm/fd-table.js';
 import type { WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
-import { realmNetworkEnv } from '../../../kernel/wasm-realm/net/realm-network.js';
+import {
+  ensureRealmCaFile,
+  isRealmDefault,
+  realmCaPath,
+  realmNetworkEnv,
+} from '../../../kernel/wasm-realm/net/realm-network.js';
+import { ownerKey } from '../../../kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
@@ -201,13 +207,44 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
 }
 
 /**
- * The program's environment: the realm's network defaults (the proxy, see
- * `realm-network.ts`) under the shell's exports. On the panel terminal,
+ * A program's exported environment (what GNU bash reports after a run) without
+ * the realm defaults it was only given, so they do not become the shell's own
+ * exports; a name the shell already had (`had`) stays.
+ */
+export function withoutRealmDefaults(
+  env: Readonly<Record<string, string>>,
+  had: Readonly<Record<string, string>>
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name, value]) => name in had || !isRealmDefault(name, value))
+  );
+}
+
+/**
+ * The owner's CA certificate, written under its home, and the variables that
+ * point curl, libcurl and git at it (none when it cannot be had).
+ */
+async function caEnv(
+  ctx: CommandContext,
+  options: RunWasmOptions
+): Promise<Record<string, string>> {
+  const owner = ownerKey(options.processConfig?.owner);
+  const home = ctx.exportedEnv?.HOME ?? ctx.env.get('HOME') ?? '/tmp';
+  return ensureRealmCaFile(ctx.fs, realmCaPath(home, owner), owner);
+}
+
+/**
+ * The program's environment: the realm's network defaults (the proxy and the
+ * CA bundle, see `realm-network.ts`) under the shell's exports. On the panel terminal,
  * which is Ghostty's VT core, a `TERM` that is unset or `dumb` becomes
  * `xterm-256color` (with `COLORTERM=truecolor`), so curses programs use it.
  */
-function programEnv(ctx: CommandContext, call: Invocation): Record<string, string> {
-  const env = { ...realmNetworkEnv(), ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
+function programEnv(
+  ctx: CommandContext,
+  call: Invocation,
+  network: Record<string, string>
+): Record<string, string> {
+  const env = { ...network, ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
   if (call.tty && (!env.TERM || env.TERM === 'dumb')) {
     env.TERM = 'xterm-256color';
     env.COLORTERM ??= 'truecolor';
@@ -361,7 +398,7 @@ export async function runWasmCommand(
       module: call.module ? ctx.fs.resolvePath(ctx.cwd, call.module) : modulePath(gluePath),
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
-      env: programEnv(ctx, call),
+      env: programEnv(ctx, call, { ...realmNetworkEnv(), ...(await caEnv(ctx, options)) }),
       defaults: programDefaults(call, options),
       cwd: ctx.cwd,
       fds,

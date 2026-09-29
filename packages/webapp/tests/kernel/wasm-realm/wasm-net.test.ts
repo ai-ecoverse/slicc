@@ -6,8 +6,10 @@
  * scripted transport.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { RealmCa } from '../../../src/kernel/wasm-realm/net/realm-ca.js';
 import {
   enableRealmNetwork,
+  realmCaEnv,
   realmNetworkEnv,
   realmProxy,
 } from '../../../src/kernel/wasm-realm/net/realm-network.js';
@@ -16,6 +18,7 @@ import type { WasmProgram } from '../../../src/kernel/wasm-realm/protocol.js';
 import { LoopbackNet } from '../../../src/kernel/wasm-realm/socket.js';
 import { bundleProcessWorker, loadProgram, runProgram } from './helpers/node-wasm-process.js';
 import { reply, scripted, text } from './net/proxy-helpers.js';
+import { nodeTlsEngine } from './net/tls-helpers.js';
 
 const FIXTURE = new URL('../../fixtures/wasm-sockets/socktest', import.meta.url).pathname;
 
@@ -29,11 +32,14 @@ beforeAll(async () => {
 
 afterAll(() => worker?.dispose());
 
-/** A namespace whose proxy answers through `handler`. */
-function network(handler: (req: RealmTransportRequest) => ReturnType<typeof reply>) {
+/** A namespace whose proxy answers through `handler` (terminating TLS with `ca`). */
+function network(handler: (req: RealmTransportRequest) => ReturnType<typeof reply>, ca?: RealmCa) {
   const net = new LoopbackNet();
   const t = scripted(handler, { maxRequestBody: 1 << 20 });
-  enableRealmNetwork(net, { transport: () => t.transport });
+  enableRealmNetwork(net, {
+    transport: () => t.transport,
+    tls: ca ? { ca: async () => ca, engine: () => nodeTlsEngine() } : false,
+  });
   return { net, seen: t.seen, stop: () => realmProxy(net)?.close() };
 }
 
@@ -112,5 +118,71 @@ describe('wasm-realm network (real programs)', () => {
       ]);
     },
     60_000
+  );
+
+  // curl 8.22.0 over Mbed TLS with the socket shims (~0.9 MB): build it with
+  // build-curl-tls.sh (the plain-HTTP script with CURL_USE_MBEDTLS) and point
+  // SLICC_WASM_CURL_TLS at curl.js.
+  it.skipIf(!process.env.SLICC_WASM_CURL_TLS)(
+    'native curl does HTTPS through CONNECT, trusting only the realm CA',
+    async () => {
+      const curl = await loadProgram(process.env.SLICC_WASM_CURL_TLS as string);
+      const store = new Map();
+      const ca = await RealmCa.open('cone:', {
+        get: async (o) => store.get(o),
+        put: async (o, r) => void store.set(o, r),
+      });
+      const { net, seen, stop } = network(
+        (req) =>
+          reply(
+            200,
+            [['Content-Type', 'text/plain']],
+            `${req.method} ${req.url} ${text(req.body ?? new Uint8Array())}\n`
+          ),
+        ca
+      );
+      const caFile = '/home/user/.config/slicc/realm-ca-cone.pem';
+      const env = { ...realmNetworkEnv(), ...realmCaEnv(caFile) };
+      const run = async (...args: string[]) => {
+        const p = runProgram(worker.file, curl, ['-q', '-sS', ...args], net, 'curl', env, {
+          [caFile]: ca.pem,
+        });
+        return { code: await p.exited, out: p.stdout(), err: p.stderr() };
+      };
+
+      const get = await run(
+        '-w',
+        '%{http_version} %{ssl_verify_result}\n',
+        'https://example.com/a?b=1'
+      );
+      expect(get.err).toBe('');
+      expect(get.out).toBe('GET https://example.com/a?b=1 \n1.1 0\n');
+
+      const post = await run('--data-binary', 'secret-free', 'https://api.test:8443/up');
+      expect(post.out).toBe('POST https://api.test:8443/up secret-free\n');
+
+      // Two URLs, one tunnel reused.
+      const both = await run('https://example.com/1', 'https://example.com/2');
+      expect(both.out).toBe('GET https://example.com/1 \nGET https://example.com/2 \n');
+
+      // Without the realm CA the leaf is untrusted (60: peer certificate cannot be authenticated).
+      const untrusted = runProgram(
+        worker.file,
+        curl,
+        ['-q', '-sS', 'https://example.com/'],
+        net,
+        'curl',
+        realmNetworkEnv()
+      );
+      expect(await untrusted.exited).toBe(60);
+      stop();
+      expect(seen.map((r) => r.url)).toEqual([
+        'https://example.com/a?b=1',
+        'https://api.test:8443/up',
+        'https://example.com/1',
+        'https://example.com/2',
+      ]);
+    },
+    120_000
   );
 });
