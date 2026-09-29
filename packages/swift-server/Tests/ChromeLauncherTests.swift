@@ -236,7 +236,11 @@ final class ChromeLauncherTests: XCTestCase {
     func testSeedProfilePreferencesDoesNotWipeOnReadFault() throws {
         // Regression for #3625: try? Data(contentsOf:) collapsed every read
         // fault to empty prefs, then overwrote the durable Preferences.
-        let launcher = makeLauncher()
+        // Inject EACCES — chmod 0o000 is a no-op when tests run as root.
+        let eacces = NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES))
+        let launcher = ChromeLauncher(
+            preferencesDataReader: { _ in throw eacces }
+        )
         let dir = NSTemporaryDirectory() + "slicc-seed-prefs-" + UUID().uuidString
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let defaultDir = dir + "/Default"
@@ -250,17 +254,9 @@ final class ChromeLauncherTests: XCTestCase {
         ]
         let durableData = try JSONSerialization.data(withJSONObject: durable)
         try durableData.write(to: URL(fileURLWithPath: prefsPath))
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o000], ofItemAtPath: prefsPath)
-        defer {
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o644], ofItemAtPath: prefsPath)
-        }
 
         launcher.seedProfilePreferences(userDataDir: dir)
 
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o644], ofItemAtPath: prefsPath)
         let after = try Data(contentsOf: URL(fileURLWithPath: prefsPath))
         XCTAssertEqual(after, durableData)
     }

@@ -133,6 +133,9 @@ struct ChromeLauncher: Sendable {
     /// Injected so tests can simulate "new Chrome process appeared after
     /// launch" without actually spawning Chrome.
     private let runningPidsForBundle: @Sendable (URL) -> Set<pid_t>
+    /// Read Preferences bytes. Injectable so tests can simulate non-ENOENT
+    /// read faults without relying on mode bits (chmod is a no-op as root).
+    private let preferencesDataReader: @Sendable (URL) throws -> Data
 
     init(
         logger: Logger = Logger(label: "slicc.chrome-launcher"),
@@ -172,7 +175,8 @@ struct ChromeLauncher: Sendable {
                     }
                     return app.processIdentifier
                 })
-        }
+        },
+        preferencesDataReader: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }
     ) {
         self.logger = logger
         self.fileExists = fileExists
@@ -185,6 +189,7 @@ struct ChromeLauncher: Sendable {
         self.chromePidDiscoveryTimeout = chromePidDiscoveryTimeout
         self.fetchData = fetchData
         self.runningPidsForBundle = runningPidsForBundle
+        self.preferencesDataReader = preferencesDataReader
     }
 
     func findChromeExecutable() -> String? {
@@ -430,7 +435,7 @@ struct ChromeLauncher: Sendable {
 
         let prefs: [String: Any]
         do {
-            let data = try Data(contentsOf: prefsPath)
+            let data = try preferencesDataReader(prefsPath)
             guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return  // exists but not an object — fail closed
             }

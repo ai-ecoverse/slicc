@@ -1,5 +1,5 @@
 import { type existsSync, existsSync as fsExistsSync, type readdirSync } from 'fs';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -1026,6 +1026,7 @@ describe('seedChromeProfilePreferences', () => {
   it('does not wipe existing Preferences on a non-ENOENT read fault', async () => {
     // Regression for #3625: catch-all readJsonFile treated EACCES/EIO like a
     // missing file, seeded from {}, and overwrote the durable Preferences.
+    // Inject the fault — chmod 0o000 is a no-op for root (CI containers).
     const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
     tempDirs.push(dir);
     const prefsPath = join(dir, 'Default', 'Preferences');
@@ -1036,12 +1037,13 @@ describe('seedChromeProfilePreferences', () => {
       account_info: [{ email: 'user@example.com' }],
     });
     await writeFile(prefsPath, durable);
-    await chmod(prefsPath, 0o000);
-    try {
-      await seedChromeProfilePreferences(dir);
-    } finally {
-      await chmod(prefsPath, 0o644);
-    }
+    const eacces = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+
+    await seedChromeProfilePreferences(dir, {
+      readFileImpl: async () => {
+        throw eacces;
+      },
+    });
 
     expect(await readFile(prefsPath, 'utf8')).toBe(durable);
   });

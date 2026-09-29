@@ -601,10 +601,13 @@ export function findChromeExecutable(options: FindChromeExecutableOptions = {}):
  *   untouched — collapsing those faults to `{}` and rewriting would wipe the
  *   user's persistent Preferences (#3625).
  */
-async function readJsonFile(filePath: string): Promise<JsonObject | null> {
+async function readJsonFile(
+  filePath: string,
+  readFileImpl: (path: string) => Promise<string> = (path) => readFile(path, 'utf8')
+): Promise<JsonObject | null> {
   let raw: string;
   try {
-    raw = await readFile(filePath, 'utf8');
+    raw = await readFileImpl(filePath);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
     return null;
@@ -892,10 +895,18 @@ export const TAB_LIFECYCLE_EXEMPT_SITES = [
  * than a missing file fail closed: the existing Preferences are left
  * untouched rather than rewritten from an empty default (#3625).
  */
-export async function seedChromeProfilePreferences(userDataDir: string): Promise<void> {
+/** Injectable seams for {@link seedChromeProfilePreferences} (tests). */
+export interface SeedChromeProfilePreferencesDeps {
+  readFileImpl?: (path: string) => Promise<string>;
+}
+
+export async function seedChromeProfilePreferences(
+  userDataDir: string,
+  deps: SeedChromeProfilePreferencesDeps = {}
+): Promise<void> {
   const prefsPath = join(userDataDir, 'Default', 'Preferences');
   try {
-    const prefs = await readJsonFile(prefsPath);
+    const prefs = await readJsonFile(prefsPath, deps.readFileImpl);
     if (prefs === null) return; // fail closed — do not overwrite durable prefs
     prefs['tab_freezing_enabled'] = false;
     const performanceTuning = ensureObject(prefs, 'performance_tuning');
