@@ -32,6 +32,11 @@ import {
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
+import {
+  sprinkleGestureHid,
+  sprinkleGestureSerial,
+  sprinkleGestureUsb,
+} from './sprinkle-device-acquire.js';
 import { captureSprinkleScreenshot } from './sprinkle-screenshot.js';
 
 export interface CaptureScreenResult {
@@ -514,7 +519,12 @@ export class SprinkleBridge {
       case 'request': {
         const hid = getNavigatorHid();
         if (!hid) throw new Error('WebHID is unavailable in this browser');
-        return hidOps.hidRequest(reg, hid, (args[0] as HidDeviceFilter[]) ?? []);
+
+        return hidOps.hidRequest(
+          reg,
+          sprinkleGestureHid(hid),
+          (args[0] as HidDeviceFilter[]) ?? []
+        );
       }
       case 'info':
         return hidOps.hidDeviceInfo(reg, args[0] as string);
@@ -561,7 +571,12 @@ export class SprinkleBridge {
       case 'request': {
         const serial = getNavigatorSerial();
         if (!serial) throw new Error('Web Serial is unavailable in this browser');
-        return serialOps.serialRequest(reg, serial, (args[0] as SerialFilter[]) ?? []);
+
+        return serialOps.serialRequest(
+          reg,
+          sprinkleGestureSerial(serial),
+          (args[0] as SerialFilter[]) ?? []
+        );
       }
       case 'info':
         return serialOps.serialDeviceInfo(reg, args[0] as string);
@@ -598,7 +613,12 @@ export class SprinkleBridge {
       case 'request': {
         const usb = getNavigatorUsb();
         if (!usb) throw new Error('WebUSB is unavailable in this browser');
-        return usbOps.usbRequest(reg, usb, (args[0] as UsbDeviceFilter[]) ?? []);
+
+        return usbOps.usbRequest(
+          reg,
+          sprinkleGestureUsb(usb),
+          (args[0] as UsbDeviceFilter[]) ?? []
+        );
       }
       case 'info':
         return usbOps.usbDeviceInfo(reg, args[0] as string);
