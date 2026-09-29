@@ -266,6 +266,7 @@ struct ServerCommand: AsyncParsableCommand {
             eventLoopGroupProvider: .singleton,
             configuration: httpConfiguration
         )
+        let rawFetchHTTPClient = RawFetchProxy.makeHTTPClient()
         let startupLatch = ServerStartupLatch()
 
         let router = Router(context: BasicRequestContext.self)
@@ -292,7 +293,8 @@ struct ServerCommand: AsyncParsableCommand {
             httpClient: httpClient,
             agentActivityTracker: agentActivityTracker,
             secretInjector: secretInjector,
-            oauthStore: oauthStore
+            oauthStore: oauthStore,
+            rawFetchHTTPClient: rawFetchHTTPClient
         )
 
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
@@ -450,12 +452,14 @@ struct ServerCommand: AsyncParsableCommand {
             electronFollower?.stop()
             overlayInjector?.stop()
             try await httpClient.shutdown()
+            try await rawFetchHTTPClient.shutdown()
         } catch {
             appTask.cancel()
             await tabSessionRecorder?.stop()
             electronFollower?.stop()
             overlayInjector?.stop()
             try? await httpClient.shutdown()
+            try? await rawFetchHTTPClient.shutdown()
             throw error
         }
     }

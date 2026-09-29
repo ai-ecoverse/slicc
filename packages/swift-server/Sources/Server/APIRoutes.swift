@@ -85,7 +85,8 @@ func registerAPIRoutes(
     httpClient: HTTPClient,
     agentActivityTracker: AgentActivityTracker = AgentActivityTracker(),
     secretInjector: SecretInjector = SecretInjector(secrets: []),
-    oauthStore: OAuthSecretStore? = nil
+    oauthStore: OAuthSecretStore? = nil,
+    rawFetchHTTPClient: HTTPClient? = nil
 ) {
     
     
@@ -424,8 +425,17 @@ func registerAPIRoutes(
     
     SudoApprove.registerRoutes(router: router)
 
+    
+    
+    
+    let rawFetch = rawFetchHTTPClient.map {
+        RawFetchProxy(httpClient: $0, secretInjector: secretInjector, activityTracker: agentActivityTracker)
+    }
     for method in fetchProxyMethods {
         router.on("/api/fetch-proxy", method: method) { request, _ in
+            if let rawFetch, let response = try await rawFetch.respond(to: request) {
+                return response
+            }
             guard let initialTargetURLValue = await trackedTargetURL(request, tracker: agentActivityTracker) else {
                 return try proxyErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
             }
@@ -466,74 +476,25 @@ func registerAPIRoutes(
                 {
                     injectedHeaders[.authorization] = synthetic
                 }
-                for field in request.headers {
-                    
-                    
-                    
-                    if field.name == .authorization,
-                        field.value.lowercased().hasPrefix("basic ")
-                    {
-                        let basic = secretInjector.unmaskAuthorizationBasic(
-                            value: field.value,
-                            targetHostname: targetHostname
-                        )
-                        if let forbidden = basic.forbidden {
-                            return try proxyErrorResponse(
-                                status: .forbidden,
-                                message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
-                            )
-                        }
-                        if basic.value != field.value {
-                            injectedHeaders[field.name] = basic.value
-                        }
-                        continue
-                    }
-                    switch secretInjector.inject(text: field.value, hostname: targetHostname) {
-                    case .success(let replaced):
-                        if replaced != field.value {
-                            injectedHeaders[field.name] = replaced
-                        }
-                    case .domainBlocked(let secretName, let hostname):
-                        return try proxyErrorResponse(
-                            status: .forbidden,
-                            message: "Secret \(secretName) is not allowed for domain \(hostname)"
-                        )
-                    }
+                if let forbidden = unmaskRequestHeaders(
+                    request.headers,
+                    into: &injectedHeaders,
+                    hostname: targetHostname,
+                    injector: secretInjector
+                ) {
+                    return try proxyErrorResponse(status: .forbidden, message: forbiddenSecretMessage(forbidden))
                 }
 
                 
                 
                 
                 
-                
-                
-                
-                
-                
-                
-                
-                if rawBody.readableBytes > 0 {
-                    let contentType = injectedHeaders[.contentType] ?? ""
-                    if isTextRequestContentType(contentType),
-                        let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes)
-                    {
-                        
-                        
-                        
-                        let replaced =
-                            isFormContentType(contentType)
-                            ? unmaskFormBody(text: bodyString, hostname: targetHostname, injector: secretInjector)
-                            : secretInjector.injectBody(text: bodyString, hostname: targetHostname)
-                        if replaced != bodyString {
-                            rawBody = ByteBuffer(string: replaced)
-                        }
-                    } else if let bodyData = rawBody.getData(at: rawBody.readerIndex, length: rawBody.readableBytes) {
-                        let replaced = secretInjector.unmaskBodyBytes(bytes: bodyData, targetHostname: targetHostname)
-                        if replaced != bodyData {
-                            rawBody = ByteBuffer(data: replaced)
-                        }
-                    }
-                }
+                rawBody = unmaskRequestBody(
+                    rawBody,
+                    contentType: injectedHeaders[.contentType] ?? "",
+                    hostname: targetHostname,
+                    injector: secretInjector
+                )
 
                 
                 
@@ -541,24 +502,14 @@ func registerAPIRoutes(
                 
                 if let hmacSpec = injectedHeaders[hmacSignHeader] {
                     injectedHeaders[hmacSignHeader] = nil
-                    let bodyBytes = rawBody.getBytes(at: rawBody.readerIndex, length: rawBody.readableBytes) ?? []
-                    let signResult = secretInjector.signHmac(spec: hmacSpec, body: bodyBytes, targetHostname: targetHostname)
-                    if let forbidden = signResult.forbidden {
-                        return try proxyErrorResponse(
-                            status: .forbidden,
-                            message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
-                        )
-                    }
-                    if let headerName = signResult.headerName, let signatureHex = signResult.signatureHex,
-                        let field = HTTPField.Name(headerName)
-                    {
-                        injectedHeaders[field] = signatureHex
-                    }
-                    if let timestampHeaderName = signResult.timestampHeaderName,
-                        let timestampValue = signResult.timestampValue,
-                        let field = HTTPField.Name(timestampHeaderName)
-                    {
-                        injectedHeaders[field] = timestampValue
+                    if let forbidden = applyHmacSigning(
+                        spec: hmacSpec,
+                        body: rawBody,
+                        headers: &injectedHeaders,
+                        hostname: targetHostname,
+                        injector: secretInjector
+                    ) {
+                        return try proxyErrorResponse(status: .forbidden, message: forbiddenSecretMessage(forbidden))
                     }
                 }
 
