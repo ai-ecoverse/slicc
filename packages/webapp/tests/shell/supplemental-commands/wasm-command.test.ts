@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const spawn = vi.hoisted(() => vi.fn());
 vi.mock('../../../src/kernel/wasm-realm/host.js', () => ({ spawnWasmProcess: spawn }));
 const compile = vi.hoisted(() => vi.fn());
-vi.mock('../../../src/kernel/realm/wasm-compiler.js', () => ({ compileWasmFromVfs: compile }));
+const compileBytes = vi.hoisted(() => vi.fn(async () => ({ compiled: 'bytes' })));
+vi.mock('../../../src/kernel/realm/wasm-compiler.js', () => ({
+  compileWasmFromVfs: compile,
+  compileWasmModule: compileBytes,
+}));
 
 import { LOGIN_RC, LOGIN_RC_FD } from '../../../src/kernel/login-shell-marks.js';
 import { sinkFile } from '../../../src/kernel/wasm-realm/fd-table.js';
@@ -43,7 +47,7 @@ function ctx(files: Record<string, string>, stdin = ''): CommandContext {
       },
       stat: async (p: string) => {
         if (!(p in files)) throw new Error(`ENOENT: no such file, '${p}'`);
-        return { size: files[p].length, mtime: new Date(0) };
+        return { isFile: true, size: files[p].length, mtime: new Date(0) };
       },
     },
   } as unknown as CommandContext;
@@ -89,6 +93,23 @@ describe('wasm command', () => {
     expect(opts.cwd).toBe('/w');
     expect(compile.mock.calls[0][1]).toBe('/w/bin/coreutils.wasm');
     expect(r).toEqual({ stdout: '\xff\x00A', stderr: 'warn\n', exitCode: 4, stdoutKind: 'bytes' });
+  });
+
+  it('runs a wasm module given as PROGRAM as a WASI program: its own module, no glue', async () => {
+    spawn.mockImplementation((opts) => ({
+      pid: opts.pid,
+      exited: Promise.resolve(0),
+      kill: vi.fn(),
+    }));
+    const files = { '/w/bin/rg.wasm': '\0asm\x01\0\0\0' };
+    const r = await runWasmCommand(['bin/rg.wasm', '-n', 'x'], ctx(files));
+    expect(r.exitCode).toBe(0);
+    const opts = spawn.mock.calls[0][0];
+    expect(opts.program).toEqual({ abi: 'wasi', glue: '', module: { compiled: 'bytes' } });
+    expect(opts.argv0).toBe('rg');
+    expect(opts.args).toEqual(['-n', 'x']);
+
+    expect(compile).not.toHaveBeenCalled();
   });
 
   it('lets a proxy setting the shell exports win over the realm default, even an empty one', async () => {

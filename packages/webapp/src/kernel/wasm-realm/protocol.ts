@@ -5,6 +5,8 @@ export const WASM_PROCESS_EXIT = 'wasm-process-exit';
 export const WASM_PROCESS_ERROR = 'wasm-process-error';
 
 export interface WasmProgram {
+  abi?: 'emscripten' | 'wasi';
+
   glue: string;
 
   module: WebAssembly.Module;

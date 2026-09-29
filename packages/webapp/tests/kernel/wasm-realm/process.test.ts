@@ -97,3 +97,44 @@ describe('WasmProcess pipes and poll', () => {
     expect(await p.syscall({ op: 'fd-poll', fd: 9 })).toMatchObject({ ok: false, errno: 'EBADF' });
   });
 });
+
+describe('WasmProcess: numbers a WASI worker holds', () => {
+  const json = (r: Awaited<ReturnType<WasmProcess['syscall']>>) =>
+    r.ok && r.kind === 'json' ? r.json : r;
+
+  it('fd-reserve holds a number (the lowest free, or the one asked for); fd-info calls it held', async () => {
+    const p = new WasmProcess(3100, stdio('', []));
+    expect(json(await p.syscall({ op: 'fd-reserve' }))).toBe(3);
+    expect(json(await p.syscall({ op: 'fd-reserve', fd: 7 }))).toBe(7);
+    expect(await p.syscall({ op: 'fd-reserve', fd: 7 })).toMatchObject({
+      ok: false,
+      errno: 'EBADF',
+    });
+    expect(json(await p.syscall({ op: 'fd-info', fd: 3 }))).toEqual({ tty: false, kind: 'held' });
+    expect(json(await p.syscall({ op: 'fd-info', fd: 1 }))).toEqual({ tty: false, kind: 'stream' });
+
+    expect(await p.syscall({ op: 'fd-read', fd: 3, max: 4 })).toMatchObject({ errno: 'EBADF' });
+    await p.syscall({ op: 'fd-close', fd: 3 });
+    expect(json(await p.syscall({ op: 'fd-reserve' }))).toBe(3);
+  });
+
+  it('fd-dup honors a minimum; fd-renumber moves a description and closes the source', async () => {
+    const out: string[] = [];
+    const p = new WasmProcess(3101, stdio('', out));
+    expect(json(await p.syscall({ op: 'fd-dup', fd: 1, min: 10 }))).toBe(10);
+    expect(json(await p.syscall({ op: 'fd-dup', fd: 1 }))).toBe(3);
+    await p.syscall({ op: 'fd-renumber', from: 10, to: 5 });
+    await p.syscall({ op: 'fd-write', fd: 5, body: bytes('via 5') });
+    expect(out).toEqual(['via 5']);
+    expect(await p.syscall({ op: 'fd-write', fd: 10, body: bytes('x') })).toMatchObject({
+      errno: 'EBADF',
+    });
+    expect(await p.syscall({ op: 'fd-renumber', from: 5, to: 5 })).toEqual({
+      ok: true,
+      kind: 'void',
+    });
+    expect(await p.syscall({ op: 'fd-renumber', from: 9, to: 5 })).toMatchObject({
+      errno: 'EBADF',
+    });
+  });
+});

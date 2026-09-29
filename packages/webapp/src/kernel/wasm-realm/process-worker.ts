@@ -16,7 +16,13 @@ self.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as { type?: string } | undefined;
   if (data?.type !== WASM_PROCESS_INIT) return;
   const port = { postMessage: (msg: unknown) => self.postMessage(msg) };
-  runWasmProcess(event.data as WasmProcessInitMsg, port).then(
+  const init = event.data as WasmProcessInitMsg;
+
+  const run =
+    init.program.abi === 'wasi'
+      ? import('./wasi/wasi-runtime.js').then((m) => m.runWasiProcess(init, port))
+      : runWasmProcess(init, port);
+  run.then(
     (code) => self.postMessage({ type: WASM_PROCESS_EXIT, code } satisfies WasmProcessExitMsg),
     (err: unknown) =>
       self.postMessage({

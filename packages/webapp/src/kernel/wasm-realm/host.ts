@@ -99,7 +99,8 @@ function descId(file: OpenFile): number {
 export function inheritedFds(fds: FdTable): InheritedFd[] {
   return fds
     .numbers()
-    .filter((fd) => fd > 2)
+
+    .filter((fd) => fd > 2 && !fds.get(fd).file.held)
     .map((fd): InheritedFd => {
       const open = fds.get(fd);
       const flags = fds.statusFlags(fd);

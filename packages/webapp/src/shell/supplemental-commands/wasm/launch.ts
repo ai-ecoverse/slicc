@@ -1,5 +1,5 @@
 import type { CommandContext } from 'just-bash';
-import { compileWasmFromVfs } from '../../../kernel/realm/wasm-compiler.js';
+import { compileWasmFromVfs, compileWasmModule } from '../../../kernel/realm/wasm-compiler.js';
 import {
   type ChildForker,
   type ChildHandle,
@@ -95,6 +95,16 @@ interface StartRequest extends LaunchRequest {
   fork?: ForkState;
 }
 
+export function isWasiTarget(target: Pick<WasmTarget, 'glue' | 'module'>): boolean {
+  return target.glue === target.module;
+}
+
+const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
+
+function isWasmBytes(bytes: Uint8Array): boolean {
+  return WASM_MAGIC.every((b, i) => bytes[i] === b);
+}
+
 export function modulePath(glue: string): string {
   return glue.endsWith('.js') ? `${glue.slice(0, -3)}.wasm` : `${glue}.wasm`;
 }
@@ -119,16 +129,46 @@ export function installedCommands(ctx: CommandContext): Promise<Map<string, Wasm
   return scanWasmCommands(programFs(ctx), GLOBAL_NODE_MODULES);
 }
 
-async function loadModule(ctx: CommandContext, path: string): Promise<WebAssembly.Module> {
-  const st = await ctx.fs.stat(path);
-  const key = `${path}:${st.size}:${st.mtime.getTime()}`;
-  let module = modules.get(key);
-  if (!module) {
-    module = compileWasmFromVfs((p) => ctx.fs.readFileBuffer(p), path);
-    modules.set(key, module);
-    module.catch(() => modules.delete(key));
-  }
+function cacheKey(path: string, st: { size: number; mtime: Date }): string {
+  return `${path}:${st.size}:${st.mtime.getTime()}`;
+}
+
+function cache(key: string, module: Promise<WebAssembly.Module>): Promise<WebAssembly.Module> {
+  modules.set(key, module);
+  module.catch(() => modules.delete(key));
   return module;
+}
+
+async function loadModule(ctx: CommandContext, path: string): Promise<WebAssembly.Module> {
+  const key = cacheKey(path, await ctx.fs.stat(path));
+  return (
+    modules.get(key) ??
+    cache(
+      key,
+      compileWasmFromVfs((p) => ctx.fs.readFileBuffer(p), path)
+    )
+  );
+}
+
+export async function isModuleFile(ctx: CommandContext, path: string): Promise<boolean> {
+  let key: string;
+  try {
+    const st = await ctx.fs.stat(path);
+    if (!st.isFile) return false;
+    key = cacheKey(path, st);
+  } catch {
+    return false;
+  }
+  if (modules.has(key)) return true;
+  let bytes: Uint8Array;
+  try {
+    bytes = await ctx.fs.readFileBuffer(path);
+  } catch {
+    return false;
+  }
+  if (!isWasmBytes(bytes)) return false;
+  void cache(key, compileWasmModule(bytes)).catch(() => undefined);
+  return true;
 }
 
 function latin1(bytes: Uint8Array): string {
@@ -227,10 +267,11 @@ export class WasmSession {
   }
 
   async launch(req: LaunchRequest): Promise<WasmProcessHandle> {
-    let glue: string;
+    const wasi = isWasiTarget(req);
+    let glue = '';
     let module: WebAssembly.Module;
     try {
-      glue = await this.ctx.fs.readFile(req.glue);
+      if (!wasi) glue = await this.ctx.fs.readFile(req.glue);
       module = await loadModule(this.ctx, req.module);
       req.signal?.throwIfAborted();
     } catch (e) {
@@ -238,7 +279,11 @@ export class WasmSession {
       throw e;
     }
     const env = withSecretFunction(req.argv0, withDefaults(req.defaults, req.env));
-    return this.start({ ...req, env, program: { glue, module } });
+    return this.start({
+      ...req,
+      env,
+      program: wasi ? { abi: 'wasi', glue, module } : { glue, module },
+    });
   }
 
   private start(req: StartRequest): WasmProcessHandle {
@@ -342,6 +387,10 @@ export class WasmSession {
     if (!(await this.ctx.fs.exists(glue))) return undefined;
     const module = modulePath(glue);
     if (await this.ctx.fs.exists(module)) return { glue, module, argv0: baseName(argv0 || file) };
+
+    if (await isModuleFile(this.ctx, glue)) {
+      return { glue, module: glue, argv0: baseName(argv0 || file).replace(/\.wasm$/, '') };
+    }
     return this.packagedCopy(glue, argv0 || file);
   }
 

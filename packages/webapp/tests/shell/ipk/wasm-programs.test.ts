@@ -69,6 +69,7 @@ describe('commandsFromManifest', () => {
     expect(commands).toEqual([
       {
         name: 'ls',
+        abi: 'emscripten',
         glue: `${dir}/bin/coreutils`,
         wasm: `${dir}/bin/coreutils.wasm`,
         argv0: 'ls',
@@ -76,6 +77,7 @@ describe('commandsFromManifest', () => {
       },
       {
         name: 'sed',
+        abi: 'emscripten',
         glue: `${dir}/bin/sed`,
         wasm: `${dir}/bin/sed.wasm`,
         argv0: 'sed',
@@ -99,9 +101,60 @@ describe('commandsFromManifest', () => {
     expect(commands).toEqual([]);
   });
 
-  it('ignores an ABI the realm does not run', () => {
-    const pkg = { slicc: { abi: 'wasi', commands: { x: { glue: 'x', wasm: 'x.wasm' } } } };
+  it('ignores an ABI the realm does not run, for the package or one command', () => {
+    const pkg = { slicc: { abi: 'wasix', commands: { x: { glue: 'x', wasm: 'x.wasm' } } } };
     expect(commandsFromManifest(dir, pkg)).toEqual([]);
+    const one = {
+      slicc: {
+        commands: {
+          x: { abi: 'wasm64', glue: 'x', wasm: 'x.wasm' },
+          y: { glue: 'y', wasm: 'y.wasm' },
+        },
+      },
+    };
+    expect(commandsFromManifest(dir, one).map((c) => c.name)).toEqual(['y']);
+  });
+
+  it('a WASI command names only its module, which is its glue too (it has none)', () => {
+    const commands = commandsFromManifest(dir, {
+      name: 'wasi-tools',
+      slicc: {
+        abi: 'wasi',
+        commands: {
+          rg: { wasm: 'bin/rg.wasm' },
+          ls: { wasm: 'bin/coreutils.wasm', argv0: 'ls', glue: 'ignored' },
+
+          sed: { abi: 'emscripten', glue: 'bin/sed', wasm: 'bin/sed.wasm' },
+          none: {},
+        },
+      },
+    });
+    expect(commands).toEqual([
+      {
+        name: 'rg',
+        abi: 'wasi',
+        glue: `${dir}/bin/rg.wasm`,
+        wasm: `${dir}/bin/rg.wasm`,
+        argv0: 'rg',
+        pkg: 'wasi-tools',
+      },
+      {
+        name: 'ls',
+        abi: 'wasi',
+        glue: `${dir}/bin/coreutils.wasm`,
+        wasm: `${dir}/bin/coreutils.wasm`,
+        argv0: 'ls',
+        pkg: 'wasi-tools',
+      },
+      {
+        name: 'sed',
+        abi: 'emscripten',
+        glue: `${dir}/bin/sed`,
+        wasm: `${dir}/bin/sed.wasm`,
+        argv0: 'sed',
+        pkg: 'wasi-tools',
+      },
+    ]);
   });
 });
 
@@ -163,6 +216,7 @@ describe('scanWasmCommands', () => {
     expect([...commands.keys()]).toEqual(['sed']);
     expect(commands.get('sed')).toEqual({
       name: 'sed',
+      abi: 'emscripten',
       glue: `${GLOBAL_NODE_MODULES}/@ai-ecoverse/wasm-sed/bin/sed`,
       wasm: `${GLOBAL_NODE_MODULES}/@ai-ecoverse/wasm-sed/bin/sed.wasm`,
       argv0: 'sed',

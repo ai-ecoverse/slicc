@@ -11,6 +11,7 @@ import {
   parsePublishCli,
   publicRecord,
   REPORT_MARKER,
+  redactCriteria,
   stage,
   taskSetEnvelope,
 } from './publish.mjs';
@@ -109,6 +110,27 @@ describe('what may be published', () => {
     expect(publicRecord(errored)).toEqual(errored);
   });
 
+  it('redacts upstream rubric item ids wherever they appear, not only in statuses', () => {
+    const reason =
+      'judge output is invalid: finding A5_line_fields is not_assessable without a reason; finding A12_total_is_canonical too';
+    const up = publicRecord(
+      record('BU_Bench_V2', 'claude-opus-5-5', 't', {
+        judge: { model: 'j', fallback_reason: reason },
+        statuses: { A5_line_fields: 'met' },
+      })
+    );
+    expect(up.judge.fallback_reason).toBe(
+      'judge output is invalid: finding [criterion] is not_assessable without a reason; finding [criterion] too'
+    );
+    expect(JSON.stringify(up)).not.toMatch(/A\d+_[a-z]/);
+    expect(up.model_id ?? up.config?.model).not.toContain('[criterion]');
+
+    const own = publicRecord(
+      record('SLICC_Smoke', 'm', 't', { judge: { model: 'j', fallback_reason: reason } })
+    );
+    expect(own.judge.fallback_reason).toBe(reason);
+  });
+
   it('publishes our own task sets and refuses upstream ones', () => {
     const dir = tmp();
     expect(taskSetEnvelope('bu-v1')).toBeNull();
@@ -134,6 +156,32 @@ describe('what may be published', () => {
 });
 
 describe('stage', () => {
+  it("redacts rubric item ids in the run's copied upstream results and report", () => {
+    const out = outDir();
+    const failed = 'judge output is invalid: finding A5_line_fields is not_assessable';
+    write(join(out, 'results/SLICC_h_skills_builtin_model_m_bench_BU_Bench_V1.json'), [
+      { error: failed },
+    ]);
+    write(join(out, 'report.md'), `## run report\n- ${failed}\n`);
+    const target = join(tmp(), 'stage');
+    stage({ out, stage: target, run: 'r1', sets: [] });
+    const upstream = readFileSync(
+      join(target, 'runs/r1/results/SLICC_h_skills_builtin_model_m_bench_BU_Bench_V1.json'),
+      'utf8'
+    );
+    expect(upstream).not.toContain('A5_line_fields');
+    expect(upstream).toContain('finding [criterion] is not_assessable');
+    expect(readFileSync(join(target, 'runs/r1/report.md'), 'utf8')).not.toContain('A5_line_fields');
+
+    expect(readFileSync(join(target, 'runs/r1/results/SLICC_x.json'), 'utf8')).toContain(
+      'tasks_completed'
+    );
+    expect(redactCriteria(['A1_answer', { e: 'B12_total' }])).toEqual([
+      '[criterion]',
+      { e: '[criterion]' },
+    ]);
+  });
+
   it('stages the run, encrypted own traces, merged records, results, report and card', () => {
     const out = outDir();
     const dataset = tmp();

@@ -62,6 +62,8 @@ export interface KernelFile {
   flush?(): Promise<void>;
 
   tty?: KernelTty;
+
+  held?: true;
 }
 
 export function pollFile(file: KernelFile): PollState {
@@ -148,9 +150,14 @@ export function nullFile(): OpenFile {
   });
 }
 
-export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket';
+export function heldFile(): OpenFile {
+  return new OpenFile({ held: true, close: () => {} });
+}
+
+export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket' | 'held';
 
 export function kernelFdKind(file: KernelFile): Exclude<KernelFdKind, 'socket'> {
+  if (file.held) return 'held';
   if (file.tty) return 'tty';
   return file.seek ? 'file' : 'stream';
 }
