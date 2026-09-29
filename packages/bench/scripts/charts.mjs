@@ -11,6 +11,8 @@
  * show theirs on hover, so a crowded chart stays legible and identity never rests on color alone.
  */
 
+import { compareVersions, parseModel } from './models.mjs';
+
 const esc = (v) =>
   String(v ?? '').replace(
     /[&<>"']/g,
@@ -20,9 +22,26 @@ const esc = (v) =>
 /** Categorical slots the page defines (`--series-1` … `--series-8`). */
 export const SERIES_SLOTS = 12;
 
-/** Model → categorical slot, alphabetical, so a model keeps its color from report to report. */
+const VARIANT_ORDER = { low: 0, default: 1, max: 2 };
+
+/**
+ * Model → slot (`--series-N`), one per model, ordered by provider, tier, family, newest version,
+ * then thinking variant, so a legend groups each provider's shades together. The slot's color is
+ * set per report from `modelColors` (html.mjs); `--series-1…12` in the page are only fallbacks.
+ */
 export function modelSlots(models) {
-  return new Map([...new Set(models)].sort().map((m, i) => [m, (i % SERIES_SLOTS) + 1]));
+  const order = [...new Set(models)]
+    .map(parseModel)
+    .sort(
+      (a, b) =>
+        a.provider.localeCompare(b.provider) ||
+        (a.tier ?? 9) - (b.tier ?? 9) ||
+        a.family.localeCompare(b.family) ||
+        compareVersions(a.version, b.version) ||
+        (VARIANT_ORDER[a.variant] ?? 3) - (VARIANT_ORDER[b.variant] ?? 3) ||
+        a.spec.localeCompare(b.spec)
+    );
+  return new Map(order.map((p, i) => [p.spec, i + 1]));
 }
 
 /** A configuration's score on a 0–100 index: its mean rubric score × 100. */

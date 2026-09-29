@@ -30,18 +30,32 @@ const CONFIGS = [
 ];
 
 describe('encoding', () => {
-  it('gives each model a stable slot, alphabetically, whatever order it arrives in', () => {
+  it('gives each model its own slot, grouped by provider, tier and newest version', () => {
     expect([...modelSlots(['sonnet', 'opus', 'sonnet']).entries()]).toEqual([
       ['opus', 1],
       ['sonnet', 2],
     ]);
-    // Twelve distinct colors before any repeats: the V2.1 report compares twelve models.
-    const twelve = modelSlots(
-      Array.from({ length: 12 }, (_, i) => `m${String(i).padStart(2, '0')}`)
-    );
-    expect(new Set(twelve.values()).size).toBe(12);
+    const slots = modelSlots([
+      'gpt-6-luna',
+      'claude-opus-5-5@max',
+      'claude-sonnet-5',
+      'claude-opus-5-5',
+      'claude-sonnet-5-5',
+      'claude-opus-5-5@low',
+      'kimi-k3',
+    ]);
+    expect([...slots.keys()]).toEqual([
+      'claude-sonnet-5-5',
+      'claude-sonnet-5',
+      'claude-opus-5-5@low',
+      'claude-opus-5-5',
+      'claude-opus-5-5@max',
+      'kimi-k3',
+      'gpt-6-luna',
+    ]);
+    // No wrapping: thirteen models get thirteen slots.
     const many = modelSlots(Array.from({ length: 13 }, (_, i) => `m${String(i).padStart(2, '0')}`));
-    expect(many.get('m12')).toBe(1);
+    expect(new Set(many.values()).size).toBe(13);
   });
 
   it('reads a score as an index, and lists models and the skills encoding', () => {

@@ -15,8 +15,16 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chartLegend, modelSlots, rankingChart, toolUseChart, valueChart } from './charts.mjs';
+import { modelColors } from './models.mjs';
 import { listFiles } from './publish.mjs';
-import { configKey, percent, reportData, versionLine } from './results.mjs';
+import {
+  COMPARISON_KINDS,
+  canonicalRecords,
+  configKey,
+  percent,
+  reportData,
+  versionLine,
+} from './results.mjs';
 
 const esc = (v) =>
   String(v ?? '').replace(
@@ -84,6 +92,19 @@ function deltaList(title, deltas, label) {
     })
     .join('\n');
   return `<h3>${esc(title)}</h3><ul class="deltas">${items}</ul>`;
+}
+
+/**
+ * The section's series colors: each model's slot gets its provider/model/generation color
+ * (`modelColors`), scoped to the section so two benchmarks can color the same slot differently.
+ */
+function paletteStyle(cls, slots) {
+  const colors = modelColors([...slots.keys()]);
+  const decl = (mode) =>
+    [...slots.entries()]
+      .map(([m, i]) => `--series-${i}: ${colors.get(m)?.[mode] ?? 'var(--muted)'};`)
+      .join(' ');
+  return `<style>.${cls} { ${decl('light')} } @media (prefers-color-scheme: dark) { .${cls} { ${decl('dark')} } }</style>\n`;
 }
 
 /** Below this many paired tasks, a lift is flagged as a small sample. */
@@ -315,15 +336,17 @@ footer { margin-top: 40px; font-size: 13px; color: var(--muted); }
 
 /** The page for a set of records. */
 export function reportHtml(
-  records,
+  input,
   { title = 'SLICC Bench', generated = new Date().toISOString() } = {}
 ) {
+  // `@default` pools with the plain model everywhere on the page, not only in the stats.
+  const records = canonicalRecords(input);
   const data = reportData(records);
   const judges = data.judges.length
     ? data.judges.map((j) => `<code>${esc(j)}</code>`).join(', ')
     : 'none yet';
   const sections = data.benchmarks
-    .map((b) => {
+    .map((b, bi) => {
       const rs = records.filter((r) => r.benchmark === b.benchmark);
       const configs = b.configs.map((c) => ({
         harness: c.harness,
@@ -331,7 +354,7 @@ export function reportHtml(
         skills: c.skills,
       }));
       const slots = modelSlots(b.configs.map((c) => c.model));
-      return `<section>
+      return `${paletteStyle(`bench-${bi}`, slots)}<section class="bench-${bi}">
 <h2>${esc(b.benchmark)} <small>${rs.length} runs, ${new Set(rs.map((r) => r.task_id)).size} tasks</small></h2>
 <p class="muted">${esc(versionLine(b.slicc_versions)).replace('**Mixed:**', '<strong>Mixed:</strong>')}</p>
 <h3>Ranking <small>score = mean rubric score × 100, over judged runs</small></h3>
@@ -345,7 +368,13 @@ ${toolUseChart(b.configs, slots)}
 <h3>Configurations</h3>
 <div class="cards">${b.configs.map(card).join('\n')}</div>
 ${configTable(b)}
-${deltaList(`What models change (paired, against ${b.model_deltas[0]?.from ?? ''})`, b.model_deltas, (d) => `${d.skills}, ${d.to}`)}
+${COMPARISON_KINDS.map(([kind, title]) =>
+  deltaList(
+    title,
+    b.model_deltas.filter((d) => d.kind === kind),
+    (d) => `${d.skills}, ${d.from} → ${d.to}`
+  )
+).join('\n')}
 <h3>Tasks <small>hardest first; hover a cell for time and cost</small></h3>
 ${matrix(rs, configs)}
 <h3>Time and cost per run</h3>

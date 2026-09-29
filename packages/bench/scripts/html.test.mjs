@@ -99,7 +99,9 @@ describe('reportHtml', () => {
     expect(html).toContain('<p class="pair">none 0.80 → builtin 1.00 (+0.20)</p>');
     expect(html).toContain('<dd>1 <span class="chip warn">small sample</span></dd>');
     expect(html.indexOf('Skills lift')).toBeLessThan(html.indexOf('<h3>Configurations</h3>'));
-    expect(html).toContain('What models change (paired, against opus)');
+    // Colors come from the model palette, scoped to the benchmark's section.
+    expect(html).toMatch(/<style>\.bench-0 \{ --series-1: hsl\(/);
+    expect(html).toContain('<section class="bench-0">');
     expect(html).toContain('<h3>Answered without tools');
     expect(html).toContain('<td class="cell pass"');
     expect(html).toContain('<td class="cell error" title="error · error: leader went away');
