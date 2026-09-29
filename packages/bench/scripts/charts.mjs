@@ -234,7 +234,7 @@ export function valueChart(configs, slots) {
     const label = `<text x="${(px + 15).toFixed(1)}" y="${ly.toFixed(1)}" class="point-label${isFront ? '' : ' on-hover'}">${esc(name)}</text>`;
     if (isFront) layers.labels.push(`${leader}${label}`);
     layers.dots.push(
-      `<g class="pt${isFront ? ' front' : ''}"><circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${isFront ? 8 : 7}" ${fill(c, slots)}><title>${esc(tip)}</title></circle>${isFront ? '' : label}</g>`
+      `<g class="pt${isFront ? ' front' : ''}" tabindex="0" role="img" aria-label="${esc(tip)}"><circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${isFront ? 8 : 7}" ${fill(c, slots)}><title>${esc(tip)}</title></circle>${isFront ? '' : label}</g>`
     );
   }
   const marks = [...layers.labels, ...layers.dots].join('\n');

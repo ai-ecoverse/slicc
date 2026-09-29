@@ -305,7 +305,8 @@ table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .value .point-label { font-size: 14px; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; } .value .point-label:not(.on-hover) { font-weight: 600; }
 .value .on-hover { opacity: 0; pointer-events: none; transition: opacity .12s; }
 .value .pt:hover .on-hover, .value .pt:focus-within .on-hover { opacity: 1; }
-.value .pt:hover circle { stroke: var(--fg); stroke-width: 2; }
+.value .pt:hover circle, .value .pt:focus circle { stroke: var(--fg); stroke-width: 2; }
+.value .pt:focus { outline: none; } .value .pt:focus-visible circle { stroke-width: 3; }
 .value .leader { stroke: var(--muted); stroke-width: 1; } .ranking { max-width: 100%; height: auto; }
 .label { fill: var(--muted); font-size: 12px; }
 .mark { fill: var(--c); stroke: var(--c); }

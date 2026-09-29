@@ -210,9 +210,14 @@ describe('valueChart', () => {
     expect(svg).toContain('class="point-label">opus · builtin</text>');
     expect(svg).toContain('class="point-label">sonnet · builtin</text>');
     expect(svg).toMatch(
-      /<g class="pt"><circle[^>]*>[\s\S]*?class="point-label on-hover">sonnet · none<\/text><\/g>/
+      /<g class="pt"[^>]*><circle[^>]*>[\s\S]*?class="point-label on-hover">sonnet · none<\/text><\/g>/
     );
     expect(svg).not.toContain('on-hover">opus · builtin');
+    // Keyboard users reach every point: focus reveals a hover label, and the name is announced.
+    expect(svg).toContain(
+      '<g class="pt" tabindex="0" role="img" aria-label="sonnet · none: score 20, $2.000 per task">'
+    );
+    expect(svg.match(/<g class="pt[^"]*" tabindex="0"/g)).toHaveLength(3);
     // Frontier labels are drawn before any dot, so their halos never cover a point.
     expect(svg.indexOf('class="point-label">opus · builtin')).toBeLessThan(
       svg.indexOf('<g class="pt')
