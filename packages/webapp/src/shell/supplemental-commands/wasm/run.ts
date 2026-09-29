@@ -249,8 +249,7 @@ function programEnv(
     env.TERM = 'xterm-256color';
     env.COLORTERM ??= 'truecolor';
   }
-  // The working directory and a `$`, as the slicc prompt shows (bash's `\$`
-  // would print `#`: every process runs as uid 0).
+  // The working directory and a `$`, as the slicc prompt shows.
   if (call.login) {
     env.PS1 ??= '\\w $ ';
     // Marks each prompt with the last status: how the panel collects the

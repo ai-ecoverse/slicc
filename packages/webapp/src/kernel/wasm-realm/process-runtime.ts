@@ -49,6 +49,7 @@ import {
 import { SignalGate } from './process-signals.js';
 import { createSocketKernel } from './process-sockets.js';
 import type { ForkState, InheritedFd, WasmProcessInitMsg } from './protocol.js';
+import { ownByRealmUser } from './realm-user.js';
 import type { Termios } from './tty.js';
 
 export {
@@ -349,6 +350,7 @@ export async function runWasmProcess(
   if (pipefs) streams.usePipes(pipefs);
   streams.useControllingTerminal();
   useDevFd(running.FS);
+  ownByRealmUser(running.FS);
   const livePath = (s: ProcessStream) => liveNodePath(s.node as unknown as LiveFsNode);
   running.sliccKernel = createProcessKernel({
     transport,
