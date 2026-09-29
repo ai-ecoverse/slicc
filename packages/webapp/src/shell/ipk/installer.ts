@@ -24,6 +24,7 @@ import {
   DEFAULT_FETCH_CONCURRENCY,
   type Limiter,
 } from './concurrency.js';
+import { EXECUTABLE_MODE, normalizeFileMode } from './file-modes.js';
 import {
   preflightGlobalBinDelegators,
   reconcileGlobalBinDelegators,
@@ -141,7 +142,13 @@ function chooseSavedRange(input: ParsedSpec, resolvedVersion: string): string {
   return r;
 }
 
+/**
+ * Write `entries` under `installDir`, then set every file's mode in one
+ * metadata batch: the tar entry's mode normalized as npm does, and 0755 for
+ * the package's `bin` targets (npm's bin-links makes them executable too).
+ */
 async function writeEntries(fs: VirtualFS, installDir: string, entries: TarEntry[]): Promise<void> {
+  const modes = new Map<string, number>();
   for (const entry of entries) {
     if (!entry.path) continue;
     const safePath = entry.path.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -154,7 +161,33 @@ async function writeEntries(fs: VirtualFS, installDir: string, entries: TarEntry
       await ensureDir(fs, target.slice(0, lastSlash));
     }
     await fs.writeFile(target, entry.bytes);
+    modes.set(safePath, normalizeFileMode(entry.mode));
   }
+  for (const binPath of binTargets(entries)) {
+    if (modes.has(binPath)) modes.set(binPath, EXECUTABLE_MODE);
+  }
+  await fs.updateMetadataBatch(
+    [...modes].map(([path, mode]) => ({ path: joinPath(installDir, path), mode }))
+  );
+}
+
+/** Package-relative paths of the `bin` targets declared in the tarball's package.json. */
+function binTargets(entries: TarEntry[]): string[] {
+  const manifestEntry = entries.find((e) => e.path === 'package.json');
+  if (!manifestEntry) return [];
+  let manifest: InstalledPackageManifest;
+  try {
+    manifest = JSON.parse(
+      new TextDecoder().decode(manifestEntry.bytes)
+    ) as InstalledPackageManifest;
+  } catch {
+    return [];
+  }
+  const bin = manifest.bin;
+  if (typeof bin !== 'string' && (typeof bin !== 'object' || bin === null)) return [];
+  return Object.values(normalizeBin(bin, manifest.name ?? ''))
+    .filter((p): p is string => typeof p === 'string')
+    .map(normalizeBinPath);
 }
 
 /** ENOENT → fallback; any other FsError or JSON parse fault is rethrown. */

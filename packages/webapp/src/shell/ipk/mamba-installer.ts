@@ -7,7 +7,8 @@
  */
 
 import type { SecureFetch } from 'just-bash';
-import { FsError, type VirtualFS } from '../../fs/index.js';
+import { FsError, type MetadataUpdate, type VirtualFS } from '../../fs/index.js';
+import { normalizeFileMode } from './file-modes.js';
 import { type ExtractedCondaEntry, extractCondaArchive } from './mamba-extract.js';
 import { CONDA_META_DIR, CONDA_PREFIX, DEFAULT_CONDA_CHANNELS } from './mamba-prefix.js';
 import {
@@ -190,6 +191,7 @@ async function writeEntries(
   }
 
   const written: string[] = [];
+  const modes: MetadataUpdate[] = [];
   // Files first so symlink targets exist when possible.
   const files = entries.filter((e) => !e.symlink && !e.directory);
   const links = entries.filter((e) => e.symlink);
@@ -208,8 +210,12 @@ async function writeEntries(
       bytes = relocatePrefixBytes(bytes, placeholder, prefix, pathsMeta.get(entry.path)?.file_mode);
     }
     await fs.writeFile(target, bytes);
+    modes.push({ path: target, mode: normalizeFileMode(entry.mode) });
     written.push(entry.path);
   }
+  // One metadata batch per package, as for symlinks below: keep executables
+  // (shared objects, scripts) executable, normalized as npm does.
+  await fs.updateMetadataBatch(modes);
 
   // Batch symlink creation so OPFS rewrites /.metadata.json once per package
   // (not once per link) — same quadratic shape #3507 fixed for tar chmod/utimes.

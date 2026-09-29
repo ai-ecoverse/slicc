@@ -49,13 +49,14 @@ interface TarEntryInput {
   name: string;
   data: Uint8Array;
   typeflag?: string;
+  mode?: number;
 }
 
 function buildUstarHeader(entry: TarEntryInput): Uint8Array {
   const header = new Uint8Array(512);
   const typeflag = entry.typeflag ?? '0';
   writeString(header, 0, 100, entry.name);
-  writeOctal(header, 100, 8, 0o644);
+  writeOctal(header, 100, 8, entry.mode ?? 0o644);
   writeOctal(header, 108, 8, 0);
   writeOctal(header, 116, 8, 0);
   writeOctal(header, 124, 12, entry.data.length);
@@ -103,6 +104,8 @@ interface SyntheticPackage {
   version: string;
   files?: Record<string, string>;
   manifestExtras?: Record<string, unknown>;
+  /** Tar header modes by file path (default 0o644). */
+  modes?: Record<string, number>;
 }
 
 function buildPackageTarball(pkg: SyntheticPackage): Uint8Array {
@@ -120,6 +123,7 @@ function buildPackageTarball(pkg: SyntheticPackage): Uint8Array {
   const entries: TarEntryInput[] = Object.entries(files).map(([path, content]) => ({
     name: `package/${path}`,
     data: bytes(content),
+    mode: pkg.modes?.[path],
   }));
   return gzipSync(buildTar(entries));
 }
@@ -736,6 +740,73 @@ describe('installPackage (single-package path)', () => {
     ).rejects.toThrow(/gunzip|gzip|corrupt|decompress|magic/i);
     expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
     expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('keeps the executable bit from the tarball, normalized to 0755 / 0644 as npm does', async () => {
+    const reg = makeRegistry([
+      {
+        name: 'tool',
+        version: '1.0.0',
+        files: {
+          'libexec/helper': '#!/bin/sh\necho hi\n',
+          'libexec/odd': '#!/bin/sh\n',
+          'lib/data.txt': 'data',
+          'lib/writable.txt': 'data',
+        },
+        modes: {
+          'libexec/helper': 0o755,
+          // setuid and group/world write are dropped.
+          'libexec/odd': 0o4777,
+          'lib/data.txt': 0o644,
+          'lib/writable.txt': 0o666,
+        },
+      },
+    ]);
+    await installPackage('tool', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    const mode = async (p: string) =>
+      (await fs.stat(`/work/node_modules/tool/${p}`)).mode! & 0o7777;
+    expect(await mode('libexec/helper')).toBe(0o755);
+    expect(await mode('libexec/odd')).toBe(0o755);
+    expect(await mode('lib/data.txt')).toBe(0o644);
+    expect(await mode('lib/writable.txt')).toBe(0o644);
+    expect(await mode('index.js')).toBe(0o644);
+  });
+
+  it('keeps modes on a global install too', async () => {
+    const reg = makeRegistry([
+      {
+        name: 'tool',
+        version: '1.0.0',
+        files: { 'libexec/helper': '#!/bin/sh\n' },
+        modes: { 'libexec/helper': 0o755 },
+      },
+    ]);
+    await installPackages(['tool'], { fs, fetch: fakeFetch(reg), cwd: '/work', global: true });
+    const st = await fs.stat(`${GLOBAL_NODE_MODULES}/tool/libexec/helper`);
+    expect(st.mode! & 0o7777).toBe(0o755);
+  });
+
+  it('makes bin targets executable even when the tarball does not', async () => {
+    const reg = makeRegistry([
+      {
+        name: 'clitool',
+        version: '1.0.0',
+        files: { 'cli.js': '#!/usr/bin/env node\n', 'bin/other': '#!/bin/sh\n' },
+        manifestExtras: { bin: { clitool: './cli.js', other: 'bin/other' } },
+      },
+      {
+        name: 'single',
+        version: '1.0.0',
+        files: { 'run.js': '#!/usr/bin/env node\n' },
+        manifestExtras: { bin: 'run.js' },
+      },
+    ]);
+    await installPackages(['clitool', 'single'], { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    const mode = async (p: string) => (await fs.stat(`/work/node_modules/${p}`)).mode! & 0o7777;
+    expect(await mode('clitool/cli.js')).toBe(0o755);
+    expect(await mode('clitool/bin/other')).toBe(0o755);
+    expect(await mode('single/run.js')).toBe(0o755);
+    expect(await mode('clitool/index.js')).toBe(0o644);
   });
 
   it('rejects a tarball that does not match dist.integrity and extracts nothing', async () => {
