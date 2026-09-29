@@ -1276,7 +1276,12 @@ export class Bridge implements KernelFacade {
     requestId: string,
     request: import('../sudo/types.js').SudoRequest
   ): Promise<void> {
-    let decision: import('../sudo/types.js').SudoDecision = { decision: 'deny' };
+    // Every path below that does not reach an approver leaves this in place:
+    // a deny that says nobody answered, never one that reads as a refusal.
+    let decision: import('../sudo/types.js').SudoDecision = {
+      decision: 'deny',
+      reason: 'unavailable',
+    };
     // A request that names a non-human approver (a biscotto seat gated on the
     // cone, or on a scoop the cone delegated to) never reaches the human
     // broker — routing it there would silently ignore the configured approver

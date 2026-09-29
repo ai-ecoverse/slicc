@@ -309,7 +309,7 @@ describe('multiple roots', () => {
     });
     await expect(
       empty.enqueueSudoRequest(childA.jid, { kind: 'command', detail: 'rm -rf' })
-    ).resolves.toEqual({ decision: 'deny' });
+    ).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('closing root A closes its child and leaves root B’s subtree untouched', async () => {

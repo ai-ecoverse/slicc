@@ -21,7 +21,14 @@
 import { createLogger } from '../base/logger.js';
 import type { PanelRpcClient } from '../kernel/panel-rpc.js';
 import { suggestPattern } from './suggest-pattern.js';
-import type { SudoBroker, SudoDecision, SudoRequest, SudoRequestOptions } from './types.js';
+import {
+  type SudoBroker,
+  type SudoDecision,
+  type SudoRequest,
+  type SudoRequestOptions,
+  type SudoUnansweredReason,
+  unavailableDecision,
+} from './types.js';
 
 const log = createLogger('sudo:tray-first');
 
@@ -52,7 +59,7 @@ export function createTrayFirstSudoBroker(
 
   return {
     async requestApproval(req: SudoRequest, opts?: SudoRequestOptions): Promise<SudoDecision> {
-      if (opts?.signal?.aborted) return { decision: 'deny' };
+      if (opts?.signal?.aborted) return unavailableDecision();
       let suggestedPattern = req.suggestedPattern;
       if (!suggestedPattern) {
         try {
@@ -92,10 +99,29 @@ export function createTrayFirstSudoBroker(
   };
 }
 
-/** Coerce an untrusted page decision; anything unrecognised denies. */
+const UNANSWERED_REASONS: readonly SudoUnansweredReason[] = [
+  'user-timeout',
+  'cone-timeout',
+  'unavailable',
+];
+
+/**
+ * Coerce an untrusted page decision; anything unrecognised denies.
+ *
+ * A page-side deny that says WHY nobody answered (the delegate threw, the
+ * in-page prompt could not be shown, the delegated phone timed out) keeps its
+ * `reason`: dropping it here turned every one of those into what reads as a
+ * human refusal. A shape that is not a decision at all is a broken hop, so it
+ * denies as `unavailable` rather than as a refusal.
+ */
 function normalizeDecision(decision: unknown, suggested: string): SudoDecision {
-  if (!decision || typeof decision !== 'object') return { decision: 'deny' };
-  const d = decision as { decision?: unknown; pattern?: unknown; attestation?: unknown };
+  if (!decision || typeof decision !== 'object') return unavailableDecision();
+  const d = decision as {
+    decision?: unknown;
+    pattern?: unknown;
+    attestation?: unknown;
+    reason?: unknown;
+  };
   const attestation =
     d.attestation === 'biometric' || d.attestation === 'passcode' || d.attestation === 'none'
       ? d.attestation
@@ -106,5 +132,7 @@ function normalizeDecision(decision: unknown, suggested: string): SudoDecision {
       typeof d.pattern === 'string' && d.pattern.trim().length > 0 ? d.pattern.trim() : suggested;
     return { decision: 'always', pattern, ...(attestation ? { attestation } : {}) };
   }
-  return { decision: 'deny' };
+  if (d.decision !== 'deny') return unavailableDecision();
+  const reason = UNANSWERED_REASONS.find((known) => known === d.reason);
+  return reason ? { decision: 'deny', reason } : { decision: 'deny' };
 }

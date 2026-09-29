@@ -461,16 +461,26 @@ expire on the same budget.
 enforcement layer branches on `decision === 'deny'`, so a new variant would fail
 _open_; the field keeps the fail-closed default and only enriches the message.
 
-**Two legs, two notices.** The approver differs per leg, so the recovery advice
-must too — telling a scoop to wait for a human who was never prompted is wrong:
+**Two legs, two notices — and one for a request nobody saw.** The approver
+differs per leg, so the recovery advice must too — telling a scoop to wait for a
+human who was never prompted is wrong. A third reason, `unavailable`, marks a
+deny that no approver ever produced: a `CapabilityFailure` from the gesture
+transport (a 400 from `/api/sudo-approve`, a hosted origin answering with its
+route catalog, a dead relay), no broker or no native `confirm`, a `confirm()`
+that returned `false` from a hidden document, a delegate or prompt that threw,
+every prompted follower disconnecting, or an approver that cannot be reached.
+Only a deny with NO `reason` is a refusal:
 
 | `reason`       | Which leg expired | What the agent is told                                     |
 | -------------- | ----------------- | ---------------------------------------------------------- |
 | `user-timeout` | cone → user       | the user was not there; report it and wait for them        |
 | `cone-timeout` | scoop → cone      | the cone never resolved it; no human was prompted, move on |
+| `unavailable`  | none; never shown | nobody was asked (dead relay, no surface); report it       |
 
-Every gate renders both through one helper, `sudoRefusalMessage(prefix, decision)`,
-so denial and timeout wording can never drift apart:
+Every gate renders all of them through one helper, `sudoRefusalMessage(prefix, decision)`,
+so denial and timeout wording can never drift apart (`unavailable` reads "approval
+could not be requested"). A biscotto guest is told `rejected` only for a deny with
+no `reason`; any reason reports `unanswered` (`biscotto-review.ts`):
 
 An explicit `sudo <command>` refusal or timeout, and an implicit command-level
 gate refusal or timeout, exits **77** (`EX_NOPERM`). This gives agents a status

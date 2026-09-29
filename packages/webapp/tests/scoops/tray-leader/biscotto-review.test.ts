@@ -14,7 +14,10 @@ import {
   FollowerRegistry,
 } from '../../../src/scoops/tray-leader/follower-registry.js';
 import type { LeaderSyncManagerOptions } from '../../../src/scoops/tray-leader-sync.js';
+import { createSudoBroker } from '../../../src/sudo/index.js';
+import { toKernelSudoRequest } from '../../../src/sudo/leader-request.js';
 import type { SudoDecision } from '../../../src/sudo/types.js';
+import { createRestCapabilityBroker } from '../../../src/work-unit/capability/index.js';
 
 const SEAT = {
   id: 'seat1',
@@ -115,6 +118,33 @@ describe('BiscottoReview', () => {
     // Otherwise a leader that simply has no broker would ungate every seat.
     const { review, delivered, states } = createHarness(undefined);
     review.submit('peer', guestMessage());
+    await vi.waitFor(() => expect(states).toHaveLength(2));
+    expect(delivered).toHaveLength(0);
+    expect(states[1]).toEqual(['m1', 'unanswered']);
+  });
+
+  // Observed live: the guest saw "The host did not forward that message." a
+  // few seconds after "Sent for review", and the owner never saw a prompt.
+  // The owner's approval endpoint had refused the request outright (the
+  // Sliccstart slicc-server 400'd the guest-message kind), and that transport
+  // failure surfaced as a bare deny, i.e. a human refusal. Composed here from
+  // the real broker chain rather than a mocked decision, so a fail-closed
+  // branch anywhere in it that drops the reason is caught.
+  it.each([
+    ['a 400 from the approval endpoint', '{"error":"invalid sudo-approve payload"}', 400],
+    ['a 200 route catalog from an origin with no approval endpoint', '{"routes":[]}', 200],
+    ['an unreachable approval endpoint', '<html>502</html>', 502],
+  ])('reports %s as unanswered, never as a refusal', async (_label, body, status) => {
+    const rest = createRestCapabilityBroker({
+      resolveUrl: (path) => path,
+      fetchImpl: (async () =>
+        new Response(body as string, { status: status as number })) as typeof fetch,
+    });
+    const broker = createSudoBroker(rest);
+    const { review, delivered, states } = createHarness((request) =>
+      broker.requestApproval(toKernelSudoRequest(request))
+    );
+    review.submit('peer', guestMessage({ text: "hi. I'm the other user" }));
     await vi.waitFor(() => expect(states).toHaveLength(2));
     expect(delivered).toHaveLength(0);
     expect(states[1]).toEqual(['m1', 'unanswered']);

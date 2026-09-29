@@ -14,7 +14,9 @@
  *    (Face ID / passcode gate); anyone else's `always` is downgraded to a
  *    one-shot `allow`, so an unauthenticated web tab cannot widen the policy.
  *  - Fail closed: timeout, every candidate disconnecting, a dead channel, or a
- *    malformed reply all resolve `deny`.
+ *    malformed reply all resolve `deny`. Only a follower's explicit "Deny"
+ *    is a bare deny; every other path carries a `reason` (`user-timeout` or
+ *    `unavailable`) so it is never reported as a human's refusal.
  *
  * A headless leader with NO capable follower connected does not deny at once:
  * it parks the request, asks the hub to push-wake registered phones, and
@@ -27,7 +29,7 @@
  */
 
 import type { TraySudoAttestation } from '@slicc/shared-ts';
-import type { SudoDecision, SudoRequest } from '../../sudo/types.js';
+import { type SudoDecision, type SudoRequest, unavailableDecision } from '../../sudo/types.js';
 import type { LeaderSyncContext } from './context.js';
 
 /** Same fail-closed window the cone-mediated path uses (5 minutes). */
@@ -109,7 +111,8 @@ export class SudoDelegation {
         expiresAt,
         timer: setTimeout(() => {
           this.context.log.warn('Delegated sudo approval timed out — denying', { requestId });
-          this.settle(requestId, { decision: 'deny' });
+          // The prompt reached a follower and nobody answered it there.
+          this.settle(requestId, { decision: 'deny', reason: 'user-timeout' });
         }, this.timeoutMs),
         settle: resolve,
       };
@@ -130,7 +133,7 @@ export class SudoDelegation {
         this.context.log.warn('No capable follower for delegated sudo approval — denying', {
           requestId,
         });
-        this.settle(requestId, { decision: 'deny' });
+        this.settle(requestId, unavailableDecision());
       }
     });
   }
@@ -187,8 +190,12 @@ export class SudoDelegation {
             : entry.request.suggestedPattern?.trim() || entry.request.detail;
         verdict = { decision: 'always', pattern: safe, ...(att ? { attestation: att } : {}) };
       }
-    } else {
+    } else if (decision === 'deny') {
       verdict = { decision: 'deny' };
+    } else {
+      // Not a verdict the follower's human could have given: a skewed or
+      // broken peer. Still a deny, but not one to report as a refusal.
+      verdict = unavailableDecision();
     }
     this.context.log.info('Delegated sudo approval settled by follower', {
       bootstrapId,
@@ -266,7 +273,7 @@ export class SudoDelegation {
         this.context.log.warn('Every prompted follower disconnected — denying sudo approval', {
           requestId: entry.requestId,
         });
-        this.settle(entry.requestId, { decision: 'deny' });
+        this.settle(entry.requestId, unavailableDecision());
       }
     }
   }
@@ -274,7 +281,7 @@ export class SudoDelegation {
   /** Deny everything outstanding (leader shutdown). */
   dispose(): void {
     for (const requestId of [...this.pending.keys()]) {
-      this.settle(requestId, { decision: 'deny' });
+      this.settle(requestId, unavailableDecision());
     }
   }
 }

@@ -29,7 +29,13 @@
 import { createLogger } from '../base/logger.js';
 import { type CapabilityBroker, normalizeApprovalDecision } from '../work-unit/capability/index.js';
 import { suggestPattern } from './suggest-pattern.js';
-import type { SudoBroker, SudoDecision, SudoRequest, SudoRequestOptions } from './types.js';
+import {
+  type SudoBroker,
+  type SudoDecision,
+  type SudoRequest,
+  type SudoRequestOptions,
+  unavailableDecision,
+} from './types.js';
 
 const log = createLogger('sudo:capability-gesture');
 
@@ -69,7 +75,7 @@ export function createCapabilityGestureSudoBroker(
       // modal now would prompt for an action that already timed out.
       if (signal?.aborted) {
         log.warn('sudo approval aborted before prompting — denying', { detail: req.detail });
-        return { decision: 'deny' };
+        return unavailableDecision();
       }
 
       if (!broker) {
@@ -77,7 +83,7 @@ export function createCapabilityGestureSudoBroker(
           'no CapabilityBroker injected for the sudo gesture hop — denying (composition bug, never a guessed transport)',
           { detail: req.detail }
         );
-        return { decision: 'deny' };
+        return unavailableDecision();
       }
 
       const result = await broker.approvals.request({
@@ -90,16 +96,16 @@ export function createCapabilityGestureSudoBroker(
         ...(signal ? { signal } : {}),
       });
       if (!result.ok) {
-        // A `CapabilityFailure` here is distinguishable from a human's
-        // refusal at the `CapabilityBroker` level (`docs/work-unit.md`
-        // phase 6 detail), but `SudoDecision` has no shape for that: a
-        // broken relay reads as a plain `deny` here, not `reason:
-        // 'user-timeout'` (that would misreport it as an unanswered
-        // prompt rather than a dead transport).
+        // A `CapabilityFailure` is a dead or refusing transport, never a
+        // human's refusal: the endpoint 400'd a kind it does not know, the
+        // hosted origin had no approval route, the relay broke. It carries
+        // `reason: 'unavailable'` so every consumer can tell it from a click on
+        // "Deny" — a bare deny here is how a guest was once told "the host
+        // refused" when no prompt had ever been shown.
         log.warn('capability broker approvals.request failed — denying', {
           message: result.message,
         });
-        return { decision: 'deny' };
+        return unavailableDecision();
       }
       // Defence in depth: `SudoFS` / `enforceCommandSudo` only ever check
       // `decision === 'deny'`, so any non-canonical shape a future (or

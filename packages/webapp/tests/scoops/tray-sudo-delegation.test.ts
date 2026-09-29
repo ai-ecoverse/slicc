@@ -291,7 +291,7 @@ describe('delegateSudoApproval', () => {
       requestId,
       decision: 'yes please',
     } as unknown as FollowerToLeaderMessage);
-    expect(await pending).toEqual({ decision: 'deny' });
+    expect(await pending).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('ignores a verdict from a follower that was never prompted', async () => {
@@ -325,7 +325,7 @@ describe('delegateSudoApproval', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(phone.types()).toContain('sudo.approve.request');
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 10);
-    expect(await pending).toEqual({ decision: 'deny' });
+    expect(await pending).toEqual({ decision: 'deny', reason: 'user-timeout' });
     expect(phone.types()).toContain('sudo.approve.cancel');
   });
 
@@ -335,13 +335,16 @@ describe('delegateSudoApproval', () => {
     const pending = manager.delegateSudoApproval(REQUEST);
     await flush();
     manager.removeFollower('phone');
-    expect(await pending).toEqual({ decision: 'deny' });
+    expect(await pending).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('denies at once on an interactive leader with no capable follower', async () => {
     const { manager } = makeLeader();
     addFollower(manager, 'cli', { sudoApproval: false });
-    expect(await manager.delegateSudoApproval(REQUEST)).toEqual({ decision: 'deny' });
+    expect(await manager.delegateSudoApproval(REQUEST)).toEqual({
+      decision: 'deny',
+      reason: 'unavailable',
+    });
   });
 
   it('asks the hub to push-wake phones with metadata only', async () => {
@@ -421,7 +424,7 @@ describe('headless leader parks the prompt until a capable follower arrives', ()
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(await pending).toEqual({ decision: 'deny' });
+    expect(await pending).toEqual({ decision: 'deny', reason: 'user-timeout' });
   });
 });
 
