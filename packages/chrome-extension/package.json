@@ -35,7 +35,7 @@
   "dependencies": {
     "@ai-ecoverse/cherry": "*",
     "@earendil-works/pi-ai": "0.84.4",
-    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-coding-agent": "0.99.1",
     "@slicc/shared-ts": "*"
   }
 }
