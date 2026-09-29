@@ -7,7 +7,14 @@ import { createDefaultSecretBackend, type SecretBackend } from './secret-backend
 
 export const GIT_CREDENTIAL_HELPER = 'git-credential-slicc';
 
-export const PLUMBING: ReadonlyMap<string, string> = new Map([[GIT_CREDENTIAL_HELPER, 'git']]);
+export const PLUMBING: ReadonlyMap<string, string> = new Map([
+  [GIT_CREDENTIAL_HELPER, 'git'],
+  ['git-upload-pack', 'git'],
+  ['git-receive-pack', 'git'],
+  ['git-upload-archive', 'git'],
+  ['git-remote-http', 'git'],
+  ['git-remote-https', 'git'],
+]);
 
 export const GITHUB_DOMAINS = ['github.com', '*.github.com'];
 

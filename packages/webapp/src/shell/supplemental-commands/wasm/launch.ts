@@ -10,7 +10,10 @@ import {
 import { type FdTable, KernelError, type OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import { JobTable } from '../../../kernel/wasm-realm/jobs.js';
-import { enableRealmNetwork } from '../../../kernel/wasm-realm/net/realm-network.js';
+import {
+  enableRealmNetwork,
+  isRealmDefault,
+} from '../../../kernel/wasm-realm/net/realm-network.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
 import { type LoopbackNet, loopbackNet, ownerKey } from '../../../kernel/wasm-realm/socket.js';
@@ -25,6 +28,19 @@ export const SECRET_FUNCTION =
   '() { command secret "$@" || return; local __slicc_env; ' +
   'if __slicc_env=$(command secret shell-env "$@" 2>/dev/null); then eval "$__slicc_env"; fi; return 0; }';
 
+function withDefaults(
+  defaults: Readonly<Record<string, string>> | undefined,
+  env: Record<string, string>
+): Record<string, string> {
+  if (!defaults) return env;
+  const realmGitConfig =
+    env.GIT_CONFIG_SYSTEM !== undefined &&
+    isRealmDefault('GIT_CONFIG_SYSTEM', env.GIT_CONFIG_SYSTEM);
+  if (!realmGitConfig || !('GIT_CONFIG_NOSYSTEM' in defaults)) return { ...defaults, ...env };
+  const { GIT_CONFIG_NOSYSTEM: _off, ...rest } = defaults;
+  return { ...rest, ...env };
+}
+
 function withSecretFunction(argv0: string, env: Record<string, string>): Record<string, string> {
   if (!/^(ba)?sh$/.test(baseName(argv0)) || SECRET_FUNCTION_ENV in env) return env;
   return { ...env, [SECRET_FUNCTION_ENV]: SECRET_FUNCTION };
@@ -37,6 +53,10 @@ const SIGNAL_NAME = new Map(
 );
 
 const REGISTRY_PATH = /^\/(?:usr\/)?bin\/([^/]+)$/;
+
+const PACKAGE_ROOT = /^(.*\/node_modules\/(?:@[^/]+\/)?[^/]+)\//;
+
+const LOCATED_MODULE = /locateFile\(\s*["']([^"'/]+\.wasm)["']\s*\)/;
 
 const SHEBANG_MAX = 256;
 
@@ -217,10 +237,7 @@ export class WasmSession {
       await req.fds.closeAll();
       throw e;
     }
-    const env = withSecretFunction(
-      req.argv0,
-      req.defaults ? { ...req.defaults, ...req.env } : req.env
-    );
+    const env = withSecretFunction(req.argv0, withDefaults(req.defaults, req.env));
     return this.start({ ...req, env, program: { glue, module } });
   }
 
@@ -322,9 +339,34 @@ export class WasmSession {
       return bash && { glue: bash.glue, module: bash.wasm, argv0: 'sh', defaults: bash.env };
     }
     const glue = this.ctx.fs.resolvePath(cwd, file);
+    if (!(await this.ctx.fs.exists(glue))) return undefined;
     const module = modulePath(glue);
-    if (!(await this.ctx.fs.exists(glue)) || !(await this.ctx.fs.exists(module))) return undefined;
-    return { glue, module, argv0: baseName(argv0 || file) };
+    if (await this.ctx.fs.exists(module)) return { glue, module, argv0: baseName(argv0 || file) };
+    return this.packagedCopy(glue, argv0 || file);
+  }
+
+  private async packagedCopy(glue: string, argv0: string): Promise<WasmTarget | undefined> {
+    const root = PACKAGE_ROOT.exec(glue)?.[1];
+    if (root === undefined) return undefined;
+    let text: string;
+    try {
+      text = await this.ctx.fs.readFile(glue);
+    } catch {
+      return undefined;
+    }
+    const located = LOCATED_MODULE.exec(text)?.[1];
+    if (located === undefined) return undefined;
+    for (const command of (await this.commands()).values()) {
+      if (command.wasm.startsWith(`${root}/`) && command.wasm.endsWith(`/${located}`)) {
+        return {
+          glue: command.glue,
+          module: command.wasm,
+          argv0: baseName(argv0),
+          defaults: command.env,
+        };
+      }
+    }
+    return undefined;
   }
 
   private forker(ppid: number, parent: StartRequest): ChildForker {

@@ -889,7 +889,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     if (this.allowedCommands !== null && !this.isCommandAllowed(name)) {
       return { stderr: `bash: ${name}: command not found\n`, exitCode: 127 };
     }
-    if (!this.isTransparentGatingEnabled()) return null;
+
+    if (!this.isTransparentGatingEnabled() || PLUMBING.has(name)) return null;
     const denial = await this.gateCommandDispatch(name, args, env[SUDO_REASON_ENV]);
     return denial ? { stderr: denial.stderr, exitCode: denial.exitCode } : null;
   };
