@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 /**
  * Pins that sprinkle `captureScreen` acquires display media through the
- * leader `<slicc-permissions>` surface when mounted (#3604), so the Allow
- * click supplies the user gesture the sprinkle→leader postMessage hop
- * otherwise drops. Sibling of the #3574 screenshare prompt routing.
+ * leader `<slicc-permissions>` Grant prompt when mounted (#3604), so the
+ * Allow click supplies the user gesture the sprinkle→leader postMessage hop
+ * otherwise drops. Sibling of the #3574 screenshare prompt routing —
+ * must use `prompt()`, not `request()` (request invokes getDisplayMedia
+ * immediately with no Allow UI).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,23 +38,48 @@ describe('acquireSprinkleCaptureStream', () => {
     vi.restoreAllMocks();
   });
 
-  it('routes through surface.request("screenshare") when the permissions surface is mounted', async () => {
+  it('routes through surface.prompt({ kinds: ["screenshare"] }) when the permissions surface is mounted', async () => {
     const stream = makeStream();
-    surfaceMock.request.mockResolvedValueOnce({ kind: 'screenshare', stream });
+    surfaceMock.prompt.mockResolvedValueOnce({
+      status: 'granted',
+      grants: [{ kind: 'screenshare', stream }],
+    });
 
     const got = await acquireSprinkleCaptureStream();
 
     expect(got).toBe(stream);
-    expect(surfaceMock.request).toHaveBeenCalledWith('screenshare', {
-      constraints: { video: true, audio: false },
+    expect(surfaceMock.prompt).toHaveBeenCalledWith({
+      kinds: ['screenshare'],
+      description: 'A sprinkle asks to share a screen.',
+      requestOptions: { screenshare: { constraints: { video: true, audio: false } } },
     });
+    // Must not call request() — that skips the Grant UI and still needs a gesture.
+    expect(surfaceMock.request).not.toHaveBeenCalled();
   });
 
   it('rejects when the user cancels / denies the screenshare Grant prompt', async () => {
-    surfaceMock.request.mockResolvedValueOnce(null);
+    surfaceMock.prompt.mockResolvedValueOnce({
+      status: 'cancelled',
+      grants: [],
+      reason: 'cancelled',
+    });
 
     await expect(acquireSprinkleCaptureStream()).rejects.toThrow('Screen capture cancelled');
-    expect(surfaceMock.request).toHaveBeenCalledTimes(1);
+    expect(surfaceMock.prompt).toHaveBeenCalledTimes(1);
+    expect(surfaceMock.request).not.toHaveBeenCalled();
+  });
+
+  it('rejects with the prompt reason when the grant fails for a non-cancel cause', async () => {
+    surfaceMock.prompt.mockResolvedValueOnce({
+      status: 'error',
+      grants: [],
+      reason: 'unavailable',
+      message: 'getDisplayMedia unavailable',
+    });
+
+    await expect(acquireSprinkleCaptureStream()).rejects.toThrow(
+      'Screen capture unavailable: getDisplayMedia unavailable'
+    );
   });
 
   it('falls back to navigator.mediaDevices.getDisplayMedia when no surface is mounted', async () => {
@@ -68,7 +95,7 @@ describe('acquireSprinkleCaptureStream', () => {
 
     expect(got).toBe(stream);
     expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: false });
-    expect(surfaceMock.request).not.toHaveBeenCalled();
+    expect(surfaceMock.prompt).not.toHaveBeenCalled();
   });
 
   it('rejects when no surface is mounted and getDisplayMedia is unavailable', async () => {

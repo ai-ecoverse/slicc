@@ -34,20 +34,33 @@ const log = createLogger('sprinkle-manager');
 /**
  * Acquire a display-media stream for sprinkle `captureScreen`.
  *
- * Prefer the leader `<slicc-permissions>` surface (`screenshare` kind) so the
- * Allow click supplies the user gesture — a sprinkle iframe's call arrives
- * across an async `postMessage` hop that drops transient activation. Fall
- * back to direct `getDisplayMedia` only when no surface is mounted (cherry
- * follower / headless harness), matching `wc-attach.ts` `captureScreenshot`.
+ * Prefer the leader `<slicc-permissions>` surface via `prompt()` (not
+ * `request()`): a sprinkle iframe's call arrives across an async
+ * `postMessage` hop that drops transient activation, and only the Grant
+ * Allow click re-supplies the gesture that opens `getDisplayMedia` — same
+ * path as `gestureDisplayMedia` / #3574. Fall back to direct
+ * `getDisplayMedia` only when no surface is mounted (cherry follower /
+ * headless harness).
  */
 export async function acquireSprinkleCaptureStream(): Promise<MediaStream> {
   const surface = getLeaderPermissionsSurface();
   if (surface) {
-    const grant = await surface.request('screenshare', {
-      constraints: { video: true, audio: false },
+    const constraints = { video: true, audio: false };
+    const result = await surface.prompt({
+      kinds: ['screenshare'],
+      description: 'A sprinkle asks to share a screen.',
+      requestOptions: { screenshare: { constraints } },
     });
+    const grant =
+      result.status === 'granted' ? result.grants.find((g) => g.kind === 'screenshare') : undefined;
     if (!grant) {
-      throw new Error('Screen capture cancelled');
+      const detail = result.message ? `: ${result.message}` : '';
+      const reason = result.reason ?? result.status;
+      throw new Error(
+        reason === 'cancelled' || result.status === 'cancelled'
+          ? 'Screen capture cancelled'
+          : `Screen capture ${reason}${detail}`
+      );
     }
     return (grant as Extract<PermissionGrant, { kind: 'screenshare' }>).stream;
   }
