@@ -45,6 +45,7 @@ import { NO_LOGIN_SHELL } from '../../terminal-protocol.js';
 import {
   type InstalledCommandsLookup,
   installedCommands,
+  isModuleFile,
   modulePath,
   type NativeGate,
   WasmSession,
@@ -346,6 +347,19 @@ function stdinBytes(ctx: CommandContext): Uint8Array {
   return bytes;
 }
 
+/**
+ * The module to run: `--module`, else PROGRAM itself when it is a wasm module
+ * (`wasm ./rg.wasm`: a WASI program, no glue), else the glue's `.wasm`.
+ */
+async function programModule(
+  ctx: CommandContext,
+  call: Invocation,
+  gluePath: string
+): Promise<string> {
+  if (call.module) return ctx.fs.resolvePath(ctx.cwd, call.module);
+  return (await isModuleFile(ctx, gluePath)) ? gluePath : modulePath(gluePath);
+}
+
 /** The program's env defaults: its installed command's, as looked up or as the shell dispatched it. */
 function programDefaults(
   call: Invocation,
@@ -388,6 +402,7 @@ export async function runWasmCommand(
   );
   const call = await resolveInstalled(ctx, session, parsed);
   const gluePath = ctx.fs.resolvePath(ctx.cwd, call.program);
+  const modulePathOf = await programModule(ctx, call, gluePath);
 
   let stdio: Stdio;
   if (call.tty) {
@@ -414,8 +429,9 @@ export async function runWasmCommand(
   try {
     handle = await session.launch({
       glue: gluePath,
-      module: call.module ? ctx.fs.resolvePath(ctx.cwd, call.module) : modulePath(gluePath),
-      argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
+      module: modulePathOf,
+      argv0:
+        call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.(js|wasm)$/, ''),
       args: call.args,
       env: programEnv(ctx, call, {
         ...realmNetworkEnv(),

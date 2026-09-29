@@ -21,11 +21,17 @@ import {
 import {
   bytesSource,
   FdTable,
+  heldFile,
+  nullFile,
   OpenFile,
   openPipe,
   sinkFile,
 } from '../../../src/kernel/wasm-realm/fd-table.js';
-import { spawnWasmProcess, type WasmWorkerLike } from '../../../src/kernel/wasm-realm/host.js';
+import {
+  inheritedFds,
+  spawnWasmProcess,
+  type WasmWorkerLike,
+} from '../../../src/kernel/wasm-realm/host.js';
 import type { InheritedFd, WasmProcessInitMsg } from '../../../src/kernel/wasm-realm/protocol.js';
 import { LoopbackNet } from '../../../src/kernel/wasm-realm/socket.js';
 
@@ -328,5 +334,14 @@ describe('spawnWasmProcess', () => {
     expect(onError).toHaveBeenCalledWith('boom');
     // Handled here, so the crash does not propagate to the kernel worker (and the page).
     expect(worker.lastError?.preventDefault).toHaveBeenCalled();
+  });
+});
+
+describe('inheritedFds', () => {
+  it('leaves out a number a WASI worker holds itself: there is nothing behind it to inherit', () => {
+    const fds = new FdTable();
+    fds.installAt(3, heldFile());
+    fds.installAt(4, nullFile());
+    expect(inheritedFds(fds).map((f) => f.fd)).toEqual([4]);
   });
 });

@@ -5,6 +5,7 @@ const spawn = vi.hoisted(() => vi.fn());
 vi.mock('../../../../src/kernel/wasm-realm/host.js', () => ({ spawnWasmProcess: spawn }));
 vi.mock('../../../../src/kernel/realm/wasm-compiler.js', () => ({
   compileWasmFromVfs: async () => ({}),
+  compileWasmModule: async () => ({}),
 }));
 
 import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
@@ -13,6 +14,8 @@ import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../../../src/shell/ipk/wasm-programs.js';
 import {
+  isModuleFile,
+  isWasiTarget,
   SECRET_FUNCTION,
   SECRET_FUNCTION_ENV,
   WasmSession,
@@ -44,7 +47,10 @@ function ctx(files: Record<string, string>, exec?: CommandContext['exec']): Comm
         return files[p];
       },
       readFileBuffer: async (p: string) => bytes(files[p] ?? ''),
-      stat: async (p: string) => ({ size: (files[p] ?? '').length, mtime: new Date(0) }),
+      stat: async (p: string) => {
+        if (!has(p)) throw new Error(`ENOENT: ${p}`);
+        return { isFile: p in files, size: (files[p] ?? '').length, mtime: new Date(0) };
+      },
     },
   } as unknown as CommandContext;
 }
@@ -724,5 +730,31 @@ describe('WasmSession', () => {
     expect(opts.argv0).toBe('tool');
     expect(pm.spawn).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'wasm', ppid: 500 }));
     expect(child.pid).toBe(opts.pid);
+  });
+
+  it('runs a wasm module by itself (the `\\0asm` magic) as a WASI program: no glue to read', async () => {
+    fakeProcesses();
+    const WASM = '\0asm\x01\0\0\0';
+    const files = { ...installed, '/w/rg.wasm': WASM, '/w/notes.wasm': 'plain text' };
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    const target = await session.resolve('/w/rg.wasm', './rg.wasm', '/w');
+    expect(target).toEqual({ glue: '/w/rg.wasm', module: '/w/rg.wasm', argv0: 'rg' });
+    expect(isWasiTarget(target!)).toBe(true);
+    // A file named .wasm that is no module is no program.
+    expect(await session.resolve('/w/notes.wasm', 'notes.wasm', '/w')).toBeUndefined();
+    await session.launch({ ...target!, args: ['-n', 'x'], env: {}, cwd: '/w', fds: stdio() });
+    const opts = spawn.mock.calls.at(-1)![0];
+    expect(opts.program).toMatchObject({ abi: 'wasi', glue: '' });
+    expect(opts.argv0).toBe('rg');
+    expect(opts.args).toEqual(['-n', 'x']);
+  });
+
+  it('isModuleFile: only an existing regular file starting with the wasm magic', async () => {
+    const c = ctx({ '/w/m.wasm': '\0asm\x01', '/w/d/x': '', '/w/s.sh': '#!/bin/sh' });
+    expect(await isModuleFile(c, '/w/m.wasm')).toBe(true);
+    expect(await isModuleFile(c, '/w/m.wasm')).toBe(true); // cached
+    expect(await isModuleFile(c, '/w/s.sh')).toBe(false);
+    expect(await isModuleFile(c, '/w/d')).toBe(false);
+    expect(await isModuleFile(c, '/w/missing')).toBe(false);
   });
 });

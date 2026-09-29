@@ -1,0 +1,152 @@
+/**
+ * The WASI host's smaller parts: errno mapping, paths, the buffered file,
+ * the stat cache, and which modules the preview1 runtime refuses.
+ */
+import { describe, expect, it } from 'vitest';
+import { E, wasiErrnoOf } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
+import {
+  cachingBridge,
+  LocalFile,
+  normalize,
+  pathInode,
+  resolveUnder,
+} from '../../../../src/kernel/wasm-realm/wasi/wasi-files.js';
+import { unsupportedImport } from '../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js';
+import { FakeFs } from './fakes.js';
+
+describe('wasiErrnoOf', () => {
+  it('maps POSIX names to WASI numbers, with the aliases and EIO for the unknown', () => {
+    expect(wasiErrnoOf('ENOENT')).toBe(E.NOENT);
+    expect(wasiErrnoOf('EPIPE')).toBe(E.PIPE);
+    expect(wasiErrnoOf('EOPNOTSUPP')).toBe(E.NOTSUP);
+    expect(wasiErrnoOf('EWOULDBLOCK')).toBe(E.AGAIN);
+    expect(wasiErrnoOf('ETXTBSY')).toBe(E.IO);
+    expect(wasiErrnoOf(undefined)).toBe(E.IO);
+  });
+});
+
+describe('paths', () => {
+  it('normalize drops `.`, `..` and empty segments and never climbs above /', () => {
+    expect(normalize('/a/./b//c/../d')).toBe('/a/b/d');
+    expect(normalize('/../..')).toBe('/');
+    expect(resolveUnder('/w/p', 'x/../y')).toBe('/w/p/y');
+    expect(resolveUnder('/w/p', '/abs')).toBe('/abs');
+  });
+
+  it('pathInode is stable per path and differs between paths', () => {
+    expect(pathInode('/a')).toBe(pathInode('/a'));
+    expect(pathInode('/a')).not.toBe(pathInode('/b'));
+  });
+});
+
+describe('LocalFile', () => {
+  it('loads on first use, zero-fills a gap, and writes back only what changed', () => {
+    const fs = new FakeFs().file('/f', 'abc');
+    const f = new LocalFile(fs, '/f', true, true, false, false);
+    expect(fs.ops).toEqual([]);
+    f.flush(); // nothing loaded, nothing to write
+    expect(fs.ops).toEqual([]);
+    f.pwrite(new TextEncoder().encode('Z'), 5);
+    expect(f.size()).toBe(6);
+    f.flush();
+    expect(fs.text('/f')).toBe('abc\0\0Z');
+    const writes = fs.ops.filter((op) => op.startsWith('write')).length;
+    f.flush();
+    expect(fs.ops.filter((op) => op.startsWith('write')).length).toBe(writes);
+  });
+
+  it('a new (or truncated) file starts empty without reading the old bytes', () => {
+    const fs = new FakeFs().file('/f', 'old');
+    const f = new LocalFile(fs, '/f', true, true, false, true);
+    expect(f.read(10)).toEqual(new Uint8Array(0));
+    f.flush();
+    expect(fs.text('/f')).toBe('');
+    expect(fs.ops.some((op) => op.startsWith('read'))).toBe(false);
+  });
+});
+
+describe('cachingBridge', () => {
+  it('answers stat, lstat and exists from its cache, errors included', () => {
+    const fs = new FakeFs().file('/f', 'x');
+    const cached = cachingBridge(fs);
+    cached.stat('/f');
+    cached.stat('/f');
+    cached.lstat('/f');
+    expect(cached.exists('/f')).toBe(true);
+    expect(fs.ops.filter((op) => op === 'stat /f')).toHaveLength(1);
+    expect(() => cached.stat('/missing')).toThrow('ENOENT');
+    expect(cached.exists('/missing')).toBe(false);
+    expect(fs.ops.filter((op) => op === 'stat /missing')).toHaveLength(1);
+  });
+
+  it('forgets everything after any mutation, even a failed one, and on invalidate()', () => {
+    const fs = new FakeFs().file('/f', 'x');
+    const cached = cachingBridge(fs);
+    cached.stat('/f');
+    cached.writeFile('/g', new Uint8Array(1));
+    cached.stat('/f');
+    expect(fs.ops.filter((op) => op === 'stat /f')).toHaveLength(2);
+    expect(() => cached.rename('/missing', '/x')).toThrow('ENOENT');
+    cached.stat('/f');
+    cached.invalidate();
+    cached.stat('/f');
+    expect(fs.ops.filter((op) => op === 'stat /f')).toHaveLength(4);
+    for (const op of ['unlink', 'mkdir', 'rmdir', 'rm'] as const) cached[op]('/g');
+    cached.symlink('/f', '/l');
+    cached.chmod('/f', 0o644);
+    cached.utimes('/f', 1, 2);
+    expect(cached.readFile('/f')).toEqual(new TextEncoder().encode('x'));
+  });
+});
+
+/** A module with the given imports (func `() -> ()` or a memory) and exports (funcs). */
+function module(
+  imports: Array<[string, string, 'func' | 'memory']>,
+  exports: string[]
+): WebAssembly.Module {
+  const enc = new TextEncoder();
+  const str = (s: string) => [s.length, ...enc.encode(s)];
+  const section = (id: number, body: number[]) => [id, body.length, ...body];
+  const types = section(1, [1, 0x60, 0, 0]);
+  const imp = section(2, [
+    imports.length,
+    ...imports.flatMap(([m, n, kind]) =>
+      kind === 'func' ? [...str(m), ...str(n), 0, 0] : [...str(m), ...str(n), 2, 0, 1]
+    ),
+  ]);
+  const funcs = section(3, [exports.length, ...exports.map(() => 0)]);
+  const nImportedFuncs = imports.filter(([, , k]) => k === 'func').length;
+  const exp = section(7, [
+    exports.length,
+    ...exports.flatMap((name, i) => [...str(name), 0, nImportedFuncs + i]),
+  ]);
+  const code = section(10, [exports.length, ...exports.flatMap(() => [2, 0, 0x0b])]);
+  return new WebAssembly.Module(
+    new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, ...types, ...imp, ...funcs, ...exp, ...code])
+  );
+}
+
+describe('unsupportedImport', () => {
+  const P1 = 'wasi_snapshot_preview1';
+  it('accepts a preview1 command', () => {
+    expect(unsupportedImport(module([[P1, 'fd_write', 'func']], ['_start']))).toBeUndefined();
+  });
+
+  it('refuses WASIX, threads, Emscripten glue imports and reactors, saying which', () => {
+    expect(unsupportedImport(module([['wasix_32v1', 'proc_fork', 'func']], ['_start']))).toContain(
+      'WASIX'
+    );
+    expect(unsupportedImport(module([['env', 'memory', 'memory']], ['_start']))).toContain(
+      'threaded'
+    );
+    expect(unsupportedImport(module([['wasi', 'thread-spawn', 'func']], ['_start']))).toContain(
+      'threaded'
+    );
+    expect(unsupportedImport(module([['a', 'a', 'func']], ['_start']))).toContain(
+      'imports a.a: no WASI preview1 program'
+    );
+    expect(unsupportedImport(module([[P1, 'fd_write', 'func']], ['_initialize']))).toContain(
+      'no _start'
+    );
+  });
+});

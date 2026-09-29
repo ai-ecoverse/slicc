@@ -19,12 +19,19 @@ import {
   type InheritedSlot,
   SpawnError,
 } from './children.js';
-import { type FdTable, KernelError, openPipe, pollFile } from './fd-table.js';
+import {
+  type FdTable,
+  heldFile,
+  KernelError,
+  kernelFdKind,
+  openPipe,
+  pollFile,
+} from './fd-table.js';
 import type { JobTable } from './jobs.js';
 import type { ForkState } from './protocol.js';
 import { selectFds } from './select.js';
 import { type DefaultAction, defaultAction, isSignal, SIG, sigbit } from './signals.js';
-import { LoopbackNet } from './socket.js';
+import { KernelSocket, LoopbackNet } from './socket.js';
 import { SOCKET_OPS, type SocketSyscall, socketSyscall } from './socket-syscalls.js';
 import type { KernelTty, Termios } from './tty.js';
 import { type VfsFileFs, vfsFile } from './vfs-file.js';
@@ -57,6 +64,12 @@ export type WasmSyscall =
   | { op: 'fd-seek'; fd: number; offset: number; whence: number }
   | { op: 'fd-select'; read: number[]; write: number[]; timeoutMs: number }
   | { op: 'fd-info'; fd: number }
+  /** dup(2): the lowest free fd >= `min` (default 3) on the same description. */
+  | { op: 'fd-dup'; fd: number; min?: number }
+  /** Take a number for a descriptor the process's worker holds itself (WASI): `fd`, or the lowest free >= 3. */
+  | { op: 'fd-reserve'; fd?: number }
+  /** WASI fd_renumber: `to` becomes `from`'s description (what was at `to` closes), `from` closes. */
+  | { op: 'fd-renumber'; from: number; to: number }
   /** open("/dev/tty"): a new descriptor on the controlling terminal (ENXIO without one). */
   | { op: 'fd-open-tty' }
   | { op: 'tty-get'; fd: number }
@@ -136,6 +149,9 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-seek',
   'fd-select',
   'fd-info',
+  'fd-dup',
+  'fd-reserve',
+  'fd-renumber',
   'fd-open-tty',
   'tty-get',
   'tty-set',
@@ -394,12 +410,21 @@ export class WasmProcess {
         });
         return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
       }
-      case 'fd-info':
-        return {
-          ok: true,
-          kind: 'json',
-          json: { tty: this.fds.get(req.fd).file.tty !== undefined },
-        };
+      case 'fd-info': {
+        const file = this.fds.get(req.fd).file;
+        const kind = file instanceof KernelSocket ? 'socket' : kernelFdKind(file);
+        return { ok: true, kind: 'json', json: { tty: file.tty !== undefined, kind } };
+      }
+      case 'fd-dup':
+        return { ok: true, kind: 'json', json: this.fds.dup(req.fd, req.min ?? 3) };
+      case 'fd-reserve':
+        return { ok: true, kind: 'json', json: this.reserve(req.fd) };
+      case 'fd-renumber':
+        if (req.from !== req.to) {
+          this.fds.dup2(req.from, req.to);
+          await Promise.resolve(this.fds.close(req.from));
+        }
+        return { ok: true, kind: 'void' };
       case 'fd-open-tty': {
         const tty = this.controllingTerminal();
         if (!tty) throw new KernelError('ENXIO');
@@ -422,6 +447,14 @@ export class WasmProcess {
         return { ok: true, kind: 'void' };
       }
     }
+  }
+
+  /** A held number: exactly `fd` (EBADF when taken), else the lowest free one >= 3. */
+  private reserve(fd: number | undefined): number {
+    if (fd === undefined) return this.fds.install(heldFile(), 3);
+    if (this.fds.has(fd)) throw new KernelError('EBADF');
+    this.fds.installAt(fd, heldFile());
+    return fd;
   }
 
   /** Terminal syscalls: termios, window size and foreground group of an fd that is a terminal (else ENOTTY). */

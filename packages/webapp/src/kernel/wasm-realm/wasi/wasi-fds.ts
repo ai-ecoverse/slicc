@@ -1,0 +1,272 @@
+/**
+ * `wasi-fds.ts` — a WASI program's descriptor table, numbered as the
+ * kernel's: a kernel descriptor (stdio, a pipe, an inherited fd) is itself,
+ * and a descriptor the worker holds (a buffered VFS file, a directory, a
+ * device) keeps its number taken in the kernel with a placeholder
+ * (`fd-reserve`), so the two tables never disagree.
+ *
+ * Preopens, the one layout Zig, Go and wasi-libc all resolve correctly:
+ * fd 3 is `.` (the cwd — Zig's std takes fd 3 as its cwd, wasi-libc resolves
+ * relative paths through `.`), then one absolute preopen per top-level VFS
+ * directory. `/` itself is never one: wasi-libc lets it shadow `.`. Go takes
+ * its cwd from `$PWD`. An absolute path on any directory fd resolves from
+ * the VFS root (Zig hands absolute paths to fd 3): the process's fs token
+ * bounds what it can reach, so WASI rights add nothing and every descriptor
+ * carries them all.
+ */
+import type { SyncFsBridgeStat, SyncFsPosixBridge } from '../../realm/sync-fs-xhr-bridge.js';
+import type { KernelFdKind } from '../fd-table.js';
+import type { ProcessSys } from '../kernel-streams.js';
+import type { WasmSyscall } from '../process.js';
+import { FDFLAGS, OFLAGS, RIGHTS } from './wasi-abi.js';
+import { LocalFile, normalize, resolveUnder, type WasiEntry, WasiError } from './wasi-files.js';
+
+/** The kernel as the WASI host calls it. */
+export interface WasiKernel {
+  sys: ProcessSys;
+  /** A syscall `sys` does not wrap; its answer (EBADF & co. thrown as errors with a `code`). */
+  call(req: WasmSyscall): unknown;
+}
+
+type Device = 'null' | 'zero' | 'urandom';
+
+const DEVICES: Readonly<Record<string, Device>> = {
+  '/dev/null': 'null',
+  '/dev/zero': 'zero',
+  '/dev/urandom': 'urandom',
+  '/dev/random': 'urandom',
+};
+
+/** `/dev/stdin`, `/dev/stdout`, `/dev/stderr`, `/dev/fd/N`: the fd they reopen. */
+function stdioAlias(path: string): number | undefined {
+  const m = /^\/dev\/(?:(stdin)|(stdout)|(stderr)|fd\/(\d+))$/.exec(path);
+  if (!m) return undefined;
+  return m[1] ? 0 : m[2] ? 1 : m[3] ? 2 : Number(m[4]);
+}
+
+export function deviceOf(path: string): Device | undefined {
+  return DEVICES[path];
+}
+
+export class WasiFds {
+  private readonly table = new Map<number, WasiEntry>();
+
+  constructor(
+    private readonly kernel: WasiKernel,
+    private readonly fs: SyncFsPosixBridge
+  ) {}
+
+  /**
+   * The table a process starts with: kernel fds 0-2 and `inherited`, then the
+   * preopens from fd 3 up. An inherited fd in their way moves above them
+   * (WASI programs find preopens by scanning up from 3 until EBADF).
+   */
+  setup(cwd: string, inherited: readonly number[]): void {
+    for (const fd of [0, 1, 2]) this.table.set(fd, kernelEntry());
+    const preopens = this.preopens(cwd);
+    const top = 3 + preopens.length;
+    for (const fd of inherited) {
+      let at = fd;
+      if (fd < top) {
+        at = this.kernel.call({ op: 'fd-dup', fd, min: top }) as number;
+        this.kernel.sys.close(fd);
+      }
+      this.table.set(at, kernelEntry());
+    }
+    preopens.forEach((entry, i) => {
+      this.kernel.call({ op: 'fd-reserve', fd: 3 + i });
+      this.table.set(3 + i, entry);
+    });
+  }
+
+  private preopens(cwd: string): WasiEntry[] {
+    const out: WasiEntry[] = [{ type: 'dir', path: normalize(cwd), preopen: '.' }];
+    let names: string[] = [];
+    try {
+      names = this.fs.readdir('/');
+    } catch {
+      return out;
+    }
+    // `/dev` always: wasi-libc reaches `/dev/null` & co. only through a preopen.
+    for (const name of [...new Set([...names, 'dev'])].sort()) {
+      const path = `/${name}`;
+      if (path === '/dev') {
+        out.push({ type: 'dir', path, preopen: path });
+        continue;
+      }
+      try {
+        if (this.fs.stat(path).isDirectory) out.push({ type: 'dir', path, preopen: path });
+      } catch {
+        /* gone, or unreadable: no preopen */
+      }
+    }
+    return out;
+  }
+
+  find(fd: number): WasiEntry | undefined {
+    return this.table.get(fd);
+  }
+
+  get(fd: number): WasiEntry {
+    const e = this.table.get(fd);
+    if (!e) throw new WasiError('EBADF');
+    return e;
+  }
+
+  /** A preopen's entry, or EBADF (which ends the program's preopen scan). */
+  preopen(fd: number): Extract<WasiEntry, { type: 'dir' }> & { preopen: string } {
+    const e = this.table.get(fd);
+    if (e?.type !== 'dir' || e.preopen === undefined) throw new WasiError('EBADF');
+    return e as Extract<WasiEntry, { type: 'dir' }> & { preopen: string };
+  }
+
+  dir(fd: number): Extract<WasiEntry, { type: 'dir' }> {
+    const e = this.get(fd);
+    if (e.type !== 'dir') throw new WasiError('ENOTDIR');
+    return e;
+  }
+
+  entries(): IterableIterator<WasiEntry> {
+    return this.table.values();
+  }
+
+  /** A worker-held descriptor at the number the kernel reserves for it. */
+  private install(e: WasiEntry): number {
+    const fd = this.kernel.call({ op: 'fd-reserve' }) as number;
+    this.table.set(fd, e);
+    return fd;
+  }
+
+  close(fd: number): void {
+    const e = this.get(fd);
+    this.table.delete(fd);
+    this.kernel.sys.close(fd);
+    release(e);
+  }
+
+  /** fd_renumber: `to` becomes `from` (what was at `to` closes), `from` is gone. */
+  renumber(from: number, to: number): void {
+    const e = this.get(from);
+    const old = this.get(to);
+    if (from === to) return;
+    this.kernel.call({ op: 'fd-renumber', from, to });
+    this.table.delete(from);
+    this.table.set(to, e);
+    release(old);
+  }
+
+  /** The kernel's kind of a kernel descriptor (asked once). */
+  kind(fd: number, e: Extract<WasiEntry, { type: 'kernel' }>): KernelFdKind {
+    if (!e.kind) {
+      const info = this.kernel.call({ op: 'fd-info', fd }) as {
+        tty?: boolean;
+        kind?: KernelFdKind;
+      };
+      e.kind = info.kind ?? (info.tty ? 'tty' : 'stream');
+    }
+    return e.kind;
+  }
+
+  /** Write back every buffered file (at exit). */
+  flushAll(): void {
+    for (const e of this.table.values()) if (e.type === 'file') e.file.flush();
+  }
+
+  /** Before a path-level op sees a file this process has buffered, write it back. */
+  flushPath(path: string): void {
+    for (const file of this.filesAt(path)) file.flush();
+  }
+
+  /** The files open at `path`. */
+  private filesAt(path: string): LocalFile[] {
+    const out: LocalFile[] = [];
+    for (const e of this.table.values())
+      if (e.type === 'file' && e.file.path === path) out.push(e.file);
+    return out;
+  }
+
+  /** `path` is about to be unlinked: its open files keep their bytes and are never written back. */
+  unlinking(path: string): void {
+    for (const file of this.filesAt(path)) file.orphan();
+  }
+
+  /** `from` was renamed to `to`: its open files follow it (written back there). */
+  renamed(from: string, to: string): void {
+    for (const file of this.filesAt(from)) file.path = to;
+  }
+
+  /** `path` given with directory fd `dirfd`; an absolute path stands on its own. */
+  resolve(dirfd: number, path: string): string {
+    if (path.startsWith('/')) return normalize(path);
+    return resolveUnder(this.dir(dirfd).path, path);
+  }
+
+  /** path_open: a device, the terminal, a reopened fd, a directory or a VFS file; its new fd. */
+  open(path: string, oflags: number, rights: bigint, fdflags: number): number {
+    const device = deviceOf(path);
+    if (device) return this.install({ type: 'device', device });
+    if (path === '/dev/tty') {
+      const fd = this.kernel.sys.openTty?.();
+      if (fd === undefined) throw new WasiError('ENXIO');
+      this.table.set(fd, { ...kernelEntry(), kind: 'tty' });
+      return fd;
+    }
+    const alias = stdioAlias(path);
+    if (alias !== undefined) return this.reopen(alias);
+    const s = this.statOrMissing(path);
+    if (s && oflags & OFLAGS.CREAT && oflags & OFLAGS.EXCL) throw new WasiError('EEXIST');
+    if (oflags & OFLAGS.DIRECTORY && !s?.isDirectory) {
+      throw new WasiError(s ? 'ENOTDIR' : 'ENOENT');
+    }
+    if (s?.isDirectory) return this.install({ type: 'dir', path });
+    if (!s && !(oflags & OFLAGS.CREAT)) throw new WasiError('ENOENT');
+    return this.install({ type: 'file', file: this.file(path, s, oflags, rights, fdflags) });
+  }
+
+  private file(
+    path: string,
+    existing: SyncFsBridgeStat | undefined,
+    oflags: number,
+    rights: bigint,
+    fdflags: number
+  ): LocalFile {
+    const writable =
+      (rights & RIGHTS.FD_WRITE) !== 0n || (oflags & (OFLAGS.CREAT | OFLAGS.TRUNC)) !== 0;
+    const readable = (rights & RIGHTS.FD_READ) !== 0n || !writable;
+    // Created at once, so a readdir that follows sees it.
+    if (!existing) this.fs.writeFile(path, new Uint8Array(0));
+    const empty = !existing || (oflags & OFLAGS.TRUNC) !== 0;
+    const append = (fdflags & FDFLAGS.APPEND) !== 0;
+    return new LocalFile(this.fs, path, readable, writable, append, empty);
+  }
+
+  private statOrMissing(path: string): SyncFsBridgeStat | undefined {
+    try {
+      return this.fs.stat(path);
+    } catch (e) {
+      if ((e as { code?: string }).code === 'ENOENT') return undefined;
+      throw e;
+    }
+  }
+
+  /** `/dev/fd/N`: a new fd on N's description (a buffered file is shared, offset and all). */
+  private reopen(fd: number): number {
+    const e = this.get(fd);
+    if (e.type === 'kernel') {
+      const at = this.kernel.call({ op: 'fd-dup', fd }) as number;
+      this.table.set(at, { ...e });
+      return at;
+    }
+    if (e.type === 'file') e.file.refs++;
+    return this.install(e.type === 'file' ? e : { ...e });
+  }
+}
+
+function kernelEntry(): Extract<WasiEntry, { type: 'kernel' }> {
+  return { type: 'kernel', nonblock: false, append: false };
+}
+
+/** The worker's side of a close: a buffered file's last fd writes it back. */
+function release(e: WasiEntry): void {
+  if (e.type === 'file' && --e.file.refs === 0) e.file.flush();
+}

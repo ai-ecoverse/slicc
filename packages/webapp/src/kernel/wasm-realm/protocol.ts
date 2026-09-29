@@ -14,9 +14,14 @@ export const WASM_PROCESS_INIT = 'wasm-process-init';
 export const WASM_PROCESS_EXIT = 'wasm-process-exit';
 export const WASM_PROCESS_ERROR = 'wasm-process-error';
 
-/** An Emscripten program: its glue (JS) and compiled module. */
+/** A program: its compiled module, and for Emscripten its glue (JS). */
 export interface WasmProgram {
-  /** The Emscripten glue source; built with `-sENVIRONMENT` including `worker`. */
+  /**
+   * How it talks to the kernel: through its Emscripten glue (the default), or
+   * WASI preview1 imports (`wasi/wasi-runtime.ts`), with no glue at all.
+   */
+  abi?: 'emscripten' | 'wasi';
+  /** The Emscripten glue source; built with `-sENVIRONMENT` including `worker`. Empty for WASI. */
   glue: string;
   /** Compiled on the kernel side (a large module would OOM a worker). */
   module: WebAssembly.Module;

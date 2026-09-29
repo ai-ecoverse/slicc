@@ -14,7 +14,7 @@
  *   the end first and its output is written to its descriptors when it is done.
  */
 import type { CommandContext } from 'just-bash';
-import { compileWasmFromVfs } from '../../../kernel/realm/wasm-compiler.js';
+import { compileWasmFromVfs, compileWasmModule } from '../../../kernel/realm/wasm-compiler.js';
 import {
   type ChildForker,
   type ChildHandle,
@@ -121,7 +121,10 @@ export type NativeGate = (
 /** The installed wasm commands by name, as the shell's catalog knows them now. */
 export type InstalledCommandsLookup = () => Promise<Map<string, WasmCommand>>;
 
-/** A wasm program to start: its glue and module paths and `argv[0]`. */
+/**
+ * A wasm program to start: its glue and module paths and `argv[0]`. A WASI
+ * program has no glue: its `glue` is its module (see {@link isWasiTarget}).
+ */
 export interface WasmTarget {
   glue: string;
   module: string;
@@ -148,6 +151,18 @@ export interface LaunchRequest extends WasmTarget {
 interface StartRequest extends LaunchRequest {
   program: WasmProgram;
   fork?: ForkState;
+}
+
+/** A target with no glue of its own (its glue path is its module): a WASI program. */
+export function isWasiTarget(target: Pick<WasmTarget, 'glue' | 'module'>): boolean {
+  return target.glue === target.module;
+}
+
+/** The first bytes of every wasm module: `\0asm`. */
+const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
+
+function isWasmBytes(bytes: Uint8Array): boolean {
+  return WASM_MAGIC.every((b, i) => bytes[i] === b);
 }
 
 /** The glue's module: `x.js` → `x.wasm`, `x` → `x.wasm`. */
@@ -177,16 +192,51 @@ export function installedCommands(ctx: CommandContext): Promise<Map<string, Wasm
   return scanWasmCommands(programFs(ctx), GLOBAL_NODE_MODULES);
 }
 
-async function loadModule(ctx: CommandContext, path: string): Promise<WebAssembly.Module> {
-  const st = await ctx.fs.stat(path);
-  const key = `${path}:${st.size}:${st.mtime.getTime()}`;
-  let module = modules.get(key);
-  if (!module) {
-    module = compileWasmFromVfs((p) => ctx.fs.readFileBuffer(p), path);
-    modules.set(key, module);
-    module.catch(() => modules.delete(key));
-  }
+function cacheKey(path: string, st: { size: number; mtime: Date }): string {
+  return `${path}:${st.size}:${st.mtime.getTime()}`;
+}
+
+function cache(key: string, module: Promise<WebAssembly.Module>): Promise<WebAssembly.Module> {
+  modules.set(key, module);
+  module.catch(() => modules.delete(key));
   return module;
+}
+
+async function loadModule(ctx: CommandContext, path: string): Promise<WebAssembly.Module> {
+  const key = cacheKey(path, await ctx.fs.stat(path));
+  return (
+    modules.get(key) ??
+    cache(
+      key,
+      compileWasmFromVfs((p) => ctx.fs.readFileBuffer(p), path)
+    )
+  );
+}
+
+/**
+ * Whether `path` is a wasm module itself (it starts with `\0asm`), which the
+ * realm runs as a WASI program. What was read to tell is compiled into the
+ * module cache, so the launch that follows reads nothing again.
+ */
+export async function isModuleFile(ctx: CommandContext, path: string): Promise<boolean> {
+  let key: string;
+  try {
+    const st = await ctx.fs.stat(path);
+    if (!st.isFile) return false;
+    key = cacheKey(path, st);
+  } catch {
+    return false;
+  }
+  if (modules.has(key)) return true;
+  let bytes: Uint8Array;
+  try {
+    bytes = await ctx.fs.readFileBuffer(path);
+  } catch {
+    return false;
+  }
+  if (!isWasmBytes(bytes)) return false;
+  void cache(key, compileWasmModule(bytes)).catch(() => undefined);
+  return true;
 }
 
 function latin1(bytes: Uint8Array): string {
@@ -302,10 +352,11 @@ export class WasmSession {
 
   /** Start a program; rejects when its glue or module cannot be read or compiled. */
   async launch(req: LaunchRequest): Promise<WasmProcessHandle> {
-    let glue: string;
+    const wasi = isWasiTarget(req);
+    let glue = '';
     let module: WebAssembly.Module;
     try {
-      glue = await this.ctx.fs.readFile(req.glue);
+      if (!wasi) glue = await this.ctx.fs.readFile(req.glue);
       module = await loadModule(this.ctx, req.module);
       req.signal?.throwIfAborted();
     } catch (e) {
@@ -313,7 +364,11 @@ export class WasmSession {
       throw e;
     }
     const env = withSecretFunction(req.argv0, withDefaults(req.defaults, req.env));
-    return this.start({ ...req, env, program: { glue, module } });
+    return this.start({
+      ...req,
+      env,
+      program: wasi ? { abi: 'wasi', glue, module } : { glue, module },
+    });
   }
 
   /** Start a loaded program: a new process, or (with `fork`) a forked copy of its parent. */
@@ -441,6 +496,10 @@ export class WasmSession {
     if (!(await this.ctx.fs.exists(glue))) return undefined;
     const module = modulePath(glue);
     if (await this.ctx.fs.exists(module)) return { glue, module, argv0: baseName(argv0 || file) };
+    // A wasm module by itself: a WASI program (its name without `.wasm`, for a multi-call binary).
+    if (await isModuleFile(this.ctx, glue)) {
+      return { glue, module: glue, argv0: baseName(argv0 || file).replace(/\.wasm$/, '') };
+    }
     return this.packagedCopy(glue, argv0 || file);
   }
 

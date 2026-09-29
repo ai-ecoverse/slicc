@@ -117,21 +117,24 @@ function descId(file: OpenFile): number {
 
 /** The descriptors beyond 0-2 a process starts with, as its runtime backs them. */
 export function inheritedFds(fds: FdTable): InheritedFd[] {
-  return fds
-    .numbers()
-    .filter((fd) => fd > 2)
-    .map((fd): InheritedFd => {
-      const open = fds.get(fd);
-      const flags = fds.statusFlags(fd);
-      const kind = open.file instanceof KernelSocket ? 'socket' : kernelFdKind(open.file);
-      return {
-        fd,
-        kind,
-        ...(flags !== undefined ? { flags } : {}),
-        ...(fds.closesOnExec(fd) ? { cloexec: true } : {}),
-        ...(kind === 'stream' ? { desc: descId(open) } : {}),
-      };
-    });
+  return (
+    fds
+      .numbers()
+      // A held number is its worker's own (a WASI program's file): nothing to inherit.
+      .filter((fd) => fd > 2 && !fds.get(fd).file.held)
+      .map((fd): InheritedFd => {
+        const open = fds.get(fd);
+        const flags = fds.statusFlags(fd);
+        const kind = open.file instanceof KernelSocket ? 'socket' : kernelFdKind(open.file);
+        return {
+          fd,
+          kind,
+          ...(flags !== undefined ? { flags } : {}),
+          ...(fds.closesOnExec(fd) ? { cloexec: true } : {}),
+          ...(kind === 'stream' ? { desc: descId(open) } : {}),
+        };
+      })
+  );
 }
 
 export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
