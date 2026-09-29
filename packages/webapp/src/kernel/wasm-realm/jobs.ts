@@ -7,6 +7,8 @@
  * parent's. `setpgid` moves a process into a group of the same session (or
  * makes it one), `setsid` starts a new session. A terminal's foreground group
  * (`tcsetpgrp`) is where ^C / ^Z / SIGWINCH go; `kill(-pgid)` signals a group.
+ * A session's controlling terminal is the one its leader started on:
+ * what `/dev/tty` opens for every process of the session.
  */
 import { KernelError } from './fd-table.js';
 import type { KernelTty } from './tty.js';
@@ -28,10 +30,21 @@ export interface JobMember {
 export class JobTable {
   private readonly members = new Map<number, JobMember>();
   private readonly foreground = new Map<KernelTty, number>();
+  /** Controlling terminals by session id. */
+  private readonly terminals = new Map<number, KernelTty>();
 
-  /** A new process: its own group and session (a leader), or its parent's. */
-  add(pid: number, parentPid: number | undefined, signal: (sig: number) => void): JobMember {
+  /**
+   * A new process: its own group and session (a leader), or its parent's. A
+   * leader started on `terminal` makes it the session's controlling terminal.
+   */
+  add(
+    pid: number,
+    parentPid: number | undefined,
+    signal: (sig: number) => void,
+    terminal?: KernelTty
+  ): JobMember {
     const parent = parentPid === undefined ? undefined : this.members.get(parentPid);
+    if (!parent && terminal) this.terminals.set(pid, terminal);
     const member: JobMember = {
       pid,
       ppid: parent?.pid,
@@ -95,13 +108,23 @@ export class JobTable {
     return this.member(pid || caller).sid;
   }
 
-  /** setsid(2): a new session and group led by `pid`; not for a group leader. */
+  /** setsid(2): a new session and group led by `pid`, with no controlling terminal; not for a group leader. */
   setsid(pid: number): number {
     const member = this.member(pid);
     if (member.pgid === pid) throw new KernelError('EPERM');
     member.sid = pid;
     member.pgid = pid;
+    this.terminals.delete(pid);
     return pid;
+  }
+
+  /**
+   * The controlling terminal of `pid`'s session: null when the session has
+   * none, undefined when `pid` is no process of the table.
+   */
+  controllingTerminal(pid: number): KernelTty | null | undefined {
+    const member = this.members.get(pid);
+    return member && (this.terminals.get(member.sid) ?? null);
   }
 
   /** Signal every process of group `pgid`; false when there is none. */
