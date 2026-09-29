@@ -24,7 +24,11 @@ import { SYNC_EXEC_CHANNEL, type SyncExecResultPayload } from './sync-exec-dispa
 import type { SyncExecTransport } from './sync-exec-xhr-bridge.js';
 import type { SyncFsResult } from './sync-fs-dispatch.js';
 import { SYNC_EXEC_XHR_MARGIN_MS, SYNC_FS_REQUEST_TIMEOUT_MS } from './sync-fs-wire.js';
-import { parseSyncFsStat, type SyncFsPosixBridge } from './sync-fs-xhr-bridge.js';
+import {
+  parseSyncFsStat,
+  type SyncFsBridgeStat,
+  type SyncFsPosixBridge,
+} from './sync-fs-xhr-bridge.js';
 import {
   decodeSabResult,
   SAB_I_CHUNK,
@@ -202,6 +206,15 @@ export function createSyncFsSabBridge(
         throw errnoError('EIO', path);
       }
       return list as string[];
+    },
+    readdirStat: (path) => {
+      const list = json({ op: 'readdir-stat', path }, path);
+      if (!Array.isArray(list)) throw errnoError('EIO', path);
+      return list.map((entry): [string, SyncFsBridgeStat | null] => {
+        const [name, stat] = entry as [unknown, unknown];
+        if (typeof name !== 'string') throw errnoError('EIO', path);
+        return [name, stat === null ? null : parseSyncFsStat(stat)];
+      });
     },
     exists: (path) => {
       const v = json({ op: 'exists', path }, path);

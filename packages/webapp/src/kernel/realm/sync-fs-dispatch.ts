@@ -82,6 +82,8 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         return { ok: true, kind: 'json', json: statJson(await fs.lstat(resolved)) };
       case 'readdir':
         return { ok: true, kind: 'json', json: await fs.readdir(resolved) };
+      case 'readdir-stat':
+        return { ok: true, kind: 'json', json: await readdirStat(fs, resolved) };
       case 'mkdir':
         await fs.mkdir(resolved, { recursive: true });
         return { ok: true, kind: 'void' };
@@ -104,6 +106,29 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
   } catch (err) {
     return toErrno(err);
   }
+}
+
+/**
+ * A listing and each entry's lstat, from this side of the bridge: a program
+ * that lists a directory to learn its entries' types (a WASI `fd_readdir`,
+ * Python's import system over `lib/python3.12`) pays one round trip, not one
+ * per entry, and a mount answers the lstats from the listing it just fetched.
+ */
+async function readdirStat(
+  fs: SyncFsTokenEntry['fs'],
+  dir: string
+): Promise<Array<[string, SyncFsStatJson | null]>> {
+  const names = await fs.readdir(dir);
+  const base = dir === '/' ? '' : dir;
+  return Promise.all(
+    names.map(async (name): Promise<[string, SyncFsStatJson | null]> => {
+      try {
+        return [name, statJson(await fs.lstat(`${base}/${name}`))];
+      } catch {
+        return [name, null];
+      }
+    })
+  );
 }
 
 /** Wire shape of a `stat` / `lstat` result. */

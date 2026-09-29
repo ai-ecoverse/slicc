@@ -20,6 +20,7 @@ import { SignalGate } from '../process-signals.js';
 import type { WasmProcessInitMsg } from '../protocol.js';
 import { cachingBridge } from './wasi-files.js';
 import { WasiExit, WasiHost } from './wasi-host.js';
+import { WasiStats } from './wasi-stats.js';
 
 /** A program that trapped (abort, `unreachable`, a stack overflow) ends as SIGABRT would. */
 const TRAPPED = 134;
@@ -54,6 +55,8 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     new Int32Array(init.sab, 0, SAB_HEADER_I32),
     { masks: () => null, raise: () => {} }
   ).transport();
+  // SLICC_WASI_STATS=1: every call counted and timed, the table on stderr at the end.
+  const stats = init.env.SLICC_WASI_STATS ? new WasiStats() : undefined;
   const sys = kernelSys(transport);
   const say = (text: string) => sys.write(2, new TextEncoder().encode(`${init.argv0}: ${text}\n`));
   const refused = unsupportedImport(init.program.module);
@@ -61,23 +64,29 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     say(refused);
     return 126;
   }
-  const call = (req: WasmSyscall): unknown => {
+  let call = (req: WasmSyscall): unknown => {
     const r: SyncFsResult = transport.call(req, Number.POSITIVE_INFINITY, req.op);
     if (!r.ok) throw new SyscallError(r.errno);
     return r.kind === 'json' ? r.json : undefined;
   };
+  if (stats) {
+    const kernelCall = call;
+    call = (req) => stats.time(`kernel.${req.op}`, () => kernelCall(req));
+  }
+  const bridge = createSyncFsSabBridge(transport);
   const host = new WasiHost({
     args: [init.argv0, ...init.args],
     env: init.env,
     cwd: init.cwd,
     pid: init.pid,
-    kernel: { sys, call },
-    fs: cachingBridge(createSyncFsSabBridge(transport)),
+    kernel: { sys: stats ? stats.wrap('kernel', sys) : sys, call },
+    fs: cachingBridge(stats ? stats.wrap('fs', bridge) : bridge),
     inherited: (init.fds ?? []).map((f) => ({ fd: f.fd, kind: f.kind, flags: f.flags })),
   });
   const instance = await WebAssembly.instantiate(init.program.module, {
-    [PREVIEW1]: host.imports(),
+    [PREVIEW1]: stats ? stats.wrap('wasi', host.imports()) : host.imports(),
   });
+  stats?.phase('instantiate');
   const exports = instance.exports as { memory: WebAssembly.Memory; _start: () => void };
   host.mem.bind(exports.memory);
   try {
@@ -96,5 +105,13 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
   } finally {
     // What the program wrote to the files it has open must not be lost with the worker.
     host.flushAll();
+    if (stats) {
+      stats.phase('run');
+      try {
+        sys.write(2, new TextEncoder().encode(stats.report()));
+      } catch {
+        /* no stderr left to report on */
+      }
+    }
   }
 }

@@ -65,7 +65,8 @@ function start(
   stdio: [OpenFile, OpenFile, OpenFile],
   err: (m: string) => void,
   extra: Array<[number, OpenFile]> = [],
-  cwd = '/workspace/proj'
+  cwd = '/workspace/proj',
+  env: Record<string, string> = {}
 ): Promise<number> {
   const fds = new FdTable();
   for (const [i, f] of stdio.entries()) fds.installAt(i, f);
@@ -75,7 +76,7 @@ function start(
     program,
     argv0,
     args,
-    env: { HOME: '/home' },
+    env: { HOME: '/home', ...env },
     cwd,
     fds,
     fs: fs as never,
@@ -88,7 +89,13 @@ function start(
 async function run(
   program: WasmProgram,
   args: string[],
-  opts: { stdin?: string; argv0?: string; extra?: Array<[number, OpenFile]>; cwd?: string } = {}
+  opts: {
+    stdin?: string;
+    argv0?: string;
+    extra?: Array<[number, OpenFile]>;
+    cwd?: string;
+    env?: Record<string, string>;
+  } = {}
 ): Promise<Run> {
   let stdout = '';
   let stderr = '';
@@ -104,7 +111,8 @@ async function run(
     ],
     (m) => void (stderr += m),
     opts.extra,
-    opts.cwd
+    opts.cwd,
+    opts.env
   );
   return { code, stdout, stderr };
 }
@@ -182,6 +190,25 @@ describe('WASI preview1 programs in the wasm realm', () => {
     expect((await run(c, ['rw', 'rw.bin'])).stdout).toBe('pread 23AB67 size 7\n');
     expect(await text('/workspace/proj/rw.bin')).toBe('0123AB6');
     expect((await run(c, ['ls', 'src'])).stdout).toBe('ls src: lib.rs main.go\n');
+  });
+
+  it('SLICC_WASI_STATS=1: a 300-entry listing is one bridge request, counted on stderr', async () => {
+    for (let i = 0; i < 300; i++) await fs.writeFile(`/home/many/m${i}.py`, '');
+    const r = await run(await wasi(`${FIXTURES}wasitest.wasm`), ['ls', '/home/many'], {
+      env: { SLICC_WASI_STATS: '1' },
+    });
+    expect(r.stdout).toMatch(/^ls \/home\/many: m0\.py m1\.py m10\.py /);
+    const rows = new Map(
+      [...r.stderr.matchAll(/^\s+[\d.]+\s+(\d+)\s+[\d.]+\s+(\S+)$/gm)].map((m) => [
+        m[2],
+        Number(m[1]),
+      ])
+    );
+    expect(rows.get('fs.readdirStat')).toBe(1);
+    expect(rows.get('fs.lstat') ?? 0).toBeLessThan(5); // `.` and `..`, not one per entry
+    expect(rows.get('wasi.fd_readdir')).toBeGreaterThan(0);
+    expect(r.stderr).toMatch(/ms {2}instantiate\n/);
+    expect(r.stderr).toMatch(/ms {2}run\n/);
   });
 
   it('C: stdio, argv and env, exit codes, sleep, isatty, devices and /dev/fd', async () => {

@@ -138,3 +138,23 @@ test('a thrown error with a NUMERIC .code collapses to EIO', async () => {
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.errno).toBe('EIO');
 });
+
+test('readdir-stat lists names with their lstats in one op (a symlink stays one)', async () => {
+  const token = await scopedToken('/scoops/x/', true);
+  const r = await dispatchSyncFs({ token, op: 'readdir-stat', path: '.' });
+  expect(r.ok).toBe(true);
+  if (!r.ok || r.kind !== 'json') return;
+  const byName = new Map(r.json as Array<[string, Record<string, unknown> | null]>);
+  expect([...byName.keys()].sort()).toEqual(['in.txt', 'link.txt']);
+  expect(byName.get('in.txt')).toMatchObject({ isFile: true, size: 2 });
+  expect(byName.get('link.txt')).toMatchObject({ isSymbolicLink: true, isFile: false });
+});
+
+test('ESCALATION GUARD: readdir-stat shows no more than readdir (no out-of-sandbox entry)', async () => {
+  const token = await scopedToken('/scoops/x/');
+  const plain = await dispatchSyncFs({ token, op: 'readdir', path: '/' });
+  const r = await dispatchSyncFs({ token, op: 'readdir-stat', path: '/' });
+  const names = r.ok && r.kind === 'json' ? (r.json as Array<[string]>).map(([n]) => n) : [];
+  expect(names).not.toContain('secret.txt');
+  expect(names).toEqual(plain.ok && plain.kind === 'json' ? plain.json : []);
+});
