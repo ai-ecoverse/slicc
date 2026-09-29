@@ -1,5 +1,5 @@
 import { type existsSync, existsSync as fsExistsSync, type readdirSync } from 'fs';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -1007,23 +1007,43 @@ describe('seedChromeProfilePreferences', () => {
     expect(after.performance_tuning.tab_discarding.exceptions).toEqual(TAB_LIFECYCLE_EXEMPT_SITES);
   });
 
-  it('replaces a corrupt Preferences file with a valid seeded one', async () => {
-    // Unlike clearChromeRestoreState (whose crash-flag rewrite is cosmetic and
-    // can defer to Chrome's regeneration), the freeze opt-out must exist at
-    // launch — an unprotected leader freezes in the background. Chrome fills
-    // the rest of a minimal-but-valid file back in itself.
+  it('leaves a corrupt Preferences file untouched (fail closed)', async () => {
+    // A parse failure is not "file missing" — rewriting from {} would destroy
+    // whatever Chrome still has on disk (or a mid-flush partial). Leave it for
+    // Chrome to regenerate; --disable-features still covers the freeze belt.
     const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
     tempDirs.push(dir);
     const prefsPath = join(dir, 'Default', 'Preferences');
     await mkdir(join(dir, 'Default'), { recursive: true });
-    await writeFile(prefsPath, 'not valid json {');
+    const corrupt = 'not valid json {';
+    await writeFile(prefsPath, corrupt);
 
     await seedChromeProfilePreferences(dir);
 
-    const after = JSON.parse(await readFile(prefsPath, 'utf8')) as {
-      tab_freezing_enabled: boolean;
-    };
-    expect(after.tab_freezing_enabled).toBe(false);
+    expect(await readFile(prefsPath, 'utf8')).toBe(corrupt);
+  });
+
+  it('does not wipe existing Preferences on a non-ENOENT read fault', async () => {
+    // Regression for #3625: catch-all readJsonFile treated EACCES/EIO like a
+    // missing file, seeded from {}, and overwrote the durable Preferences.
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    const durable = JSON.stringify({
+      profile: { name: 'keep-me-forever', content_settings: { exceptions: { cookies: {} } } },
+      extensions: { settings: { abcdefghijklmnop: { state: 1 } } },
+      account_info: [{ email: 'user@example.com' }],
+    });
+    await writeFile(prefsPath, durable);
+    await chmod(prefsPath, 0o000);
+    try {
+      await seedChromeProfilePreferences(dir);
+    } finally {
+      await chmod(prefsPath, 0o644);
+    }
+
+    expect(await readFile(prefsPath, 'utf8')).toBe(durable);
   });
 });
 

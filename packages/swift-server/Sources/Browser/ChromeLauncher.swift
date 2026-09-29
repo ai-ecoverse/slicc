@@ -418,20 +418,37 @@ struct ChromeLauncher: Sendable {
     /// origins (honored by freeze policy via FreezingFollowsDiscardOptOut).
     /// Mirrors node-server's `seedChromeProfilePreferences`. Merges into
     /// existing prefs and never throws.
+    ///
+    /// Read faults other than a missing file fail closed: the existing
+    /// Preferences are left untouched rather than rewritten from an empty
+    /// default (#3625).
     func seedProfilePreferences(userDataDir: String) {
         let defaultDir = URL(fileURLWithPath: userDataDir, isDirectory: true)
             .appendingPathComponent("Default", isDirectory: true)
         let prefsPath = defaultDir.appendingPathComponent("Preferences")
         try? FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
-        var prefs: [String: Any] = [:]
-        if let data = try? Data(contentsOf: prefsPath),
-            let parsed = try? JSONSerialization.jsonObject(with: data),
-            let existing = parsed as? [String: Any]
-        {
-            prefs = existing
+
+        let prefs: [String: Any]
+        do {
+            let data = try Data(contentsOf: prefsPath)
+            guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return  // exists but not an object — fail closed
+            }
+            prefs = parsed
+        } catch {
+            // Missing file (first run) → seed from empty. Any other read fault
+            // (EIO/EACCES/EBUSY/partial) → leave the existing file alone.
+            let ns = error as NSError
+            let isMissing =
+                (ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError)
+                || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT))
+            guard isMissing else { return }
+            prefs = [:]
         }
-        prefs["tab_freezing_enabled"] = false
-        var performanceTuning = prefs["performance_tuning"] as? [String: Any] ?? [:]
+
+        var mutablePrefs = prefs
+        mutablePrefs["tab_freezing_enabled"] = false
+        var performanceTuning = mutablePrefs["performance_tuning"] as? [String: Any] ?? [:]
         var highEfficiencyMode = performanceTuning["high_efficiency_mode"] as? [String: Any] ?? [:]
         highEfficiencyMode["state"] = 0
         performanceTuning["high_efficiency_mode"] = highEfficiencyMode
@@ -442,8 +459,8 @@ struct ChromeLauncher: Sendable {
         }
         tabDiscarding["exceptions"] = exceptions
         performanceTuning["tab_discarding"] = tabDiscarding
-        prefs["performance_tuning"] = performanceTuning
-        guard let out = try? JSONSerialization.data(withJSONObject: prefs) else { return }
+        mutablePrefs["performance_tuning"] = performanceTuning
+        guard let out = try? JSONSerialization.data(withJSONObject: mutablePrefs) else { return }
         try? out.write(to: prefsPath)
     }
 
