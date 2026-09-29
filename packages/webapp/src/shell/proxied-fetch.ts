@@ -7,6 +7,11 @@ import {
 import type { SecureFetch } from 'just-bash';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes, type SecureFetchRequestBody } from './fetch-body.js';
+import {
+  type RawFetchCapabilities,
+  type RawProxiedFetch,
+  usesFetchProxyEndpoint,
+} from './proxied-fetch-raw-types.js';
 import { isProxyError, readProxyErrorMessage } from './proxy-error.js';
 import {
   decodeForbiddenResponseHeaders as _decodeForbiddenResponseHeaders,
@@ -68,6 +73,26 @@ export {
 
 function resolveFetchProxyUrl(): string {
   return resolveApiUrl('/api/fetch-proxy');
+}
+
+export {
+  type RawFetchCapabilities,
+  RawFetchError,
+  type RawFetchErrorCode,
+  type RawFetchInit,
+  type RawFetchResponse,
+  type RawHeaderList,
+  type RawProxiedFetch,
+} from './proxied-fetch-raw-types.js';
+
+export async function getRawFetchCapabilities(): Promise<RawFetchCapabilities> {
+  const raw = await import('./proxied-fetch-raw.js');
+  return raw.getRawFetchCapabilities();
+}
+
+export async function resetRawFetchCapabilities(): Promise<void> {
+  const raw = await import('./proxied-fetch-raw.js');
+  raw.resetRawFetchCapabilities();
 }
 
 export { isTextContentType };
@@ -157,6 +182,8 @@ export interface ProxiedFetchOptions {
   progress?: FetchProgressObserver;
 
   maxResponseBytes?: number;
+
+  mode?: 'default' | 'raw';
 }
 
 export const PROXY_CONTENT_LENGTH_HEADER = 'x-proxy-content-length';
@@ -460,13 +487,6 @@ export type StreamingFetch = (
   options?: Parameters<SecureFetch>[1]
 ) => Promise<StreamedFetchResponse>;
 
-function usesFetchProxyEndpoint(): boolean {
-  if (getChromeExtensionRealm()) return false;
-  if (!getExtensionDelegateId()) return true;
-  if (typeof chrome === 'undefined') return false;
-  return typeof chrome?.runtime?.connect !== 'function';
-}
-
 async function* singleChunk(bytes: Uint8Array): AsyncGenerator<Uint8Array> {
   if (bytes.byteLength > 0) yield bytes;
 }
@@ -514,8 +534,23 @@ function streamProxyBody(
 }
 
 export function createProxiedStreamingFetch(
+  fetchOptions: ProxiedFetchOptions & { mode: 'raw' }
+): RawProxiedFetch;
+export function createProxiedStreamingFetch(fetchOptions?: ProxiedFetchOptions): StreamingFetch;
+export function createProxiedStreamingFetch(
   fetchOptions: ProxiedFetchOptions = {}
-): StreamingFetch {
+): StreamingFetch | RawProxiedFetch {
+  if (fetchOptions.mode === 'raw') {
+    const raw: RawProxiedFetch = async (url, init) => {
+      const { createRawProxiedFetch } = await import('./proxied-fetch-raw.js');
+      return createRawProxiedFetch()(url, init);
+    };
+    return raw;
+  }
+  return createDefaultStreamingFetch(fetchOptions);
+}
+
+function createDefaultStreamingFetch(fetchOptions: ProxiedFetchOptions): StreamingFetch {
   const progress = fetchOptions.progress;
   if (!usesFetchProxyEndpoint()) {
     const buffered = createProxiedFetch(fetchOptions);

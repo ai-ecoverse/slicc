@@ -61,6 +61,7 @@ export function buildFetchProxyExposeHeaders(forwardedHeaderNames: Iterable<stri
 
 export function shouldParseGlobalJson(req: IncomingMessage): boolean {
   if (req.headers['x-slicc-raw-body'] === '1') return false;
+  if (req.headers['x-slicc-raw-request'] !== undefined) return false;
   if (isHostFsStableBodyRequest(req)) return false;
   return (req.headers['content-type'] ?? '').includes('application/json');
 }

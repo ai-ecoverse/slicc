@@ -95,7 +95,9 @@ import { runInstallCli } from './install-cli.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import { AgentActivityTracker } from './routes/agent-activity.js';
 import { registerFetchProxyRoute } from './routes/fetch-proxy.js';
+import { registerRawFetchProxyRoute } from './routes/fetch-proxy-raw.js';
 import { registerHandoffRoute } from './routes/handoff.js';
 import { registerLickApiRoutes } from './routes/lick-api.js';
 import { createLickBridge } from './routes/lick-bridge.js';
@@ -1151,6 +1153,12 @@ function createCdpWebSocketServer(bridgeToken: string | null): WebSocketServer {
   });
 }
 
+function mountFetchProxy(app: express.Express, secretProxy: SecretProxyManager): void {
+  const activityTracker = new AgentActivityTracker();
+  registerRawFetchProxyRoute(app, { secretProxy, activityTracker });
+  registerFetchProxyRoute(app, { secretProxy, activityTracker });
+}
+
 async function main() {
   const state = createServerState();
   await resolvePorts(state);
@@ -1225,7 +1233,7 @@ async function main() {
   const computerDemo = RUNTIME_FLAGS.computerDemo ? new ComputerDemoState() : null;
   if (computerDemo) registerComputerDemoRoutes(app, computerDemo);
 
-  registerFetchProxyRoute(app, { secretProxy });
+  mountFetchProxy(app, secretProxy);
 
   const server = createBridgeServer(app);
 

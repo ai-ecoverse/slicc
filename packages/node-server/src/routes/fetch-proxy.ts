@@ -123,7 +123,7 @@ export function injectRequestSecrets(
   return { cleanedUrl: credsResult.url };
 }
 
-async function applyHmacSigning(
+export async function applyHmacSigning(
   secretProxy: SecretProxyManager,
   headers: Record<string, string>,
   hmacSpec: string | undefined,
@@ -142,7 +142,7 @@ async function applyHmacSigning(
   return undefined;
 }
 
-function unmaskRequestBody(
+export function unmaskRequestBody(
   secretProxy: SecretProxyManager,
   headers: Record<string, string>,
   rawBody: Buffer,
@@ -243,7 +243,7 @@ export function streamUpstreamBody(
   const decoded = isText
     ? createMaybeGunzipStream({
         onDecided: (inflating) => {
-          if (inflating) res.removeHeader(FETCH_PROXY_CONTENT_LENGTH_HEADER);
+          if (inflating && !res.headersSent) res.removeHeader(FETCH_PROXY_CONTENT_LENGTH_HEADER);
         },
       })
     : new PassThrough();
