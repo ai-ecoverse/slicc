@@ -56,7 +56,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     { masks: () => null, raise: () => {} }
   ).transport();
   // SLICC_WASI_STATS=1: every call counted and timed, the table on stderr at the end.
-  const stats = init.env.SLICC_WASI_STATS ? new WasiStats() : undefined;
+  const stats = init.env.SLICC_WASI_STATS === '1' ? new WasiStats() : undefined;
   const sys = kernelSys(transport);
   const say = (text: string) => sys.write(2, new TextEncoder().encode(`${init.argv0}: ${text}\n`));
   const refused = unsupportedImport(init.program.module);

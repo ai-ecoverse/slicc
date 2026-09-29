@@ -211,9 +211,12 @@ export function createSyncFsSabBridge(
       const list = json({ op: 'readdir-stat', path }, path);
       if (!Array.isArray(list)) throw errnoError('EIO', path);
       return list.map((entry): [string, SyncFsBridgeStat | null] => {
-        const [name, stat] = entry as [unknown, unknown];
-        if (typeof name !== 'string') throw errnoError('EIO', path);
-        return [name, stat === null ? null : parseSyncFsStat(stat)];
+        if (!Array.isArray(entry) || typeof entry[0] !== 'string') throw errnoError('EIO', path);
+        // null is "vanished since the listing"; any other stat must parse.
+        if (entry[1] === null) return [entry[0], null];
+        const stat = parseSyncFsStat(entry[1]);
+        if (!stat) throw errnoError('EIO', path);
+        return [entry[0], stat];
       });
     },
     exists: (path) => {

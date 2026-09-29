@@ -260,8 +260,11 @@ describe('createSyncFsSabBridge — fs surface parity with the XHR bridge', () =
       ['gone', null],
     ]);
     expect(k.sent.map((m) => opOf((m as SyncSabReqMsg).req))).toEqual(['readdir-stat']);
-    const bad = bridgeWith(() => ({ ok: true, kind: 'json', json: [[1, null]] })).bridge;
-    expect(() => bad.readdirStat?.('/d')).toThrow(expect.objectContaining({ code: 'EIO' }));
+    for (const json of [[[1, null]], [['a', { not: 'a stat' }]], [7], ['a']]) {
+      // A malformed name, stat or entry is EIO: never an entry taken for vanished, nor a raw TypeError.
+      const bad = bridgeWith(() => ({ ok: true, kind: 'json', json })).bridge;
+      expect(() => bad.readdirStat?.('/d')).toThrow(expect.objectContaining({ code: 'EIO' }));
+    }
   });
 });
 

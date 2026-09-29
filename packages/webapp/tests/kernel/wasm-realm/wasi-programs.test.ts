@@ -209,6 +209,11 @@ describe('WASI preview1 programs in the wasm realm', () => {
     expect(rows.get('wasi.fd_readdir')).toBeGreaterThan(0);
     expect(r.stderr).toMatch(/ms {2}instantiate\n/);
     expect(r.stderr).toMatch(/ms {2}run\n/);
+    // Only `1` turns it on: a `0` (or anything else) leaves stderr to the program.
+    const off = await run(await wasi(`${FIXTURES}wasitest.wasm`), ['exit', '0'], {
+      env: { SLICC_WASI_STATS: '0' },
+    });
+    expect(off).toMatchObject({ code: 0, stderr: '' });
   });
 
   it('C: stdio, argv and env, exit codes, sleep, isatty, devices and /dev/fd', async () => {
