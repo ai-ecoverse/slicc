@@ -761,3 +761,40 @@ describe('secret command — set with an unreadable store fails closed', () => {
     expect(broker.calls()).toBe(0);
   });
 });
+
+describe('secret shell-env', () => {
+  const masked = (name: string) =>
+    vi.fn(async (n: string) =>
+      n === name ? { name, maskedValue: "mask'1", domains: ['a.com'] } : null
+    );
+
+  it('answers a set with the export a running shell needs, parsing the args as set does', async () => {
+    const backend = makeBackend({ getMasked: masked('TOKEN') });
+    for (const args of [
+      ['set', 'TOKEN', 'value', '--domain', 'a.com'],
+      ['set', '--domain', 'a.com', 'TOKEN'],
+      ['set', 'TOKEN', 'value', '--domain', 'a.com', '--persist'],
+    ]) {
+      const res = await run(['shell-env', ...args], { backend });
+      expect(res).toEqual({ stdout: "export TOKEN='mask'\\''1'\n", stderr: '', exitCode: 0 });
+    }
+  });
+
+  it('answers a delete with an unset, and nothing for other names or subcommands', async () => {
+    const backend = makeBackend({ getMasked: masked('TOKEN') });
+    expect((await run(['shell-env', 'rm', 'TOKEN'], { backend })).stdout).toBe('unset TOKEN\n');
+    expect((await run(['shell-env', 'delete', 'TOKEN'], { backend })).stdout).toBe('unset TOKEN\n');
+    for (const args of [
+      ['set', 's3.r2.key', 'v', '--domain', 'a.com'],
+      ['set', 'OTHER', 'v', '--domain', 'a.com'],
+      ['delete', 'a-b'],
+      ['list'],
+      [],
+    ]) {
+      const res = await run(['shell-env', ...args], { backend });
+      expect(res).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+    }
+    expect(backend.setSession).not.toHaveBeenCalled();
+    expect(backend.delete).not.toHaveBeenCalled();
+  });
+});

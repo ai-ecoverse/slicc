@@ -35,7 +35,7 @@ export async function bundleProcessWorker(): Promise<{ file: string; dispose(): 
 }
 
 /** A `worker_threads` Worker as the kernel host's DedicatedWorker. */
-function nodeWorker(file: string): WasmWorkerLike {
+export function nodeWorker(file: string): WasmWorkerLike {
   const worker = new Worker(file);
   const wrapped = new Map<(event: MessageEvent) => void, (arg: unknown) => void>();
   return {

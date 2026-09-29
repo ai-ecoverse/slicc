@@ -116,6 +116,64 @@ describe('AlmostBashShellHeadless on GNU bash', () => {
     expect((run.mock.calls[2]![1] as RunCtx).cwd).toBe('/workspace/sub');
   });
 
+  it('makes a secret set by a bash child ($NAME, masked) the next run’s, whatever the run’s state says', async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+        const json = (data: unknown) =>
+          ({ ok: true, status: 200, json: async () => data }) as Response;
+        if (url === '/api/secrets/session' && method === 'POST') {
+          const body = JSON.parse(String(init?.body));
+          values.set(body.name, body.value);
+          return json({ ok: true });
+        }
+        if (url === '/api/secrets/masked') {
+          return json(
+            [...values.keys()].map((name) => ({
+              name,
+              maskedValue: `mask-${name}`,
+              domains: ['a.com'],
+            }))
+          );
+        }
+        return json([]);
+      })
+    );
+    try {
+      await installBash(fs);
+      const shell = new AlmostBashShellHeadless({ fs, gnuBash: true });
+      // The run: bash runs `secret` as a just-bash child (as it does without the
+      // function), and its state reports bash's own exports, without the secret.
+      run.mockImplementationOnce(
+        async (
+          _args: string[],
+          ctx: RunCtx & { exec: (c: string, o: object) => Promise<{ exitCode: number }> },
+          options: RunOptions
+        ) => {
+          const r = await ctx.exec('secret set T_TOKEN real-value --domain a.com', {
+            env: ctx.exportedEnv,
+          });
+          expect(r.exitCode).toBe(0);
+          await options.fds?.[0]?.[1].file.write?.(
+            new TextEncoder().encode(state(0, '0', '/', ctx.exportedEnv))
+          );
+          return { stdout: '', stderr: '', exitCode: 0, stdoutKind: 'bytes' };
+        }
+      );
+      await shell.executeCommand('secret set T_TOKEN real-value --domain a.com');
+      fakeBash('', () => null);
+      await shell.executeCommand('echo "$T_TOKEN"');
+      const next = (run.mock.calls[1]![1] as RunCtx).exportedEnv;
+      expect(next.T_TOKEN).toBe('mask-T_TOKEN');
+      expect(Object.values(next)).not.toContain('real-value');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('registers the .jsh commands of a PATH a run exported', async () => {
     await installBash(fs);
     await fs.mkdir('/tools', { recursive: true });
