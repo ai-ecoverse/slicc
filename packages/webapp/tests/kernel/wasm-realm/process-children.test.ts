@@ -22,7 +22,10 @@ function transport(answer: (req: Req) => SyncFsResult) {
   return { t, calls };
 }
 
-/** An Emscripten-ish FS: fds 0-2 are kernel descriptors, fd 5 a file holding `data`, fd 6 a sink. */
+/**
+ * An Emscripten-ish FS: fds 0-2 are kernel descriptors, fd 5 a file holding
+ * `data`, fd 6 a sink, fd 7 the module's own `/dev/null`.
+ */
 function fs(data = 'file-data') {
   const written: string[] = [];
   let offset = 0;
@@ -34,6 +37,7 @@ function fs(data = 'file-data') {
     2: stream(2, 2),
     5: stream(5),
     6: stream(6),
+    7: { ...stream(7), path: '/dev/null' } as ProcessStream,
   };
   const Fs = {
     getStream: (fd: number) => streams[fd] ?? null,
@@ -109,6 +113,17 @@ describe('createProcessKernel', () => {
         cwd: '/work',
         stdio: [{ fd: 0 }, { fd: 1 }, { fd: 2 }],
       },
+    ]);
+  });
+
+  it('hands a /dev/null stdout over as nothing: no capture, so no wait (git runs a store helper so)', () => {
+    const { k, calls } = kernel(() => json(8));
+    expect(k.spawn('sh', ['sh', '-c', 'x'], null, null, [0, 7, 2])).toBe(8);
+    expect(calls.map((c) => c.op)).toEqual(['proc-spawn']);
+    expect((calls[0] as unknown as { stdio: unknown[] }).stdio).toEqual([
+      { fd: 0 },
+      { none: true },
+      { fd: 2 },
     ]);
   });
 
