@@ -581,6 +581,37 @@ create it for a hook), and none of git's shell-script commands, so
 `git submodule` (and `clone --recurse-submodules`) says it is not a git command.
 With those scripts present, submodules work.
 
+### Native Python next to Pyodide
+
+`python3` / `python` are SLICC's Pyodide until a native CPython (a WASIX build
+installed with ipk) provides them. Then, as for git:
+
+- **just-bash**: the built-ins win, so `python3` stays Pyodide.
+- **GNU bash**: `python3` is the native interpreter, as is every `python3` a
+  program or script runs.
+- **Anywhere**: `pyodide` is SLICC's Pyodide by its own name (the same
+  command).
+
+Python packages reach the native interpreter through their manifests:
+
+- The interpreter's package says what it is:
+  `"slicc": {"python": {"version": "3.14", "abi": "cp314", "platform": "wasix_wasm32"}}`.
+- A package with Python code says where its code is:
+  `"python": {"sitePackages": "lib/python3.14/site-packages"}`. One with C
+  extensions also says what it was built for:
+  `"requires": {"abi": "cp314", "platform": "wasix_wasm32"}`.
+- Each time the interpreter starts, SLICC writes
+  `~/.local/lib/python<version>/site-packages/_slicc_packages.pth`. It
+  holds one `site.addsitedir(...)` per matching package, so their own
+  `.pth` files and namespace packages work. The file is rewritten only when
+  it changes.
+- A package built for another interpreter is left off the path, with a
+  note on stderr.
+- `pip install --user` installs pure-Python packages into the same user
+  site, through the realm proxy (`CURL_CA_BUNDLE` is its CA).
+- C extensions load with WASIX `dlopen` (`docs/kernel/process-model.md`,
+  **Dynamic linking**).
+
 ### `hf download` fetches several files at once
 
 `hf download` (`hf-command.ts` over `hf-download.ts`) runs a bounded pool: at

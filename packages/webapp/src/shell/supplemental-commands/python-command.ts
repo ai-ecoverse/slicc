@@ -310,7 +310,7 @@ type ParsedPythonInvocation =
  * it stays under the cognitive-complexity cap.
  */
 async function parsePythonInvocation(
-  name: 'python3' | 'python',
+  name: 'python3' | 'python' | 'pyodide',
   args: string[],
   ctx: CommandContext
 ): Promise<ParsedPythonInvocation> {
@@ -450,7 +450,7 @@ export function stripNoopInterpreterFlags(args: string[]): string[] {
 }
 
 export function createPython3LikeCommand(
-  name: 'python3' | 'python',
+  name: 'python3' | 'python' | 'pyodide',
   options: PythonCommandOptions = {}
 ): Command {
   return defineCommand(name, async (rawArgs, ctx) => {

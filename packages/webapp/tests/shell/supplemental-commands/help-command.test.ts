@@ -133,6 +133,7 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'jsh',
   'python',
   'python3',
+  'pyodide',
   'sqlite3',
   'tsc',
   'tst',
