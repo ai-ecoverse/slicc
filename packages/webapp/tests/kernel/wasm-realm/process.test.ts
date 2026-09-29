@@ -118,6 +118,41 @@ describe('WasmProcess: numbers a WASI worker holds', () => {
     expect(json(await p.syscall({ op: 'fd-reserve' }))).toBe(3);
   });
 
+  it('a threaded WASI process shares its table through the kernel: meta, status flags, FD_CLOEXEC, the list', async () => {
+    const p = new WasmProcess(3102, stdio('', []));
+    const dir = { dir: '/workspace', preopen: '.' };
+    expect(json(await p.syscall({ op: 'fd-reserve', fd: 3, meta: dir }))).toBe(3);
+    expect(json(await p.syscall({ op: 'fd-reserve', meta: { device: 'null' } }))).toBe(4);
+    expect(json(await p.syscall({ op: 'fd-info', fd: 3 }))).toEqual({
+      tty: false,
+      kind: 'held',
+      meta: dir,
+    });
+    // chdir moves `.` for every thread.
+    await p.syscall({ op: 'fd-meta', fd: 3, meta: { dir: '/tmp', preopen: '.' } });
+    expect(json(await p.syscall({ op: 'fd-info', fd: 3 }))).toMatchObject({
+      meta: { dir: '/tmp' },
+    });
+    // Only a held number has a meaning to change.
+    expect(await p.syscall({ op: 'fd-meta', fd: 1, meta: dir })).toMatchObject({ errno: 'EBADF' });
+    await p.syscall({ op: 'fd-setfl', fd: 1, flags: 0o4000 });
+    await p.syscall({ op: 'fd-cloexec', fd: 1, on: true });
+    expect(json(await p.syscall({ op: 'fd-info', fd: 1 }))).toEqual({
+      tty: false,
+      kind: 'stream',
+      flags: 0o4000,
+      cloexec: true,
+    });
+    await p.syscall({ op: 'fd-cloexec', fd: 1, on: false });
+    expect(json(await p.syscall({ op: 'fd-list' }))).toEqual([
+      { fd: 0, tty: false, kind: 'stream' },
+      { fd: 1, tty: false, kind: 'stream', flags: 0o4000 },
+      { fd: 2, tty: false, kind: 'stream' },
+      { fd: 3, tty: false, kind: 'held', meta: { dir: '/tmp', preopen: '.' } },
+      { fd: 4, tty: false, kind: 'held', meta: { device: 'null' } },
+    ]);
+  });
+
   it('fd-dup honors a minimum; fd-renumber moves a description and closes the source', async () => {
     const out: string[] = [];
     const p = new WasmProcess(3101, stdio('', out));

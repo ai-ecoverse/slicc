@@ -14,17 +14,25 @@ import {
   WASM_PROCESS_ERROR,
   WASM_PROCESS_EXIT,
   WASM_PROCESS_INIT,
+  WASM_THREAD_INIT,
   type WasmProcessErrorMsg,
   type WasmProcessExitMsg,
   type WasmProcessInitMsg,
+  type WasmThreadInitMsg,
 } from './protocol.js';
 
 declare const self: DedicatedWorkerGlobalScope;
 
 self.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as { type?: string } | undefined;
-  if (data?.type !== WASM_PROCESS_INIT) return;
   const port = { postMessage: (msg: unknown) => self.postMessage(msg) };
+  // A thread of a WASI process: its start function, reporting for itself.
+  if (data?.type === WASM_THREAD_INIT) {
+    const init = event.data as WasmThreadInitMsg;
+    void import('./wasi/wasi-runtime.js').then((m) => m.runWasiThread(init, port));
+    return;
+  }
+  if (data?.type !== WASM_PROCESS_INIT) return;
   const init = event.data as WasmProcessInitMsg;
   // The WASI host loads only for a WASI program: Emscripten programs never pay for it.
   const run =

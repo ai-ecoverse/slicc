@@ -8,7 +8,7 @@ import type {
   SyncFsBridgeStat,
   SyncFsPosixBridge,
 } from '../../../../src/kernel/realm/sync-fs-xhr-bridge.js';
-import type { KernelFdKind } from '../../../../src/kernel/wasm-realm/fd-table.js';
+import type { HeldMeta, KernelFdKind } from '../../../../src/kernel/wasm-realm/fd-table.js';
 import type { ProcessSys } from '../../../../src/kernel/wasm-realm/kernel-streams.js';
 import type { WasmSyscall } from '../../../../src/kernel/wasm-realm/process.js';
 import type { WasiKernel } from '../../../../src/kernel/wasm-realm/wasi/wasi-fds.js';
@@ -40,6 +40,9 @@ interface FakeFd {
   reads?: number[];
   /** A VFS file's path (`openVfs`). */
   path?: string;
+  meta?: HeldMeta;
+  flags?: number;
+  cloexec?: boolean;
 }
 
 export class FakeKernel implements WasiKernel {
@@ -72,6 +75,17 @@ export class FakeKernel implements WasiKernel {
     const e = this.table.get(fd);
     if (!e) throw posix('EBADF');
     return e;
+  }
+
+  private info(fd: number) {
+    const e = this.get(fd);
+    return {
+      tty: e.kind === 'tty',
+      kind: e.kind,
+      ...(e.meta ? { meta: e.meta } : {}),
+      ...(e.flags !== undefined ? { flags: e.flags } : {}),
+      ...(e.cloexec ? { cloexec: true as const } : {}),
+    };
   }
 
   private free(min: number): number {
@@ -136,10 +150,21 @@ export class FakeKernel implements WasiKernel {
     switch (req.op) {
       case 'fd-reserve': {
         if (req.fd !== undefined && this.table.has(req.fd)) throw posix('EBADF');
-        const fd = req.fd ?? this.free(3);
-        this.add(fd, 'held');
+        const fd = req.fd ?? this.free(req.min ?? 3);
+        this.add(fd, 'held').meta = req.meta;
         return fd;
       }
+      case 'fd-meta':
+        this.get(req.fd).meta = req.meta;
+        return undefined;
+      case 'fd-setfl':
+        this.get(req.fd).flags = req.flags;
+        return undefined;
+      case 'fd-cloexec':
+        this.get(req.fd).cloexec = req.on;
+        return undefined;
+      case 'fd-list':
+        return [...this.table.keys()].sort((a, b) => a - b).map((fd) => ({ fd, ...this.info(fd) }));
       case 'fd-dup': {
         const fd = this.free(req.min ?? 3);
         this.table.set(fd, this.get(req.fd));
@@ -152,10 +177,8 @@ export class FakeKernel implements WasiKernel {
       case 'proc-spawn':
         // Nothing to run here: every program is missing.
         throw posix('ENOENT');
-      case 'fd-info': {
-        const e = this.get(req.fd);
-        return { tty: e.kind === 'tty', kind: e.kind };
-      }
+      case 'fd-info':
+        return this.info(req.fd);
       case 'fd-select': {
         const hung = [...req.read, ...req.write].filter((fd) => this.table.get(fd)?.hangup);
         return {
@@ -332,8 +355,16 @@ export class ListingFs extends FakeFs {
 }
 
 export class Guest {
-  readonly memory = new WebAssembly.Memory({ initial: 64 });
+  readonly memory: WebAssembly.Memory;
   private top = 1024;
+
+  /** `shared`: a shared memory (futexes wait on it). */
+  constructor(shared = false) {
+    this.memory = new WebAssembly.Memory({
+      initial: 64,
+      ...(shared ? { maximum: 64, shared } : {}),
+    });
+  }
 
   get view(): DataView {
     return new DataView(this.memory.buffer);

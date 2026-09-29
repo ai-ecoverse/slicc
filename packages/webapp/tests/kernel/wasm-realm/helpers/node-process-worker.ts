@@ -13,7 +13,9 @@ import {
   WASM_PROCESS_ERROR,
   WASM_PROCESS_EXIT,
   WASM_PROCESS_INIT,
+  WASM_THREAD_INIT,
   type WasmProcessInitMsg,
+  type WasmThreadInitMsg,
 } from '../../../../src/kernel/wasm-realm/protocol.js';
 
 // Emscripten glue built with ENVIRONMENT=node takes its node path here: it
@@ -27,9 +29,15 @@ const port = parentPort;
 if (!port) throw new Error('node-process-worker runs in a worker thread');
 
 port.on('message', (data: { type?: string }) => {
+  const post = { postMessage: (msg: unknown) => port.postMessage(msg) };
+  if (data?.type === WASM_THREAD_INIT) {
+    void import('../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js').then((m) =>
+      m.runWasiThread(data as WasmThreadInitMsg, post)
+    );
+    return;
+  }
   if (data?.type !== WASM_PROCESS_INIT) return;
   const init = data as WasmProcessInitMsg;
-  const post = { postMessage: (msg: unknown) => port.postMessage(msg) };
   const run =
     init.program.abi === 'wasi'
       ? import('../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js').then((m) =>

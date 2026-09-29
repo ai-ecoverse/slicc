@@ -33,11 +33,17 @@ import { isWasmSyscall, type StateListener, WasmProcess } from './process.js';
 import {
   type ForkState,
   type InheritedFd,
+  WASM_MAX_THREADS,
   WASM_PROCESS_ERROR,
   WASM_PROCESS_EXIT,
   WASM_PROCESS_INIT,
+  WASM_THREAD_EXIT,
+  WASM_THREAD_INIT,
+  WASM_THREAD_SPAWN,
   type WasmProcessInitMsg,
   type WasmProgram,
+  type WasmThread,
+  type WasmThreadInitMsg,
 } from './protocol.js';
 import { SIG, sigbit } from './signals.js';
 import { KernelSocket, type LoopbackNet } from './socket.js';
@@ -139,6 +145,14 @@ export function inheritedFds(fds: FdTable): InheritedFd[] {
   );
 }
 
+/** A process worker's message to the kernel. */
+interface WorkerSays {
+  type?: string;
+  code?: unknown;
+  message?: unknown;
+  thread?: WasmThread;
+}
+
 export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
   const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + SAB_DEFAULT_WINDOW_BYTES);
   const header = new Int32Array(sab, 0, SAB_HEADER_I32);
@@ -174,6 +188,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     worker.removeEventListener('message', onMessage);
     worker.removeEventListener('error', onError);
     responder.dispose();
+    for (const tid of [...threads.keys()]) endThread(tid);
     revokeSyncFsToken(token);
     worker.terminate();
     // Await the final VFS writeback before publishing exit: waitpid / the next
@@ -184,21 +199,75 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
       () => settle(code)
     );
   };
-  const onMessage = (event: MessageEvent): void => {
-    const data = event.data as { type?: string; code?: unknown; message?: unknown } | undefined;
+  /** What any of the process's workers says: it ended (exit() in any thread ends all), or starts a thread. */
+  const handle = (data: WorkerSays | undefined): void => {
     if (data?.type === WASM_PROCESS_EXIT) {
       finish(typeof data.code === 'number' ? data.code : CRASHED);
     } else if (data?.type === WASM_PROCESS_ERROR) {
       opts.onError?.(String(data.message));
       finish(CRASHED);
+    } else if (data?.type === WASM_THREAD_SPAWN && data.thread) {
+      spawnThread(data.thread);
     }
   };
+  const onMessage = (event: MessageEvent): void => handle(event.data as WorkerSays | undefined);
   const onError = (event: MessageEvent): void => {
     // Handled here: unhandled, a program's crash (an Emscripten abort, a trap)
     // would propagate to the kernel worker's global scope and take the page down.
     event.preventDefault();
     opts.onError?.(String((event as unknown as ErrorEvent).message ?? 'worker error'));
     finish(CRASHED);
+  };
+
+  /**
+   * A WASI process's other threads (#3530 phase 5d): a worker each, with its
+   * own bridge into the same process — one descriptor table, one signal
+   * state, one exit.
+   */
+  const threads = new Map<number, () => void>();
+  const endThread = (tid: number): void => {
+    const end = threads.get(tid);
+    threads.delete(tid);
+    end?.();
+  };
+  const spawnThread = (thread: WasmThread): void => {
+    if (done) return;
+    // The workers count their own threads and refuse past the cap; a
+    // process that gets here anyway is broken, not to be given more isolates.
+    if (threads.size >= WASM_MAX_THREADS - 1) {
+      opts.onError?.(`more than ${WASM_MAX_THREADS} threads`);
+      finish(CRASHED);
+      return;
+    }
+    const tsab = new SharedArrayBuffer(SAB_HEADER_BYTES + SAB_DEFAULT_WINDOW_BYTES);
+    const tw = (opts.createWorker ?? defaultWorker)();
+    const tresponder = attachSyncSabResponder(tw, tsab, token, { dispatch });
+    const onThreadMessage = (event: MessageEvent): void => {
+      const data = event.data as WorkerSays | undefined;
+      if (data?.type === WASM_THREAD_EXIT) endThread(thread.tid);
+      else handle(data);
+    };
+    tw.addEventListener('message', onThreadMessage);
+    tw.addEventListener('error', onError);
+    threads.set(thread.tid, () => {
+      tw.removeEventListener('message', onThreadMessage);
+      tw.removeEventListener('error', onError);
+      tresponder.dispose();
+      tw.terminate();
+    });
+    const tinit: WasmThreadInitMsg = {
+      type: WASM_THREAD_INIT,
+      pid: opts.pid,
+      program: opts.program,
+      argv0: opts.argv0,
+      args: opts.args,
+      env: opts.env,
+      cwd: opts.cwd,
+      sab: tsab,
+      ...(opts.ppid !== undefined ? { ppid: opts.ppid } : {}),
+      thread,
+    };
+    tw.postMessage(tinit);
   };
   worker.addEventListener('message', onMessage);
   worker.addEventListener('error', onError);

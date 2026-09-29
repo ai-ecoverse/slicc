@@ -62,6 +62,11 @@ export interface WasiHostOptions {
   fs: SyncFsPosixBridge;
   /** Kernel fds beyond 0-2 the process starts with, and how the kernel backs them. */
   inherited?: ReadonlyArray<{ fd: number; kind?: KernelFdKind; flags?: number }>;
+  /**
+   * A thread of a threaded process, or a forked child of one: the table is
+   * the kernel's, shared through these ids (see `WasiFds.share`).
+   */
+  shared?: Int32Array;
   /** A forked child: its parent's table (the kernel copied the numbers), instead of a fresh one. */
   forked?: { fds: readonly WasiForkFd[]; cloexec: readonly number[] };
 }
@@ -119,15 +124,20 @@ export class WasiHost {
   private cache: Record<string, WasiFunction> | undefined;
   /** The sockets the process inherited, where the preopens left them. */
   private readonly listening: number[];
-  /** The working directory (WASIX chdir moves it; preview1 has none of its own). */
-  cwd: string;
+  private readonly startCwd: string;
 
   constructor(readonly o: WasiHostOptions) {
-    this.cwd = o.cwd;
+    this.startCwd = o.cwd;
     this.fds = new WasiFds(o.kernel, o.fs);
-    if (o.forked) this.fds.restore(o.forked.fds, o.forked.cloexec);
+    if (o.shared) this.fds.share(o.shared, true);
+    else if (o.forked) this.fds.restore(o.forked.fds, o.forked.cloexec);
     else this.fds.setup(o.cwd, o.inherited ?? []);
-    this.listening = this.fds.sockets();
+    this.listening = o.shared ? [] : this.fds.sockets();
+  }
+
+  /** The working directory: what `.` (fd 3) stands for, which WASIX chdir moves for every thread. */
+  get cwd(): string {
+    return this.fds.cwd() ?? this.startCwd;
   }
 
   /** Every `wasi_snapshot_preview1` import, errors mapped to WASI errnos. */
@@ -231,13 +241,8 @@ export class WasiHost {
     const { mem, fds } = this;
     return {
       fd_fdstat_get: (fd: number, out: number) => void this.fdstat(fd, out),
-      fd_fdstat_set_flags: (fd: number, flags: number) => {
-        const e = fds.get(fd);
-        if (e.type === 'kernel') {
-          e.nonblock = (flags & FDFLAGS.NONBLOCK) !== 0;
-          e.append = (flags & FDFLAGS.APPEND) !== 0;
-        } else if (e.type === 'file') e.file.append = (flags & FDFLAGS.APPEND) !== 0;
-      },
+      fd_fdstat_set_flags: (fd: number, flags: number) =>
+        void fds.setFlags(fd, (flags & FDFLAGS.NONBLOCK) !== 0, (flags & FDFLAGS.APPEND) !== 0),
       fd_fdstat_set_rights: (fd: number) => void fds.get(fd),
       fd_filestat_get: (fd: number, out: number) =>
         void this.writeFilestat(out, this.fdFilestat(fd)),

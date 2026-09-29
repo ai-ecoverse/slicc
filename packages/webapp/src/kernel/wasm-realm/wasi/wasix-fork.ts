@@ -33,6 +33,8 @@ export interface WasiForkState {
   fds: WasiForkFd[];
   cloexec: number[];
   cwd: string;
+  /** A threaded parent: the child's table is the kernel's copy, rebuilt from there. */
+  shared?: true;
 }
 
 interface AsyncifyExports {

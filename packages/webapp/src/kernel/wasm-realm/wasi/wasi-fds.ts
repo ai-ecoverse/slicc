@@ -15,9 +15,9 @@
  * carries them all.
  */
 import type { SyncFsBridgeStat, SyncFsPosixBridge } from '../../realm/sync-fs-xhr-bridge.js';
-import type { KernelFdKind } from '../fd-table.js';
+import type { HeldMeta, KernelFdKind } from '../fd-table.js';
 import type { ProcessSys } from '../kernel-streams.js';
-import type { WasmSyscall } from '../process.js';
+import type { FdInfo, WasmSyscall } from '../process.js';
 import { FDFLAGS, OFLAGS, RIGHTS } from './wasi-abi.js';
 import {
   FileBuffer,
@@ -105,7 +105,7 @@ export class WasiFds {
       this.table.set(at, { ...kernelEntry(), nonblock, ...(kind ? { kind } : {}) });
     }
     preopens.forEach((entry, i) => {
-      this.kernel.call({ op: 'fd-reserve', fd: 3 + i });
+      this.kernel.call({ op: 'fd-reserve', fd: 3 + i, meta: metaOf(entry) as HeldMeta });
       this.table.set(3 + i, entry);
     });
   }
@@ -135,7 +135,122 @@ export class WasiFds {
   }
 
   find(fd: number): WasiEntry | undefined {
-    return this.table.get(fd);
+    if (!this.shared) return this.table.get(fd);
+    this.sync();
+    return this.table.get(fd) ?? this.fetch(fd);
+  }
+
+  // --------------------------------------------------- threads (5d)
+
+  /**
+   * Once the process has threads, the kernel's table is the one table: each
+   * worker caches what it looked up, and every change bumps a generation
+   * the threads share (`ids[GEN]`), which empties the others' caches. Files
+   * are kernel descriptions then, directories and devices held numbers whose
+   * meaning the kernel keeps ({@link HeldMeta}).
+   */
+  private shared: Int32Array | undefined;
+  private seen = 0;
+
+  get isShared(): boolean {
+    return this.shared !== undefined;
+  }
+
+  /**
+   * Share the table through `ids`. `fresh`: this worker starts with nothing
+   * cached (a new thread, a forked child); else it is the first thread
+   * spawning a second, and hands the kernel what only it knew.
+   */
+  share(ids: Int32Array, fresh: boolean): void {
+    if (!fresh) {
+      this.promoteFiles();
+      for (const fd of this.cloexec) this.kernel.call({ op: 'fd-cloexec', fd, on: true });
+      for (const [fd, e] of this.table) {
+        if (e.type === 'kernel' && (e.nonblock || e.append)) this.publishFlags(fd, e);
+      }
+    } else {
+      this.table.clear();
+      this.cloexec.clear();
+    }
+    this.shared = ids;
+    this.seen = Atomics.load(ids, GEN);
+  }
+
+  /** Another thread changed the table: forget what this one cached. */
+  private sync(): void {
+    const gen = Atomics.load(this.shared as Int32Array, GEN);
+    if (gen === this.seen) return;
+    this.table.clear();
+    this.cloexec.clear();
+    this.seen = gen;
+  }
+
+  /** This thread changed the table: the others' caches are stale. */
+  private bump(): void {
+    if (!this.shared) return;
+    const gen = Atomics.add(this.shared, GEN, 1) + 1;
+    // Nobody else changed it since this thread last looked: its cache is current.
+    if (gen - 1 === this.seen) this.seen = gen;
+  }
+
+  /** An fd another thread made, as the kernel knows it. */
+  private fetch(fd: number): WasiEntry | undefined {
+    let info: FdInfo;
+    try {
+      info = this.kernel.call({ op: 'fd-info', fd }) as FdInfo;
+    } catch {
+      return undefined;
+    }
+    const e = entryOf(info);
+    if (!e) return undefined;
+    this.table.set(fd, e);
+    if (info.cloexec) this.cloexec.add(fd);
+    return e;
+  }
+
+  /** The kernel's whole table (threads share it), for an exec, a spawn or a fork. */
+  private listed(): Array<[number, WasiEntry, boolean]> {
+    const out: Array<[number, WasiEntry, boolean]> = [];
+    for (const info of this.kernel.call({ op: 'fd-list' }) as Array<FdInfo & { fd: number }>) {
+      const e = entryOf(info);
+      if (e) out.push([info.fd, e, info.cloexec === true]);
+    }
+    return out;
+  }
+
+  private publishFlags(fd: number, e: { nonblock: boolean; append: boolean }): void {
+    const flags = (e.nonblock ? O_NONBLOCK : 0) | (e.append ? O_APPEND : 0);
+    this.kernel.call({ op: 'fd-setfl', fd, flags });
+  }
+
+  /** fd_fdstat_set_flags on a kernel descriptor: its O_NONBLOCK and O_APPEND. */
+  setFlags(fd: number, nonblock: boolean, append: boolean): void {
+    const e = this.get(fd);
+    if (e.type === 'kernel') {
+      e.nonblock = nonblock;
+      e.append = append;
+      if (this.shared) {
+        this.publishFlags(fd, e);
+        this.bump();
+      }
+    } else if (e.type === 'file') e.file.append = append;
+  }
+
+  /** FD_CLOEXEC on or off. */
+  setCloexec(fd: number, on: boolean): void {
+    this.get(fd);
+    if (on) this.cloexec.add(fd);
+    else this.cloexec.delete(fd);
+    if (this.shared) {
+      this.kernel.call({ op: 'fd-cloexec', fd, on });
+      this.bump();
+    }
+  }
+
+  /** The working directory `.` stands for, if fd 3 still is it. */
+  cwd(): string | undefined {
+    const dot = this.find(3);
+    return dot?.type === 'dir' && dot.preopen === '.' ? dot.path : undefined;
   }
 
   /** The kernel sockets in the table (after `setup`: the ones the process inherited), lowest first. */
@@ -149,17 +264,19 @@ export class WasiFds {
   /** A kernel descriptor the kernel just made (an accepted connection), at its number. */
   adopt(fd: number, kind: KernelFdKind, nonblock: boolean): void {
     this.table.set(fd, { type: 'kernel', kind, nonblock, append: false });
+    if (this.shared && nonblock) this.publishFlags(fd, { nonblock, append: false });
+    this.bump();
   }
 
   get(fd: number): WasiEntry {
-    const e = this.table.get(fd);
+    const e = this.find(fd);
     if (!e) throw new WasiError('EBADF');
     return e;
   }
 
   /** A preopen's entry, or EBADF (which ends the program's preopen scan). */
   preopen(fd: number): Extract<WasiEntry, { type: 'dir' }> & { preopen: string } {
-    const e = this.table.get(fd);
+    const e = this.find(fd);
     if (e?.type !== 'dir' || e.preopen === undefined) throw new WasiError('EBADF');
     return e as Extract<WasiEntry, { type: 'dir' }> & { preopen: string };
   }
@@ -176,8 +293,14 @@ export class WasiFds {
 
   /** A worker-held descriptor at the number the kernel reserves for it (the lowest free >= `min`). */
   private install(e: WasiEntry, min = 3): number {
-    const fd = this.kernel.call({ op: 'fd-reserve', ...(min > 3 ? { min } : {}) }) as number;
+    const meta = metaOf(e);
+    const fd = this.kernel.call({
+      op: 'fd-reserve',
+      ...(min > 3 ? { min } : {}),
+      ...(meta ? { meta } : {}),
+    }) as number;
     this.table.set(fd, e);
+    this.bump();
     return fd;
   }
 
@@ -203,7 +326,8 @@ export class WasiFds {
       if (e.type === 'file') e.file.refs++;
       at = this.install(e.type === 'file' ? e : { ...e }, min);
     }
-    if (cloexec) this.cloexec.add(at);
+    if (cloexec) this.setCloexec(at, true);
+    this.bump();
     return at;
   }
 
@@ -212,13 +336,18 @@ export class WasiFds {
     const [r, w] = this.kernel.sys.pipe();
     this.table.set(r, { type: 'kernel', kind: 'stream', nonblock: false, append: false });
     this.table.set(w, { type: 'kernel', kind: 'stream', nonblock: false, append: false });
+    this.bump();
     return [r, w];
   }
 
   /** chdir(2): relative paths (and `.`) resolve from `path` now. */
   chdir(path: string): void {
-    const dot = this.table.get(3);
-    if (dot?.type === 'dir' && dot.preopen === '.') dot.path = path;
+    const dot = this.find(3);
+    if (dot?.type !== 'dir' || dot.preopen !== '.') return;
+    dot.path = path;
+    // The kernel keeps what `.` stands for: the process's other threads move too.
+    this.kernel.call({ op: 'fd-meta', fd: 3, meta: { dir: path, preopen: '.' } });
+    this.bump();
   }
 
   /**
@@ -256,6 +385,8 @@ export class WasiFds {
   /** The table as a forked child rebuilds it (after `promoteFiles`: no buffered files are left). */
   snapshot(): WasiForkFd[] {
     const out: WasiForkFd[] = [];
+    // A threaded parent's table is the kernel's (the child rebuilds it from there).
+    if (this.shared) return out;
     for (const [fd, e] of this.table) {
       if (e.type === 'kernel')
         out.push({ fd, type: 'kernel', nonblock: e.nonblock, append: e.append });
@@ -286,8 +417,15 @@ export class WasiFds {
   /** Kernel descriptors (fd → the kernel's, the same number) a spawned or exec'd program starts with: not close-on-exec. */
   inheritable(): Map<number, number> {
     const out = new Map<number, number>();
-    for (const [fd, e] of this.table) {
-      if (e.type !== 'kernel' || this.cloexec.has(fd)) continue;
+    const all = this.shared
+      ? this.listed()
+      : [...this.table].map(([fd, e]): [number, WasiEntry, boolean] => [
+          fd,
+          e,
+          this.cloexec.has(fd),
+        ]);
+    for (const [fd, e, cloexec] of all) {
+      if (e.type !== 'kernel' || cloexec) continue;
       if (this.implicitCloexec && fd > 2) continue;
       out.set(fd, fd);
     }
@@ -300,6 +438,7 @@ export class WasiFds {
     this.cloexec.delete(fd);
     this.kernel.sys.close(fd);
     this.release(e);
+    this.bump();
   }
 
   /**
@@ -310,7 +449,7 @@ export class WasiFds {
   renumber(from: number, to: number, keep = false): void {
     const e = this.get(from);
     // dup2 may target a free number; preview1's fd_renumber needs `to` open.
-    const old = keep ? this.table.get(to) : this.get(to);
+    const old = keep ? this.find(to) : this.get(to);
     if (from === to) return;
     this.kernel.call({ op: 'fd-renumber', from, to, ...(keep ? { keep } : {}) });
     this.cloexec.delete(to);
@@ -323,6 +462,7 @@ export class WasiFds {
       if (this.cloexec.delete(from)) this.cloexec.add(to);
     }
     if (old) this.release(old);
+    this.bump();
   }
 
   /** The worker's side of a close: a description's last fd writes it back; the last open of a path drops its buffer. */
@@ -406,6 +546,7 @@ export class WasiFds {
       const fd = this.kernel.sys.openTty?.();
       if (fd === undefined) throw new WasiError('ENXIO');
       this.table.set(fd, { ...kernelEntry(), kind: 'tty' });
+      this.bump();
       return fd;
     }
     const alias = stdioAlias(path);
@@ -417,6 +558,7 @@ export class WasiFds {
     }
     if (s?.isDirectory) return this.install({ type: 'dir', path });
     if (!s && !(oflags & OFLAGS.CREAT)) throw new WasiError('ENOENT');
+    if (this.shared) return this.kernelFile(path, s, oflags, rights, fdflags);
     return this.install({ type: 'file', file: this.file(path, s, oflags, rights, fdflags) });
   }
 
@@ -444,6 +586,34 @@ export class WasiFds {
     return new LocalFile(buffer, readable, writable, (fdflags & FDFLAGS.APPEND) !== 0);
   }
 
+  /** A file of a threaded process: a kernel VFS description, which every thread reaches. */
+  private kernelFile(
+    path: string,
+    existing: SyncFsBridgeStat | undefined,
+    oflags: number,
+    rights: bigint,
+    fdflags: number
+  ): number {
+    const writable =
+      (rights & RIGHTS.FD_WRITE) !== 0n || (oflags & (OFLAGS.CREAT | OFLAGS.TRUNC)) !== 0;
+    const readable = (rights & RIGHTS.FD_READ) !== 0n || !writable;
+    const append = (fdflags & FDFLAGS.APPEND) !== 0;
+    const flags = (writable ? (readable ? O_RDWR : O_WRONLY) : 0) | (append ? O_APPEND : 0);
+    // Created at once, so a readdir that follows sees it.
+    if (!existing) this.fs.writeFile(path, new Uint8Array(0));
+    const truncate = !existing || (oflags & OFLAGS.TRUNC) !== 0;
+    const fd = this.kernel.sys.openVfs(
+      path,
+      flags,
+      0,
+      truncate ? { contents: new Uint8Array(0) } : {}
+    );
+    this.table.set(fd, { type: 'kernel', kind: 'file', nonblock: false, append });
+    if (append) this.publishFlags(fd, { nonblock: false, append });
+    this.bump();
+    return fd;
+  }
+
   private statOrMissing(path: string): SyncFsBridgeStat | undefined {
     try {
       return this.fs.stat(path);
@@ -459,6 +629,7 @@ export class WasiFds {
     if (e.type === 'kernel') {
       const at = this.kernel.call({ op: 'fd-dup', fd }) as number;
       this.table.set(at, { ...e });
+      this.bump();
       return at;
     }
     if (e.type === 'file') e.file.refs++;
@@ -468,4 +639,33 @@ export class WasiFds {
 
 function kernelEntry(): Extract<WasiEntry, { type: 'kernel' }> {
   return { type: 'kernel', nonblock: false, append: false };
+}
+
+/** `ids[GEN]`: the descriptor table's generation, which threads bump on every change. */
+const GEN = 2;
+
+/** What the kernel keeps for a held number. */
+function metaOf(e: WasiEntry): HeldMeta | undefined {
+  if (e.type === 'dir') return { dir: e.path, ...(e.preopen ? { preopen: e.preopen } : {}) };
+  if (e.type === 'device') return { device: e.device };
+  return undefined;
+}
+
+/** An entry from what the kernel says of an fd (a held one without a meaning: a buffered file, not shared). */
+function entryOf(info: FdInfo): WasiEntry | undefined {
+  if (info.meta && 'dir' in info.meta) {
+    return {
+      type: 'dir',
+      path: info.meta.dir,
+      ...(info.meta.preopen ? { preopen: info.meta.preopen } : {}),
+    };
+  }
+  if (info.meta && 'device' in info.meta) return { type: 'device', device: info.meta.device };
+  if (info.kind === 'held') return undefined;
+  return {
+    type: 'kernel',
+    kind: info.kind,
+    nonblock: ((info.flags ?? 0) & O_NONBLOCK) !== 0,
+    append: ((info.flags ?? 0) & O_APPEND) !== 0,
+  };
 }

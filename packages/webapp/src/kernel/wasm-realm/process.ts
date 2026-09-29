@@ -21,8 +21,10 @@ import {
 } from './children.js';
 import {
   type FdTable,
+  type HeldMeta,
   heldFile,
   KernelError,
+  type KernelFdKind,
   kernelFdKind,
   openPipe,
   pollFile,
@@ -67,7 +69,15 @@ export type WasmSyscall =
   /** dup(2): the lowest free fd >= `min` (default 3) on the same description. */
   | { op: 'fd-dup'; fd: number; min?: number }
   /** Take a number for a descriptor the process's worker holds itself (WASI): `fd`, or the lowest free >= `min` (3). */
-  | { op: 'fd-reserve'; fd?: number; min?: number }
+  | { op: 'fd-reserve'; fd?: number; min?: number; meta?: HeldMeta }
+  /** A held number's meaning changed (a WASI chdir moves `.`). */
+  | { op: 'fd-meta'; fd: number; meta: HeldMeta }
+  /** The status flags the process keeps on `fd` (O_NONBLOCK, O_APPEND), for its other threads. */
+  | { op: 'fd-setfl'; fd: number; flags: number }
+  /** FD_CLOEXEC on or off. */
+  | { op: 'fd-cloexec'; fd: number; on: boolean }
+  /** The whole table, lowest fd first (a threaded WASI process's workers share it). */
+  | { op: 'fd-list' }
   /**
    * WASI fd_renumber: `to` becomes `from`'s description (what was at `to`
    * closes), `from` closes — unless `keep` (WASIX's, which is dup2).
@@ -157,6 +167,15 @@ function isTtySyscall(req: WasmSyscall): req is TtySyscall {
   return req.op.startsWith('tty-');
 }
 
+/** `fd-info`'s answer (and an `fd-list` entry's, with its `fd`). */
+export interface FdInfo {
+  tty: boolean;
+  kind: KernelFdKind;
+  meta?: HeldMeta;
+  flags?: number;
+  cloexec?: true;
+}
+
 const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-read',
   'fd-write',
@@ -169,6 +188,10 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-info',
   'fd-dup',
   'fd-reserve',
+  'fd-meta',
+  'fd-setfl',
+  'fd-cloexec',
+  'fd-list',
   'fd-renumber',
   'fd-promote',
   'fd-open-tty',
@@ -429,15 +452,31 @@ export class WasmProcess {
         });
         return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
       }
-      case 'fd-info': {
+      case 'fd-info':
+        return { ok: true, kind: 'json', json: this.fdInfo(req.fd) };
+      case 'fd-list':
+        return {
+          ok: true,
+          kind: 'json',
+          json: this.fds.numbers().map((fd) => ({ fd, ...this.fdInfo(fd) })),
+        };
+      case 'fd-meta': {
         const file = this.fds.get(req.fd).file;
-        const kind = file instanceof KernelSocket ? 'socket' : kernelFdKind(file);
-        return { ok: true, kind: 'json', json: { tty: file.tty !== undefined, kind } };
+        if (!file.held) throw new KernelError('EBADF');
+        file.heldMeta = req.meta;
+        return { ok: true, kind: 'void' };
       }
+      case 'fd-setfl':
+        this.fds.setStatusFlags(req.fd, req.flags);
+        return { ok: true, kind: 'void' };
+      case 'fd-cloexec':
+        if (req.on) this.fds.setCloseOnExec(req.fd);
+        else this.fds.clearCloseOnExec(req.fd);
+        return { ok: true, kind: 'void' };
       case 'fd-dup':
         return { ok: true, kind: 'json', json: this.fds.dup(req.fd, req.min ?? 3) };
       case 'fd-reserve':
-        return { ok: true, kind: 'json', json: this.reserve(req.fd, req.min) };
+        return { ok: true, kind: 'json', json: this.reserve(req.fd, req.min, req.meta) };
       case 'fd-promote':
         this.promote(req);
         return { ok: true, kind: 'void' };
@@ -490,11 +529,24 @@ export class WasmProcess {
   }
 
   /** A held number: exactly `fd` (EBADF when taken), else the lowest free one >= 3. */
-  private reserve(fd: number | undefined, min = 3): number {
-    if (fd === undefined) return this.fds.install(heldFile(), Math.max(3, min));
+  private reserve(fd: number | undefined, min = 3, meta?: HeldMeta): number {
+    if (fd === undefined) return this.fds.install(heldFile(meta), Math.max(3, min));
     if (this.fds.has(fd)) throw new KernelError('EBADF');
-    this.fds.installAt(fd, heldFile());
+    this.fds.installAt(fd, heldFile(meta));
     return fd;
+  }
+
+  /** What `fd` is: its kind, a held number's meaning, its status flags, FD_CLOEXEC. */
+  private fdInfo(fd: number): FdInfo {
+    const file = this.fds.get(fd).file;
+    const flags = this.fds.statusFlags(fd);
+    return {
+      tty: file.tty !== undefined,
+      kind: file instanceof KernelSocket ? 'socket' : kernelFdKind(file),
+      ...(file.heldMeta ? { meta: file.heldMeta } : {}),
+      ...(flags !== undefined ? { flags } : {}),
+      ...(this.fds.closesOnExec(fd) ? { cloexec: true } : {}),
+    };
   }
 
   /** Terminal syscalls: termios, window size and foreground group of an fd that is a terminal (else ENOTTY). */

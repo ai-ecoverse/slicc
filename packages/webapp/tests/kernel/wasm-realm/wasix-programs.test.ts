@@ -214,6 +214,12 @@ describe('WASIX (wasixtest, C/wasix-libc)', () => {
     expect(r.stdout).toBe('errpipe EOF 1\nHI\nsubprocess: exit 0\n');
   });
 
+  it('pthreads (thread_spawn_v2): one descriptor table, then a fork of the threaded process', async () => {
+    const r = await run('wasixtest', ['threads']);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toBe('doubled 2 4 6\nread threaded\nchild read threaded\nchild: exit 0\n');
+  });
+
   it('a file open across a fork keeps one offset (the buffered file is handed to the kernel)', async () => {
     const r = await run('wasixtest', ['file', '/tmp/abc.txt']);
     expect(r.code).toBe(0);
@@ -287,5 +293,11 @@ describe.skipIf(!PYTHON || !COREUTILS)('WASIX python (wasmer/python, stdlib on t
       'import subprocess; print(subprocess.run(["tr", "a-z", "A-Z"], input=b"hi", capture_output=True).stdout)',
     ]);
     expect(piped).toMatchObject({ code: 0, stdout: "b'HI'\n", stderr: '' });
+    // threading: a worker per thread (wasi.thread-spawn), joined.
+    const threaded = await run('python', [
+      '-c',
+      'import threading; out = []; ts = [threading.Thread(target=out.append, args=(i,)) for i in range(3)]; [t.start() for t in ts]; [t.join() for t in ts]; print(sorted(out))',
+    ]);
+    expect(threaded).toMatchObject({ code: 0, stdout: '[0, 1, 2]\n', stderr: '' });
   }, 120_000);
 });
