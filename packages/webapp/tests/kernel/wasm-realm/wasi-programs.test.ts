@@ -12,6 +12,7 @@
 import 'fake-indexeddb/auto';
 import { existsSync, readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { LocalMountBackend } from '../../../src/fs/mount/backend-local.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import {
   bytesSource,
@@ -25,6 +26,7 @@ import { spawnWasmProcess } from '../../../src/kernel/wasm-realm/host.js';
 import type { WasmProgram } from '../../../src/kernel/wasm-realm/protocol.js';
 import { LoopbackNet } from '../../../src/kernel/wasm-realm/socket.js';
 import { VfsAdapter } from '../../../src/shell/vfs-adapter.js';
+import { createDirectoryHandle } from '../../fs/fsa-test-helpers.js';
 import { bundleProcessWorker, loadProgram, nodeWorker } from './helpers/node-wasm-process.js';
 
 const FIXTURES = new URL('../../fixtures/wasm-wasi/', import.meta.url).pathname;
@@ -62,7 +64,8 @@ function start(
   args: string[],
   stdio: [OpenFile, OpenFile, OpenFile],
   err: (m: string) => void,
-  extra: Array<[number, OpenFile]> = []
+  extra: Array<[number, OpenFile]> = [],
+  cwd = '/workspace/proj'
 ): Promise<number> {
   const fds = new FdTable();
   for (const [i, f] of stdio.entries()) fds.installAt(i, f);
@@ -73,7 +76,7 @@ function start(
     argv0,
     args,
     env: { HOME: '/home' },
-    cwd: '/workspace/proj',
+    cwd,
     fds,
     fs: fs as never,
     net: new LoopbackNet(),
@@ -85,7 +88,7 @@ function start(
 async function run(
   program: WasmProgram,
   args: string[],
-  opts: { stdin?: string; argv0?: string; extra?: Array<[number, OpenFile]> } = {}
+  opts: { stdin?: string; argv0?: string; extra?: Array<[number, OpenFile]>; cwd?: string } = {}
 ): Promise<Run> {
   let stdout = '';
   let stderr = '';
@@ -100,7 +103,8 @@ async function run(
       sinkFile((b) => void (stderr += dec.decode(b, { stream: true }))),
     ],
     (m) => void (stderr += m),
-    opts.extra
+    opts.extra,
+    opts.cwd
   );
   return { code, stdout, stderr };
 }
@@ -139,6 +143,13 @@ beforeAll(async () => {
   await vfs.writeFile('/workspace/proj/rel.txt', 'relative hello\n');
   await vfs.writeFile('/workspace/proj/src/lib.rs', 'fn a() {}\n// TODO: beta\n');
   await vfs.writeFile('/workspace/proj/src/main.go', 'package main\n// TODO: go\n');
+  // A mounted directory, as the harness mounts its host tree at /emscripten.
+  await vfs.mount(
+    '/mnt',
+    LocalMountBackend.fromHandle(createDirectoryHandle({}), { mountId: 'wasi' })
+  );
+  await vfs.mkdir('/mnt/live', { recursive: true });
+  await vfs.writeFile('/mnt/live/rel.txt', 'in the mount\n');
   fs = new VfsAdapter(vfs);
 }, 120_000);
 
@@ -228,6 +239,13 @@ describe('WASI preview1 programs in the wasm realm', () => {
       { program: await wasi(`${FIXTURES}zigtest.wasm`), argv0: 'zigtest', args: ['exit', '0'] },
     ]);
     expect(r.codes).toEqual([141, 0]);
+  });
+
+  it('relative paths resolve from a cwd inside a mount (the harness’s /emscripten)', async () => {
+    const c = await wasi(`${FIXTURES}wasitest.wasm`);
+    const r = await run(c, ['cat', 'rel.txt'], { cwd: '/mnt/live' });
+    expect(r).toMatchObject({ code: 0, stdout: 'in the mount\n' });
+    expect((await run(c, ['ls', '.'], { cwd: '/mnt/live' })).stdout).toBe('ls .: rel.txt\n');
   });
 
   it('an inherited fd in the preopens’ way moves above them', async () => {
