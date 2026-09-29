@@ -280,9 +280,12 @@ export function reportData(input) {
       );
     };
     const base = skillsBaseline(skills);
+    // A lift needs both conditions: a model that never ran the baseline gets no card, not an
+    // empty one (a sparse matrix runs `none` for one model only).
+    const ran = (m, s) => configs.some((c) => c.model === m && c.skills === s);
     const skillDeltas = [];
-    for (const m of models) {
-      for (const s of skills.filter((x) => x !== base)) {
+    for (const m of models.filter((x) => ran(x, base))) {
+      for (const s of skills.filter((x) => x !== base && ran(m, x))) {
         skillDeltas.push(delta(rs, cfg(m, base), cfg(m, s), { model: m, from: base, to: s }));
       }
     }
