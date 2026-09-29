@@ -413,7 +413,7 @@ jobs:
 
   # Lightweight test matrix that re-runs the TypeScript test suites across
   # tested Node majors (currently 24, 25, and 26). The package engines
-  # field is `>=22.13.0`, so any one-version pin in the heavier per-package
+  # field is `>=22.19.0`, so any one-version pin in the heavier per-package
   # jobs misses regressions that only surface on newer runtimes (e.g. jsdom
   # + Node >= 25 quirks around vi.unstubAllGlobals + localStorage). Build/E2E
   # stay on a single Node version in the per-package jobs to keep CI time

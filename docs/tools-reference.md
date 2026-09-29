@@ -728,8 +728,8 @@ the cone's memory-extraction call — at a fraction of a large model's capacity.
 **Algorithm**:
 
 1. **Threshold check**: Triggers when estimated tokens exceed `contextWindow - reserveTokens`
-2. **Cut point**: Walks backward from newest, keeping ~`keepRecentTokens` of recent messages. Never splits assistant+toolResult pairs.
-3. **LLM summarization**: Calls `generateSummary()` to produce a structured summary (Goal, Progress, Key Decisions, Next Steps, Critical Context)
+2. **Cut point**: Walks backward from newest, keeping ~`keepRecentTokens` of recent conversation messages. Never splits assistant+toolResult pairs. Pi 0.99 system messages carry the prompt and tool declarations; they count toward context size but are excluded from the summary cut. A system-only prefix cannot trigger an LLM summary.
+3. **LLM summarization**: Calls `generateSummary()` to produce a structured summary (Goal, Progress, Key Decisions, Next Steps, Critical Context), then restores the current system prompt and tools ahead of the summary
 4. **Fallback**: If LLM call fails or no API key, falls back to naive message dropping with a compaction marker
 
 **No truncation**: Tool results pass through at full fidelity. Image tags (`<img:...>`) are parsed into `ImageContent` blocks by `tool-adapter.ts`, but neither text nor image content is truncated. Full-size data is preserved until compaction summarizes older messages.

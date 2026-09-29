@@ -63,7 +63,7 @@ inputs:
     description: Register the join URL as a secret so it is redacted from logs. Masked values cannot cross job boundaries as outputs.
     default: 'true'
   setup-node:
-    description: Run actions/setup-node inside this action (node-server needs Node >= 22.18).
+    description: Run actions/setup-node inside this action (node-server needs Node >= 22.19).
     default: 'true'
   node-version:
     description: Node version for setup-node.

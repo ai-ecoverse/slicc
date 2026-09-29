@@ -18,6 +18,7 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model, Usage, UserMessage } from '@earendil-works/pi-ai';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
+import { getCurrentSystemMessage } from '@earendil-works/pi-ai/utils/transcript';
 // Deep import to the compaction submodule — the main entry re-exports 113 Node-only
 // modules that would break Vite's browser bundle. The compaction submodule itself
 // only depends on @earendil-works/pi-ai (already a browser-safe dependency).
@@ -48,6 +49,17 @@ import {
 import { createLogger } from '../base/logger.js';
 
 const log = createLogger('context-compaction');
+
+/** A summary replaces conversation history, never the current prompt or tool loadout. */
+function preserveTranscriptSystemState(
+  before: AgentMessage[],
+  after: AgentMessage[]
+): AgentMessage[] {
+  if (before === after) return after;
+  const currentSystem = getCurrentSystemMessage(before);
+  if (!currentSystem) return after;
+  return [currentSystem, ...after.filter((message) => message.role !== 'system')];
+}
 
 /** Default context window for Claude models. */
 const DEFAULT_CONTEXT_WINDOW = 200000;
@@ -1376,13 +1388,16 @@ export function createCompactContext(
       // emitted, so the transcript showed nothing and consumers never left
       // `idle`. A round that changes the conversation must be observable
       // whichever branch reduced it (#1985 / #2843).
-      return finishEarlyElision(
-        config,
+      return preserveTranscriptSystemState(
         messages,
-        hopeless.earlyReturn,
-        trigger,
-        detail,
-        options?.allowNaiveDrop
+        finishEarlyElision(
+          config,
+          messages,
+          hopeless.earlyReturn,
+          trigger,
+          detail,
+          options?.allowNaiveDrop
+        )
       );
     }
     const workingMessages = hopeless.messages;
@@ -1395,7 +1410,11 @@ export function createCompactContext(
       messageCount: workingMessages.length,
     });
 
-    const slices = selectCompactionSlices(workingMessages, keepRecentTokens);
+    // Pi 0.99 carries prompt/tool state in transcript system messages. They
+    // consume context, but are not conversation to summarize or discard. A
+    // system-only prefix must not start an idle summary after the first turn.
+    const conversationMessages = workingMessages.filter((message) => message.role !== 'system');
+    const slices = selectCompactionSlices(conversationMessages, keepRecentTokens);
     if (!slices) return options?.allowNaiveDrop === false ? messages : workingMessages;
     const { messagesToSummarize, messagesToKeep } = slices;
 
@@ -1424,7 +1443,10 @@ export function createCompactContext(
       // The summary head is small; the tail's images are what re-blow the
       // window (#1986). `messages` = [summaryMessage, ...messagesToKeep].
       const [summaryHead, ...tail] = attempt.messages;
-      return [summaryHead, ...elideTailImages([summaryHead], tail, contextWindow, settings)];
+      return preserveTranscriptSystemState(messages, [
+        summaryHead,
+        ...elideTailImages([summaryHead], tail, contextWindow, settings),
+      ]);
     }
     // An aborted round is NOT a degradation, and it must not fall through to
     // naive drop. `summarizeWithLlm` classifies the abort with every other
@@ -1439,17 +1461,20 @@ export function createCompactContext(
     // summary. The `fallback` phase is the observable difference between
     // "compacted cleanly" and "dropped history"; `idle` still fires last so
     // every consumer's resting-state contract holds.
-    return finishFailedSummary(
-      config,
+    return preserveTranscriptSystemState(
       messages,
-      messagesToKeep,
-      contextWindow,
-      settings,
-      signal,
-      options,
-      trigger,
-      detail,
-      attempt.failure
+      finishFailedSummary(
+        config,
+        messages,
+        messagesToKeep,
+        contextWindow,
+        settings,
+        signal,
+        options,
+        trigger,
+        detail,
+        attempt.failure
+      )
     );
   };
 }
@@ -1548,5 +1573,5 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
     compactedMessages: result.length,
   });
 
-  return result;
+  return preserveTranscriptSystemState(messages, result);
 }

@@ -72,7 +72,7 @@ describe('myersDiff', () => {
 
   it('diffs the reported input sizes with a 64 MiB heap and preserves interior matches', async () => {
     // Isolate OOM regressions from Vitest. Native TS stripping is available in
-    // our minimum Node (22.18); the pure diff module has no runtime imports.
+    // our minimum Node (22.19); the pure diff module has no runtime imports.
     const source = new URL('../../src/git/diff.ts', import.meta.url).href;
     const script = `
       import assert from 'node:assert/strict';

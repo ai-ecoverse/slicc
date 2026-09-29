@@ -583,13 +583,28 @@ describe('ScoopContext clearMessages', () => {
     ctx = new ScoopContext(testScoop, callbacks, {} as any);
   });
 
-  it('calls agent.clearMessages() when agent exists', () => {
+  it('clears conversation messages when agent exists', () => {
     injectMockAgent(ctx, async () => {});
     (ctx as any).agent.state.messages = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
 
     ctx.clearMessages();
 
     expect((ctx as any).agent.state.messages).toEqual([]);
+  });
+
+  it('retains the current system prompt and tools when clearing a live cone', () => {
+    injectMockAgent(ctx, async () => {});
+    const shell = { name: 'bash', description: 'Run a command', parameters: { type: 'object' } };
+    (ctx as any).agent.state.messages = [
+      { role: 'system', content: 'Current prompt', toolsAdded: [shell], timestamp: 1 },
+      { role: 'user', content: 'old conversation', timestamp: 2 },
+    ];
+
+    ctx.clearMessages();
+
+    expect((ctx as any).agent.state.messages).toEqual([
+      { role: 'system', content: 'Current prompt', toolsAdded: [shell], timestamp: 1 },
+    ]);
   });
 
   it('handles null agent gracefully (no throw)', () => {

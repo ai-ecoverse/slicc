@@ -11,6 +11,7 @@
  */
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript';
 import type { Agent } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
 import type { VirtualFS } from '../../fs/index.js';
@@ -90,8 +91,14 @@ export async function rebuildSystemPrompt(
     scoopMemory,
     skills
   );
+  const activeTools = getCurrentTools(agent.state.messages);
   agent.state.messages = [
-    { role: 'system', content: systemPrompt, timestamp: Date.now() },
+    {
+      role: 'system',
+      content: systemPrompt,
+      ...(activeTools.length > 0 ? { toolsAdded: activeTools } : {}),
+      timestamp: Date.now(),
+    },
     ...agent.state.messages.filter((message) => message.role !== 'system'),
   ];
 

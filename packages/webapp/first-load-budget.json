@@ -12,7 +12,7 @@
   "maxDeltaKb": 5,
   "//ceiling-raised-pi-0991": "pi 0.84.4 -> 0.99.1 increases the shared pi-ai/pi-agent-core graph and generated chat catalogue. Measured on this branch: page 1105 kB and worker 4604 kB, versus previous ceilings 768/4337. Provider transports remain behind pi-ai's lazy adapters; the model picker and Agent runtime need the shared code at boot. Raising to 1152/4656 leaves about 47/52 kB of platform headroom. The lockfile changes over 200 transitive dependencies, so the same-machine merge-base delta check is skipped by its 25-dependency guard; the absolute ceiling still applies. Revisit after Pi's shared graph can be split further.",
   "dependencyUpgradeException": {
-    "lockfileSha256": "6aa86e47366971c25c198d65f354ade475291140ac531f1837aa4a33b3ad7eb4",
+    "lockfileSha256": "2d4fc73f698737516c8dad464a544ff1a97b1c3bb757586aa4d62bf8da3b1e4d",
     "reason": "Pi 0.84.4 to 0.99.1 changes 214 lockfile dependencies; the baseline realignment guard is limited to 25. This exact lockfile is reviewed under PR #3648, while the page and worker absolute ceilings remain enforced. Remove this exception after the upgrade merges."
   },
   "pageEagerCeilingKb": 1152,

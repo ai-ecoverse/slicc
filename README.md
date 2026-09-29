@@ -110,7 +110,7 @@ The fastest way to try SLICC — no clone, no install:
 npx sliccy
 ```
 
-This downloads the latest release, launches Chrome, and opens the workspace. Configure your LLM provider in the first-run settings dialog. Requires Node >= 22.
+This downloads the latest release, launches Chrome, and opens the workspace. Configure your LLM provider in the first-run settings dialog. Requires Node >= 22.19.
 
 ### 2. Install globally
 

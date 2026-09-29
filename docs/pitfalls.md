@@ -1579,9 +1579,9 @@ Cross-importing breaks the build.
 
 **The Requirement**
 
-The repo pins `engines.node` to `>=22.18.0` (root `package.json`). Use Node 22.18 or later for both local development and CI.
+The repo pins `engines.node` to `>=22.19.0` (root `package.json`). Use Node 22.19 or later for both local development and CI.
 
-The historical LightningFS `navigator`-in-`DefaultBackend.init` tripwire that originally motivated this floor is gone — VirtualFS migrated to ZenFS / OPFS and falls back to `InMemory` under Node/Vitest, so it no longer references `navigator` at all. The floor stays because other dependencies and language features assume a modern Node runtime; the 22.18 patch level in particular is the oldest release `size-limit` (the `bundle-size` gate) supports.
+The historical LightningFS `navigator`-in-`DefaultBackend.init` tripwire that originally motivated this floor is gone — VirtualFS migrated to ZenFS / OPFS and falls back to `InMemory` under Node/Vitest, so it no longer references `navigator` at all. Pi 0.99.1 requires Node 22.19 or later; `size-limit` (the `bundle-size` gate) requires at least 22.18.
 
 `node-matrix-tests` in `.github/workflows/ci.yml` runs Node 24, 25 and 26. Node 25 sits outside `size-limit`'s declared range, which is harmless and intentional: those jobs only exercise runtime compatibility, never `size-limit`, and `.npmrc` sets no `engine-strict`, so the install just warns.
 
