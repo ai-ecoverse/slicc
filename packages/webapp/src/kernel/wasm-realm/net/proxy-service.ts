@@ -525,8 +525,9 @@ export class RealmProxy {
     }
   }
 
+  /** Largest request body: the transport's cap, never more than the proxy buffers at once. */
   private cap(): number {
-    return this.options.transport.traits.maxRequestBody;
+    return Math.min(this.options.transport.traits.maxRequestBody, this.limits.bodyBudget);
   }
 
   /** `Expect: 100-continue`: the go-ahead before the client sends its body. */
@@ -562,7 +563,9 @@ export class RealmProxy {
       // Stopped, or the client left: nobody to answer.
       if (signal.aborted) throw e;
       const message = e instanceof Error ? e.message : String(e);
-      return plainResponse(502, message || 'upstream request failed');
+      const status = (e as { status?: unknown } | null)?.status;
+      const own = typeof status === 'number' && status >= 400 && status <= 599 ? status : 502;
+      return plainResponse(own, message || 'upstream request failed');
     }
   }
 

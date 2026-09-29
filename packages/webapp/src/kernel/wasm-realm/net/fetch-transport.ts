@@ -1,25 +1,22 @@
 /**
- * `fetch-transport.ts` — the realm proxy's {@link RealmTransport} over the
- * fetch path every float already has (`shell/proxied-fetch.ts`): the CLI's
- * `/api/fetch-proxy`, the extension service worker's `fetch-proxy.fetch`
- * Port (bridged from the kernel worker through the page), and whatever the
- * cloud float answers there. Secrets ride along as they do for the shell's
+ * `fetch-transport.ts` — the realm proxy's fallback {@link RealmTransport}:
+ * the browser-shaped proxied fetch (`shell/proxied-fetch.ts`), for a float
+ * whose fetch path has no raw mode (`raw-transport.ts` picks): Sliccstart's
+ * swift-server, or a bridge that predates raw mode. It rides the
+ * `/api/fetch-proxy` route or the extension service worker's
+ * `fetch-proxy.fetch` Port (bridged from the kernel worker through the page). Secrets ride along as they do for the shell's
  * `curl`: a masked value is unmasked where the request leaves (node-server,
  * the service worker), and real values in a response are masked again there.
  *
- * What this path cannot give yet (#3571 step 6; per-float fixes are their
- * own work):
+ * The reduced semantics on this path:
  *
  * - **Redirects are followed** by the CLI route (`redirect: 'follow'`) and by
  *   the service worker's `fetch()`; the client sees the final response.
  * - **Bodies arrive decoded** (undici and the browser inflate them), and the
  *   route drops `Content-Encoding` / `Content-Length`.
- * - **Streaming**: responses stream on the CLI route only; the extension
+ * - **Streaming**: responses stream on the bridge route only; the extension
  *   Port collects the whole body in the page first (the response cap
- *   applies). Request bodies are buffered everywhere, up to
- *   {@link REQUEST_BODY_CAP}.
- * - **Cloud**: the hosted float has no fetch route (`/api/fetch-proxy`
- *   answers 404), so every request fails as a 502.
+ *   applies). Request bodies are buffered, up to {@link REQUEST_BODY_CAP}.
  * - **Header fidelity**: header names arrive lower-cased, repeated request
  *   fields are joined, and a response's repeated fields other than
  *   `Set-Cookie` arrive joined.

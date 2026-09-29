@@ -17,7 +17,8 @@
  * {@link RealmTransportTraits} states which of these a transport delivers;
  * the proxy adapts to what it is told (it drops the length and coding of a
  * body the transport decoded, and refuses a request body over the cap). The
- * implementation over today's fetch path is `fetch-transport.ts`.
+ * implementation is `raw-transport.ts` (the proxied fetch's raw mode), with
+ * `fetch-transport.ts` (the browser-shaped proxied fetch) as its fallback.
  */
 
 /** Header fields in the order they came, each repeated field its own entry. */
@@ -57,9 +58,12 @@ export interface RealmTransportTraits {
    */
   manualRedirects: boolean;
   /**
-   * True when the body bytes are the upstream's wire representation (its
-   * `Content-Encoding` still applies). False: the transport inflates coded
-   * bodies, so `Content-Encoding` and `Content-Length` describe bytes the
+   * True when the response headers describe the body bytes as delivered: a
+   * `Content-Encoding` that is present still applies to them (the upstream's
+   * wire bytes, or a transport that removes the header for every coding it
+   * undoes), and a bodiless response's `Content-Length` is the
+   * representation's. False: the transport inflates coded bodies but leaves
+   * the headers, so `Content-Encoding` and `Content-Length` describe bytes the
    * caller never sees and the proxy drops them.
    */
   encodedBodies: boolean;
@@ -73,6 +77,9 @@ export interface RealmTransport {
    * One exchange. Rejects when there is no response to give (the upstream is
    * unreachable, the route refused it, the signal fired); the message is
    * what the client is told, so it never carries a request's credentials.
+   * An error with a numeric `status` (400-599, e.g. 413 for a body over the
+   * float's cap, 403 for a secret off its domains) is answered with that
+   * status; any other is a 502.
    */
   fetch(request: RealmTransportRequest): Promise<RealmTransportResponse>;
 }
