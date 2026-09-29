@@ -50,7 +50,7 @@ A trace under `runs/<run>/traces/<benchmark>/…` decrypts the same way, with th
 
 Runs from 2026-09-27 to 2026-09-29 followed a sparse design:
 
-- **Screen:** 20 tasks for Opus 5.5, Sonnet 5 and GPT-6 Luna.
+- **Screen:** 20 tasks for Opus 5.5, Sonnet 5 and GPT-6 Luna. This is the older Sonnet 5: Sonnet 5.5 was released after the screen and joined at the frontier stage.
 - **Frontier:** all 200 tasks for Opus 5.5 at `@low`, default and `@max`, GPT-6 Luna, and Sonnet 5.5 at default and `@low`, all with the bundled skills.
 - **Skills lift:** Sonnet 5.5 on the same 200 tasks without the bundled skills.
 
