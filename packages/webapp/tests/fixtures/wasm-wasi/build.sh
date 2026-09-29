@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Rebuild the WASI fixtures (#3530 phase 5a): wasitest (C, wasi-libc) and
+# Rebuild the WASI fixtures (#3530 phase 5): wasitest and wasisock (C, wasi-libc) and
 # zigtest (Zig's std, whose cwd is fd 3), both with Zig's toolchain
 # (`zig cc` bundles wasi-libc). Needs zig >= 0.16 on PATH.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 zig cc -target wasm32-wasi -Os -s "$HERE/wasitest.c" -o "$HERE/wasitest.wasm"
+zig cc -target wasm32-wasi -Os -s "$HERE/wasisock.c" -o "$HERE/wasisock.wasm"
 zig build-exe "$HERE/zigtest.zig" -target wasm32-wasi -O ReleaseSmall -fstrip \
   -femit-bin="$HERE/zigtest.wasm"
 rm -f "$HERE/zigtest.wasm.o"

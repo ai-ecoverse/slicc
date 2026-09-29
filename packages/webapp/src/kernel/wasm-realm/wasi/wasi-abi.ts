@@ -96,6 +96,12 @@ export const CLOCK = { REALTIME: 0, MONOTONIC: 1, PROCESS_CPUTIME: 2, THREAD_CPU
 export const FSTFLAGS = { ATIM: 1, ATIM_NOW: 2, MTIM: 4, MTIM_NOW: 8 } as const;
 export const EVENTTYPE = { CLOCK: 0, FD_READ: 1, FD_WRITE: 2 } as const;
 export const SUBCLOCK_ABSTIME = 1;
+/** An fd event's flag: the other end is gone. */
+export const EVENT_FD_READWRITE_HANGUP = 1;
+/** sock_recv's flags. */
+export const RIFLAGS = { PEEK: 1, WAITALL: 2 } as const;
+/** sock_shutdown's: which directions. */
+export const SDFLAGS = { RD: 1, WR: 2 } as const;
 export const PREOPENTYPE_DIR = 0;
 
 /** Struct sizes (bytes) in the program's memory. */

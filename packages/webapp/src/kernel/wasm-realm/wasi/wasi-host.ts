@@ -8,9 +8,13 @@
  * sync-fs bridge for paths and metadata, whole-file reads and writes for the
  * files the program opens (buffered in the worker, `wasi-files.ts`), and
  * `fd-select` for `poll_oneoff`. The descriptor table is `wasi-fds.ts`.
- * Sockets are phase 5b: `sock_*` answer ENOTSUP.
+ * `sock_*` work on sockets the process inherited (a `wasm --listen`
+ * listener, whose fd numbers `$SLICC_LISTEN_FDS` names) and on the
+ * connections it accepts, in its owner's loopback namespace; preview1 has no
+ * call that opens one.
  */
 import type { SyncFsBridgeStat, SyncFsPosixBridge } from '../../realm/sync-fs-xhr-bridge.js';
+import type { KernelFdKind } from '../fd-table.js';
 import {
   CLOCK,
   E,
@@ -19,14 +23,16 @@ import {
   FSTFLAGS,
   LOOKUP_SYMLINK_FOLLOW,
   PREOPENTYPE_DIR,
+  RIFLAGS,
   RIGHTS,
+  SDFLAGS,
   SIZE,
   WASI_SIGNAL_TO_POSIX,
   WHENCE,
   wasiErrnoOf,
 } from './wasi-abi.js';
 import { deviceOf, WasiFds, type WasiKernel } from './wasi-fds.js';
-import { normalize, pathInode, resolveUnder, WasiError } from './wasi-files.js';
+import { normalize, pathInode, resolveUnder, type WasiEntry, WasiError } from './wasi-files.js';
 import { WasiMemory } from './wasi-memory.js';
 import { pollOneoff } from './wasi-poll.js';
 
@@ -45,8 +51,8 @@ export interface WasiHostOptions {
   pid: number;
   kernel: WasiKernel;
   fs: SyncFsPosixBridge;
-  /** Kernel fds beyond 0-2 the process starts with. */
-  inherited?: readonly number[];
+  /** Kernel fds beyond 0-2 the process starts with, and how the kernel backs them. */
+  inherited?: ReadonlyArray<{ fd: number; kind?: KernelFdKind; flags?: number }>;
 }
 
 /** An import: numbers in, an errno out (or nothing). */
@@ -100,10 +106,13 @@ export class WasiHost {
   readonly fds: WasiFds;
   private readonly started = performance.now();
   private cache: Record<string, WasiFunction> | undefined;
+  /** The sockets the process inherited, where the preopens left them. */
+  private readonly listening: number[];
 
   constructor(private readonly o: WasiHostOptions) {
     this.fds = new WasiFds(o.kernel, o.fs);
     this.fds.setup(o.cwd, o.inherited ?? []);
+    this.listening = this.fds.sockets();
   }
 
   /** Every `wasi_snapshot_preview1` import, errors mapped to WASI errnos. */
@@ -121,11 +130,7 @@ export class WasiHost {
           n,
           nevents
         ),
-      // Sockets are phase 5b.
-      sock_accept: () => E.NOTSUP,
-      sock_recv: () => E.NOTSUP,
-      sock_send: () => E.NOTSUP,
-      sock_shutdown: () => E.NOTSUP,
+      ...this.socketImports(),
     });
     return this.cache;
   }
@@ -137,8 +142,10 @@ export class WasiHost {
   }
 
   private environ(): string[] {
-    // Go's wasip1 runtime takes its working directory from $PWD.
-    const env = { PWD: this.o.cwd, ...this.o.env };
+    // Go's wasip1 runtime takes its working directory from $PWD; the
+    // inherited sockets moved above the preopens, and $SLICC_LISTEN_FDS says where.
+    const listen = this.listening.length > 0 ? { SLICC_LISTEN_FDS: this.listening.join(' ') } : {};
+    const env = { PWD: this.o.cwd, ...this.o.env, ...listen };
     return Object.entries(env).map(([k, v]) => `${k}=${v}`);
   }
 
@@ -310,6 +317,92 @@ export class WasiHost {
       // The VFS has no hard links.
       path_link: () => E.NOTSUP,
     };
+  }
+
+  /** A kernel socket's entry: ENOTSOCK for anything else. */
+  private socket(fd: number): Extract<WasiEntry, { type: 'kernel' }> {
+    const e = this.fds.get(fd);
+    if (e.type !== 'kernel' || this.fds.kind(fd, e) !== 'socket') throw new WasiError('ENOTSOCK');
+    return e;
+  }
+
+  private socketImports(): Record<string, WasiFunction> {
+    const { mem, fds, o } = this;
+    return {
+      sock_accept: (fd: number, flags: number, out: number) => {
+        const listener = this.socket(fd);
+        const r = o.kernel.call({ op: 'sock-accept', fd, nonblock: listener.nonblock }) as {
+          fd: number;
+        };
+        fds.adopt(r.fd, 'socket', (flags & FDFLAGS.NONBLOCK) !== 0);
+        mem.view().setUint32(out, r.fd, true);
+      },
+      sock_recv: (
+        fd: number,
+        iovs: number,
+        n: number,
+        riflags: number,
+        outLen: number,
+        outFlags: number
+      ) => {
+        const e = this.socket(fd);
+        const peek = (riflags & RIFLAGS.PEEK) !== 0;
+        const want = mem.capacity(iovs, n);
+        const data =
+          (riflags & RIFLAGS.WAITALL) !== 0 && !peek
+            ? this.recvAll(fd, want, e.nonblock)
+            : o.kernel.sys.read(fd, Math.min(want, MAX_READ), { nonblock: e.nonblock, peek });
+        mem.view().setUint32(outLen, mem.scatter(iovs, n, data), true);
+        mem.view().setUint16(outFlags, 0, true);
+      },
+      // A peer that left is EPIPE here, not SIGPIPE: preview1 has no MSG_NOSIGNAL to ask for it.
+      sock_send: (fd: number, iovs: number, n: number, _flags: number, out: number) => {
+        const e = this.socket(fd);
+        const sent = o.kernel.sys.write(fd, mem.gather(iovs, n), { nonblock: e.nonblock });
+        mem.view().setUint32(out, sent, true);
+      },
+      sock_shutdown: (fd: number, how: number) => {
+        this.socket(fd);
+        const both = SDFLAGS.RD | SDFLAGS.WR;
+        if (how === 0 || (how & ~both) !== 0) throw new WasiError('EINVAL');
+        // POSIX's SHUT_RD 0, SHUT_WR 1, SHUT_RDWR 2.
+        o.kernel.call({
+          op: 'sock-shutdown',
+          fd,
+          how: how === both ? 2 : how === SDFLAGS.WR ? 1 : 0,
+        });
+      },
+    };
+  }
+
+  /**
+   * MSG_WAITALL: read until `want` bytes (in reads of at most MAX_READ) or the
+   * peer is done. Once some bytes are in, a failing read (EAGAIN on a
+   * non-blocking socket, EINTR) ends the loop with what was read: those
+   * bytes are gone from the connection, so they must reach the program.
+   */
+  private recvAll(fd: number, want: number, nonblock: boolean): Uint8Array {
+    const chunks: Uint8Array[] = [];
+    let got = 0;
+    while (got < want) {
+      let chunk: Uint8Array;
+      try {
+        chunk = this.o.kernel.sys.read(fd, Math.min(want - got, MAX_READ), { nonblock });
+      } catch (err) {
+        if (got === 0) throw err;
+        break;
+      }
+      if (chunk.length === 0) break;
+      chunks.push(chunk);
+      got += chunk.length;
+    }
+    const out = new Uint8Array(got);
+    let at = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------- descriptors

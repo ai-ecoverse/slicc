@@ -5,7 +5,7 @@
  * descriptors the worker holds (files, directories, devices) never wait.
  * Go's scheduler sleeps and waits here (`time.Sleep`).
  */
-import { E, EVENTTYPE, SIZE, SUBCLOCK_ABSTIME } from './wasi-abi.js';
+import { E, EVENT_FD_READWRITE_HANGUP, EVENTTYPE, SIZE, SUBCLOCK_ABSTIME } from './wasi-abi.js';
 import type { WasiFds, WasiKernel } from './wasi-fds.js';
 import type { WasiMemory } from './wasi-memory.js';
 
@@ -21,6 +21,8 @@ interface PollEvent {
   userdata: bigint;
   error: number;
   type: number;
+  /** The other end is gone (a writer that closed, a reader that left). */
+  hangup?: boolean;
 }
 
 /** Nanoseconds of clock `id` now: realtime is the epoch's, the others count from `origin`. */
@@ -56,7 +58,10 @@ function writeEvents(mem: WasiMemory, ptr: number, events: readonly PollEvent[])
     v.setUint16(p + 8, ev.error, true);
     v.setUint8(p + 10, ev.type);
     // fd_readwrite.nbytes: unknown, 1 is enough for a caller to try.
-    if (ev.type !== EVENTTYPE.CLOCK) v.setBigUint64(p + 16, 1n, true);
+    if (ev.type !== EVENTTYPE.CLOCK) {
+      v.setBigUint64(p + 16, 1n, true);
+      if (ev.hangup) v.setUint16(p + 24, EVENT_FD_READWRITE_HANGUP, true);
+    }
   });
 }
 
@@ -82,7 +87,7 @@ function classify(
 /** The subscriptions `fd-select` found ready. */
 function readyEvents(
   subs: readonly Subscription[],
-  ready: { read: number[]; write: number[] }
+  ready: { read: number[]; write: number[]; hangup?: number[] }
 ): PollEvent[] {
   return subs
     .filter(
@@ -90,7 +95,12 @@ function readyEvents(
         (s.type === EVENTTYPE.FD_READ && ready.read.includes(s.fd)) ||
         (s.type === EVENTTYPE.FD_WRITE && ready.write.includes(s.fd))
     )
-    .map((s) => ({ userdata: s.userdata, error: E.SUCCESS, type: s.type }));
+    .map((s) => ({
+      userdata: s.userdata,
+      error: E.SUCCESS,
+      type: s.type,
+      hangup: ready.hangup?.includes(s.fd) === true,
+    }));
 }
 
 export function pollOneoff(
@@ -112,7 +122,9 @@ export function pollOneoff(
     else if (earliest !== Infinity)
       timeoutMs = Math.max(0, Math.ceil(earliest - performance.now()));
     const ready = kernel.call({ op: 'fd-select', read, write, timeoutMs });
-    events.push(...readyEvents(subs, ready as { read: number[]; write: number[] }));
+    events.push(
+      ...readyEvents(subs, ready as { read: number[]; write: number[]; hangup?: number[] })
+    );
   }
   const after = performance.now();
   // A deadline within half a millisecond counts: select's timer rounds.

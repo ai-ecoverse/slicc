@@ -3,7 +3,7 @@
  * worker, stdio on kernel descriptors, files on the live VFS. Loaded lazily
  * by `wasm-command.ts`.
  *
- *   wasm [--argv0 NAME] [--module PATH] PROGRAM [ARGS...]
+ *   wasm [--argv0 NAME] [--module PATH] [--listen [HOST:]PORT] PROGRAM [ARGS...]
  *   wasm --list
  *   wasm --login
  *
@@ -35,7 +35,7 @@ import {
   realmGitConfigPath,
   realmNetworkEnv,
 } from '../../../kernel/wasm-realm/net/realm-network.js';
-import { ownerKey } from '../../../kernel/wasm-realm/socket.js';
+import { ownerKey, type SockAddr } from '../../../kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
@@ -59,7 +59,7 @@ type Result = {
 };
 
 const USAGE =
-  'usage: wasm [-t] [--argv0 NAME] [--module PATH] PROGRAM [ARGS...]\n       wasm --list\n       wasm --login\n';
+  'usage: wasm [-t] [--argv0 NAME] [--module PATH] [--listen [HOST:]PORT] PROGRAM [ARGS...]\n       wasm --list\n       wasm --login\n';
 
 const NO_SAB =
   'the wasm realm needs SharedArrayBuffer, which this page lacks (it is not cross-origin isolated)';
@@ -78,6 +78,8 @@ interface Invocation {
   args: string[];
   /** The installed command's environment defaults (its manifest's `env`). */
   defaults?: Readonly<Record<string, string>>;
+  /** `--listen [HOST:]PORT`: a listening socket the program starts with. */
+  listen?: string;
 }
 
 function parse(args: string[]): Invocation | undefined {
@@ -94,10 +96,11 @@ function parse(args: string[]): Invocation | undefined {
       i += 1;
       continue;
     }
-    if (args[i] !== '--argv0' && args[i] !== '--module') break;
+    if (args[i] !== '--argv0' && args[i] !== '--module' && args[i] !== '--listen') break;
     const value = args[i + 1];
     if (value === undefined) return undefined;
     if (args[i] === '--argv0') call.argv0 = value;
+    else if (args[i] === '--listen') call.listen = value;
     else call.module = value;
     i += 2;
   }
@@ -360,6 +363,41 @@ async function programModule(
   return (await isModuleFile(ctx, gluePath)) ? gluePath : modulePath(gluePath);
 }
 
+/** musl's O_NONBLOCK: a `--listen` listener's status flags. */
+const O_NONBLOCK = 0o4000;
+
+/** `[HOST:]PORT` as a loopback address (HOST defaults to 127.0.0.1), or undefined when it is none. */
+export function listenAddress(spec: string): SockAddr | undefined {
+  const m = /^(?:([0-9.]+):)?(\d{1,5})$/.exec(spec);
+  const port = m ? Number(m[2]) : 0;
+  if (!m || port < 1 || port > 65535) return undefined;
+  return { family: 'inet', host: m[1] ?? '127.0.0.1', port };
+}
+
+/**
+ * `--listen`: a listening socket at the program's lowest free fd,
+ * non-blocking, and the env naming it (a WASI program's host moves it above its preopens and says
+ * so itself); an error message when the address is bad or taken.
+ */
+function listenOn(
+  call: Invocation,
+  session: WasmSession,
+  fds: FdTable
+): { env: Record<string, string> } | { error: string } {
+  if (call.listen === undefined) return { env: {} };
+  const addr = listenAddress(call.listen);
+  if (!addr) return { error: `--listen ${call.listen}: not a [HOST:]PORT\n` };
+  try {
+    const fd = fds.install(session.listen(addr), 3);
+    // Non-blocking from the start, as Go's netpoll needs to accept on it.
+    fds.setStatusFlags(fd, O_NONBLOCK);
+    return { env: { SLICC_LISTEN_FDS: String(fd) } };
+  } catch (e) {
+    const code = (e as { code?: string }).code ?? String(e);
+    return { error: `--listen ${call.listen}: ${code}\n` };
+  }
+}
+
 /** The program's env defaults: its installed command's, as looked up or as the shell dispatched it. */
 function programDefaults(
   call: Invocation,
@@ -424,6 +462,12 @@ export async function runWasmCommand(
     stdio.fds.setCloseOnExec(fd);
   }
   const { fds } = stdio;
+  const listening = listenOn(call, session, fds);
+  if ('error' in listening) {
+    stdio.release();
+    await fds.closeAll();
+    return { stdout: '', stderr: `wasm: ${listening.error}`, exitCode: 1 };
+  }
 
   let handle: WasmProcessHandle;
   try {
@@ -433,11 +477,15 @@ export async function runWasmCommand(
       argv0:
         call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.(js|wasm)$/, ''),
       args: call.args,
-      env: programEnv(ctx, call, {
-        ...realmNetworkEnv(),
-        ...(await caEnv(ctx, options)),
-        ...(await gitEnv(ctx, options)),
-      }),
+      env: {
+        ...programEnv(ctx, call, {
+          ...realmNetworkEnv(),
+          ...(await caEnv(ctx, options)),
+          ...(await gitEnv(ctx, options)),
+        }),
+        // Where the listener is, whatever the shell exports.
+        ...listening.env,
+      },
       defaults: programDefaults(call, options),
       cwd: ctx.cwd,
       fds,

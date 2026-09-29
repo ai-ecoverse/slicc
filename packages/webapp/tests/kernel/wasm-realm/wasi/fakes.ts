@@ -28,6 +28,16 @@ interface FakeFd {
   ready?: boolean;
   /** A kernel-held file's offset (kind 'file'). */
   offset?: number;
+  /** A listener's queue: each accept takes one (the connection's input). */
+  pending?: string[][];
+  /** sock-shutdown's `how`s. */
+  shut?: number[];
+  /** The other end is gone (select reports a hangup). */
+  hangup?: boolean;
+  /** Thrown by a read once `input` is drained (EAGAIN, EINTR), instead of end of file. */
+  drained?: string;
+  /** The `max` of every read. */
+  reads?: number[];
 }
 
 export class FakeKernel implements WasiKernel {
@@ -69,7 +79,9 @@ export class FakeKernel implements WasiKernel {
   readonly sys: ProcessSys = {
     read: (fd, max, opts) => {
       const e = this.get(fd);
+      (e.reads ??= []).push(max);
       const chunk = e.input.shift();
+      if (!chunk && e.drained) throw posix(e.drained);
       if (!chunk) {
         if (opts?.nonblock && e.kind === 'stream' && e.ready === false) throw posix('EAGAIN');
         return new Uint8Array(0);
@@ -126,11 +138,24 @@ export class FakeKernel implements WasiKernel {
         const e = this.get(req.fd);
         return { tty: e.kind === 'tty', kind: e.kind };
       }
-      case 'fd-select':
+      case 'fd-select': {
+        const hung = [...req.read, ...req.write].filter((fd) => this.table.get(fd)?.hangup);
         return {
           read: req.read.filter((fd) => this.table.get(fd)?.ready !== false),
           write: req.write.filter((fd) => this.table.get(fd)?.ready !== false),
+          ...(hung.length > 0 ? { hangup: hung } : {}),
         };
+      }
+      case 'sock-accept': {
+        const conn = this.get(req.fd).pending?.shift();
+        if (!conn) throw posix(req.nonblock ? 'EAGAIN' : 'EINTR');
+        const fd = this.free(3);
+        this.add(fd, 'socket', conn);
+        return { fd, peer: { family: 'inet', host: '127.0.0.1', port: 40000 } };
+      }
+      case 'sock-shutdown':
+        (this.get(req.fd).shut ??= []).push(req.how);
+        return undefined;
       case 'proc-kill':
         this.killed.push([req.pid, req.sig]);
         return undefined;
@@ -270,7 +295,7 @@ export class FakeFs implements SyncFsPosixBridge {
 
 /** The guest's memory: a bump allocator for strings, iovecs and out-params. */
 export class Guest {
-  readonly memory = new WebAssembly.Memory({ initial: 4 });
+  readonly memory = new WebAssembly.Memory({ initial: 64 });
   private top = 1024;
 
   get view(): DataView {

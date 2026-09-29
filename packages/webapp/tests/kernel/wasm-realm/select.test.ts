@@ -50,11 +50,11 @@ describe('selectFds', () => {
     }
   });
 
-  it('counts a pipe whose writers are gone as ready (EOF)', async () => {
+  it('counts a pipe whose writers are gone as ready (EOF), and says it hung up', async () => {
     const fds = table();
     const waiting = selectFds(fds, [3], [], -1, new AbortController().signal);
     await fds.close(4);
-    expect(await waiting).toEqual({ read: [3], write: [] });
+    expect(await waiting).toEqual({ read: [3], write: [], hangup: [3] });
   });
 
   it('is interrupted by a caught signal', async () => {
