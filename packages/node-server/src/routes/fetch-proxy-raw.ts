@@ -40,6 +40,7 @@ import {
   rawResponseHasBody,
   rawResponseHeaders,
   rawUploadStreams,
+  secretScopeHostname,
   stripRawRequestHeaders,
 } from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
@@ -135,12 +136,8 @@ async function prepareUpstream(
   const acceptEncoding = rawAcceptEncoding(headers);
   if (acceptEncoding !== undefined) headers['accept-encoding'] = acceptEncoding;
 
-  let hostname = '';
-  try {
-    hostname = new URL(head.url).hostname;
-  } catch {
-    // Malformed URL: the upstream fetch rejects it below.
-  }
+  // A malformed URL yields '' here; the upstream fetch rejects it below.
+  const hostname = secretScopeHostname(head.url);
   const injection = injectRequestSecrets(secretProxy, headers, head.url, hostname);
   if ('forbidden' in injection) return injection;
 

@@ -31,6 +31,10 @@ Each secret needs two lines: `NAME=value` and `NAME_DOMAINS=domain1,domain2`. A 
 
 **Note:** The bare `github.com` is required for `git push https://github.com/...` because `*.github.com` does not match the bare host (see `packages/shared-ts/src/secret-masking.ts`).
 
+**How a domain list matches a request.** Every float (node-server, the extension service worker, swift-server) matches against the request URL's **hostname**. The port and any `user:password@` are ignored, the name is lowercased, and an internationalized name is compared in punycode (`xn--…`), so write IDN patterns in punycode. `secretScopeHostname()` in `@slicc/shared-ts` derives it for the TypeScript floats; swift-server uses `URLComponents.host`, which agrees. So `upstream.test` covers `http://upstream.test:65209/…`.
+
+A pattern is either an exact hostname, or `*.example.com`, which matches any subdomain but not `example.com` itself. Credentials embedded in the URL are scoped the same way.
+
 ### Extending OAuth-token allowed domains
 
 Each provider hardcodes a sane default list of domains its OAuth token may be unmasked for (e.g. Adobe defaults to `*.adobelogin.com`, `*.adobe.io`, `firefall.adobe.io`, the Helix admin hosts, and `api.aem.live` for the Helix 6 Source Bus). To use that token against other services — for example, `admin.da.live` for Document Authoring — you can **layer extra domains on top per-provider** without code changes. Provider defaults remain immutable.

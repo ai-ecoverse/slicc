@@ -182,6 +182,22 @@ export function domainMatches(pattern: string, hostname: string): boolean {
 }
 
 /**
+ * The name a secret's domain list is matched against for a request URL: its
+ * WHATWG `hostname`. That is lowercase, without port or userinfo, with IDNs in
+ * punycode (`xn--…`) and IPv6 in brackets. Every float derives it here so
+ * `upstream.test` covers `http://upstream.test:8443/…` alike on node-server
+ * and in the extension (swift-server's `URLComponents.host` agrees). An
+ * unparseable URL yields `''`, which only the `*` pattern matches.
+ */
+export function secretScopeHostname(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Check if hostname is allowed by any of the domain patterns.
  */
 export function isAllowedDomain(patterns: string[], hostname: string): boolean {

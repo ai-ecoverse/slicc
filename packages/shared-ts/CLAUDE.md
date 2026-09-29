@@ -6,7 +6,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 
 ### Secrets & proxy
 
-- `secret-masking.ts` — HMAC-SHA256 masking, domain matching, scrubbing.
+- `secret-masking.ts` — HMAC-SHA256 masking, domain matching, scrubbing. `secretScopeHostname(url)` is THE name a domain list is matched against (URL hostname: no port, lowercase, punycode) — every TS float derives it here.
 - `secrets-pipeline.ts` — stateful unmask/scrub class; Basic-auth-, URL-credential-aware, byte-safe body unmask. `unmaskHeaders` mutates input in place (legacy `SecretProxyManager` semantics).
 - `content-type.ts` — fetch-proxy body classifiers. `isTextContentType` gates response scrub + body caching; `isTextRequestContentType`/`isFormContentType` gate request-body unmask ONLY (form POSTs like OAuth token exchange carry secrets that must reach upstream unmasked). Swift twin `packages/swift-server/Sources/Server/ContentType.swift` — divergence is a secret leak; both pinned by `tests/content-type-parity.test.ts` and `CrossImplementationTests.swift`; change together only.
 - `form-body-unmask.ts` — `unmaskFormBody`: encoding-aware masked→real unmask for `application/x-www-form-urlencoded` bodies. Unmasks each field's DECODED value and re-encodes only changed values (a substring splice corrupts a form when the real secret carries a reserved `&`/`=`/`+`). Swift mirror `packages/swift-server/Sources/Server/FormBodyUnmask.swift`, pinned in both cross-impl test files.
