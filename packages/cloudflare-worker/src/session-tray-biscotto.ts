@@ -143,12 +143,28 @@ function normalizeGates(gates: Partial<BiscottoGates> | undefined): BiscottoGate
 }
 
 /**
- * Mint a guest seat and return its private URL.
+ * Build the private URL for a guest seat.
  *
- * The URL reuses the preview subdomain encoding (`<trayId>--<secret>.sliccy.now`)
- * so a seat gets an origin of its own rather than a query parameter on the
- * app origin. The token therefore never appears in a `Referer`, and the page
- * can read it back off its own hostname.
+ * The URL is `<workerBaseUrl>/join/<token>`, the same shape as a tray's
+ * follower `join_url`. `GET /join/:token` serves the follower SPA, and
+ * `resolveJoinCapability` resolves a live seat token there with trust
+ * `biscotto`, so the seat attaches through the ordinary join door.
+ *
+ * It must NOT use the preview subdomain encoding
+ * (`<trayId>--<secret>.sliccy.now`): that host is served by the preview
+ * worker, which only resolves `serve` preview records, so a seat token there
+ * is a `404 Preview not found`.
+ *
+ * The token is in the path, as it is for every join URL. Browsers default to
+ * `strict-origin-when-cross-origin`, so cross-origin requests from the seat
+ * page carry only the hub origin in `Referer`, never the path.
+ */
+function biscottoSeatUrl(workerBaseUrl: string, token: string): string {
+  return `${workerBaseUrl.replace(/\/+$/, '')}/join/${token}`;
+}
+
+/**
+ * Mint a guest seat and return its private URL (see {@link biscottoSeatUrl}).
  */
 export async function mintBiscotto(
   req: MintBiscottoRequest,
@@ -177,7 +193,6 @@ export async function mintBiscotto(
     );
   }
 
-  const { buildPreviewUrl } = await import('@slicc/shared-ts');
   const token = createCapabilityToken(tray.trayId, 10);
   const record: BiscottoRecord = {
     id: crypto.randomUUID().slice(0, 8),
@@ -192,7 +207,7 @@ export async function mintBiscotto(
 
   return {
     id: record.id,
-    url: buildPreviewUrl(req.workerBaseUrl, token, '/'),
+    url: biscottoSeatUrl(req.workerBaseUrl, token),
     label: record.label,
     expiresAt: record.expiresAt,
     gates: record.gates,

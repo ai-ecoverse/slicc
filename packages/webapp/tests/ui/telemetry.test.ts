@@ -1020,3 +1020,139 @@ describe('telemetry — electron branch', () => {
     expect(mockSampleRumJs).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Capability redaction. A follower or guest-seat tab is opened at
+// `/join/<token>` and initTelemetry runs before the follower boot strips it.
+// These drive the REAL samplers (helix-rum-js on the CLI branch, the inlined
+// rum.js on the extension branch) with the page at a join URL, and assert on
+// the beacon body that reaches the underlying navigator.sendBeacon.
+// ---------------------------------------------------------------------------
+
+type Beacon = { checkpoint: string; source?: string; referer?: string; target?: unknown };
+
+describe('telemetry — capability tokens never reach a beacon', () => {
+  const TRAY_ID = '34129a9c-67bf-4138-9f1f-46e190c63a7f';
+  const SEAT_TOKEN = `${TRAY_ID}.ec331fabc0fac633ec14`;
+  const JOIN_TOKEN = `${TRAY_ID}.66861accaaee54215a91fde2e64aef3811d8`;
+  const SECRETS = ['ec331fabc0fac633ec14', '66861accaaee54215a91fde2e64aef3811d8'];
+  let savedSendBeacon: typeof navigator.sendBeacon | undefined;
+  let savedHref: string;
+
+  beforeEach(() => {
+    mockLocalStorage.clear();
+    vi.resetModules();
+    stubLocalStorage();
+    savedSendBeacon = (navigator as Navigator).sendBeacon;
+    savedHref = window.location.href;
+    delete (window as unknown as { hlx?: unknown }).hlx;
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // Back to the file-level mock (doUnmock would drop it entirely).
+    vi.doMock('@adobe/helix-rum-js', () => ({ sampleRUM: mockSampleRUM }));
+    vi.unstubAllGlobals();
+    vi.resetModules();
+    delete (window as unknown as { hlx?: unknown }).hlx;
+    window.history.replaceState(null, '', savedHref);
+    if (savedSendBeacon) {
+      Object.defineProperty(navigator, 'sendBeacon', {
+        value: savedSendBeacon,
+        writable: true,
+        configurable: true,
+      });
+    } else {
+      delete (navigator as unknown as { sendBeacon?: unknown }).sendBeacon;
+    }
+  });
+
+  function installUnderlyingBeacon(): ReturnType<typeof vi.fn> {
+    const underlying = vi.fn((_url: string, _data?: BodyInit | null) => true);
+    Object.defineProperty(navigator, 'sendBeacon', {
+      value: underlying,
+      writable: true,
+      configurable: true,
+    });
+    return underlying;
+  }
+
+  function sentBodies(underlying: ReturnType<typeof vi.fn>): string[] {
+    return underlying.mock.calls.map((call) => String(call[1]));
+  }
+
+  function expectNoSecret(bodies: string[]): void {
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      for (const secret of SECRETS) expect(body).not.toContain(secret);
+    }
+  }
+
+  it('real helix-rum-js on a /join/<seat token> page sends a redacted referer', async () => {
+    vi.doMock('@adobe/helix-rum-js', async () => vi.importActual('@adobe/helix-rum-js'));
+    window.history.replaceState(null, '', `/join/${SEAT_TOKEN}`);
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+
+    const bodies = sentBodies(underlying);
+    expectNoSecret(bodies);
+    const top = JSON.parse(bodies[0]) as { checkpoint: string; referer: string };
+    expect(top.checkpoint).toBe('top');
+    expect(top.referer).toBe(`${window.location.origin}/join/redacted`);
+  });
+
+  it('real rum.js (extension) on a ?tray=<encoded join URL> page sends a redacted referer', async () => {
+    mockLocalStorage.setItem('slicc-rum-debug', '1');
+    vi.stubGlobal('chrome', { runtime: { id: 'test-extension' } });
+    const encoded = encodeURIComponent(`https://www.sliccy.ai/join/${JOIN_TOKEN}`);
+    window.history.replaceState(null, '', `/?tray=${encoded}`);
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry({ isExtensionRealm: true });
+
+    const bodies = sentBodies(underlying);
+    expectNoSecret(bodies);
+    const navigate = JSON.parse(bodies[0]) as { checkpoint: string; referer: string };
+    expect(navigate.checkpoint).toBe('navigate');
+    expect(navigate.referer).toContain('join%2Fredacted');
+  });
+
+  it('redacts enhancer-style resource and click beacons, and error beacons', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+
+    navigator.sendBeacon(
+      'https://rum.hlx.page/.rum/10',
+      JSON.stringify({
+        checkpoint: 'missingresource',
+        referer: `https://www.sliccy.ai/controller/${JOIN_TOKEN}`,
+        source: `https://www.sliccy.ai/join/${SEAT_TOKEN}?json=true`,
+        target: 403,
+      })
+    );
+    navigator.sendBeacon(
+      'https://rum.hlx.page/.rum/10',
+      JSON.stringify({
+        checkpoint: 'click',
+        target: 'https://34129a9c67bf41389f1f46e190c63a7f--ec331fabc0fac633ec14.sliccy.now/',
+      })
+    );
+    navigator.sendBeacon(
+      'https://rum.hlx.page/.rum/10',
+      JSON.stringify({ checkpoint: 'error', source: 'js', target: `bad token ${SEAT_TOKEN}` })
+    );
+
+    const bodies = sentBodies(underlying);
+    expectNoSecret(bodies);
+    const parsed = bodies.map((b) => JSON.parse(b) as Beacon);
+    for (const checkpoint of ['missingresource', 'click', 'error']) {
+      expect(parsed.some((p) => p.checkpoint === checkpoint)).toBe(true);
+    }
+    const missing = parsed.find((p) => p.checkpoint === 'missingresource')!;
+    expect(missing.source).toBe('https://www.sliccy.ai/join/redacted?json=true');
+    expect(missing.referer).toBe('https://www.sliccy.ai/controller/redacted');
+  });
+});

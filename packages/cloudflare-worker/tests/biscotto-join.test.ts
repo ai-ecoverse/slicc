@@ -116,6 +116,44 @@ describe('biscotto join path', () => {
     expect(announced[1].biscotto?.id).toBe(seat.id);
   });
 
+  it('mints a URL that attaches as the guest when opened as printed', async () => {
+    // Regression: the minted URL used the preview subdomain encoding
+    // (`<trayId>--<secret>.sliccy.now/`), which the preview worker 404s. Drive
+    // the join with exactly the path of the URL mint returned.
+    const clock = { now: Date.parse('2026-08-27T12:00:00.000Z') };
+    const t = await createTestTray(clock);
+    const socket = await attachLeader(t);
+    const res = await t.durable.fetch(
+      new Request(`${HOST}/internal/biscotto/mint`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          controllerToken: t.controllerToken,
+          label: 'Anna',
+          workerBaseUrl: HOST,
+        }),
+      })
+    );
+    const minted = (await res.json()) as { id: string; url: string };
+
+    const printed = new URL(minted.url);
+    expect(printed.origin).toBe(HOST);
+    expect(printed.pathname).toMatch(/^\/join\/[^/]+$/);
+
+    const joinRes = await t.durable.fetch(
+      new Request(`${HOST}${printed.pathname}?json=true`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'guest-device', action: 'attach' }),
+      })
+    );
+    expect(joinRes.status).toBe(200);
+    const announced = joinAnnouncements(socket);
+    expect(announced).toHaveLength(1);
+    expect(announced[0].trust).toBe('biscotto');
+    expect(announced[0].biscotto?.id).toBe(minted.id);
+  });
+
   it('403s a revoked seat at the join door', async () => {
     const clock = { now: Date.parse('2026-08-27T12:00:00.000Z') };
     const t = await createTestTray(clock);

@@ -184,7 +184,8 @@ The implementations are privacy-safe by design (no cookies, no PII, ephemeral pa
 3. **No chat content**: `formsubmit` logs scoop name and model id, never the message text.
 4. **No PII in scoop names**: scoop names are system-generated (e.g. `researcher`, `coder`) or short user-typed labels. They flow through unredacted; if user-typed scoop names ever grow into freeform input, add an explicit sanitizer.
 5. **Model IDs only**: model id strings like `claude-sonnet-4` flow through; base URLs and OAuth account details do not.
-6. **Opt-out**: `localStorage.setItem('telemetry-disabled', 'true')` disables init entirely. `isTelemetryEnabled()` and `setTelemetryEnabled(boolean)` are exported helpers from `telemetry.ts` for wiring this into a settings UI (the UI control itself is future work).
+6. **No capability tokens**: the page URL of a follower or guest-seat tab is `/join/<token>` (or `?tray=<encoded join URL>`), and telemetry initializes before the follower boot strips it. helix-rum-js sends `referer` = origin + pathname, the helix enhancer adds click targets and resource URLs, and the inlined `rum.js` sends the full `href`. All of them send through `navigator.sendBeacon`, which `telemetry.ts` wraps on the CLI/Electron and extension branches to redact `/join/…` and `/controller/…` segments, `<trayId>.<hex>` tokens and `<compactTrayId>--<hex>` preview labels from every string body (URL-encoded copies included). Blob bodies (only sent for a same-origin collect URL) are not inspected.
+7. **Opt-out**: `localStorage.setItem('telemetry-disabled', 'true')` disables init entirely. `isTelemetryEnabled()` and `setTelemetryEnabled(boolean)` are exported helpers from `telemetry.ts` for wiring this into a settings UI (the UI control itself is future work).
 
 ## CLI Telemetry (`slicc-cli`)
 

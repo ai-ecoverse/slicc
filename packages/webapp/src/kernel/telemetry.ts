@@ -151,6 +151,9 @@ export async function initTelemetry(opts: { isExtensionRealm?: boolean } = {}): 
       sampleRUM = mod.default as SampleRUM;
       bindRuntimeErrorListeners(self);
     } else if (mode === 'extension') {
+      // rum.js serializes the full `window.location.href` as `referer`; the
+      // wrapper redacts capability tokens from every beacon it sends.
+      wrapSendBeacon({ filterViteNoise: false });
       const mod = await import('./rum.js');
       sampleRUM = mod.default as SampleRUM;
 
@@ -191,7 +194,14 @@ export async function initTelemetry(opts: { isExtensionRealm?: boolean } = {}): 
       // cross-origin so the body is a plain JSON string in practice. The
       // wrapper is intentionally not restored on teardown: there is no
       // disposeTelemetry helper, and CLI / Electron pages live for the session.
-      wrapSendBeaconForViteFilter();
+      //
+      // The same wrapper redacts capability tokens from EVERY beacon. A
+      // follower tab is opened at `/join/<token>` and initTelemetry runs
+      // before the follower boot strips it, so helix (`referer` = origin +
+      // pathname) and its enhancer (`referer`, click targets, resource URLs
+      // such as a 4xx `/join/<token>?json=true`) would otherwise ship the
+      // live join or seat capability to rum.hlx.page.
+      wrapSendBeacon({ filterViteNoise: true });
       interceptHelixPojoErrors();
       const mod = await import('@adobe/helix-rum-js');
       sampleRUM = mod.sampleRUM as SampleRUM;
@@ -389,6 +399,29 @@ function sanitizeError(msg: string): string | null {
  */
 const SENDBEACON_WRAPPED = Symbol.for('slicc.telemetry.sendBeacon.wrapped');
 
+/**
+ * Capability tokens that may appear in a page URL, a clicked link, or a
+ * resource URL: tray join / controller / seat / webhook tokens
+ * (`<trayId>.<hex>`, see the worker's `createCapabilityToken`), the
+ * `/join/<token>` and `/controller/<token>` path segments whatever their
+ * shape, and preview subdomain labels (`<compactTrayId>--<hex>`). Matched on
+ * the raw beacon text, so URL-encoded copies (`?tray=https%3A%2F%2F…`) are
+ * covered too: `encodeURIComponent` leaves `.`, `-` and hex untouched.
+ */
+const CAPABILITY_PATTERNS: ReadonlyArray<[RegExp, string]> = [
+  [/(\/|%2F)(join|controller)(\/|%2F)[^/?#&"\s\\]+/gi, '$1$2$3redacted'],
+  [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[0-9a-f]{16,}/gi, 'redacted'],
+  [/\b[0-9a-f]{32}--[0-9a-f]{16,}\b/gi, 'redacted'],
+];
+
+function redactCapabilityTokens(text: string): string {
+  let out = text;
+  for (const [pattern, replacement] of CAPABILITY_PATTERNS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
 type ParsedBeacon = { checkpoint?: string; source?: unknown; target?: unknown };
 
 /** Outcome of sanitizing one error-beacon string field. */
@@ -457,15 +490,50 @@ function sanitizeErrorBeaconBody(parsed: ParsedBeacon): true | string | null {
   return mutated ? JSON.stringify(parsed) : null;
 }
 
+/** Beacon body as text, or `null` for an opaque (Blob / view) body. */
+function readBeaconText(data: BodyInit | null | undefined): string | null {
+  try {
+    if (typeof data === 'string') return data;
+    if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+  } catch {
+    // Undecodable body — treat as opaque.
+  }
+  return null;
+}
+
 /**
- * Wrap `navigator.sendBeacon` so error beacons emitted by helix-rum-js's
- * internal listeners (which we cannot intercept at the sampleRUM seam) are
- * filtered through sanitizeError. Vite-noise-only beacons are dropped and a
- * mixed beacon is rewritten with sanitized `source` / `target`. Non-error
- * checkpoints pass through untouched. Opaque (Blob/ArrayBufferView) bodies are
- * passed through unchanged — sendBeacon is sync and Blob.text() is async.
+ * Vite-noise filter for an error-checkpoint beacon body: `true` = drop,
+ * a string = send this rewritten body, `null` = not an error beacon or
+ * nothing to change.
  */
-function wrapSendBeaconForViteFilter(): void {
+function filterErrorBeacon(text: string): true | string | null {
+  if (text.charCodeAt(0) !== 123 /* '{' */) return null;
+  try {
+    const parsed = JSON.parse(text) as ParsedBeacon;
+    return parsed?.checkpoint === 'error' ? sanitizeErrorBeaconBody(parsed) : null;
+  } catch {
+    // Non-JSON body.
+    return null;
+  }
+}
+
+/**
+ * Wrap `navigator.sendBeacon`, the one chokepoint every RUM sender shares
+ * (helix-rum-js, its enhancer, and the inlined rum.js all resolve it at call
+ * time; none of them use `fetch`).
+ *
+ * - Every string / ArrayBuffer body has capability tokens redacted
+ *   (`redactCapabilityTokens`), whatever the checkpoint.
+ * - With `filterViteNoise`, error beacons emitted by helix-rum-js's internal
+ *   listeners (which we cannot intercept at the sampleRUM seam) are also
+ *   filtered through sanitizeError: Vite-noise-only beacons are dropped and a
+ *   mixed beacon is rewritten with sanitized `source` / `target`.
+ *
+ * Opaque (Blob/ArrayBufferView) bodies are passed through unchanged — sendBeacon
+ * is sync and Blob.text() is async. Helix only sends a Blob when its collect
+ * URL is same-origin; the default rum.hlx.page endpoint is cross-origin.
+ */
+function wrapSendBeacon(opts: { filterViteNoise: boolean }): void {
   if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') return;
   const current = navigator.sendBeacon as typeof navigator.sendBeacon & {
     [SENDBEACON_WRAPPED]?: boolean;
@@ -473,28 +541,21 @@ function wrapSendBeaconForViteFilter(): void {
   if (current[SENDBEACON_WRAPPED]) return;
   const original = current.bind(navigator);
   const wrapped = ((url, data) => {
-    try {
-      const text =
-        typeof data === 'string'
-          ? data
-          : data instanceof ArrayBuffer
-            ? new TextDecoder().decode(data)
-            : null;
-      if (text && text.length > 0 && text.charCodeAt(0) === 123 /* '{' */) {
-        const parsed = JSON.parse(text) as ParsedBeacon;
-        if (parsed?.checkpoint === 'error') {
-          const outcome = sanitizeErrorBeaconBody(parsed);
-          if (outcome === true) return true;
-          if (outcome !== null) return original(url, outcome);
-        }
-      }
-    } catch {
-      // Opaque or non-JSON body — fall through and send as-is.
+    const text = readBeaconText(data);
+    if (text === null) {
+      // Opaque body — send as-is.
       // TODO: a same-origin self-host (see docs/operational-telemetry.md
-      // "Self-Hosting Option") sends Blob beacons that bypass this Vite
-      // filter; sync sendBeacon can't await Blob.text() to peek at them.
+      // "Self-Hosting Option") sends Blob beacons that bypass this wrapper;
+      // sync sendBeacon can't await Blob.text() to peek at them.
+      return original(url, data);
     }
-    return original(url, data);
+    const redacted = redactCapabilityTokens(text);
+    if (opts.filterViteNoise) {
+      const outcome = filterErrorBeacon(redacted);
+      if (outcome === true) return true;
+      if (outcome !== null) return original(url, outcome);
+    }
+    return original(url, redacted === text ? data : redacted);
   }) as typeof navigator.sendBeacon & { [SENDBEACON_WRAPPED]?: boolean };
   wrapped[SENDBEACON_WRAPPED] = true;
   navigator.sendBeacon = wrapped;
