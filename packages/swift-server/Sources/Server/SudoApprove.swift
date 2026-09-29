@@ -27,8 +27,16 @@ enum SudoApprove {
     /// a real dialog.
     typealias OsascriptRunner = @Sendable ([String]) async throws -> String
 
-    /// Valid `kind` values. Mirrors `VALID_KINDS` in node-server's endpoint.
-    static let validKinds: Set<String> = ["command", "read", "write", "secret"]
+    /// Valid `kind` values. Mirrors `VALID_KINDS` in node-server's endpoint
+    /// and MUST list every webapp `SudoKind`. An omission is not a safe
+    /// default: the handler 400s, the browser reads that as a failed approval,
+    /// and the gate fails closed without ever showing a dialog. `export`,
+    /// `guest-message` and `guest-tool` were missing here after node-server
+    /// gained them, so on a Sliccstart leader every owner-routed biscotto
+    /// message was refused with no prompt.
+    static let validKinds: Set<String> = [
+        "command", "read", "write", "secret", "export", "guest-message", "guest-tool",
+    ]
 
     enum SudoApproveError: Error, Equatable {
         case nonZeroExit(code: Int32)
@@ -40,6 +48,11 @@ enum SudoApprove {
         let kind: String
         let detail: String
         let suggestedPattern: String?
+        /// The leader's account of who is asking (a biscotto seat label).
+        /// Rendered before `detail`, which may be guest-authored prose.
+        var requester: String? = nil
+        /// The requester's own stated reason. Untrusted; rendered after `detail`.
+        var reason: String? = nil
     }
 
     struct Decision: Equatable {
@@ -51,14 +64,23 @@ enum SudoApprove {
         let kind: String
         let detail: String
         let suggestedPattern: String?
+        let requester: String?
+        let reason: String?
     }
 
     // MARK: - Mirrored helpers
 
-    /// Human-readable one-liner describing the gated action. Mirrors
-    /// `describeRequest` in node-server's `dialog-backends.ts`.
+    /// Human-readable description of the gated action. Mirrors
+    /// `describeRequest` in node-server's `dialog-backends.ts`: the system's
+    /// account of who is asking first, then the subject, then any stated
+    /// reason — `detail` and `reason` are untrusted and must not come first.
     static func describeRequest(_ req: ApproveRequest) -> String {
-        "\(req.kind): \(req.detail)"
+        let requester = req.requester?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let head = requester.isEmpty
+            ? "\(req.kind): \(req.detail)"
+            : "\(req.kind) from \(requester): \(req.detail)"
+        let reason = req.reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return reason.isEmpty ? head : "\(head)\n\nReason given: \(reason)"
     }
 
     /// `suggestedPattern` (trimmed) when set, else `detail` (trimmed). Mirrors
@@ -180,7 +202,13 @@ enum SudoApprove {
         guard !env.detail.isEmpty else { return badRequest() }
 
         let decision = await decide(
-            request: ApproveRequest(kind: env.kind, detail: env.detail, suggestedPattern: env.suggestedPattern),
+            request: ApproveRequest(
+                kind: env.kind,
+                detail: env.detail,
+                suggestedPattern: env.suggestedPattern,
+                requester: env.requester?.isEmpty == false ? env.requester : nil,
+                reason: env.reason?.isEmpty == false ? env.reason : nil
+            ),
             runner: runner
         )
         return decisionResponse(decision)

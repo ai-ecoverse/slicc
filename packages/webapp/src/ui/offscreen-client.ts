@@ -817,7 +817,7 @@ export class OffscreenClient implements KernelClientFacade {
     const result = await Promise.race([
       reply,
       new Promise<import('../sudo/types.js').SudoDecision>((resolve) =>
-        setTimeout(() => resolve({ decision: 'deny' }), timeoutMs)
+        setTimeout(() => resolve({ decision: 'deny', reason: 'unavailable' }), timeoutMs)
       ),
     ]);
     this.pendingSudoRequests.delete(requestId);

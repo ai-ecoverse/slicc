@@ -215,7 +215,7 @@ export class ConeRequestRegistry {
       if (entry.scoopJid !== scoopJid) continue;
       this.pending.delete(id);
       if (entry.timerHandle != null) this.clearTimer(entry.timerHandle);
-      entry.resolve({ decision: 'deny' });
+      entry.resolve({ decision: 'deny', reason: 'unavailable' });
       this.notifyAutoSettle(id, 'scoop-dropped', entry.scoopJid);
       count++;
     }
@@ -227,7 +227,7 @@ export class ConeRequestRegistry {
     let count = 0;
     for (const [id, entry] of this.pending) {
       if (entry.timerHandle != null) this.clearTimer(entry.timerHandle);
-      entry.resolve({ decision: 'deny' });
+      entry.resolve({ decision: 'deny', reason: 'unavailable' });
       this.notifyAutoSettle(id, 'shutdown', entry.scoopJid);
       count++;
     }

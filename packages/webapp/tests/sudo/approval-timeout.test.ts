@@ -124,12 +124,14 @@ describe('withApprovalTimeout', () => {
     expect(await h.pending).toEqual({ decision: 'deny', reason: 'user-timeout' });
   });
 
-  it('denies (without a timeout reason) when the wrapped broker throws', async () => {
+  it('denies as "unavailable", not as a refusal, when the wrapped broker throws', async () => {
     const h = makeHarness();
     h.fail(new Error('transport gone'));
     const decision = await h.pending;
-    expect(decision).toEqual({ decision: 'deny' });
-    expect(isTimedOut(decision)).toBe(false);
+    // A throwing broker never showed anyone a prompt, so the deny must not be
+    // readable as a human's refusal.
+    expect(decision).toEqual({ decision: 'deny', reason: 'unavailable' });
+    expect(isTimedOut(decision)).toBe(true);
   });
 
   it('returns the broker unwrapped when the budget is disabled', () => {
@@ -182,6 +184,12 @@ describe('sudoRefusalMessage', () => {
     const msg = sudoRefusalMessage('sudo', { decision: 'deny', reason: 'cone-timeout' });
     expect(msg).toContain('sudo: approval request timed out');
     expect(msg).toContain(timeoutNotice('cone-timeout'));
+  });
+
+  it('says an unavailable approval could not be requested, not that it timed out', () => {
+    const msg = sudoRefusalMessage('sudo', { decision: 'deny', reason: 'unavailable' });
+    expect(msg).toContain('sudo: approval could not be requested');
+    expect(msg).toContain('NOT a denial');
   });
 
   it('never reports a non-deny decision as denied-with-reason', () => {

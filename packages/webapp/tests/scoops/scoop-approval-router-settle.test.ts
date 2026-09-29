@@ -150,7 +150,7 @@ describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
     expect(h.store.find((m) => m.content.includes('/.migration'))?.lickState).toBe('pending');
     // Cleanup so the uncovered request doesn't dangle.
     h.router.failAll();
-    await expect(uncovered).resolves.toEqual({ decision: 'deny' });
+    await expect(uncovered).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('resolves pending command requests now covered by a NOPASSWD Cmnd grant', async () => {
@@ -180,7 +180,7 @@ describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
     expect(h.router.settleGrantedRequests('some-other-folder')).toBe(0);
     expect(h.router.listPendingSudoRequests()).toHaveLength(1);
     h.router.failAll();
-    await expect(other).resolves.toEqual({ decision: 'deny' });
+    await expect(other).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   // #2455 review: `registry.resolve()` deletes the entry, so ownership must be
@@ -248,7 +248,7 @@ describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
 
     expect(h.router.settleGrantedRequests('scoop_a-folder')).toBe(0);
     h.router.failAll();
-    await expect(pending).resolves.toEqual({ decision: 'deny' });
+    await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   // End-to-end through the real reload seam (#2455 review): a real SudoManager
@@ -354,7 +354,7 @@ describe('ScoopApprovalRouter admission-time grant match (issue #2853)', () => {
     expect(h.router.listPendingSudoRequests()).toHaveLength(1);
     expect(h.store[0]?.lickState).toBe('pending');
     h.router.failAll();
-    await expect(uncovered).resolves.toEqual({ decision: 'deny' });
+    await expect(uncovered).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('resolves allow immediately for a NOPASSWD-granted command', async () => {
@@ -380,7 +380,7 @@ describe('ScoopApprovalRouter admission-time grant match (issue #2853)', () => {
     expect(h.handleMessage).toHaveBeenCalledOnce();
     expect(h.router.listPendingSudoRequests()).toHaveLength(1);
     h.router.failAll();
-    await expect(pending).resolves.toEqual({ decision: 'deny' });
+    await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('does not let a granted suggested_pattern smuggle an ungranted detail', async () => {
@@ -395,7 +395,7 @@ describe('ScoopApprovalRouter admission-time grant match (issue #2853)', () => {
     expect(h.handleMessage).toHaveBeenCalledOnce();
     expect(h.router.listPendingSudoRequests()).toHaveLength(1);
     h.router.failAll();
-    await expect(pending).resolves.toEqual({ decision: 'deny' });
+    await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('still escalates a self-protected sudoers write despite NOPASSWD Write /**', async () => {
@@ -412,7 +412,7 @@ describe('ScoopApprovalRouter admission-time grant match (issue #2853)', () => {
     expect(h.handleMessage).toHaveBeenCalledOnce();
     expect(h.router.listPendingSudoRequests()).toHaveLength(1);
     h.router.failAll();
-    await expect(pending).resolves.toEqual({ decision: 'deny' });
+    await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('still escalates a secret request even when other grants exist', async () => {
@@ -426,7 +426,7 @@ describe('ScoopApprovalRouter admission-time grant match (issue #2853)', () => {
     expect(h.handleMessage).toHaveBeenCalledOnce();
     expect(h.router.listPendingSudoRequests()).toHaveLength(1);
     h.router.failAll();
-    await expect(pending).resolves.toEqual({ decision: 'deny' });
+    await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 });
 
@@ -446,7 +446,7 @@ describe('ScoopApprovalRouter settle paths flip the lick card off pending', () =
     );
     // Only the original delivery — settling must not re-prompt the cone.
     expect(h.handleMessage).toHaveBeenCalledTimes(1);
-    await expect(decision).resolves.toEqual({ decision: 'deny' });
+    await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('shutdown: failAll flips the stored card to dismissed', async () => {
@@ -463,7 +463,7 @@ describe('ScoopApprovalRouter settle paths flip the lick card off pending', () =
       expect.objectContaining({ lickState: 'dismissed' })
     );
     expect(h.handleMessage).toHaveBeenCalledTimes(1);
-    await expect(decision).resolves.toEqual({ decision: 'deny' });
+    await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('expired: the fail-closed timer flips the stored card to dismissed', async () => {

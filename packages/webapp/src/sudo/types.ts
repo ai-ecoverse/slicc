@@ -111,11 +111,18 @@ export interface SudoDecision {
    *   - `cone-timeout` — a scoop's cone-mediated request went unanswered past
    *     `CONE_SUDO_TIMEOUT_MS`. No human was ever prompted; the cone agent is
    *     the approver on that leg, so the recovery advice differs.
+   *   - `unavailable` — the request never reached anyone who could answer it:
+   *     no approval surface, a transport or relay that failed, a native dialog
+   *     the browser suppressed, a delegate that threw, every prompted follower
+   *     disconnecting. A plumbing failure, not a refusal. Stamped by every
+   *     fail-closed branch below the enforcement layer so a consumer that
+   *     reports outcomes to a third party (a biscotto guest) never tells them
+   *     "a human refused" when nobody saw the request.
    *
    * Deliberately a field rather than a fourth `decision` value: every consumer
    * branches on `decision === 'deny'`, so a new variant would fail OPEN.
    */
-  reason?: SudoTimeoutReason;
+  reason?: SudoUnansweredReason;
   /**
    * The approver's own words about the decision — why a `deny` was refused,
    * or a caveat attached to an `allow`. Surfaced verbatim to the requester by
@@ -135,8 +142,23 @@ export interface SudoDecision {
   attestation?: 'biometric' | 'passcode' | 'none';
 }
 
-/** Which approval leg ran out of time. See {@link SudoDecision.reason}. */
-export type SudoTimeoutReason = 'user-timeout' | 'cone-timeout';
+/**
+ * Why a `deny` carries no human's refusal. See {@link SudoDecision.reason}.
+ * Every value means "unanswered"; only the absence of a reason means "refused".
+ */
+export type SudoUnansweredReason = 'user-timeout' | 'cone-timeout' | 'unavailable';
+
+/** @deprecated Kept for existing imports; it now includes `unavailable`. */
+export type SudoTimeoutReason = SudoUnansweredReason;
+
+/**
+ * The fail-closed decision for a request that never reached an approver.
+ * Use this instead of a bare `{ decision: 'deny' }` on any plumbing path: a
+ * bare deny is indistinguishable from a human pressing "Deny".
+ */
+export function unavailableDecision(): SudoDecision {
+  return { decision: 'deny', reason: 'unavailable' };
+}
 
 /** Per-call options every {@link SudoBroker} accepts. */
 export interface SudoRequestOptions {

@@ -155,8 +155,8 @@ describe('ConeRequestRegistry fail-closed paths', () => {
     const { id: b1Id, pending: pendingB1 } = registry.register('scoop_b', REQ);
 
     expect(registry.failScoop('scoop_a')).toBe(2);
-    await expect(pendingA1).resolves.toEqual({ decision: 'deny' });
-    await expect(pendingA2).resolves.toEqual({ decision: 'deny' });
+    await expect(pendingA1).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
+    await expect(pendingA2).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
     expect(registry.size()).toBe(1);
 
     // Untouched scoop_b request still resolvable.
@@ -170,8 +170,8 @@ describe('ConeRequestRegistry fail-closed paths', () => {
     const { pending: p2 } = registry.register('scoop_b', REQ);
 
     expect(registry.failAll()).toBe(2);
-    await expect(p1).resolves.toEqual({ decision: 'deny' });
-    await expect(p2).resolves.toEqual({ decision: 'deny' });
+    await expect(p1).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
+    await expect(p2).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
     expect(registry.size()).toBe(0);
     expect(registry.list()).toEqual([]);
   });
@@ -260,7 +260,7 @@ describe('ConeRequestRegistry onAutoSettle', () => {
     const registry = new ConeRequestRegistry({ newId: () => 'sudo-1', onAutoSettle });
     const { pending } = registry.register('scoop_a', REQ);
     expect(() => registry.failAll()).not.toThrow();
-    return expect(pending).resolves.toEqual({ decision: 'deny' });
+    return expect(pending).resolves.toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 });
 

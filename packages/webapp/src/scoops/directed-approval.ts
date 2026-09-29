@@ -91,6 +91,8 @@ function refuse(reason: string): DirectedApprovalRefusal {
 }
 
 const DENY: SudoDecision = { decision: 'deny' };
+/** The configured approver could not be reached — nobody refused. */
+const UNREACHABLE: SudoDecision = { decision: 'deny', reason: 'unavailable' };
 
 export interface RunDirectedApprovalDeps extends DirectedApprovalDeps {
   /** File the request against a unit and wait for it to settle. */
@@ -132,7 +134,7 @@ export async function runDirectedApproval(
     ];
     if (!bridge) {
       log.warn('No agent bridge available for an approver agent — denying');
-      return DENY;
+      return UNREACHABLE;
     }
     const { approverRunnerFor } = await import('./approver-agent.js');
     const fs = deps.getSharedFs();
@@ -171,7 +173,7 @@ export async function runDirectedApproval(
 
   if (directive && directive.kind !== 'user') {
     const target = resolveDirectedApprover(directive, deps);
-    if (!target.ok) return DENY;
+    if (!target.ok) return UNREACHABLE;
     return deps.enqueue(target.requesterJid, request, { approver: target.approver });
   }
 

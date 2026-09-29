@@ -292,7 +292,8 @@ describe('node-rest adapter emits the contract wire', () => {
         fetchImpl: (async () => new Response(body, { status: 200 })) as typeof fetch,
       });
       const decision = await closed.approvals.request({ kind: 'command', detail: 'ls' });
-      expect(decision).toEqual({ ok: true, value: { decision: 'deny' } });
+      // Not a decision at all: the endpoint never asked anyone.
+      expect(decision).toEqual({ ok: true, value: { decision: 'deny', reason: 'unavailable' } });
     }
   });
 

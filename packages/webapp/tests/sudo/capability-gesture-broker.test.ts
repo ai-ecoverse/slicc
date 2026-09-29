@@ -59,6 +59,7 @@ describe('createCapabilityGestureSudoBroker', () => {
 
     expect(await broker.requestApproval(REQ, { signal: controller.signal })).toEqual({
       decision: 'deny',
+      reason: 'unavailable',
     });
     expect(request).not.toHaveBeenCalled();
   });
@@ -120,7 +121,7 @@ describe('createCapabilityGestureSudoBroker', () => {
         }) as unknown as CapabilityResult<ApprovalDecision>
     );
     const broker = createCapabilityGestureSudoBroker(fakeBroker(request), { suggest });
-    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny' });
+    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('fills an always decision missing a pattern with the suggested default — defence in depth', async () => {
@@ -180,7 +181,8 @@ describe('createCapabilityGestureSudoBroker', () => {
         }) as const
     );
     const broker = createCapabilityGestureSudoBroker(fakeBroker(request), { suggest });
-    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny' });
+    // A dead transport is not a human's refusal.
+    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('denies on CapabilityUnavailable (no transport for this float at all)', async () => {
@@ -195,12 +197,12 @@ describe('createCapabilityGestureSudoBroker', () => {
         }) as const
     );
     const broker = createCapabilityGestureSudoBroker(fakeBroker(request), { suggest });
-    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny' });
+    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('denies (fails closed) when no CapabilityBroker was ever injected, without constructing any transport', async () => {
     const broker = createCapabilityGestureSudoBroker(null, { suggest });
-    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny' });
+    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('falls back to req.detail when the suggester throws', async () => {

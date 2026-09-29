@@ -55,6 +55,12 @@ export async function suggestPattern(req: SudoRequest, signal?: AbortSignal): Pr
   }
 
   const exact = req.detail.trim();
+  // A guest's message or a guest-caused tool call is never persisted as a
+  // grant (`SudoManager.approve` downgrades "Always" to one-shot), so there is
+  // nothing to generalize. Asking the model anyway cost a full LLM round trip
+  // before the owner's prompt could appear, and sent unreviewed guest text to
+  // a provider before any human had approved it.
+  if (req.kind === 'guest-message' || req.kind === 'guest-tool') return exact;
   const system = req.kind === 'command' ? COMMAND_SYSTEM : PATH_SYSTEM;
 
   let proposed: string | null = null;
