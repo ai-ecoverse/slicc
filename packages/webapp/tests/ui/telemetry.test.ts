@@ -1029,6 +1029,8 @@ describe('telemetry — electron branch', () => {
 // the beacon body that reaches the underlying navigator.sendBeacon.
 // ---------------------------------------------------------------------------
 
+type Beacon = { checkpoint: string; source?: string; referer?: string; target?: unknown };
+
 describe('telemetry — capability tokens never reach a beacon', () => {
   const TRAY_ID = '34129a9c-67bf-4138-9f1f-46e190c63a7f';
   const SEAT_TOKEN = `${TRAY_ID}.ec331fabc0fac633ec14`;
@@ -1049,7 +1051,8 @@ describe('telemetry — capability tokens never reach a beacon', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.doUnmock('@adobe/helix-rum-js');
+    // Back to the file-level mock (doUnmock would drop it entirely).
+    vi.doMock('@adobe/helix-rum-js', () => ({ sampleRUM: mockSampleRUM }));
     vi.unstubAllGlobals();
     vi.resetModules();
     delete (window as unknown as { hlx?: unknown }).hlx;
@@ -1143,9 +1146,12 @@ describe('telemetry — capability tokens never reach a beacon', () => {
     );
 
     const bodies = sentBodies(underlying);
-    expect(bodies).toHaveLength(3);
     expectNoSecret(bodies);
-    const missing = JSON.parse(bodies[0]) as { source: string; referer: string };
+    const parsed = bodies.map((b) => JSON.parse(b) as Beacon);
+    for (const checkpoint of ['missingresource', 'click', 'error']) {
+      expect(parsed.some((p) => p.checkpoint === checkpoint)).toBe(true);
+    }
+    const missing = parsed.find((p) => p.checkpoint === 'missingresource')!;
     expect(missing.source).toBe('https://www.sliccy.ai/join/redacted?json=true');
     expect(missing.referer).toBe('https://www.sliccy.ai/controller/redacted');
   });
