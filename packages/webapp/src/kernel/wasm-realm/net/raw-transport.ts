@@ -69,7 +69,10 @@ export function rawFetchTransport(
   return {
     traits: {
       manualRedirects: true,
-      encodedBodies: false,
+      // Raw mode already made its headers match the bytes: a coding it
+      // undid is gone, one it left (zstd on node-server, an unknown one) is
+      // still named, and a HEAD/304 keeps its representation's length.
+      encodedBodies: true,
       maxRequestBody: capabilities.maxRequestBodyBytes,
     },
     async fetch(request) {

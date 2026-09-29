@@ -58,9 +58,12 @@ export interface RealmTransportTraits {
    */
   manualRedirects: boolean;
   /**
-   * True when the body bytes are the upstream's wire representation (its
-   * `Content-Encoding` still applies). False: the transport inflates coded
-   * bodies, so `Content-Encoding` and `Content-Length` describe bytes the
+   * True when the response headers describe the body bytes as delivered: a
+   * `Content-Encoding` that is present still applies to them (the upstream's
+   * wire bytes, or a transport that removes the header for every coding it
+   * undoes), and a bodiless response's `Content-Length` is the
+   * representation's. False: the transport inflates coded bodies but leaves
+   * the headers, so `Content-Encoding` and `Content-Length` describe bytes the
    * caller never sees and the proxy drops them.
    */
   encodedBodies: boolean;

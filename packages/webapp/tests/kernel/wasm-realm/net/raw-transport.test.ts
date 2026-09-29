@@ -1,15 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
+import { RealmProxy } from '../../../../src/kernel/wasm-realm/net/proxy-service.js';
 import {
   rawFetchTransport,
   realmFetchTransport,
 } from '../../../../src/kernel/wasm-realm/net/raw-transport.js';
 import type { RealmTransport } from '../../../../src/kernel/wasm-realm/net/transport.js';
+import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
 import {
   type RawFetchCapabilities,
   RawFetchError,
   type RawProxiedFetch,
 } from '../../../../src/shell/proxied-fetch.js';
-import { enc, reply, text } from './proxy-helpers.js';
+import { Client, enc, reply, text } from './proxy-helpers.js';
 
 const CAPS: RawFetchCapabilities = {
   supported: true,
@@ -67,7 +69,7 @@ describe('rawFetchTransport', () => {
       body: stream('mo', 'ved'),
     }));
     const t = rawFetchTransport(raw, CAPS);
-    expect(t.traits).toEqual({ manualRedirects: true, encodedBodies: false, maxRequestBody: 1234 });
+    expect(t.traits).toEqual({ manualRedirects: true, encodedBodies: true, maxRequestBody: 1234 });
     const res = await t.fetch(request({ method: 'POST', body: enc('x') }));
     const [url, init] = raw.mock.calls[0];
     expect(url).toBe('http://h.test/a');
@@ -171,5 +173,44 @@ describe('realmFetchTransport', () => {
     });
     await expect(t.fetch(request())).rejects.toMatchObject({ status: 413 });
     expect(fb.calls).toBe(0);
+  });
+});
+
+describe('raw mode through the proxy', () => {
+  it('keeps a coding raw mode left in place and a HEAD’s length', async () => {
+    const raw: RawProxiedFetch = async (_url, init) =>
+      init?.method === 'HEAD'
+        ? {
+            status: 200,
+            statusText: 'OK',
+            url: 'u',
+            headers: [['Content-Length', '42']],
+            body: null,
+          }
+        : {
+            status: 200,
+            statusText: 'OK',
+            url: 'u',
+            headers: [
+              ['Content-Encoding', 'zstd'],
+              ['Content-Length', '5'],
+            ],
+            body: stream('zst!!'),
+          };
+    const net = new LoopbackNet();
+    const proxy = new RealmProxy({ net, transport: rawFetchTransport(raw, CAPS) });
+    try {
+      const c = Client.open(net, proxy.port);
+      await c.send('GET http://h.test/z HTTP/1.1\r\n\r\n');
+      const coded = await c.response();
+      expect(coded.header('content-encoding')).toBe('zstd');
+      expect(coded.body).toBe('zst!!');
+      await c.send('HEAD http://h.test/z HTTP/1.1\r\n\r\n');
+      expect((await c.response({ head: true })).header('content-length')).toBe('42');
+      c.close();
+    } finally {
+      proxy.close();
+      await proxy.closed;
+    }
   });
 });
