@@ -5,12 +5,10 @@ import {
   HMAC_SIGN_HEADER,
   isDecodedPartialResponse,
   isTextContentType,
-  isTextRequestContentType,
   RAW_FETCH_BUFFERED_REQUEST_BODY_CAP,
   RAW_FETCH_PORT_CHUNK_BYTES,
   RAW_FETCH_PORT_WINDOW,
   RAW_FETCH_PROTOCOL_VERSION,
-  RAW_FETCH_STREAM_THRESHOLD_BYTES,
   RAW_FETCH_TAG_PREFIX,
   type RawFetchErrorCode,
   type RawFetchRequestHead,
@@ -19,9 +17,12 @@ import {
   type RawPortResponseMsg,
   rawResponseHasBody,
   rawResponseHeaders,
+  rawUploadStreams,
   type SecretsPipeline,
   stripRawRequestHeaders,
+  supportsRequestStreams,
   uint8ToBase64,
+  withUnsentUploadRetry,
 } from '@slicc/shared-ts';
 import type { PortLike, RawSessionStarter } from './fetch-proxy-shared.js';
 import { installForbiddenHeaderRule, randomFragmentToken } from './fetch-proxy-shared.js';
@@ -48,23 +49,6 @@ class RawError extends Error {
     message: string
   ) {
     super(message);
-  }
-}
-
-export function supportsRequestStreams(): boolean {
-  let duplexAccessed = false;
-  try {
-    const hasContentType = new Request('https://example.invalid/', {
-      body: new ReadableStream(),
-      method: 'POST',
-      get duplex() {
-        duplexAccessed = true;
-        return 'half';
-      },
-    } as RequestInit).headers.has('Content-Type');
-    return duplexAccessed && !hasContentType;
-  } catch {
-    return false;
   }
 }
 
@@ -156,11 +140,15 @@ function prepareHead(pipeline: SecretsPipeline, head: RawFetchRequestHead): Prep
   return { url: creds.url, host, headers, hmacSpec };
 }
 
-function shouldStream(msg: RawRequestMsg, prepared: PreparedRaw, deps: RawFetchDeps): boolean {
-  if (!msg.hasBody || prepared.hmacSpec) return false;
-  if (isTextRequestContentType(prepared.headers['content-type'] ?? '')) return false;
-  if (!(deps.supportsRequestStreams ?? supportsRequestStreams)()) return false;
-  return msg.bodyLength === undefined || msg.bodyLength >= RAW_FETCH_STREAM_THRESHOLD_BYTES;
+function shouldStream(msg: RawRequestMsg, deps: RawFetchDeps): boolean {
+  return (
+    msg.hasBody &&
+    rawUploadStreams({
+      headers: msg.head.headers,
+      bodyLength: msg.bodyLength,
+      canStream: (deps.supportsRequestStreams ?? supportsRequestStreams)(),
+    })
+  );
 }
 
 async function bufferUpload(queue: UploadQueue): Promise<Uint8Array> {
@@ -184,39 +172,6 @@ async function bufferUpload(queue: UploadQueue): Promise<Uint8Array> {
     offset += part.byteLength;
   }
   return out;
-}
-
-function retryableUpload(queue: UploadQueue) {
-  let delivered = 0;
-  let spare: Uint8Array | null = null;
-  let generation = 0;
-  const stream = () => {
-    const own = ++generation;
-    return new ReadableStream<Uint8Array>(
-      {
-        async pull(controller) {
-          const chunk = spare ?? (await queue.next());
-          spare = null;
-          if (own !== generation) {
-            spare = chunk;
-            return;
-          }
-          if (!chunk) {
-            controller.close();
-            return;
-          }
-          delivered += chunk.byteLength;
-          controller.enqueue(chunk);
-        },
-      },
-      { highWaterMark: 0 }
-    );
-  };
-  return { stream, untouched: () => delivered === 0 };
-}
-
-function isUnsentRefusal(err: unknown, untouched: boolean, signal: AbortSignal): boolean {
-  return err instanceof TypeError && untouched && !signal.aborted;
 }
 
 async function relayBody(
@@ -302,7 +257,7 @@ class RawSession {
 
   private async fetchUpstream(pipeline: SecretsPipeline, prepared: PreparedRaw): Promise<Response> {
     const fetchImpl = this.deps.fetchImpl ?? fetch;
-    const streamed = shouldStream(this.msg, prepared, this.deps);
+    const streamed = shouldStream(this.msg, this.deps);
     const rule = await installForbiddenHeaderRule(prepared.url, prepared.headers, {
       fragment: this.tag,
       alsoRestore: RESTORE_ALSO,
@@ -329,13 +284,11 @@ class RawSession {
         return await fetchImpl(rule.fetchUrl, init);
       }
       init.duplex = 'half';
-      const upload = retryableUpload(this.queue);
-      try {
-        return await fetchImpl(rule.fetchUrl, { ...init, body: upload.stream() });
-      } catch (err) {
-        if (!isUnsentRefusal(err, upload.untouched(), this.signal)) throw err;
-        return await fetchImpl(rule.fetchUrl, { ...init, body: upload.stream() });
-      }
+      return await withUnsentUploadRetry(
+        () => this.queue.next(),
+        (body) => fetchImpl(rule.fetchUrl, { ...init, body }),
+        this.signal
+      );
     } finally {
       await rule.cleanup();
     }

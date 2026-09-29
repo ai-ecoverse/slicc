@@ -9,6 +9,10 @@ import {
   type RawFetchErrorCode,
   type RawFetchProbeReply,
   rawResponseHasBody,
+  rawUploadStreams,
+  readerSource,
+  supportsRequestStreams,
+  withUnsentUploadRetry,
 } from '@slicc/shared-ts';
 import {
   apiHeaders,
@@ -90,7 +94,11 @@ async function probeBridge(url: string): Promise<ProbeAnswer> {
   }
   const reply = resp.ok ? parseRawFetchProbeReply(await resp.json().catch(() => null)) : null;
   if (!reply) await resp.body?.cancel().catch(() => undefined);
-  return { capabilities: reply ? fromReply(reply) : UNSUPPORTED, keepMs: Infinity };
+  if (!reply) return { capabilities: UNSUPPORTED, keepMs: Infinity };
+
+  const capabilities = fromReply(reply);
+  capabilities.requestBodyStreaming &&= supportsRequestStreams();
+  return { capabilities, keepMs: Infinity };
 }
 
 async function probeExtension(connect: () => RawFetchPort): Promise<ProbeAnswer> {
@@ -285,12 +293,48 @@ async function splitRawResponse(resp: Response, method: string): Promise<RawFetc
   return { ...head, body };
 }
 
+async function postToBridge(
+  request: RequestInit,
+  init: RawFetchInit,
+  capabilities: RawFetchCapabilities
+): Promise<Response> {
+  const url = resolveApiUrl('/api/fetch-proxy');
+  const body = init.body;
+  const streams =
+    body !== undefined &&
+    rawUploadStreams({
+      headers: init.headers ?? [],
+      bodyLength:
+        body instanceof Uint8Array
+          ? body.byteLength
+          : body instanceof Blob
+            ? body.size
+            : init.bodyLength,
+      canStream: capabilities.requestBodyStreaming,
+    });
+  if (!streams || body === undefined) {
+    const blob = await bufferRequestBody(body, capabilities.maxRequestBodyBytes, init.signal);
+    return fetch(url, blob ? { ...request, body: blob } : request);
+  }
+  const stream =
+    body instanceof Uint8Array
+      ? new Blob([body as BlobPart]).stream()
+      : body instanceof Blob
+        ? body.stream()
+        : body;
+
+  return withUnsentUploadRetry(
+    readerSource(stream),
+    (upload) => fetch(url, { ...request, body: upload, duplex: 'half' } as RequestInit),
+    init.signal
+  );
+}
+
 function bridgeRawFetch(): RawProxiedFetch {
   return async (url, init = {}) => {
     const method = init.method ?? 'GET';
     const capabilities = await getRawFetchCapabilities();
     if (!capabilities.supported) throw unsupported();
-    const blob = await bufferRequestBody(init.body, capabilities.maxRequestBodyBytes, init.signal);
     const headers = apiHeaders({
       [RAW_FETCH_REQUEST_HEADER]: encodeRawRequestHead({
         url,
@@ -301,13 +345,12 @@ function bridgeRawFetch(): RawProxiedFetch {
       'X-Slicc-Raw-Body': '1',
     });
     const request: RequestInit = { method: 'POST', headers, cache: 'no-store' };
-    if (blob) request.body = blob;
     if (init.signal) request.signal = init.signal;
     let resp: Response;
     try {
-      resp = await fetch(resolveApiUrl('/api/fetch-proxy'), request);
+      resp = await postToBridge(request, init, capabilities);
     } catch (err) {
-      if (init.signal?.aborted) throw err;
+      if (init.signal?.aborted || err instanceof RawFetchError) throw err;
       throw new RawFetchError(
         'bridge',
         502,

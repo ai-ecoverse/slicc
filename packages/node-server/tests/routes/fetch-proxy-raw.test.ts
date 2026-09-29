@@ -376,7 +376,7 @@ describe('raw /api/fetch-proxy', () => {
     expect(resp.status).toBe(200);
     expect(await resp.json()).toEqual({
       rawFetch: 1,
-      requestBodyStreaming: false,
+      requestBodyStreaming: true,
       maxRequestBodyBytes: 256 * 1024 * 1024,
     });
     expect(h.seen).toHaveLength(0);
@@ -395,6 +395,80 @@ describe('raw /api/fetch-proxy', () => {
     const result = await rawFetch(h, `${h.origin}/hop`);
     expect(values(result.head.headers, 'x-hop')).toEqual([]);
     expect(values(result.head.headers, 'x-end')).toEqual(['kept']);
+  });
+
+  describe('streamed uploads (chunked from the webapp)', () => {
+    function streamedPost(
+      h: Harness,
+      url: string,
+      headers: RawHeaderList,
+      chunks: Uint8Array[],
+      gate?: Promise<void>
+    ) {
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(chunks[0]!);
+          await gate;
+          for (const chunk of chunks.slice(1)) controller.enqueue(chunk);
+          controller.close();
+        },
+      });
+      return fetch(`${h.bridge}/api/fetch-proxy`, {
+        method: 'POST',
+        headers: {
+          [RAW_FETCH_REQUEST_HEADER]: encodeRawRequestHead({ url, method: 'POST', headers }),
+          'Content-Type': 'application/octet-stream',
+        },
+        body,
+        duplex: 'half',
+      } as RequestInit);
+    }
+
+    it('forwards a binary body as it arrives, with the declared length, past the buffer cap', async () => {
+      let firstBytes: () => void = () => {};
+      const upstreamStarted = new Promise<void>((resolve) => {
+        firstBytes = resolve;
+      });
+      const received: { length?: string; te?: string; bytes: number[] } = { bytes: [] };
+      const upstream = createServer((req, res) => {
+        received.length = req.headers['content-length'];
+        received.te = req.headers['transfer-encoding'];
+        req.on('data', (c: Buffer) => {
+          received.bytes.push(...c);
+          firstBytes();
+        });
+        req.on('end', () => res.end('stored'));
+      });
+      const origin = await serve(upstream);
+      const h = await harness((_req, res) => res.end(), { maxRequestBodyBytes: 4 });
+      const resp = streamedPost(
+        h,
+        `${origin}/objects`,
+        [
+          ['Content-Type', 'application/octet-stream'],
+          ['Content-Length', '6'],
+        ],
+        [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])],
+        upstreamStarted
+      );
+      const split = decodeRawResponseFrame(new Uint8Array(await (await resp).arrayBuffer()));
+      expect(split?.head.status).toBe(200);
+      expect(new TextDecoder().decode(split?.rest)).toBe('stored');
+      expect(received).toEqual({ length: '6', te: undefined, bytes: [1, 2, 3, 4, 5, 6] });
+    });
+
+    it('still buffers and unmasks a text body that arrives chunked', async () => {
+      const h = await harness((_req, res) => res.end('ok'));
+      const text = new TextEncoder().encode(`{"token":"${h.masked}"}`);
+      await streamedPost(
+        h,
+        `${h.origin}/json`,
+        [['Content-Type', 'application/json']],
+        [text.subarray(0, 5), text.subarray(5)]
+      );
+      expect(h.seen[0]?.body.toString()).toBe(`{"token":"${TOKEN}"}`);
+      expect(h.seen[0]?.headers['content-length']).toBe(String(h.seen[0]?.body.byteLength));
+    });
   });
 
   it('rejects a malformed request head and an unreachable upstream', async () => {

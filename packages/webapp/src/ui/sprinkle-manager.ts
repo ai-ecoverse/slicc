@@ -1,3 +1,4 @@
+import type { PermissionGrant } from '@slicc/webcomponents';
 import { createLogger } from '../base/logger.js';
 import { SPRINKLE_ROOTS } from '../base/sprinkle-roots.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
@@ -21,8 +22,37 @@ import {
 } from './sprinkle-bridge.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
+import { getLeaderPermissionsSurface } from './wc/wc-permissions-registry.js';
 
 const log = createLogger('sprinkle-manager');
+
+export async function acquireSprinkleCaptureStream(): Promise<MediaStream> {
+  const surface = getLeaderPermissionsSurface();
+  if (surface) {
+    const constraints = { video: true, audio: false };
+    const result = await surface.prompt({
+      kinds: ['screenshare'],
+      description: 'A sprinkle asks to share a screen.',
+      requestOptions: { screenshare: { constraints } },
+    });
+    const grant =
+      result.status === 'granted' ? result.grants.find((g) => g.kind === 'screenshare') : undefined;
+    if (!grant) {
+      const detail = result.message ? `: ${result.message}` : '';
+      const reason = result.reason ?? result.status;
+      throw new Error(
+        reason === 'cancelled' || result.status === 'cancelled'
+          ? 'Screen capture cancelled'
+          : `Screen capture ${reason}${detail}`
+      );
+    }
+    return (grant as Extract<PermissionGrant, { kind: 'screenshare' }>).stream;
+  }
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error('Screen capture not supported in this browser');
+  }
+  return navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+}
 
 export interface AddSprinkleOptions {
   attention?: boolean;
@@ -202,16 +232,12 @@ export class SprinkleManager implements SprinkleManagerHandle {
         throw new Error('Screen capture unavailable in this environment');
       }
 
-      if (local && !navigator.mediaDevices?.getDisplayMedia) {
-        throw new Error('Screen capture not supported in this browser');
-      }
-
       let bytes: ArrayBuffer;
       let width: number;
       let height: number;
 
       if (local) {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        const stream = await acquireSprinkleCaptureStream();
         try {
           const video = document.createElement('video');
           video.srcObject = stream;

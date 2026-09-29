@@ -6,11 +6,7 @@ import {
   uint8ToBase64,
 } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  type RawFetchDeps,
-  rawSessionStarter,
-  supportsRequestStreams,
-} from '../src/fetch-proxy-raw.js';
+import { type RawFetchDeps, rawSessionStarter } from '../src/fetch-proxy-raw.js';
 import { handleFetchProxyConnectionAsync, type PortLike } from '../src/fetch-proxy-shared.js';
 import { type CapturedHead, createRawFetchCapture } from '../src/raw-fetch-capture.js';
 
@@ -508,9 +504,5 @@ describe('raw fetch-proxy Port', () => {
     p.send({ type: 'raw-credit', chunks: 1 });
     await settle();
     expect(p.posts).toEqual([expect.objectContaining({ code: 'unsupported', status: 501 })]);
-  });
-
-  it('detects request-stream support', () => {
-    expect(typeof supportsRequestStreams()).toBe('boolean');
   });
 });
