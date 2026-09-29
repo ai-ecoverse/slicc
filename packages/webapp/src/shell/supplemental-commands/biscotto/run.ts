@@ -1,8 +1,8 @@
 /**
  * `biscotto` / `biscotti` — hand someone a revocable guest seat on this cone.
  *
- * A biscotto is a private `*.sliccy.now` URL that shows the live transcript and
- * a composer. What the guest sends is reviewed before it reaches the cone, and
+ * A biscotto is a private `<hub>/join/<token>` URL that shows the live
+ * transcript and a composer. What the guest sends is reviewed before it reaches the cone, and
  * (when the seat says so) every tool call in the turn their message causes is
  * reviewed too.
  *
