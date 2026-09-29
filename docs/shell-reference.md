@@ -614,6 +614,16 @@ file. These lines are not repeated in the result, which keeps its per-file lines
 and ends with the elapsed time and average rate. The human terminal has no live
 sink and shows the result when the command exits.
 
+### `ipk install`: file modes
+
+Extracted files keep their executable bit, normalized as npm does
+(`shell/ipk/file-modes.ts`): a tar entry with any execute bit becomes 0755 and
+everything else 0644, with no setuid/setgid/sticky and no group or world write.
+A package's `bin` targets are made 0755 even when the tarball doesn't mark them.
+`ipk mamba install` applies the same rule to conda archives. A `node_modules` tree installed before modes were kept lacks the `.ipk-modes-v1` marker at its root; the next install into it re-extracts even up-to-date packages once, then writes the marker. Tools that only run
+executable helpers depend on this; `git submodule` from
+`@ai-ecoverse/wasm-git` runs `libexec/git-core/git-submodule`.
+
 ### `ipk install`: tarball integrity
 
 Every tarball `ipk install` downloads is checked against its packument's
