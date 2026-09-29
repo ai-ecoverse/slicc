@@ -335,7 +335,7 @@ export class SecretsPipeline {
 
     let user = decodeURIComponent(parsed.username);
     let pass = decodeURIComponent(parsed.password);
-    const host = parsed.host;
+    const host = parsed.hostname;
     let touched = false;
     for (const [maskedValue, ms] of this.maskedToSecret) {
       if (user.includes(maskedValue) || pass.includes(maskedValue)) {

@@ -789,6 +789,54 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    /// Header injection scopes a secret by the same hostname TypeScript uses
+    /// (`secretScopeHostname`): IPv6 keeps its brackets, as in the WHATWG
+    /// `hostname`. `URL.host` dropped them, so a secret scoped to `[::1]` was
+    /// refused (403) here while node-server and the extension allowed it.
+    func testFetchProxyScopesHeaderSecretsByTheTypeScriptHostname() async throws {
+        let injector = SecretInjector(secrets: [
+            .init(name: "LOCAL_TOKEN", realValue: "real-local-token-123", maskedValue: "masked-local-token", domains: ["[::1]"])
+        ])
+        let received = AuthorizationBox()
+        let upstreamRouter = Router()
+        upstreamRouter.get("/resource") { request, _ in
+            await received.set(request.headers[.authorization])
+            return Response(status: .ok)
+        }
+        let upstreamApp = Application(
+            responder: upstreamRouter.buildResponder(),
+            configuration: .init(address: .hostname("::1", port: 0))
+        )
+        try await self.withHTTPClient { httpClient in
+            try await upstreamApp.test(.live) { upstreamClient in
+                let upstreamPort = try XCTUnwrap(upstreamClient.port)
+                let router = Router()
+                registerAPIRoutes(
+                    router: router,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient,
+                    secretInjector: injector
+                )
+                let app = Application(responder: router.buildResponder())
+                try await app.test(.router) { client in
+                    try await client.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .get,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: "http://[::1]:\(upstreamPort)/resource",
+                            .authorization: "Bearer masked-local-token",
+                        ]
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok)
+                    }
+                }
+            }
+        }
+        let authorization = await received.value
+        XCTAssertEqual(authorization, "Bearer real-local-token-123")
+    }
+
     /// Round-trip helper: stands up a live Hummingbird server hosting an
     /// upstream stub route, registers the API routes (including
     /// `/api/fetch-proxy`) on a separate router used in `.router` (in-memory)
@@ -1620,4 +1668,9 @@ private actor ProxySurfaceCaptureBox {
     func snapshot() -> [Snapshot] {
         values
     }
+}
+
+private actor AuthorizationBox {
+    private(set) var value: String?
+    func set(_ value: String?) { self.value = value }
 }

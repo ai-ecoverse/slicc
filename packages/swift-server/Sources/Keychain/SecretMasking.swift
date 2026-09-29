@@ -169,6 +169,30 @@ public func domainMatches(pattern: String, hostname: String) -> Bool {
     return h.count > suffix.count && h.hasSuffix(suffix)
 }
 
+/// The name a secret's domain list is matched against for a request URL: the
+/// twin of `secretScopeHostname()` in `@slicc/shared-ts` (the WHATWG URL
+/// `hostname`). That is lowercase, without port or userinfo, with an IDN in
+/// punycode (`xn--…`) and IPv6 in brackets. Returns "" when the URL has no
+/// host, which only the `*` pattern matches.
+///
+/// Neither Foundation accessor can be used as-is: `URLComponents.host`
+/// decodes an IDN to Unicode (even punycode input), and `URL.host` drops the
+/// IPv6 brackets. `URLComponents.encodedHost` gives the TypeScript form; the
+/// `URL` fallback covers a Foundation whose `encodedHost` is not IDNA-encoded.
+/// Pinned against TypeScript by `CrossImplementationTests`.
+public func secretScopeHostname(_ rawUrl: String) -> String {
+    if let encoded = URLComponents(string: rawUrl)?.encodedHost, !encoded.isEmpty,
+        encoded.allSatisfy(\.isASCII), !encoded.contains("%")
+    {
+        return encoded.lowercased()
+    }
+    guard let host = URL(string: rawUrl)?.host(percentEncoded: false), !host.isEmpty,
+        host.allSatisfy(\.isASCII)
+    else { return "" }
+    let lowered = host.lowercased()
+    return lowered.contains(":") && !lowered.hasPrefix("[") ? "[\(lowered)]" : lowered
+}
+
 /// Check if hostname is allowed by any of the domain patterns.
 public func isAllowedDomain(patterns: [String], hostname: String) -> Bool {
     patterns.contains { domainMatches(pattern: $0, hostname: hostname) }

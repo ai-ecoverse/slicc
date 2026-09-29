@@ -6,6 +6,7 @@ import {
   HMAC_SIGN_HEADER,
   PROXY_WWW_AUTHENTICATE_HEADER,
   type SecretsPipeline,
+  secretScopeHostname,
   uint8ToBase64,
 } from '@slicc/shared-ts';
 
@@ -213,7 +214,7 @@ async function prepareUpstreamRequest(
     };
   }
   const cleanedUrl = credsResult.url;
-  const host = new URL(cleanedUrl).host;
+  const host = secretScopeHostname(cleanedUrl);
 
   const headers: Record<string, string> = decodeForbiddenRequestHeaders(msg.headers);
   let hmacSpec: string | undefined;

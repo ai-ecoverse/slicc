@@ -614,7 +614,9 @@ public final class SecretInjector: @unchecked Sendable {
 
         var user = (userEncoded?.removingPercentEncoding) ?? (userEncoded ?? "")
         var pass = (passEncoded?.removingPercentEncoding) ?? (passEncoded ?? "")
-        let host = components.host ?? ""
+        // Not `components.host`: that decodes an IDN to Unicode, while the
+        // TypeScript floats match punycode (`secretScopeHostname`).
+        let host = secretScopeHostname(rawUrl)
         var touched = false
         for secret in secrets {
             guard secret.isMaskable else { continue }
