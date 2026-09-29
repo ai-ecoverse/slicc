@@ -93,7 +93,8 @@ export function rawFetchTransport(
 }
 
 export interface RealmFetchOptions {
-  capabilities?: () => RawFetchCapabilities;
+  /** What the float's raw mode can do (the bridge is asked once). */
+  capabilities?: () => RawFetchCapabilities | Promise<RawFetchCapabilities>;
   raw?: () => RawProxiedFetch;
   fallback?: () => RealmTransport;
 }
@@ -101,25 +102,42 @@ export interface RealmFetchOptions {
 /**
  * The float's transport for the realm proxy: raw mode where the float has
  * it, else today's proxied fetch; a raw `unsupported` answer switches to the
- * fallback for good.
+ * fallback for good. The float is asked at once; the first request waits for
+ * the answer, and until then the traits are the fallback's (its smaller body
+ * cap), which is safe on either path.
  */
 export function realmFetchTransport(options: RealmFetchOptions = {}): RealmTransport {
-  const capabilities = (options.capabilities ?? getRawFetchCapabilities)();
-  const fallback = options.fallback ?? (() => proxiedFetchTransport());
-  if (!capabilities.supported) return fallback();
-  const raw = rawFetchTransport(
-    (options.raw ?? (() => createProxiedStreamingFetch({ mode: 'raw' })))(),
-    capabilities
-  );
-  let current: RealmTransport = raw;
+  let fallbackTransport: RealmTransport | undefined;
+  const fallback = () => {
+    fallbackTransport ??= (options.fallback ?? (() => proxiedFetchTransport()))();
+    return fallbackTransport;
+  };
+  let current: RealmTransport | undefined;
+  const chosen = Promise.resolve()
+    .then(() => (options.capabilities ?? getRawFetchCapabilities)())
+    .then(
+      (capabilities) =>
+        capabilities.supported
+          ? rawFetchTransport(
+              (options.raw ?? (() => createProxiedStreamingFetch({ mode: 'raw' })))(),
+              capabilities
+            )
+          : fallback(),
+      () => fallback()
+    )
+    .then((transport) => {
+      current ??= transport;
+      return current;
+    });
   return {
     get traits() {
-      return current.traits;
+      return (current ?? fallback()).traits;
     },
     async fetch(request) {
-      if (current !== raw) return current.fetch(request);
+      const transport = current ?? (await chosen);
+      if (transport === fallbackTransport) return transport.fetch(request);
       try {
-        return await raw.fetch(request);
+        return await transport.fetch(request);
       } catch (e) {
         if (!(e instanceof RawFetchError) || e.code !== 'unsupported') throw e;
         current = fallback();

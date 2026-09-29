@@ -153,13 +153,34 @@ describe('realmFetchTransport', () => {
         'raw fetch: this bridge does not support raw mode'
       );
     });
-    const t = realmFetchTransport({ capabilities: () => CAPS, raw: () => raw, fallback: () => fb });
+    const t = realmFetchTransport({
+      capabilities: async () => CAPS,
+      raw: () => raw,
+      fallback: () => fb,
+    });
+    // Until the float answers, the fallback's (safe) traits; then raw mode's.
+    expect(t.traits.manualRedirects).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(t.traits.manualRedirects).toBe(true);
     expect(await drain((await t.fetch(request())).body)).toBe('fallback');
     await t.fetch(request());
     expect(raw).toHaveBeenCalledTimes(1);
     expect(fb.calls).toBe(2);
     expect(t.traits.manualRedirects).toBe(false);
+  });
+
+  it('uses the fallback when asking the float fails', async () => {
+    const fb = fallback();
+    const raw = vi.fn<RawProxiedFetch>();
+    const t = realmFetchTransport({
+      capabilities: async () => {
+        throw new Error('bridge down');
+      },
+      raw: () => raw,
+      fallback: () => fb,
+    });
+    expect(await drain((await t.fetch(request())).body)).toBe('fallback');
+    expect(raw).not.toHaveBeenCalled();
   });
 
   it('lets any other raw failure through, with its status', async () => {

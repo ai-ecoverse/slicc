@@ -72,7 +72,10 @@ beforeAll(async () => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     if (url.startsWith(bridge)) {
-      const raw = new Headers(init?.headers).has('x-slicc-raw-request');
+      const sent = new Headers(init?.headers);
+      // The capability probe is neither mode's request.
+      if (sent.has('x-slicc-raw-probe')) return realFetch(input, init);
+      const raw = sent.has('x-slicc-raw-request');
       bridgeCalls[raw ? 'raw' : 'fallback']++;
       return realFetch(input, init);
     }
