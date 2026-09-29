@@ -70,12 +70,14 @@ export interface ProcessSys {
     path: string,
     flags: number,
     position: number,
-    opts?: { contents?: Uint8Array; orphan?: boolean }
+    opts?: { contents?: Uint8Array; orphan?: boolean; truncate?: boolean }
   ): number;
   /** lseek(2) on a kernel description's shared offset. */
   seek(fd: number, offset: number, whence: number): number;
   /** fsync(2): write back a VFS file description's buffered content. */
   flush(fd: number): void;
+  /** pread(2) on a VFS file description: up to `max` bytes at `at`, its offset untouched. */
+  pread?(fd: number, max: number, at: number): Uint8Array;
   /** Whether the descriptor is a terminal. */
   isatty?(fd: number): boolean;
   /** A new kernel fd on the controlling terminal (`/dev/tty`); ENXIO without one. */

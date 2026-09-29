@@ -84,6 +84,13 @@ export interface KernelFile {
   seek?(offset: number, whence: number): Promise<number>;
   /** Write back buffered content (a VFS file). */
   flush?(): Promise<void>;
+  /** pread(2) / pwrite(2): at `at`, the offset untouched (a VFS file; else ESPIPE). */
+  pread?(max: number, at: number): Promise<Uint8Array>;
+  pwrite?(bytes: Uint8Array, at: number): Promise<number>;
+  /** ftruncate(2) (a VFS file). */
+  resize?(size: number): Promise<void>;
+  /** A VFS file's path (where it is now) and size, buffered writes included. */
+  stat?(): Promise<{ path: string; size: number }>;
   /** A terminal: its termios and window size (isatty, tcgetattr, TIOCGWINSZ). */
   tty?: KernelTty;
   /**

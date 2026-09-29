@@ -36,7 +36,7 @@ import { type DefaultAction, defaultAction, isSignal, SIG, sigbit } from './sign
 import { KernelSocket, LoopbackNet } from './socket.js';
 import { SOCKET_OPS, type SocketSyscall, socketSyscall } from './socket-syscalls.js';
 import type { KernelTty, Termios } from './tty.js';
-import { type VfsFileFs, vfsFile } from './vfs-file.js';
+import { type VfsFileFs, VfsNodes, vfsFile } from './vfs-file.js';
 
 /** The syscalls of a wasm-realm process (the request bodies on the SAB wire). */
 export type WasmSyscall =
@@ -62,7 +62,24 @@ export type WasmSyscall =
       contents?: Uint8Array;
       /** Never write back: the path is gone from the VFS. */
       orphan?: boolean;
+      /** Created or truncated by the open. */
+      truncate?: boolean;
     }
+  /** pread(2) / pwrite(2) / ftruncate(2) of a VFS file description (else ESPIPE). */
+  | { op: 'fd-pread'; fd: number; offset: number; max: number }
+  | { op: 'fd-pwrite'; fd: number; offset: number; body: Uint8Array }
+  | { op: 'fd-resize'; fd: number; size: number }
+  /** A VFS file description's path and size (`{ path, size }`). */
+  | { op: 'fd-vfs-stat'; fd: number }
+  /**
+   * What the program did to a path, for the VFS files it has open here:
+   * write back what is at or beneath it (a stat follows); it is about to be
+   * unlinked / was unlinked (the opens keep the bytes); it was renamed.
+   */
+  | { op: 'fd-path-flush'; path: string }
+  | { op: 'fd-path-unlinking'; path: string }
+  | { op: 'fd-path-unlinked'; path: string }
+  | { op: 'fd-path-renamed'; from: string; to: string }
   | { op: 'fd-seek'; fd: number; offset: number; whence: number }
   | { op: 'fd-select'; read: number[]; write: number[]; timeoutMs: number }
   | { op: 'fd-info'; fd: number }
@@ -159,6 +176,32 @@ function isSocketSyscall(req: WasmSyscall): req is SocketSyscall {
   return req.op.startsWith('sock-');
 }
 
+/** The syscalls on a VFS file description, and on the paths of those open. */
+type VfsSyscall = Extract<
+  FdSyscall,
+  {
+    op:
+      | 'fd-pread'
+      | 'fd-pwrite'
+      | 'fd-resize'
+      | 'fd-vfs-stat'
+      | 'fd-path-flush'
+      | 'fd-path-unlinking'
+      | 'fd-path-unlinked'
+      | 'fd-path-renamed';
+  }
+>;
+
+function isVfsSyscall(req: FdSyscall): req is VfsSyscall {
+  return (
+    req.op.startsWith('fd-path-') ||
+    req.op === 'fd-pread' ||
+    req.op === 'fd-pwrite' ||
+    req.op === 'fd-resize' ||
+    req.op === 'fd-vfs-stat'
+  );
+}
+
 function isFdSyscall(req: WasmSyscall): req is FdSyscall {
   return req.op.startsWith('fd-');
 }
@@ -184,6 +227,14 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-poll',
   'fd-open-vfs',
   'fd-seek',
+  'fd-pread',
+  'fd-pwrite',
+  'fd-resize',
+  'fd-vfs-stat',
+  'fd-path-flush',
+  'fd-path-unlinking',
+  'fd-path-unlinked',
+  'fd-path-renamed',
   'fd-select',
   'fd-info',
   'fd-dup',
@@ -281,6 +332,8 @@ export class WasmProcess {
   private wake: () => void = () => {};
   private readonly stateListeners: StateListener[] = [];
   private net: LoopbackNet | undefined;
+  /** Its open VFS files' bytes, one node per path. */
+  private readonly nodes: VfsNodes | undefined;
 
   constructor(
     readonly pid: number,
@@ -288,6 +341,7 @@ export class WasmProcess {
     private readonly options: WasmProcessOptions = {}
   ) {
     this.children = new ChildTable(fds, options.spawner, options.forker);
+    this.nodes = options.fs ? new VfsNodes(options.fs) : undefined;
     this.children.onChildState = () => this.signal(SIG.CHLD);
   }
 
@@ -419,6 +473,7 @@ export class WasmProcess {
 
   /** Descriptor syscalls: reads and writes a caught signal can interrupt. */
   private async fdSyscall(req: FdSyscall): Promise<SyncFsResult> {
+    if (isVfsSyscall(req)) return this.vfsSyscall(req);
     switch (req.op) {
       case 'fd-read':
         return { ok: true, kind: 'bytes', bytes: await this.read(req) };
@@ -443,13 +498,18 @@ export class WasmProcess {
         return { ok: true, kind: 'json', json: pollFile(this.fds.get(req.fd).file) };
       case 'fd-open-vfs': {
         if (!this.options.fs) throw new SpawnError('ENOSYS');
-        const file = vfsFile(this.options.fs, {
-          path: req.path,
-          flags: req.flags,
-          position: req.position,
-          ...(req.contents !== undefined ? { contents: req.contents } : {}),
-          ...(req.orphan ? { orphan: true } : {}),
-        });
+        const file = vfsFile(
+          this.options.fs,
+          {
+            path: req.path,
+            flags: req.flags,
+            position: req.position,
+            ...(req.contents !== undefined ? { contents: req.contents } : {}),
+            ...(req.orphan ? { orphan: true } : {}),
+            ...(req.truncate ? { truncate: true } : {}),
+          },
+          this.nodes
+        );
         return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
       }
       case 'fd-info':
@@ -510,6 +570,35 @@ export class WasmProcess {
     }
   }
 
+  /** Positioned I/O on a VFS file description, and what the program did to paths it has open. */
+  private async vfsSyscall(req: VfsSyscall): Promise<SyncFsResult> {
+    if ('path' in req || 'from' in req) {
+      const nodes = this.nodes;
+      if (req.op === 'fd-path-flush') await nodes?.flush(req.path);
+      else if (req.op === 'fd-path-unlinking') await nodes?.unlinking(req.path);
+      else if (req.op === 'fd-path-unlinked') nodes?.unlinked(req.path);
+      else if (req.op === 'fd-path-renamed') nodes?.renamed(req.from, req.to);
+      return { ok: true, kind: 'void' };
+    }
+    const file = this.fds.get(req.fd).file;
+    if (!file.pread || !file.pwrite || !file.resize || !file.stat) throw new KernelError('ESPIPE');
+    switch (req.op) {
+      case 'fd-pread':
+        return {
+          ok: true,
+          kind: 'bytes',
+          bytes: await file.pread(Math.min(req.max, MAX_READ), req.offset),
+        };
+      case 'fd-pwrite':
+        return { ok: true, kind: 'json', json: await file.pwrite(req.body, req.offset) };
+      case 'fd-resize':
+        await file.resize(req.size);
+        return { ok: true, kind: 'void' };
+      case 'fd-vfs-stat':
+        return { ok: true, kind: 'json', json: await file.stat() };
+    }
+  }
+
   /** fd-promote: the held number `fd` becomes a VFS file description (or shares one). */
   private promote(req: Extract<WasmSyscall, { op: 'fd-promote' }>): void {
     if (!this.fds.get(req.fd).file.held) throw new KernelError('EBADF');
@@ -518,13 +607,17 @@ export class WasmProcess {
       return;
     }
     if (!this.options.fs || req.path === undefined) throw new KernelError('EINVAL');
-    const file = vfsFile(this.options.fs, {
-      path: req.path,
-      flags: req.flags ?? 0,
-      position: req.position ?? 0,
-      ...(req.contents !== undefined ? { contents: req.contents } : {}),
-      ...(req.orphan ? { orphan: true } : {}),
-    });
+    const file = vfsFile(
+      this.options.fs,
+      {
+        path: req.path,
+        flags: req.flags ?? 0,
+        position: req.position ?? 0,
+        ...(req.contents !== undefined ? { contents: req.contents } : {}),
+        ...(req.orphan ? { orphan: true } : {}),
+      },
+      this.nodes
+    );
     this.fds.installAt(req.fd, file);
   }
 

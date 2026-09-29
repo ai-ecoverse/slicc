@@ -495,15 +495,19 @@ export class WasiFds {
   /** Before a path-level op sees `path` (or, for a directory, what is beneath it), write back its buffers. */
   flushPath(path: string): void {
     for (const [p, buffer] of this.buffers) if (within(p, path)) buffer.flush();
+    // A threaded process's files are the kernel's (`kernelFile`).
+    if (this.shared) this.kernel.call({ op: 'fd-path-flush', path });
   }
 
   /** `path` is about to be unlinked: load its bytes, so its open fds keep them if the unlink succeeds. */
   unlinking(path: string): void {
     this.buffers.get(path)?.load();
+    if (this.shared) this.kernel.call({ op: 'fd-path-unlinking', path });
   }
 
   /** `path` was unlinked: its open fds keep their bytes and never write them back. */
   unlinked(path: string): void {
+    if (this.shared) this.kernel.call({ op: 'fd-path-unlinked', path });
     const buffer = this.buffers.get(path);
     if (!buffer) return;
     buffer.orphan();
@@ -517,6 +521,7 @@ export class WasiFds {
    */
   renamed(from: string, to: string): void {
     if (from === to) return;
+    if (this.shared) this.kernel.call({ op: 'fd-path-renamed', from, to });
     const moved: Array<[string, FileBuffer]> = [];
     for (const [p, buffer] of this.buffers) {
       if (within(p, from)) moved.push([p, buffer]);
@@ -601,13 +606,9 @@ export class WasiFds {
     const flags = (writable ? (readable ? O_RDWR : O_WRONLY) : 0) | (append ? O_APPEND : 0);
     // Created at once, so a readdir that follows sees it.
     if (!existing) this.fs.writeFile(path, new Uint8Array(0));
+    // One node per path in the kernel: this open shares the bytes of the process's others.
     const truncate = !existing || (oflags & OFLAGS.TRUNC) !== 0;
-    const fd = this.kernel.sys.openVfs(
-      path,
-      flags,
-      0,
-      truncate ? { contents: new Uint8Array(0) } : {}
-    );
+    const fd = this.kernel.sys.openVfs(path, flags, 0, truncate ? { truncate } : {});
     this.table.set(fd, { type: 'kernel', kind: 'file', nonblock: false, append });
     if (append) this.publishFlags(fd, { nonblock: false, append });
     this.bump();

@@ -79,6 +79,14 @@ const NS_PER_MS = 1_000_000n;
 const MAX_READ = 1024 * 1024;
 const SIGPIPE_EXIT = 141;
 
+/** A regular file's positioned I/O and size: a buffered file, or a threaded process's kernel description. */
+interface Positional {
+  pread(max: number, at: number): Uint8Array;
+  pwrite(bytes: Uint8Array, at: number): number;
+  size(): number;
+  truncate(size: number): void;
+}
+
 interface Filestat {
   filetype: number;
   size: bigint;
@@ -213,13 +221,17 @@ export class WasiHost {
         mem.view().setUint32(out, mem.scatter(iovs, n, data), true);
       },
       fd_pread: (fd: number, iovs: number, n: number, at: bigint, out: number) => {
-        const data = this.file(fd, 'read').pread(mem.capacity(iovs, n), Number(at));
+        const data = this.positional(fd, 'read').pread(mem.capacity(iovs, n), Number(at));
         mem.view().setUint32(out, mem.scatter(iovs, n, data), true);
       },
       fd_pwrite: (fd: number, iovs: number, n: number, at: bigint, out: number) =>
         void mem
           .view()
-          .setUint32(out, this.file(fd, 'write').pwrite(mem.gather(iovs, n), Number(at)), true),
+          .setUint32(
+            out,
+            this.positional(fd, 'write').pwrite(mem.gather(iovs, n), Number(at)),
+            true
+          ),
       fd_seek: (fd: number, offset: bigint, whence: number, out: number) =>
         void mem.view().setBigUint64(out, BigInt(this.seek(fd, Number(offset), whence)), true),
       fd_tell: (fd: number, out: number) =>
@@ -230,7 +242,7 @@ export class WasiHost {
       fd_datasync: (fd: number) => void this.sync(fd),
       fd_advise: (fd: number) => void fds.get(fd),
       fd_allocate: (fd: number, offset: bigint, len: bigint) => {
-        const file = this.file(fd);
+        const file = this.positional(fd);
         const end = Number(offset + len);
         if (end > file.size()) file.truncate(end);
       },
@@ -246,7 +258,8 @@ export class WasiHost {
       fd_fdstat_set_rights: (fd: number) => void fds.get(fd),
       fd_filestat_get: (fd: number, out: number) =>
         void this.writeFilestat(out, this.fdFilestat(fd)),
-      fd_filestat_set_size: (fd: number, size: bigint) => void this.file(fd).truncate(Number(size)),
+      fd_filestat_set_size: (fd: number, size: bigint) =>
+        void this.positional(fd).truncate(Number(size)),
       fd_filestat_set_times: (fd: number, atim: bigint, mtim: bigint, flags: number) => {
         const e = fds.get(fd);
         if (e.type === 'file') {
@@ -439,6 +452,27 @@ export class WasiHost {
     return e.file;
   }
 
+  /** `fd`'s positioned I/O: a buffered file's, or a threaded process's kernel file's. */
+  private positional(fd: number, access?: 'read' | 'write'): Positional {
+    const e = this.fds.get(fd);
+    if (e.type !== 'kernel' || this.fds.kind(fd, e) !== 'file') return this.file(fd, access);
+    const kernel = this.o.kernel;
+    return {
+      pread: (max, at) => {
+        if (!kernel.sys.pread) throw new WasiError('ESPIPE');
+        return kernel.sys.pread(fd, Math.min(max, MAX_READ), at);
+      },
+      pwrite: (body, at) => kernel.call({ op: 'fd-pwrite', fd, offset: at, body }) as number,
+      size: () => this.kernelStat(fd).size,
+      truncate: (size) => void kernel.call({ op: 'fd-resize', fd, size }),
+    };
+  }
+
+  /** A kernel VFS file's path (where it is now) and size, its unwritten bytes included. */
+  private kernelStat(fd: number): { path?: string; size: number } {
+    return this.o.kernel.call({ op: 'fd-vfs-stat', fd }) as { path?: string; size: number };
+  }
+
   private write(fd: number, data: Uint8Array): number {
     const e = this.fds.get(fd);
     if (e.type === 'kernel') {
@@ -526,24 +560,28 @@ export class WasiHost {
   private fdFilestat(fd: number): Filestat {
     const e = this.fds.get(fd);
     if (e.type === 'dir') return filestatOf(e.path, this.o.fs.stat(e.path));
-    if (e.type === 'file') {
-      let s: SyncFsBridgeStat | undefined;
-      try {
-        s = this.o.fs.stat(e.file.path);
-      } catch {
-        /* unlinked while open */
-      }
-      // The buffered size is the truth until the write-back.
-      return {
-        ...filestatOf(e.file.path, s ?? { isFile: true, isDirectory: false, size: 0 }),
-        size: BigInt(e.file.size()),
-      };
+    if (e.type === 'file') return this.statOrphanable(e.file.path, e.file.size());
+    const kind = e.type === 'kernel' ? this.fds.kind(fd, e) : undefined;
+    if (kind === 'file') {
+      const vfs = this.kernelStat(fd);
+      if (vfs.path) return this.statOrphanable(vfs.path, vfs.size);
     }
-    const filetype =
-      e.type === 'kernel'
-        ? kernelFiletype(this.fds.kind(fd, e)).filetype
-        : FILETYPE.CHARACTER_DEVICE;
+    const filetype = kind ? kernelFiletype(kind).filetype : FILETYPE.CHARACTER_DEVICE;
     return { filetype, size: 0n, ino: BigInt(fd + 1), mtimeNs: 0n };
+  }
+
+  /** An open file's stat: its path's (none once unlinked), with the buffered size, the truth until the write-back. */
+  private statOrphanable(path: string, size: number): Filestat {
+    let s: SyncFsBridgeStat | undefined;
+    try {
+      s = this.o.fs.stat(path);
+    } catch {
+      /* unlinked while open */
+    }
+    return {
+      ...filestatOf(path, s ?? { isFile: true, isDirectory: false, size: 0 }),
+      size: BigInt(size),
+    };
   }
 
   private pathFilestat(path: string, lookup: number): Filestat {

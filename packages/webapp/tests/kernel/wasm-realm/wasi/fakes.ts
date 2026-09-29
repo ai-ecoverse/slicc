@@ -38,8 +38,9 @@ interface FakeFd {
   drained?: string;
   /** The `max` of every read. */
   reads?: number[];
-  /** A VFS file's path (`openVfs`). */
+  /** A VFS file's path (`openVfs`), and its bytes (positioned I/O). */
   path?: string;
+  data?: Uint8Array;
   meta?: HeldMeta;
   flags?: number;
   cloexec?: boolean;
@@ -137,6 +138,7 @@ export class FakeKernel implements WasiKernel {
       return offset;
     },
     flush: (fd) => void this.get(fd),
+    pread: (fd, max, at) => (this.get(fd).data ?? new Uint8Array(0)).slice(at, at + max),
     openTty: () => {
       if (!this.tty) throw posix('ENXIO');
       const fd = this.free(3);
@@ -199,6 +201,30 @@ export class FakeKernel implements WasiKernel {
         return undefined;
       case 'proc-kill':
         this.killed.push([req.pid, req.sig]);
+        return undefined;
+      case 'fd-pwrite': {
+        const e = this.get(req.fd);
+        const old = e.data ?? new Uint8Array(0);
+        e.data = new Uint8Array(Math.max(old.length, req.offset + req.body.length));
+        e.data.set(old);
+        e.data.set(req.body, req.offset);
+        return req.body.length;
+      }
+      case 'fd-resize': {
+        const e = this.get(req.fd);
+        const old = e.data ?? new Uint8Array(0);
+        e.data = new Uint8Array(req.size);
+        e.data.set(old.subarray(0, req.size));
+        return undefined;
+      }
+      case 'fd-vfs-stat': {
+        const e = this.get(req.fd);
+        return { path: e.path, size: e.data?.length ?? 0 };
+      }
+      case 'fd-path-flush':
+      case 'fd-path-unlinking':
+      case 'fd-path-unlinked':
+      case 'fd-path-renamed':
         return undefined;
       default:
         throw posix('ENOSYS');
