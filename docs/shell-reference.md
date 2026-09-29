@@ -573,6 +573,14 @@ domains cover and only over HTTPS; the proxy unmasks it where the request
 leaves. Your `~/.gitconfig` and a repository's config win over both the
 helper and the identity. Details: `docs/secrets.md`, **Native git**.
 
+Hooks run as on any system: git runs `.git/hooks/<name>` by path, and its `#!`
+line picks the program (`#!/bin/sh` is GNU bash). Two gaps are in the package,
+not the realm: `@ai-ecoverse/wasm-git@2.55.0-2` ships no templates (`git init`
+warns that they are missing, and a new repository has no `.git/hooks`, so
+create it for a hook), and none of git's shell-script commands, so
+`git submodule` (and `clone --recurse-submodules`) says it is not a git command.
+With those scripts present, submodules work.
+
 ### `hf download` fetches several files at once
 
 `hf download` (`hf-command.ts` over `hf-download.ts`) runs a bounded pool: at
