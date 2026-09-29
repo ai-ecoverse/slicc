@@ -44,13 +44,18 @@ function makePackument(
   versions: string[],
   distTags?: Record<string, string>
 ): Packument {
-  const versionMap: Record<string, { name: string; version: string; dist: { tarball: string } }> =
-    {};
+  const versionMap: Record<
+    string,
+    { name: string; version: string; dist: { tarball: string; shasum: string } }
+  > = {};
   for (const v of versions) {
     versionMap[v] = {
       name,
       version: v,
-      dist: { tarball: `https://${REGISTRY_NPMJS_HOST}/${name}/-/${name}-${v}.tgz` },
+      dist: {
+        tarball: `https://${REGISTRY_NPMJS_HOST}/${name}/-/${name}-${v}.tgz`,
+        shasum: '0000000000000000000000000000000000000000',
+      },
     };
   }
   const tags: Record<string, string> = distTags ?? { latest: versions[versions.length - 1] };
@@ -131,6 +136,90 @@ describe('registryUrl', () => {
 describe('REGISTRY_NPMJS_HOST', () => {
   it('resolves the npm registry hostname', () => {
     expect(REGISTRY_NPMJS_HOST).toBe('registry.npmjs.org');
+  });
+});
+
+describe('fetchPackument: abbreviated metadata', () => {
+  const ABBREVIATED = 'application/vnd.npm.install-v1+json';
+
+  /** Serves `abbreviated` to corgi requests and `full` to the rest, recording each Accept. */
+  function registry(abbreviated: unknown, full: unknown) {
+    const accepts: string[] = [];
+    const fetch = (async (_url: string, opts?: SecureFetchOptions) => {
+      const accept = String((opts?.headers as Record<string, string> | undefined)?.Accept ?? '');
+      accepts.push(accept);
+      return jsonResult(accept.startsWith(ABBREVIATED) ? abbreviated : full);
+    }) as unknown as SecureFetch;
+    return { fetch, accepts };
+  }
+
+  it('asks for abbreviated install metadata first and uses it when complete', async () => {
+    const corgi = makePackument('p', ['1.0.0', '1.1.0']);
+    const { fetch, accepts } = registry(corgi, { should: 'not be fetched' });
+    const out = await fetchPackument('p', fetch);
+    expect(out).toEqual(corgi);
+    expect(accepts).toHaveLength(1);
+    expect(accepts[0]).toMatch(
+      /^application\/vnd\.npm\.install-v1\+json; q=1\.0, application\/json/
+    );
+  });
+
+  it('falls back to the full packument when a version has no hash to verify against', async () => {
+    const corgi = makePackument('p', ['1.0.0', '1.1.0']);
+    delete (corgi.versions['1.1.0'].dist as { shasum?: string }).shasum;
+    const full = makePackument('p', ['1.0.0', '1.1.0']);
+    full.versions['1.1.0'].dist.integrity = 'sha512-full';
+    const { fetch, accepts } = registry(corgi, full);
+    const out = await fetchPackument('p', fetch);
+    expect(out.versions['1.1.0'].dist.integrity).toBe('sha512-full');
+    expect(accepts).toEqual([expect.stringMatching(/^application\/vnd\.npm/), 'application/json']);
+  });
+
+  it('falls back when a version has no dist.tarball or the dist-tags are missing', async () => {
+    const noTarball = makePackument('p', ['1.0.0']);
+    (noTarball.versions['1.0.0'] as { dist?: unknown }).dist = { shasum: 'x' };
+    const noTags = makePackument('p', ['1.0.0']);
+    delete noTags['dist-tags'];
+    const full = makePackument('p', ['1.0.0']);
+    for (const corgi of [noTarball, noTags]) {
+      const { fetch, accepts } = registry(corgi, full);
+      await expect(fetchPackument('p', fetch)).resolves.toEqual(full);
+      expect(accepts).toHaveLength(2);
+    }
+  });
+
+  it('keeps deprecated, dependencies and bin from the abbreviated document', async () => {
+    const corgi = makePackument('p', ['1.0.0', '2.0.0']);
+    Object.assign(corgi.versions['2.0.0'], {
+      deprecated: 'use 1.x',
+      dependencies: { q: '^1' },
+      bin: { p: 'cli.js' },
+    });
+    const { fetch } = registry(corgi, {});
+    const out = await fetchPackument('p', fetch);
+    expect(out.versions['2.0.0']).toMatchObject({
+      deprecated: 'use 1.x',
+      dependencies: { q: '^1' },
+      bin: { p: 'cli.js' },
+    });
+    expect(resolveVersion(out, '*')).toBe('1.0.0');
+  });
+
+  it('requests only the full packument when asked to', async () => {
+    const full = makePackument('p', ['1.0.0']);
+    const { fetch, accepts } = registry({}, full);
+    await expect(fetchPackument('p', fetch, { full: true })).resolves.toEqual(full);
+    expect(accepts).toEqual(['application/json']);
+  });
+
+  it('does not fall back when the abbreviated request itself fails', async () => {
+    const accepts: string[] = [];
+    const fetch = (async (_url: string, opts?: SecureFetchOptions) => {
+      accepts.push(String((opts?.headers as Record<string, string> | undefined)?.Accept));
+      return jsonResult({ error: 'not found' }, 404, 'Not Found');
+    }) as unknown as SecureFetch;
+    await expect(fetchPackument('p', fetch)).rejects.toThrow(/HTTP 404/);
+    expect(accepts).toHaveLength(1);
   });
 });
 
