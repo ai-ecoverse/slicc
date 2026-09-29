@@ -15,6 +15,19 @@ import type { WasiForkState } from './wasi/wasix-fork.js';
 export const WASM_PROCESS_INIT = 'wasm-process-init';
 export const WASM_PROCESS_EXIT = 'wasm-process-exit';
 export const WASM_PROCESS_ERROR = 'wasm-process-error';
+/** A WASI process starts a thread (`thread-spawn`, `thread_spawn_v2`): any of its workers → kernel. */
+export const WASM_THREAD_SPAWN = 'wasm-thread-spawn';
+/** The kernel starts a thread's worker: kernel → the new worker. */
+export const WASM_THREAD_INIT = 'wasm-thread-init';
+/** A thread's start function returned (or it called thread_exit): its worker → kernel. */
+export const WASM_THREAD_EXIT = 'wasm-thread-exit';
+
+/**
+ * The most threads a WASI process runs at once, the main one included (a
+ * worker, and a V8 isolate, each); `SLICC_WASM_THREADS` in its environment
+ * lowers it. A spawn past it fails (pthread_create: EAGAIN).
+ */
+export const WASM_MAX_THREADS = 64;
 
 /** A program: its compiled module, and for Emscripten its glue (JS). */
 export interface WasmProgram {
@@ -111,6 +124,34 @@ export interface WasmProcessInitMsg {
    * runner's private descriptor (close-on-exec).
    */
   fds?: InheritedFd[];
+}
+
+/** A thread of a WASI process: its id, its start function's argument, the process's memory and ids. */
+export interface WasmThread {
+  tid: number;
+  arg: number;
+  /** The process's shared memory. */
+  memory: WebAssembly.Memory;
+  /**
+   * Int32s the process's threads share: the last thread id, the threads
+   * running besides the main one, the descriptor table's generation.
+   */
+  ids: SharedArrayBuffer;
+}
+
+export interface WasmThreadSpawnMsg {
+  type: typeof WASM_THREAD_SPAWN;
+  thread: WasmThread;
+}
+
+/** The process's init, with the thread's own SAB bridge and what it runs. */
+export interface WasmThreadInitMsg extends Omit<WasmProcessInitMsg, 'type' | 'fork' | 'fds'> {
+  type: typeof WASM_THREAD_INIT;
+  thread: WasmThread;
+}
+
+export interface WasmThreadExitMsg {
+  type: typeof WASM_THREAD_EXIT;
 }
 
 export interface WasmProcessExitMsg {

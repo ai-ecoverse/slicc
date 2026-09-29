@@ -26,6 +26,7 @@
 import { E, FDFLAGS, WASI_SIGNAL_TO_POSIX, wasiErrnoOf } from './wasi-abi.js';
 import { WasiError } from './wasi-files.js';
 import { WasiExit, type WasiFunction, type WasiHost, wrap } from './wasi-host.js';
+import { MAIN_TID, ThreadExit, type WasiThreads } from './wasi-threads.js';
 import type { AsyncifyDriver } from './wasix-fork.js';
 import { type SpawnFdOp, WasixProcess } from './wasix-process.js';
 
@@ -48,6 +49,8 @@ export const COMPAT: Readonly<Record<string, readonly string[]>> = {
 
 export class WasixHost {
   private readonly process: WasixProcess;
+  /** The process's threads (a module with a shared memory can have them). */
+  threads: WasiThreads | undefined;
 
   constructor(
     private readonly host: WasiHost,
@@ -185,7 +188,6 @@ export class WasixHost {
       chdir: (ptr: number, len: number) => {
         const path = host.fds.resolve(3, this.str(ptr, len));
         if (!host.o.fs.stat(path).isDirectory) throw new WasiError('ENOTDIR');
-        host.cwd = path;
         host.fds.chdir(path);
       },
     };
@@ -208,11 +210,8 @@ export class WasixHost {
         host.fds.get(fd);
         mem.view().setUint16(out, host.fds.cloexec.has(fd) ? FDFLAGSEXT_CLOEXEC : 0, true);
       },
-      fd_fdflags_set: (fd: number, flags: number) => {
-        host.fds.get(fd);
-        if (flags & FDFLAGSEXT_CLOEXEC) host.fds.cloexec.add(fd);
-        else host.fds.cloexec.delete(fd);
-      },
+      fd_fdflags_set: (fd: number, flags: number) =>
+        void host.fds.setCloexec(fd, (flags & FDFLAGSEXT_CLOEXEC) !== 0),
       path_open2: (
         dirfd: number,
         lookup: number,
@@ -227,7 +226,7 @@ export class WasixHost {
       ) => {
         const r = preview1.path_open(dirfd, lookup, p, l, oflags, rights, inheriting, fdflags, out);
         if (r === E.SUCCESS && fdflagsext & FDFLAGSEXT_CLOEXEC)
-          host.fds.cloexec.add(mem.view().getUint32(out, true));
+          host.fds.setCloexec(mem.view().getUint32(out, true), true);
         return r;
       },
       tty_get: (ptr: number) => void this.ttyGet(ptr),
@@ -329,32 +328,52 @@ export class WasixHost {
     const { mem, host } = this;
     const i32 = () => new Int32Array(mem.view().buffer);
     return {
-      thread_id: (out: number) => void mem.view().setUint32(out, 1, true),
-      thread_parallelism: (out: number) => void mem.view().setUint32(out, 1, true),
-      // The only thread: its exit is the process's.
+      thread_id: (out: number) =>
+        void mem.view().setUint32(out, this.threads?.tid ?? MAIN_TID, true),
+      thread_parallelism: (out: number) =>
+        void mem.view().setUint32(out, this.threads?.parallelism() ?? 1, true),
+      // Another thread's exit is its own; the main thread's is the process's.
       thread_exit: (code: number) => {
+        if (this.threads && this.threads.tid !== MAIN_TID) throw new ThreadExit();
         throw new WasiExit(code);
       },
+      // A signal to a thread is the process's: the kernel applies its default action.
       thread_signal: (tid: number, sig: number) => {
-        if (tid !== 1) throw new WasiError('ESRCH');
+        if (!(this.threads?.known(tid) ?? tid === MAIN_TID)) throw new WasiError('ESRCH');
         const posix = WASI_SIGNAL_TO_POSIX[sig];
         if (posix === undefined) throw new WasiError('EINVAL');
         host.o.kernel.call({ op: 'proc-kill', pid: host.o.pid, sig: posix });
       },
-      // Threads are phase 5d.
-      thread_spawn_v2: () => E.NOTSUP,
+      // start_ptr → wasi_thread_start(tid, start_ptr) in a new worker; EAGAIN past the cap.
+      thread_spawn_v2: (startPtr: number, tidPtr: number) => {
+        if (!this.threads) return E.NOTSUP;
+        const tid = this.threads.spawn(startPtr);
+        if (tid < 0) return E.AGAIN;
+        mem.view().setUint32(tidPtr, tid, true);
+        return E.SUCCESS;
+      },
       futex_wait: (ptr: number, expected: number, timeoutPtr: number, wokenPtr: number) => {
         const v = mem.view();
         const timed = timeoutPtr !== 0 && v.getUint8(timeoutPtr) === 1;
         const ms = timed
           ? Number(v.getBigUint64(timeoutPtr + 8, true)) / 1e6
           : Number.POSITIVE_INFINITY;
-        v.setUint8(wokenPtr, Atomics.wait(i32(), ptr >> 2, expected | 0, ms) === 'ok' ? 1 : 0);
+        // As Wasmer answers: woken unless it timed out (a changed value counts as woken).
+        v.setUint8(
+          wokenPtr,
+          Atomics.wait(i32(), ptr >> 2, expected | 0, ms) === 'timed-out' ? 0 : 1
+        );
       },
-      futex_wake: (ptr: number, wokenPtr: number) =>
-        void mem.view().setUint8(wokenPtr, Atomics.notify(i32(), ptr >> 2, 1) > 0 ? 1 : 0),
-      futex_wake_all: (ptr: number, wokenPtr: number) =>
-        void mem.view().setUint8(wokenPtr, Atomics.notify(i32(), ptr >> 2) > 0 ? 1 : 0),
+      // Woken whether or not anyone waited (Wasmer's answer): wasix-libc retries
+      // a wake that reports otherwise, and would spin on an uncontended unlock.
+      futex_wake: (ptr: number, wokenPtr: number) => {
+        Atomics.notify(i32(), ptr >> 2, 1);
+        mem.view().setUint8(wokenPtr, 1);
+      },
+      futex_wake_all: (ptr: number, wokenPtr: number) => {
+        Atomics.notify(i32(), ptr >> 2);
+        mem.view().setUint8(wokenPtr, 1);
+      },
     };
   }
 

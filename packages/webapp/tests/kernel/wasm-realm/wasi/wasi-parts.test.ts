@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { E, wasiErrnoOf } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
+import { WasiFds } from '../../../../src/kernel/wasm-realm/wasi/wasi-fds.js';
 import {
   cachingBridge,
   FileBuffer,
@@ -13,7 +14,7 @@ import {
   resolveUnder,
 } from '../../../../src/kernel/wasm-realm/wasi/wasi-files.js';
 import { unsupportedImport } from '../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js';
-import { FakeFs } from './fakes.js';
+import { FakeFs, FakeKernel } from './fakes.js';
 
 describe('wasiErrnoOf', () => {
   it('maps POSIX names to WASI numbers, with the aliases and EIO for the unknown', () => {
@@ -145,15 +146,31 @@ describe('unsupportedImport', () => {
     );
     expect(unsupportedImport(wasix, memory)).toBeUndefined();
     // A memory nobody recorded is still refused.
-    expect(unsupportedImport(wasix)).toContain('threaded');
+    expect(unsupportedImport(wasix)).toContain('imports env.memory');
   });
 
-  it('refuses wasip1-threads, Emscripten glue imports and reactors, saying which', () => {
+  it('accepts wasm32-wasip1-threads on the shared memory the kernel recorded (5d)', () => {
+    const memory = { module: 'env', name: 'memory', initial: 17, shared: true };
+    const threaded = module(
+      [
+        [P1, 'fd_write', 'func'],
+        ['env', 'memory', 'memory'],
+        ['wasi', 'thread-spawn', 'func'],
+      ],
+      ['_start']
+    );
+    expect(unsupportedImport(threaded, memory)).toBeUndefined();
+    expect(unsupportedImport(threaded, { ...memory, shared: false })).toContain(
+      'imports wasi.thread-spawn'
+    );
+  });
+
+  it('refuses an unrecorded memory, a thread spawn without one, glue imports and reactors, saying which', () => {
     expect(unsupportedImport(module([['env', 'memory', 'memory']], ['_start']))).toContain(
-      'threaded'
+      'imports env.memory'
     );
     expect(unsupportedImport(module([['wasi', 'thread-spawn', 'func']], ['_start']))).toContain(
-      'threaded'
+      'imports wasi.thread-spawn'
     );
     expect(unsupportedImport(module([['a', 'a', 'func']], ['_start']))).toContain(
       'imports a.a: no WASI preview1 program'
@@ -161,5 +178,47 @@ describe('unsupportedImport', () => {
     expect(unsupportedImport(module([[P1, 'fd_write', 'func']], ['_initialize']))).toContain(
       'no _start'
     );
+  });
+});
+
+describe('WasiFds shared by threads (5d)', () => {
+  /** Two threads' tables over one kernel: A the main thread (sharing once it spawns), B a new thread. */
+  function twoThreads() {
+    const kernel = new FakeKernel();
+    const fs = new FakeFs().dir('/workspace').dir('/tmp').file('/workspace/a.txt', 'a');
+    const a = new WasiFds(kernel, fs);
+    a.setup('/workspace', []);
+    const ids = new Int32Array(new SharedArrayBuffer(16));
+    a.share(ids, false);
+    const b = new WasiFds(kernel, fs);
+    b.share(ids, true);
+    return { kernel, a, b };
+  }
+
+  it('a new thread finds the preopens, and `.`, through the kernel', () => {
+    const { b } = twoThreads();
+    expect(b.cwd()).toBe('/workspace');
+    expect(b.preopen(5)).toMatchObject({ path: '/tmp', preopen: '/tmp' });
+  });
+
+  it("one thread's chdir, close and reopen are the other's: nothing stale is kept", () => {
+    const { a, b } = twoThreads();
+    const fd = a.open('/tmp', 0, 0n, 0);
+    expect(b.dir(fd).path).toBe('/tmp'); // B caches it now
+    a.chdir('/tmp');
+    expect(b.cwd()).toBe('/tmp');
+    a.close(fd);
+    expect(a.open('/dev/null', 0, 0n, 0)).toBe(fd); // the same number, another kind
+    expect(b.find(fd)).toEqual({ type: 'device', device: 'null' });
+  });
+
+  it("a file is a kernel description once shared (every thread reaches it), and FD_CLOEXEC is the kernel's", () => {
+    const { kernel, a, b } = twoThreads();
+    const fd = b.open('/workspace/a.txt', 0, 0n, 0);
+    expect(kernel.opened).toEqual(['/workspace/a.txt']);
+    expect(a.find(fd)).toMatchObject({ type: 'kernel', kind: 'file' });
+    b.setCloexec(fd, true);
+    expect(a.inheritable().has(fd)).toBe(false);
+    expect(a.inheritable().has(1)).toBe(true);
   });
 });

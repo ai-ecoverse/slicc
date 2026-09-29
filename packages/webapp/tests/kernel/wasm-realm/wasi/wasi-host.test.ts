@@ -794,3 +794,50 @@ describe('WasiHost: sockets (5b)', () => {
     expect(g.view.getUint16(events + 24, true)).toBe(EVENT_FD_READWRITE_HANGUP);
   });
 });
+
+describe("WasiHost: a threaded process's files are kernel descriptions (5d)", () => {
+  function threaded() {
+    const s = setup();
+    s.host.fds.share(new Int32Array(new SharedArrayBuffer(16)), false);
+    return s;
+  }
+
+  it('pread, pwrite, allocate, set_size and filestat reach the description', () => {
+    const { call, g, open, kernel } = threaded();
+    const [errno, fd] = open('a.txt');
+    expect(errno).toBe(E.SUCCESS);
+    expect(kernel.opened).toEqual(['/workspace/p/a.txt']);
+    const [iov, n] = g.iov('hello');
+    const out = g.alloc(8);
+    expect(call('fd_pwrite', fd, iov, n, 2n, out)).toBe(E.SUCCESS);
+    expect(g.u32(out)).toBe(5);
+    const [riov, rn, buf] = g.iov(3);
+    expect(call('fd_pread', fd, riov, rn, 3n, out)).toBe(E.SUCCESS);
+    expect(g.read(buf, g.u32(out))).toBe('ell');
+    expect(call('fd_allocate', fd, 0n, 9n)).toBe(E.SUCCESS);
+    const st = g.alloc(SIZE.FILESTAT);
+    expect(call('fd_filestat_get', fd, st)).toBe(E.SUCCESS);
+    expect(g.view.getUint8(st + 16)).toBe(FILETYPE.REGULAR_FILE);
+    expect(g.u64(st + 32)).toBe(9n);
+    expect(call('fd_filestat_set_size', fd, 4n)).toBe(E.SUCCESS);
+    call('fd_filestat_get', fd, st);
+    expect(g.u64(st + 32)).toBe(4n);
+  });
+
+  it("an unlink, a rename and a path's stat tell the kernel, whose descriptions hold the bytes", () => {
+    const { kernel, open, path, g, call } = threaded();
+    open('a.txt');
+    const [p, l] = g.str('a.txt');
+    expect(call('path_filestat_get', 3, 1, p, l, g.alloc(SIZE.FILESTAT))).toBe(E.SUCCESS);
+    const [to, tl] = g.str('b.txt');
+    expect(path(3, 'a.txt', 'path_rename', 3, to, tl)).toBe(E.SUCCESS);
+    expect(path(3, 'b.txt', 'path_unlink_file')).toBe(E.SUCCESS);
+    expect(kernel.calls.filter((c) => c.op.startsWith('fd-path-'))).toEqual([
+      { op: 'fd-path-flush', path: '/workspace/p/a.txt' },
+      { op: 'fd-path-flush', path: '/workspace/p/a.txt' },
+      { op: 'fd-path-renamed', from: '/workspace/p/a.txt', to: '/workspace/p/b.txt' },
+      { op: 'fd-path-unlinking', path: '/workspace/p/b.txt' },
+      { op: 'fd-path-unlinked', path: '/workspace/p/b.txt' },
+    ]);
+  });
+});

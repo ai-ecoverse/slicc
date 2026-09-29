@@ -209,6 +209,7 @@ export class WasixProcess {
         fds: fds.snapshot(),
         cloexec: [...fds.cloexec],
         cwd: this.host.cwd,
+        ...(fds.isShared ? { shared: true as const } : {}),
       };
       return this.call({
         op: 'proc-fork',

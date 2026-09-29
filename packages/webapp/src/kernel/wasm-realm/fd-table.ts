@@ -84,6 +84,13 @@ export interface KernelFile {
   seek?(offset: number, whence: number): Promise<number>;
   /** Write back buffered content (a VFS file). */
   flush?(): Promise<void>;
+  /** pread(2) / pwrite(2): at `at`, the offset untouched (a VFS file; else ESPIPE). */
+  pread?(max: number, at: number): Promise<Uint8Array>;
+  pwrite?(bytes: Uint8Array, at: number): Promise<number>;
+  /** ftruncate(2) (a VFS file). */
+  resize?(size: number): Promise<void>;
+  /** A VFS file's path (where it is now) and size, buffered writes included. */
+  stat?(): Promise<{ path: string; size: number }>;
   /** A terminal: its termios and window size (isatty, tcgetattr, TIOCGWINSZ). */
   tty?: KernelTty;
   /**
@@ -92,7 +99,15 @@ export interface KernelFile {
    * program's fds and the kernel's stay one numbering.
    */
   held?: true;
+  /**
+   * What a held number stands for in its worker (a WASI directory or
+   * device), so another thread of the process can open it too.
+   */
+  heldMeta?: HeldMeta;
 }
+
+/** A WASI worker-held descriptor, as the kernel keeps it for the process's other threads. */
+export type HeldMeta = { dir: string; preopen?: string } | { device: 'null' | 'zero' | 'urandom' };
 
 /** A description's readiness: its own answer, or ready in whatever direction it serves. */
 export function pollFile(file: KernelFile): PollState {
@@ -185,8 +200,8 @@ export function nullFile(): OpenFile {
 }
 
 /** A number a WASI program's worker holds a descriptor under (see {@link KernelFile.held}). */
-export function heldFile(): OpenFile {
-  return new OpenFile({ held: true, close: () => {} });
+export function heldFile(meta?: HeldMeta): OpenFile {
+  return new OpenFile({ held: true, ...(meta ? { heldMeta: meta } : {}), close: () => {} });
 }
 
 /**
@@ -239,6 +254,12 @@ export class FdTable {
   setCloseOnExec(fd: number): void {
     this.get(fd);
     this.cloexec.add(fd);
+  }
+
+  /** Clear FD_CLOEXEC on `fd`. */
+  clearCloseOnExec(fd: number): void {
+    this.get(fd);
+    this.cloexec.delete(fd);
   }
 
   closesOnExec(fd: number): boolean {

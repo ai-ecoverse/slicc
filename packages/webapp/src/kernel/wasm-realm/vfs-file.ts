@@ -12,6 +12,11 @@
  * reference closes (or on a flush), like the live mount does per worker.
  * An unlinked-while-open file (mkstemp) carries its live bytes across the
  * handoff and is never written back — the path is gone.
+ *
+ * A process's descriptions of one path share one `VfsNode` (`VfsNodes`), as
+ * a WASI worker's buffered opens share one buffer: a threaded WASI program
+ * opens every file here, so two opens see each other's writes, and an
+ * unlink or rename reaches the bytes of every open.
  */
 import { KernelError, OpenFile } from './fd-table.js';
 
@@ -44,80 +49,199 @@ export interface VfsFileOptions {
   contents?: Uint8Array;
   /** Unlinked while open: never write back (the live mount's orphan rule). */
   orphan?: boolean;
+  /** Created or truncated by the open: empty, whatever the path held. */
+  truncate?: boolean;
 }
 
-export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions): OpenFile {
+/** Whether `path` is `root` or beneath it. */
+function within(path: string, root: string): boolean {
+  return path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`);
+}
+
+/**
+ * One VFS file's bytes as a process holds them: loaded on first use, written
+ * back on a flush, never written back once orphaned (its path is gone).
+ * Operations run one at a time: a read and a write interleave at operation
+ * granularity, never inside one.
+ */
+export class VfsNode {
+  private data: Uint8Array | undefined;
+  private length = 0;
+  private dirty = false;
+  private queue: Promise<unknown> = Promise.resolve();
+  /** Descriptions on it. */
+  opens = 0;
+
+  constructor(
+    private readonly fs: VfsFileFs,
+    public path: string,
+    contents?: Uint8Array,
+    public orphaned = false
+  ) {
+    // Orphans carry their live bytes (possibly empty); never re-read a gone path.
+    if (contents !== undefined) this.data = new Uint8Array(contents);
+    else if (orphaned) this.data = new Uint8Array(0);
+    this.length = this.data?.length ?? 0;
+  }
+
+  serial<T>(op: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(op);
+    this.queue = next.catch(() => undefined);
+    return next;
+  }
+
+  async load(): Promise<Uint8Array> {
+    if (!this.data) {
+      try {
+        this.data = await this.fs.readFileBuffer(this.path);
+      } catch {
+        this.data = new Uint8Array(0); // created, or gone since: start empty
+      }
+      this.length = this.data.length;
+    }
+    return this.data;
+  }
+
+  async size(): Promise<number> {
+    await this.load();
+    return this.length;
+  }
+
+  async pread(max: number, at: number): Promise<Uint8Array> {
+    const bytes = await this.load();
+    const n = Math.max(0, Math.min(max, this.length - at));
+    return bytes.slice(at, at + n);
+  }
+
+  async pwrite(bytes: Uint8Array, at: number): Promise<number> {
+    await this.load();
+    const buf = this.ensure(at + bytes.length);
+    if (at > this.length) buf.fill(0, this.length, at);
+    buf.set(bytes, at);
+    this.length = Math.max(this.length, at + bytes.length);
+    this.dirty = true;
+    return bytes.length;
+  }
+
+  async truncate(size: number): Promise<void> {
+    await this.load();
+    const buf = this.ensure(size);
+    if (size > this.length) buf.fill(0, this.length, size);
+    this.length = size;
+    this.dirty = true;
+  }
+
+  private ensure(need: number): Uint8Array {
+    const cur = this.data ?? new Uint8Array(0);
+    if (cur.length >= need) return cur;
+    const grown = new Uint8Array(Math.max(need, cur.length * 2, 256));
+    grown.set(cur.subarray(0, this.length));
+    this.data = grown;
+    return grown;
+  }
+
+  async flush(): Promise<void> {
+    if (!this.dirty || !this.data || this.orphaned) return;
+    this.dirty = false;
+    await this.fs.writeFile(this.path, this.data.slice(0, this.length));
+  }
+}
+
+/**
+ * The nodes of a process's open VFS files, by path: what an unlink or a
+ * rename (the program's own, over the sync-fs bridge) does to them.
+ */
+export class VfsNodes {
+  private readonly byPath = new Map<string, VfsNode>();
+
+  constructor(private readonly fs: VfsFileFs) {}
+
+  /** The node of `path`, shared with the process's other opens of it. */
+  open(path: string): VfsNode {
+    let node = this.byPath.get(path);
+    if (!node) {
+      node = new VfsNode(this.fs, path);
+      this.byPath.set(path, node);
+    }
+    node.opens++;
+    return node;
+  }
+
+  /** A description on `node` closed: the last one forgets it. */
+  closed(node: VfsNode): void {
+    node.opens--;
+    if (node.opens === 0 && this.byPath.get(node.path) === node) this.byPath.delete(node.path);
+  }
+
+  /** Write back what is open at or beneath `path` (a stat of it follows). */
+  async flush(path: string): Promise<void> {
+    for (const [p, node] of this.byPath) if (within(p, path)) await node.serial(() => node.flush());
+  }
+
+  /** `path` is about to be unlinked: load its bytes, so its opens keep them. */
+  async unlinking(path: string): Promise<void> {
+    const node = this.byPath.get(path);
+    if (node) await node.serial(() => node.load());
+  }
+
+  /** `path` was unlinked: its opens keep their bytes and never write them back. */
+  unlinked(path: string): void {
+    const node = this.byPath.get(path);
+    if (!node) return;
+    node.orphaned = true;
+    this.byPath.delete(path);
+  }
+
+  /** `from` became `to`: what was open at `to` is replaced; what was open at `from` follows. */
+  renamed(from: string, to: string): void {
+    if (from === to) return;
+    const moved: VfsNode[] = [];
+    for (const [p, node] of this.byPath) {
+      if (within(p, from)) moved.push(node);
+      else if (within(p, to)) {
+        node.orphaned = true;
+        this.byPath.delete(p);
+      }
+    }
+    for (const node of moved) {
+      this.byPath.delete(node.path);
+      node.path = to + node.path.slice(from.length);
+      this.byPath.set(node.path, node);
+    }
+  }
+}
+
+/**
+ * A description of a VFS file: its own offset and access mode on a node —
+ * the process's shared node of the path (`nodes`), or a private one (handed
+ * over `contents`, an orphan, or no registry).
+ */
+export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): OpenFile {
   const access = opts.flags & O_ACCMODE;
   const readable = access !== O_WRONLY;
   const writable = access === O_WRONLY || access === O_RDWR;
-  // Orphans carry their live bytes (possibly empty); never re-read a gone path.
-  let data: Uint8Array | undefined =
-    opts.contents !== undefined
-      ? new Uint8Array(opts.contents)
-      : opts.orphan
-        ? new Uint8Array(0)
-        : undefined;
-  let length = data?.length ?? 0;
-  let dirty = false;
+  const node =
+    nodes && opts.contents === undefined && !opts.orphan
+      ? nodes.open(opts.path)
+      : new VfsNode(fs, opts.path, opts.contents, opts.orphan === true);
+  if (opts.truncate) void node.serial(() => node.truncate(0));
   let offset = opts.position;
-  // One operation at a time: a read and a write from two processes interleave
-  // at operation granularity, never inside one.
-  let queue: Promise<unknown> = Promise.resolve();
-  const serial = <T>(op: () => Promise<T>): Promise<T> => {
-    const next = queue.then(op);
-    queue = next.catch(() => undefined);
-    return next;
-  };
-
-  const load = async (): Promise<Uint8Array> => {
-    if (!data) {
-      try {
-        data = await fs.readFileBuffer(opts.path);
-      } catch {
-        data = new Uint8Array(0); // created, or gone since: start empty
-      }
-      length = data.length;
-    }
-    return data;
-  };
-
-  const ensure = (need: number): Uint8Array => {
-    const cur = data ?? new Uint8Array(0);
-    if (cur.length >= need) return cur;
-    const grown = new Uint8Array(Math.max(need, cur.length * 2, 256));
-    grown.set(cur.subarray(0, length));
-    data = grown;
-    return grown;
-  };
-
-  const flush = async (): Promise<void> => {
-    if (!dirty || !data || opts.orphan) return;
-    dirty = false;
-    await fs.writeFile(opts.path, data.slice(0, length));
-  };
+  const serial = <T>(op: () => Promise<T>) => node.serial(op);
 
   return new OpenFile({
     read: readable
       ? (max) =>
           serial(async () => {
-            const bytes = await load();
-            const n = Math.max(0, Math.min(max, length - offset));
-            const out = bytes.slice(offset, offset + n);
-            offset += n;
+            const out = await node.pread(max, offset);
+            offset += out.length;
             return out;
           })
       : undefined,
     write: writable
       ? (bytes) =>
           serial(async () => {
-            await load();
-            if (opts.flags & O_APPEND) offset = length;
-            const buf = ensure(offset + bytes.length);
-            if (offset > length) buf.fill(0, length, offset);
-            buf.set(bytes, offset);
-            offset += bytes.length;
-            length = Math.max(length, offset);
-            dirty = true;
+            if (opts.flags & O_APPEND) offset = await node.size();
+            offset += await node.pwrite(bytes, offset);
             return bytes.length;
           })
       : undefined,
@@ -125,16 +249,34 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions): OpenFile {
       serial(async () => {
         let base = 0;
         if (whence === SEEK_CUR) base = offset;
-        else if (whence === SEEK_END) {
-          await load();
-          base = length;
-        } else if (whence !== SEEK_SET) throw new KernelError('EINVAL');
+        else if (whence === SEEK_END) base = await node.size();
+        else if (whence !== SEEK_SET) throw new KernelError('EINVAL');
         if (base + to < 0) throw new KernelError('EINVAL');
         offset = base + to;
         return offset;
       }),
-    flush: () => serial(flush),
+    pread: (max, at) =>
+      serial(() => {
+        if (!readable) throw new KernelError('EBADF');
+        return node.pread(max, at);
+      }),
+    pwrite: (bytes, at) =>
+      serial(() => {
+        if (!writable) throw new KernelError('EBADF');
+        return node.pwrite(bytes, at);
+      }),
+    resize: (size) =>
+      serial(() => {
+        if (!writable) throw new KernelError('EBADF');
+        return node.truncate(size);
+      }),
+    stat: () => serial(async () => ({ path: node.path, size: await node.size() })),
+    flush: () => serial(() => node.flush()),
     // Awaitable: process exit and fd-close wait for the final writeback.
-    close: () => serial(flush),
+    close: () =>
+      serial(async () => {
+        await node.flush();
+        nodes?.closed(node);
+      }),
   });
 }

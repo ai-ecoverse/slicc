@@ -8,7 +8,7 @@ import type {
   SyncFsBridgeStat,
   SyncFsPosixBridge,
 } from '../../../../src/kernel/realm/sync-fs-xhr-bridge.js';
-import type { KernelFdKind } from '../../../../src/kernel/wasm-realm/fd-table.js';
+import type { HeldMeta, KernelFdKind } from '../../../../src/kernel/wasm-realm/fd-table.js';
 import type { ProcessSys } from '../../../../src/kernel/wasm-realm/kernel-streams.js';
 import type { WasmSyscall } from '../../../../src/kernel/wasm-realm/process.js';
 import type { WasiKernel } from '../../../../src/kernel/wasm-realm/wasi/wasi-fds.js';
@@ -38,8 +38,12 @@ interface FakeFd {
   drained?: string;
   /** The `max` of every read. */
   reads?: number[];
-  /** A VFS file's path (`openVfs`). */
+  /** A VFS file's path (`openVfs`), and its bytes (positioned I/O). */
   path?: string;
+  data?: Uint8Array;
+  meta?: HeldMeta;
+  flags?: number;
+  cloexec?: boolean;
 }
 
 export class FakeKernel implements WasiKernel {
@@ -72,6 +76,17 @@ export class FakeKernel implements WasiKernel {
     const e = this.table.get(fd);
     if (!e) throw posix('EBADF');
     return e;
+  }
+
+  private info(fd: number) {
+    const e = this.get(fd);
+    return {
+      tty: e.kind === 'tty',
+      kind: e.kind,
+      ...(e.meta ? { meta: e.meta } : {}),
+      ...(e.flags !== undefined ? { flags: e.flags } : {}),
+      ...(e.cloexec ? { cloexec: true as const } : {}),
+    };
   }
 
   private free(min: number): number {
@@ -123,6 +138,7 @@ export class FakeKernel implements WasiKernel {
       return offset;
     },
     flush: (fd) => void this.get(fd),
+    pread: (fd, max, at) => (this.get(fd).data ?? new Uint8Array(0)).slice(at, at + max),
     openTty: () => {
       if (!this.tty) throw posix('ENXIO');
       const fd = this.free(3);
@@ -136,10 +152,21 @@ export class FakeKernel implements WasiKernel {
     switch (req.op) {
       case 'fd-reserve': {
         if (req.fd !== undefined && this.table.has(req.fd)) throw posix('EBADF');
-        const fd = req.fd ?? this.free(3);
-        this.add(fd, 'held');
+        const fd = req.fd ?? this.free(req.min ?? 3);
+        this.add(fd, 'held').meta = req.meta;
         return fd;
       }
+      case 'fd-meta':
+        this.get(req.fd).meta = req.meta;
+        return undefined;
+      case 'fd-setfl':
+        this.get(req.fd).flags = req.flags;
+        return undefined;
+      case 'fd-cloexec':
+        this.get(req.fd).cloexec = req.on;
+        return undefined;
+      case 'fd-list':
+        return [...this.table.keys()].sort((a, b) => a - b).map((fd) => ({ fd, ...this.info(fd) }));
       case 'fd-dup': {
         const fd = this.free(req.min ?? 3);
         this.table.set(fd, this.get(req.fd));
@@ -152,10 +179,8 @@ export class FakeKernel implements WasiKernel {
       case 'proc-spawn':
         // Nothing to run here: every program is missing.
         throw posix('ENOENT');
-      case 'fd-info': {
-        const e = this.get(req.fd);
-        return { tty: e.kind === 'tty', kind: e.kind };
-      }
+      case 'fd-info':
+        return this.info(req.fd);
       case 'fd-select': {
         const hung = [...req.read, ...req.write].filter((fd) => this.table.get(fd)?.hangup);
         return {
@@ -176,6 +201,30 @@ export class FakeKernel implements WasiKernel {
         return undefined;
       case 'proc-kill':
         this.killed.push([req.pid, req.sig]);
+        return undefined;
+      case 'fd-pwrite': {
+        const e = this.get(req.fd);
+        const old = e.data ?? new Uint8Array(0);
+        e.data = new Uint8Array(Math.max(old.length, req.offset + req.body.length));
+        e.data.set(old);
+        e.data.set(req.body, req.offset);
+        return req.body.length;
+      }
+      case 'fd-resize': {
+        const e = this.get(req.fd);
+        const old = e.data ?? new Uint8Array(0);
+        e.data = new Uint8Array(req.size);
+        e.data.set(old.subarray(0, req.size));
+        return undefined;
+      }
+      case 'fd-vfs-stat': {
+        const e = this.get(req.fd);
+        return { path: e.path, size: e.data?.length ?? 0 };
+      }
+      case 'fd-path-flush':
+      case 'fd-path-unlinking':
+      case 'fd-path-unlinked':
+      case 'fd-path-renamed':
         return undefined;
       default:
         throw posix('ENOSYS');
@@ -332,8 +381,16 @@ export class ListingFs extends FakeFs {
 }
 
 export class Guest {
-  readonly memory = new WebAssembly.Memory({ initial: 64 });
+  readonly memory: WebAssembly.Memory;
   private top = 1024;
+
+  /** `shared`: a shared memory (futexes wait on it). */
+  constructor(shared = false) {
+    this.memory = new WebAssembly.Memory({
+      initial: 64,
+      ...(shared ? { maximum: 64, shared } : {}),
+    });
+  }
 
   get view(): DataView {
     return new DataView(this.memory.buffer);
