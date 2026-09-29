@@ -12,7 +12,11 @@ import { bytesSource, FdTable, sinkFile } from '../../../../src/kernel/wasm-real
 import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../../../src/shell/ipk/wasm-programs.js';
-import { WasmSession } from '../../../../src/shell/supplemental-commands/wasm/launch.js';
+import {
+  SECRET_FUNCTION,
+  SECRET_FUNCTION_ENV,
+  WasmSession,
+} from '../../../../src/shell/supplemental-commands/wasm/launch.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -186,6 +190,40 @@ describe('WasmSession', () => {
     };
     const own = new WasmSession(ctx(withSh), undefined, () => {});
     expect((await own.resolve('/bin/sh', 'sh', '/w'))?.glue).toBe(`${DASH}/bin/dash`);
+  });
+
+  it('gives every bash it starts GNU bash’s secret function, a program’s /bin/sh too', async () => {
+    const BASH = '/shared/lib/node_modules/@ai-ecoverse/wasm-bash';
+    const files = {
+      ...installed,
+      [`${BASH}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-bash',
+        slicc: { commands: { bash: { glue: 'bin/bash', wasm: 'bin/bash.wasm' } } },
+      }),
+      [`${BASH}/bin/bash`]: 'BASH',
+      [`${BASH}/bin/bash.wasm`]: 'W',
+    };
+    fakeProcesses();
+    const session = new WasmSession(ctx(files), undefined, () => {});
+
+    const spawner = await parentSpawner(session);
+    expect(spawn.mock.calls.at(-1)![0].env).not.toHaveProperty(SECRET_FUNCTION_ENV);
+    await spawner(
+      { file: '/bin/sh', argv: ['sh', '-c', 'x'], env: { A: '1' }, cwd: '/w' },
+      stdio()
+    );
+    expect(spawn.mock.calls.at(-1)![0].env).toEqual({
+      A: '1',
+      [SECRET_FUNCTION_ENV]: SECRET_FUNCTION,
+    });
+    await spawner({ file: 'bash', argv: ['bash'], env: {}, cwd: '/w' }, stdio());
+    expect(spawn.mock.calls.at(-1)![0].env[SECRET_FUNCTION_ENV]).toBe(SECRET_FUNCTION);
+
+    const own = { [SECRET_FUNCTION_ENV]: '() { :; }' };
+    await spawner({ file: 'bash', argv: ['bash'], env: own, cwd: '/w' }, stdio());
+    expect(spawn.mock.calls.at(-1)![0].env).toEqual(own);
+    await spawner({ file: 'tac', argv: ['tac'], env: {}, cwd: '/w' }, stdio());
+    expect(spawn.mock.calls.at(-1)![0].env).toEqual({});
   });
 
   it('asks the shell’s catalog on every lookup: an install or removal mid-session counts', async () => {

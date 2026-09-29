@@ -20,6 +20,16 @@ import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wa
 import type { JshProcessConfig } from '../../jsh-executor.js';
 import { STDIN_ISATTY_ENV, STDOUT_ISATTY_ENV } from '../stdio-tty.js';
 
+export const SECRET_FUNCTION_ENV = 'BASH_FUNC_secret%%';
+export const SECRET_FUNCTION =
+  '() { command secret "$@" || return; local __slicc_env; ' +
+  'if __slicc_env=$(command secret shell-env "$@" 2>/dev/null); then eval "$__slicc_env"; fi; return 0; }';
+
+function withSecretFunction(argv0: string, env: Record<string, string>): Record<string, string> {
+  if (!/^(ba)?sh$/.test(baseName(argv0)) || SECRET_FUNCTION_ENV in env) return env;
+  return { ...env, [SECRET_FUNCTION_ENV]: SECRET_FUNCTION };
+}
+
 const modules = new Map<string, Promise<WebAssembly.Module>>();
 
 const SIGNAL_NAME = new Map(
@@ -204,7 +214,10 @@ export class WasmSession {
       await req.fds.closeAll();
       throw e;
     }
-    const env = req.defaults ? { ...req.defaults, ...req.env } : req.env;
+    const env = withSecretFunction(
+      req.argv0,
+      req.defaults ? { ...req.defaults, ...req.env } : req.env
+    );
     return this.start({ ...req, env, program: { glue, module } });
   }
 

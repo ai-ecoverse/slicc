@@ -43,6 +43,11 @@ Other:
                                                pipeline.
   secret edit                                  Open the Mount Secrets options page
                                                (extension) or print the env path.
+  secret shell-env <set|delete> <args…>        The line a shell runs after that
+                                               set / delete succeeded to keep
+                                               $NAME in step (export NAME='<mask>'
+                                               or unset NAME). GNU bash's \`secret\`
+                                               function runs it for you.
 
 The required --domain flag accepts a non-empty comma-separated list of patterns
 (exact or wildcard, e.g. *.github.com). Choosing "Always" on a prompt skips future
@@ -264,6 +269,31 @@ async function handleSet(
     : handleSetSession(name, value, domains, env);
 }
 
+function shellQuote(s: string): string {
+  return `'${s.replaceAll("'", `'\\''`)}'`;
+}
+
+async function handleShellEnv(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
+  const [sub, ...rest] = args.slice(1);
+  const done = (stdout: string): ExecResult => ({ stdout, stderr: '', exitCode: 0 });
+  if (sub === 'set') {
+    const parsed = parseKnownFlags(rest, {
+      value: SECRET_VALUE_FLAGS,
+      bool: SECRET_SET_BOOL_FLAGS,
+    });
+    const name = 'error' in parsed ? undefined : parsed.positionals[0];
+    if (!name || !isValidShellEnvName(name)) return done('');
+    const rec = await env.backend.getMasked(name).catch(() => null);
+    return done(rec ? `export ${name}=${shellQuote(rec.maskedValue)}\n` : '');
+  }
+  if (sub === 'delete' || sub === 'rm') {
+    const parsed = parseKnownFlags(rest, {});
+    const name = 'error' in parsed ? undefined : parsed.positionals[0];
+    return done(name && isValidShellEnvName(name) ? `unset ${name}\n` : '');
+  }
+  return done('');
+}
+
 async function handleGet(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
   const parsed = parseKnownFlags(args.slice(1), {});
   if ('error' in parsed) return flagError(parsed.error);
@@ -444,6 +474,8 @@ async function dispatch(
     case 'get':
     case 'read':
       return handleGet(args, env);
+    case 'shell-env':
+      return handleShellEnv(args, env);
     case 'peek':
       return handlePeek(args, env);
     case 'scope':

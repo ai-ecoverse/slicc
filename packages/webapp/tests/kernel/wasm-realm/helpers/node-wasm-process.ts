@@ -27,7 +27,7 @@ export async function bundleProcessWorker(): Promise<{ file: string; dispose(): 
   return { file, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function nodeWorker(file: string): WasmWorkerLike {
+export function nodeWorker(file: string): WasmWorkerLike {
   const worker = new Worker(file);
   const wrapped = new Map<(event: MessageEvent) => void, (arg: unknown) => void>();
   return {
