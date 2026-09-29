@@ -29,6 +29,7 @@
  * envelope emit.
  */
 
+import { readOAuthExtras } from '@slicc/shared-ts';
 import type {
   BashExecResult,
   ByteString,
@@ -98,6 +99,7 @@ import {
   SUDO_REFUSED_EXIT_CODE,
 } from './sudo/command-guard.js';
 import { extractLeadingCommentReason, SUDO_REASON_ENV } from './sudo/command-reason.js';
+import { GITHUB_DOMAINS, PLUMBING } from './supplemental-commands/git-credential-command.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
 import { sayStdioPlugin } from './supplemental-commands/say-stdio-rewrite.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
@@ -330,6 +332,17 @@ async function ensureFreshGithubToken(opts?: { force?: boolean }): Promise<void>
     return;
   }
   await github.getValidAccessToken?.();
+}
+
+/**
+ * Where the GitHub OAuth token is unmasked: the provider's domains plus the
+ * user's extras, as the replica gets them (`saveOAuthAccount`).
+ */
+function githubOAuthDomains(): string[] {
+  const github = getRegisteredProviderConfig('github');
+  if (!github) return GITHUB_DOMAINS;
+  const extras = typeof localStorage === 'undefined' ? [] : readOAuthExtras(localStorage).github;
+  return [...(github.oauthTokenDomains ?? GITHUB_DOMAINS), ...(extras ?? [])];
 }
 
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
@@ -680,6 +693,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         this.pendingEnvWrites.set(name, null);
         delete this.lastEnv[name];
       },
+      // `git-credential-slicc` hands native git the token this shell's `git`
+      // uses (freshened the same way), where the OAuth token may go.
+      gitCredential: {
+        githubToken: (env, opts) => this.gitCommands.githubCredential(env, opts),
+        githubDomains: githubOAuthDomains,
+      },
+      gitIdentity: () => this.gitCommands.identity(),
     });
   }
 
@@ -1321,6 +1341,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           onOutput: tee,
           fds,
           commands: () => this.scriptCatalog.getWasmCommands(),
+          gitIdentity: () => this.gitCommands.identity(),
         }),
     });
     const pathBefore = this.lastEnv.PATH;
@@ -1497,7 +1518,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   }
 
   private wrapCommandForSudo(command: Command): Command {
-    if (!this.isTransparentGatingEnabled()) return command;
+    // Plumbing runs inside a call of its command, which the gate already saw.
+    if (!this.isTransparentGatingEnabled() || PLUMBING.has(command.name)) return command;
     const guard = (args: string[], reason?: string) =>
       this.gateCommandDispatch(command.name, args, reason);
     return {
@@ -1638,9 +1660,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     await fs.writeFile(path, `${prefix}NOPASSWD Cmnd  ${safe}\n`);
   }
 
-  /** True when `name` is registrable/executable under the allow-list. */
+  /**
+   * True when `name` is registrable/executable under the allow-list. Plumbing
+   * (`git-credential-slicc`) is allowed exactly when its command is.
+   */
   private isCommandAllowed(name: string): boolean {
-    return this.allowedCommands === null || this.allowedCommands.has(name);
+    return this.allowedCommands === null || this.allowedCommands.has(PLUMBING.get(name) ?? name);
   }
 
   private async doSyncJshCommands(): Promise<void> {
@@ -1758,6 +1783,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
             gate: this.gateNativeCommand,
             defaults: wasm.env,
             commands: () => catalog.getWasmCommands(),
+            gitIdentity: () => this.gitCommands.identity(),
           }
         );
       }

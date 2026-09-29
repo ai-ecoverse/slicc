@@ -28,8 +28,11 @@ import {
 import type { WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import {
   ensureRealmCaFile,
+  ensureRealmGitConfig,
+  type GitIdentity,
   isRealmDefault,
   realmCaPath,
+  realmGitConfigPath,
   realmNetworkEnv,
 } from '../../../kernel/wasm-realm/net/realm-network.js';
 import { ownerKey } from '../../../kernel/wasm-realm/socket.js';
@@ -129,6 +132,8 @@ export interface RunWasmOptions {
   defaults?: Readonly<Record<string, string>>;
   /** The installed commands as the shell's catalog knows them (else scanned per invocation). */
   commands?: InstalledCommandsLookup;
+  /** The identity SLICC's `git` commits with, for native git's system config. */
+  gitIdentity?: () => Promise<GitIdentity | undefined>;
 }
 
 /** The installed commands: the shell's catalog when it gave one, else a scan. */
@@ -229,14 +234,29 @@ async function caEnv(
   options: RunWasmOptions
 ): Promise<Record<string, string>> {
   const owner = ownerKey(options.processConfig?.owner);
-  const home = ctx.exportedEnv?.HOME ?? ctx.env.get('HOME') ?? '/tmp';
-  return ensureRealmCaFile(ctx.fs, realmCaPath(home, owner), owner);
+  return ensureRealmCaFile(ctx.fs, realmCaPath(homeOf(ctx), owner), owner);
+}
+
+function homeOf(ctx: CommandContext): string {
+  return ctx.exportedEnv?.HOME ?? ctx.env.get('HOME') ?? '/tmp';
 }
 
 /**
- * The program's environment: the realm's network defaults (the proxy and the
- * CA bundle, see `realm-network.ts`) under the shell's exports. On the panel terminal,
- * which is Ghostty's VT core, a `TERM` that is unset or `dumb` becomes
+ * Native git's system config, written under the home: the credential helper
+ * and SLICC's git identity (none when that cannot be had).
+ */
+async function gitEnv(
+  ctx: CommandContext,
+  options: RunWasmOptions
+): Promise<Record<string, string>> {
+  const identity = await options.gitIdentity?.().catch(() => undefined);
+  return ensureRealmGitConfig(ctx.fs, realmGitConfigPath(homeOf(ctx)), identity);
+}
+
+/**
+ * The program's environment: the realm's defaults (the proxy, the CA bundle
+ * and git's system config, see `realm-network.ts`) under the shell's exports.
+ * On the panel terminal, which is Ghostty's VT core, a `TERM` that is unset or `dumb` becomes
  * `xterm-256color` (with `COLORTERM=truecolor`), so curses programs use it.
  */
 function programEnv(
@@ -397,7 +417,11 @@ export async function runWasmCommand(
       module: call.module ? ctx.fs.resolvePath(ctx.cwd, call.module) : modulePath(gluePath),
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
-      env: programEnv(ctx, call, { ...realmNetworkEnv(), ...(await caEnv(ctx, options)) }),
+      env: programEnv(ctx, call, {
+        ...realmNetworkEnv(),
+        ...(await caEnv(ctx, options)),
+        ...(await gitEnv(ctx, options)),
+      }),
       defaults: programDefaults(call, options),
       cwd: ctx.cwd,
       fds,

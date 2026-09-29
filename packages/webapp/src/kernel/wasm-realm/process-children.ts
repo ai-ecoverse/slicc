@@ -145,6 +145,10 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
     const stream = fd >= 0 ? Fs.getStream(fd) : null;
     if (!stream) return { none: true };
     if (stream.sliccKernelFd !== undefined) return { fd: stream.sliccKernelFd };
+    // The module's own `/dev/null` is no output to capture: capturing makes the
+    // spawn wait for the child, which a forked child about to exec must not
+    // (git's start_command waits for that exec, a `no_stdout` helper's too).
+    if (stream.path === '/dev/null') return { none: true };
     return n === 0 ? { input: drain(Fs, stream) } : { capture: true };
   };
 

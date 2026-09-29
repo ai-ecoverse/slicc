@@ -337,15 +337,42 @@ export class GitCommands {
    *   3. `$GITHUB_TOKEN` from the shell env
    * Returns undefined when none is set.
    */
-  private resolveAuthToken(): string | undefined {
+  private resolveAuthToken(env = this.currentEnv): string | undefined {
     if (this.githubToken) return this.githubToken;
-    const env = this.currentEnv;
     if (!env) return undefined;
     const gh = readEnvVar(env, 'GH_TOKEN');
     if (gh) return gh;
     const gt = readEnvVar(env, 'GITHUB_TOKEN');
     if (gt) return gt;
     return undefined;
+  }
+
+  /**
+   * The GitHub token a `git` with this environment would authenticate with,
+   * freshened first (`force`: renewed, after the host rejected it), for other
+   * git clients to use: `git-credential-slicc` hands it to native git. It is
+   * the value git itself holds, the OAuth mask where SLICC manages the login.
+   */
+  async githubCredential(
+    env: Readonly<Record<string, string>>,
+    opts?: { force?: boolean }
+  ): Promise<string | undefined> {
+    await this.ensureFreshGithubToken(opts);
+    await this.loadGithubToken();
+    return this.resolveAuthToken(env);
+  }
+
+  /**
+   * The identity this `git` commits with outside any repository's own config:
+   * the global config (which the GitHub login seeds), else the defaults. What
+   * native git gets as its system config (`git-credential-slicc`'s sibling).
+   */
+  async identity(): Promise<{ name: string; email: string }> {
+    const globalFs = await this.getGlobalFs();
+    return {
+      name: (await readGlobalGitConfigValue(globalFs, 'user.name')) ?? this.authorName,
+      email: (await readGlobalGitConfigValue(globalFs, 'user.email')) ?? this.authorEmail,
+    };
   }
 
   /** Get or create the shared Global VirtualFS instance for config persistence. */
