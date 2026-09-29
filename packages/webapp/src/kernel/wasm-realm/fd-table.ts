@@ -29,6 +29,7 @@ export type KernelErrno =
   | 'EINTR'
   | 'ESRCH'
   | 'ENOTTY'
+  | 'ENXIO'
   | 'EPERM'
   | 'EIO'
   | 'EACCES'
@@ -202,6 +203,15 @@ export class FdTable {
     const file = this.fds.get(fd);
     if (!file) throw new KernelError('EBADF');
     return file;
+  }
+
+  /** The terminal fd 0, 1 or 2 is on (the first that is one), if any. */
+  stdioTerminal(): KernelTty | undefined {
+    for (const fd of [0, 1, 2]) {
+      const tty = this.fds.get(fd)?.file.tty;
+      if (tty) return tty;
+    }
+    return undefined;
   }
 
   /** The open descriptor numbers, lowest first. */

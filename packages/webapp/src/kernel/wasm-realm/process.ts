@@ -57,6 +57,8 @@ export type WasmSyscall =
   | { op: 'fd-seek'; fd: number; offset: number; whence: number }
   | { op: 'fd-select'; read: number[]; write: number[]; timeoutMs: number }
   | { op: 'fd-info'; fd: number }
+  /** open("/dev/tty"): a new descriptor on the controlling terminal (ENXIO without one). */
+  | { op: 'fd-open-tty' }
   | { op: 'tty-get'; fd: number }
   | { op: 'tty-set'; fd: number; termios: Termios }
   | { op: 'tty-winsz'; fd: number }
@@ -134,6 +136,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-seek',
   'fd-select',
   'fd-info',
+  'fd-open-tty',
   'tty-get',
   'tty-set',
   'tty-winsz',
@@ -397,6 +400,11 @@ export class WasmProcess {
           kind: 'json',
           json: { tty: this.fds.get(req.fd).file.tty !== undefined },
         };
+      case 'fd-open-tty': {
+        const tty = this.controllingTerminal();
+        if (!tty) throw new KernelError('ENXIO');
+        return { ok: true, kind: 'json', json: this.fds.install(tty.file(), 3) };
+      }
       case 'fd-select': {
         const { read, write, timeoutMs } = req;
         const signal = this.blockingSignal();
@@ -467,6 +475,15 @@ export class WasmProcess {
 
   private sid(): number {
     return this.options.jobs?.getsid(this.pid, 0) ?? this.pid;
+  }
+
+  /**
+   * Its session's controlling terminal; without a job table that knows the
+   * process, the terminal its stdio is on.
+   */
+  private controllingTerminal(): KernelTty | undefined {
+    const session = this.options.jobs?.controllingTerminal(this.pid);
+    return session === undefined ? this.fds.stdioTerminal() : (session ?? undefined);
   }
 
   /** Process groups and sessions: without a job table, each process is its own. */

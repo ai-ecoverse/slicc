@@ -292,6 +292,7 @@ export class WasmSession {
   private start(req: StartRequest): WasmProcessHandle {
     const pm = this.processConfig?.processManager;
     const { pid } = this.register('wasm', [req.argv0, ...req.args], req.cwd, req.env, req.ppid);
+    const terminal = req.fds.stdioTerminal();
     const handle = spawnWasmProcess({
       pid,
       program: req.program,
@@ -312,7 +313,9 @@ export class WasmSession {
     this.live.add(handle);
     this.wasmByPid.set(pid, handle);
     this.leader ??= pid;
-    this.jobs.add(pid, req.ppid, (sig) => handle.signal(sig));
+    // The invocation's first process leads its session: the terminal it
+    // starts on (`wasm -t`, the panel's login shell) is the session's `/dev/tty`.
+    this.jobs.add(pid, req.ppid, (sig) => handle.signal(sig), terminal);
     // `kill` / `ps`: SIGKILL and uncaught signals end the worker; caught ones run the handler.
     const unsubscribe = pm?.onSignal((signaled, sig) => {
       if (signaled.pid === pid) handle.signal(SIGNAL_BY_NAME[sig]);

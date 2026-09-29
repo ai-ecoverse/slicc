@@ -65,6 +65,23 @@ describe('JobTable', () => {
     expect(jobs.pgidOf(99)).toBeUndefined();
   });
 
+  it('a session controls the terminal its leader started on; setsid leaves it behind', () => {
+    const jobs = new JobTable();
+    const tty = new KernelTty({ write: () => {} }, () => {});
+    const other = new KernelTty({ write: () => {} }, () => {});
+    jobs.add(10, undefined, () => {}, tty);
+    jobs.add(11, 10, () => {}, other); // a child takes its session's, whatever it runs on
+    jobs.add(12, 11, () => {});
+    jobs.add(20, undefined, () => {}); // a session without one
+    expect(jobs.controllingTerminal(11)).toBe(tty);
+    expect(jobs.controllingTerminal(12)).toBe(tty);
+    expect(jobs.controllingTerminal(20)).toBeNull();
+    expect(jobs.controllingTerminal(99)).toBeUndefined(); // no process of the table
+    jobs.setsid(12);
+    expect(jobs.controllingTerminal(12)).toBeNull();
+    expect(jobs.controllingTerminal(11)).toBe(tty);
+  });
+
   it('setsid: a new session, not for a group leader', () => {
     const { jobs, add } = table();
     add(10);
@@ -244,7 +261,33 @@ describe('WasmProcess stop and continue', () => {
   });
 });
 
-describe('WasmProcess exec', () => {
+describe('WasmProcess /dev/tty and exec', () => {
+  it("opens its session's controlling terminal, off its stdio too; ENXIO without one", async () => {
+    const jobs = new JobTable();
+    const out: string[] = [];
+    const tty = new KernelTty({ write: (b) => out.push(new TextDecoder().decode(b)) }, () => {});
+    jobs.add(5, undefined, () => {}, tty);
+    jobs.add(6, 5, () => {});
+    const p = new WasmProcess(6, new FdTable(), { jobs });
+    const opened = await p.syscall({ op: 'fd-open-tty' });
+    expect(opened).toEqual({ ok: true, kind: 'json', json: 3 });
+    expect(await p.syscall({ op: 'fd-info', fd: 3 })).toMatchObject({ json: { tty: true } });
+    await p.syscall({ op: 'fd-write', fd: 3, body: bytes('hi') });
+    expect(out.join('')).toBe('hi');
+    jobs.setsid(6);
+    expect(await p.syscall({ op: 'fd-open-tty' })).toMatchObject({ ok: false, errno: 'ENXIO' });
+  });
+
+  it('without a job table, /dev/tty is the terminal its stdio is on, if any', async () => {
+    const tty = new KernelTty({ write: () => {} }, () => {});
+    const onTty = new FdTable();
+    onTty.installAt(2, tty.file());
+    const p = new WasmProcess(7, onTty);
+    expect(await p.syscall({ op: 'fd-open-tty' })).toMatchObject({ ok: true, json: 3 });
+    const none = new WasmProcess(8, new FdTable());
+    expect(await none.syscall({ op: 'fd-open-tty' })).toMatchObject({ ok: false, errno: 'ENXIO' });
+  });
+
   it('an exec releases the old image’s descriptors while the program runs', async () => {
     let end!: (code: number) => void;
     const spawner = async (_req: unknown, fds: FdTable) => {

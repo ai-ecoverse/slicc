@@ -58,11 +58,12 @@ describe('kernelSys', () => {
     ]);
   });
 
-  it('closes, makes pipes, and polls through the kernel', () => {
+  it('closes, makes pipes, opens the controlling terminal, and polls through the kernel', () => {
     const seen: unknown[] = [];
     const replies: Record<string, SyncFsResult> = {
       'fd-close': { ok: true, kind: 'void' },
       'fd-pipe': { ok: true, kind: 'json', json: [3, 4] },
+      'fd-open-tty': { ok: true, kind: 'json', json: 5 },
       'fd-poll': {
         ok: true,
         kind: 'json',
@@ -77,8 +78,14 @@ describe('kernelSys', () => {
     );
     sys.close(3);
     expect(sys.pipe()).toEqual([3, 4]);
+    expect(sys.openTty?.()).toBe(5);
     expect(sys.poll(3)).toEqual({ readable: true, writable: false, hangup: false });
-    expect(seen).toEqual([{ op: 'fd-close', fd: 3 }, { op: 'fd-pipe' }, { op: 'fd-poll', fd: 3 }]);
+    expect(seen).toEqual([
+      { op: 'fd-close', fd: 3 },
+      { op: 'fd-pipe' },
+      { op: 'fd-open-tty' },
+      { op: 'fd-poll', fd: 3 },
+    ]);
   });
 
   it('raises a kernel errno as SyscallError', () => {

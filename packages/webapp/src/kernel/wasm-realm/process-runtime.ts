@@ -120,6 +120,9 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
         (json(call({ op: 'fd-info', fd }, `fd-info ${fd}`)) as { tty?: boolean })?.tty === true
       );
     },
+    openTty() {
+      return json(call({ op: 'fd-open-tty' }, 'fd-open-tty')) as number;
+    },
     tcgets(fd) {
       return json(call({ op: 'tty-get', fd }, `tty-get ${fd}`)) as Termios;
     },

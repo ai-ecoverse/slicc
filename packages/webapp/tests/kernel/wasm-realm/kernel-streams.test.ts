@@ -233,7 +233,7 @@ describe('KernelStreams', () => {
       opened.push([path, flags]);
       // Emscripten's console devices come with its TTY (`stream.tty`).
       const tty = path.startsWith('/dev/tty') ? { ops: {} } : undefined;
-      return { fd: 9, flags, stream_ops: {}, tty } as unknown as ProcessStream;
+      return { fd: 9, flags, path, stream_ops: {}, tty } as unknown as ProcessStream;
     };
     const reads: number[] = [];
     const sys = fakeSys({
@@ -260,6 +260,33 @@ describe('KernelStreams', () => {
     expect(fs.open('/etc/passwd', 0).sliccKernelFd).toBeUndefined();
     expect(opened.map(([path]) => path)).toEqual(['/dev/tty', '/dev/tty1', '/etc/passwd']);
     void streams;
+  });
+
+  it("opens /dev/tty on the kernel's controlling terminal, or fails with ENXIO", () => {
+    const { fs } = fakeFs();
+    const closed: number[] = [];
+    Object.assign(fs, {
+      open: (path: string, flags: number) =>
+        ({ fd: 9, flags, path, stream_ops: {}, tty: { ops: {} } }) as unknown as ProcessStream,
+      closeStream: (fd: number) => closed.push(fd),
+    });
+    let ctty: number | undefined = 7;
+    const sys = fakeSys({
+      openTty: () => {
+        if (ctty === undefined) throw new SyscallError('ENXIO');
+        return ctty;
+      },
+    });
+    const kernel = new KernelStreams(fs, sys);
+    kernel.useControllingTerminal();
+    const tty = fs.open('/dev/tty', 2);
+    expect([tty.sliccKernelFd, tty.flags, tty.tty !== undefined]).toEqual([7, 2, true]);
+    // Its own descriptor: the last close closes it.
+    tty.stream_ops.close?.(tty);
+    expect(sys.closed).toEqual([7]);
+    ctty = undefined;
+    expect(() => fs.open('/dev/tty', 2)).toThrow(expect.objectContaining({ errno: 60 }));
+    expect(closed).toEqual([9]); // Emscripten's console stream does not stay open
   });
 
   it('wireKernelFd opens a kernel descriptor beyond stdio at its own number', () => {

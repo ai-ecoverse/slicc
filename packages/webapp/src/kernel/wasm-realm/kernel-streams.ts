@@ -78,6 +78,8 @@ export interface ProcessSys {
   flush(fd: number): void;
   /** Whether the descriptor is a terminal. */
   isatty?(fd: number): boolean;
+  /** A new kernel fd on the controlling terminal (`/dev/tty`); ENXIO without one. */
+  openTty?(): number;
   /** A terminal's termios / window size (`[rows, cols]`). */
   tcgets?(fd: number): Termios;
   tcsets?(fd: number, termios: Termios): void;
@@ -238,10 +240,12 @@ export class KernelStreams {
   }
 
   /**
-   * Make a terminal device the program opens (`/dev/tty`, or the
-   * `/dev/tty1` that `ttyname()` names) its controlling terminal: the kernel
-   * terminal its stdio is on. A pager such as less reads its keys there.
-   * Without one, Emscripten's own console device stays.
+   * Put the terminal devices the program opens on the kernel's terminals:
+   * `/dev/tty` is its controlling terminal (its session's, which a pager
+   * reads its keys from even when its stdio is not the terminal), and ENXIO
+   * without one; any other (the `/dev/tty1` that `ttyname()` names) is the
+   * terminal its stdio is on. Without a kernel terminal to use, Emscripten's
+   * own console device stays.
    */
   useControllingTerminal(): void {
     if (typeof this.Fs.open !== 'function') return; // an FS without open(): nothing to route
@@ -250,15 +254,28 @@ export class KernelStreams {
       const stream = open(path, flags, mode);
       // Emscripten gave it one of its console terminals (`stream.tty`). Keep
       // the description (the access mode asked for) and put it on the kernel
-      // terminal: one more reference to that descriptor.
-      const terminal = stream.tty ? this.controllingTerminal() : undefined;
+      // terminal.
+      if (!stream.tty) return stream;
+      if (stream.path === '/dev/tty' && this.sys.openTty) {
+        let kfd: number;
+        try {
+          kfd = this.call(() => this.sys.openTty?.() as number);
+        } catch (e) {
+          this.Fs.closeStream(stream.fd);
+          throw e;
+        }
+        this.attach(stream, kfd, true);
+        return stream;
+      }
+      // One more reference to the descriptor its stdio is on.
+      const terminal = this.stdioTerminal();
       if (terminal !== undefined) this.attach(stream, terminal, true);
       return stream;
     };
   }
 
   /** The kernel descriptor of the terminal the process's stdio is on. */
-  private controllingTerminal(): number | undefined {
+  private stdioTerminal(): number | undefined {
     for (const fd of [0, 1, 2]) {
       const stream = this.Fs.getStream(fd);
       if (stream?.sliccKernelFd !== undefined && stream.tty) return stream.sliccKernelFd;
