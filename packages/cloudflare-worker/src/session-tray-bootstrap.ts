@@ -411,6 +411,9 @@ export class BootstrapCoordinator {
         id: bootstrap.biscottoId,
         label: record?.label ?? '',
         expiresAt: record?.expiresAt,
+        // The unit the seat shares. Absent (a pre-binding seat, or one revoked
+        // mid-announcement) makes the leader show the guest nothing.
+        ...(record?.unitJid ? { unitJid: record.unitJid } : {}),
         gates: {
           message: normalizeBiscottoGate(record?.gates.message),
           tool: normalizeBiscottoGate(record?.gates.tool),

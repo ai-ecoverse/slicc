@@ -77,10 +77,9 @@ export interface PendingGuestMessage extends GuestSubmission {
    */
   toolGate?: TurnGuestGate;
   /**
-   * The unit that was active when the guest sent this. Everything about the
-   * message is bound to it, and delivery refuses if the owner has since moved
-   * on — an approved message landing in a different conversation is not the
-   * message anyone approved.
+   * The unit the seat was minted for (`FollowerBiscottoIdentity.unitJid`).
+   * Everything about the message — delivery target, tool gate, approver — is
+   * bound to it, independent of which unit the owner is displaying.
    */
   unitJid: string;
 }
@@ -165,7 +164,34 @@ export class BiscottoReview {
     // progress, and a reviewer approving the TEXT is not thereby approving an
     // interruption — the two are not visible as one decision. Stripped here so
     // no downstream caller can honour it; the message queues normally instead.
-    const unitJid = this.context.options.getScoopJid();
+    // The unit the SEAT was minted for — never the unit the owner happens to
+    // be displaying. Binding to the displayed unit delivered a guest's message
+    // (and gated its turn) in whatever conversation was on screen.
+    const unitJid = message.biscotto.unitJid;
+    if (!unitJid) {
+      // A seat minted before seats recorded their unit. There is no safe unit
+      // to infer, so the message is refused — the host's configuration, not a
+      // plumbing failure, is what did not forward it.
+      this.context.log.warn('Biscotto seat has no bound unit — refusing its message', {
+        bootstrapId,
+        biscottoId: message.biscotto.id,
+      });
+      this.deps.notify(bootstrapId, message.messageId, 'rejected');
+      return;
+    }
+    if (this.isScoopUnit(unitJid)) {
+      // People never talk to a scoop: a selected scoop is read-only and asks
+      // go to the owning cone. `biscotto serve` refuses to mint from a scoop,
+      // so this is a backstop for a seat bound to one anyway — the message is
+      // refused rather than written into the scoop or re-routed to a cone the
+      // seat was never bound to.
+      this.context.log.warn('Biscotto seat is bound to a scoop — refusing its message', {
+        bootstrapId,
+        biscottoId: message.biscotto.id,
+      });
+      this.deps.notify(bootstrapId, message.messageId, 'rejected');
+      return;
+    }
     const toolGate = toolGateForSeat(message.biscotto, unitJid);
     if (toolGate === null) {
       // The seat configures tool gating this leader cannot route to its named
@@ -217,6 +243,20 @@ export class BiscottoReview {
    * reviewing in parallel would let a human answering out of order reorder the
    * guest's own messages on the way into the cone.
    */
+  /**
+   * Whether `unitJid` is a scoop (a child unit), per the ownership edge on the
+   * leader's own roster. Unknown (no roster, no entry, no `parentId`) reads as
+   * not-a-scoop: the mint-side refusal is the primary control.
+   */
+  private isScoopUnit(unitJid: string): boolean {
+    try {
+      const summary = this.context.options.getScoops?.().find((unit) => unit.jid === unitJid);
+      return typeof summary?.parentId === 'string';
+    } catch {
+      return false;
+    }
+  }
+
   private async drain(seat: string): Promise<void> {
     if (this.inFlight.has(seat)) return;
     this.inFlight.add(seat);
@@ -247,19 +287,10 @@ export class BiscottoReview {
           continue;
         }
         if (outcome === 'approved') {
-          // The owner may have switched units while this sat on screen. The
-          // message, its tool gate and its approver were all bound to the unit
-          // that was active when the guest sent it; delivering into a different
-          // conversation is not the message anyone approved.
-          const current = this.context.options.getScoopJid();
-          if (current !== next.unitJid) {
-            this.context.log.warn('Selected unit changed during review — not delivering', {
-              submittedFor: next.unitJid,
-              current,
-            });
-            this.deps.notify(bootstrapId, next.messageId, 'rejected');
-            continue;
-          }
+          // Delivered to the seat's own unit whatever the owner is displaying
+          // now: the message, its tool gate and its approver were all bound to
+          // that unit at submit, so the owner switching conversations mid-review
+          // changes nothing about what was approved.
           this.deps.deliver(next);
         }
         this.deps.notify(bootstrapId, next.messageId, outcome);

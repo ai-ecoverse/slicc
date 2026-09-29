@@ -274,6 +274,8 @@ export type PanelRpcRequest =
       op: 'tray-mint-biscotto';
       payload: {
         label: string;
+        /** The unit (cone or scoop JID) the seat shares — the one that ran the command. */
+        unitJid?: string;
         ttlMs?: number;
         gates?: {
           message: FollowerBiscottoGate;
@@ -900,6 +902,7 @@ export interface PanelRpcResults {
     /** The private guest URL. Shown ONCE — a listing never returns tokens. */
     url: string;
     label: string;
+    unitJid?: string;
     expiresAt?: string;
     gates: {
       message: FollowerBiscottoGate;

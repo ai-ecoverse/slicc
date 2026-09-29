@@ -149,14 +149,20 @@ const BROADCAST_ERROR_THROTTLE_MS = 60_000;
 function restrictOutbound(
   sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>,
   trust: FollowerTrust,
-  log: Logger
+  log: Logger,
+  seatUnitJid?: string
 ): TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage> {
   if (trust !== 'biscotto') return sync;
   return new Proxy(sync, {
     get(target, prop, receiver) {
       if (prop !== 'send') return Reflect.get(target, prop, receiver);
       return (message: LeaderToFollowerMessage): boolean => {
-        if (isMessageSendableToTrust('biscotto', message.type)) return target.send(message);
+        if (
+          isMessageSendableToTrust('biscotto', message.type) &&
+          isForSeatUnit(message, seatUnitJid)
+        ) {
+          return target.send(message);
+        }
         log.debug('Withholding a message a biscotto may not receive', { type: message.type });
         // Reported as sent: the caller is broadcasting to everyone and a guest
         // legitimately not receiving this is not a transport failure.
@@ -164,6 +170,26 @@ function restrictOutbound(
       };
     },
   });
+}
+
+/**
+ * Whether a message a guest may receive is about the ONE unit its seat shares.
+ *
+ * The type allowlist cannot tell one unit's `agent_event` from another's, and
+ * senders route by the unit the leader DISPLAYS; a seat minted on cone A was
+ * handed cone B's turns, echoes and snapshots as soon as the owner switched to
+ * B. So every unit-tagged message is checked here, on the seat's own channel,
+ * against the unit recorded on the seat at mint — whoever sent it.
+ *
+ * Fails closed: a seat with no recorded unit receives no unit traffic at all,
+ * and an empty `scoopJid` passes only on `user_message_ack`, where it means
+ * "your message reached no unit" and names none.
+ */
+function isForSeatUnit(message: LeaderToFollowerMessage, seatUnitJid: string | undefined): boolean {
+  const tagged = message as { scoopJid?: unknown };
+  if (!('scoopJid' in tagged)) return true;
+  if (message.type === 'user_message_ack' && tagged.scoopJid === '') return true;
+  return seatUnitJid !== undefined && tagged.scoopJid === seatUnitJid;
 }
 
 export class FollowerRegistry {
@@ -186,7 +212,12 @@ export class FollowerRegistry {
   ): ConnectedFollower {
     this.removeFollower(bootstrapId);
     const trust = meta?.trust ?? 'full';
-    const sync = restrictOutbound(createLeaderSyncChannel(channel), trust, this.options.log);
+    const sync = restrictOutbound(
+      createLeaderSyncChannel(channel),
+      trust,
+      this.options.log,
+      meta?.biscotto?.unitJid
+    );
     const unsubscribe = sync.onMessage((message) => this.options.onMessage(bootstrapId, message));
     const keepalive = new DataChannelKeepalive({
       sendPing: () => sync.send({ type: 'ping' }),
@@ -457,9 +488,8 @@ export class FollowerRegistry {
    *   concurrent turns into one transcript;
    * - a peer with no selection keeps the historical default, the unit the
    *   leader is displaying;
-   * - a biscotto gets the displayed unit and nothing else: a guest is shared
-   *   ONE thread, its snapshot is pinned to the displayed unit, and the wire
-   *   allowlist cannot tell one unit's `agent_event` from another's.
+   * - a biscotto gets the unit its seat was minted for and nothing else —
+   *   never the displayed unit. A seat without a recorded unit gets nothing.
    */
   broadcastUnitTraffic(
     scoopJid: string,
@@ -471,7 +501,7 @@ export class FollowerRegistry {
       (follower) => {
         const reading =
           follower.trust === 'biscotto'
-            ? displayedScoopJid
+            ? follower.biscotto?.unitJid
             : (follower.selectedScoopJid ?? displayedScoopJid);
         return reading === scoopJid;
       }

@@ -22,6 +22,9 @@ import { createRestCapabilityBroker } from '../../../src/work-unit/capability/in
 const SEAT = {
   id: 'seat1',
   label: 'Anna',
+  // The unit the seat was minted for. Deliberately the harness's initial
+  // displayed unit too, so the pre-binding tests keep their meaning.
+  unitJid: 'cone',
   gates: { message: { approver: 'user' as const }, tool: { approver: 'user' as const } },
 };
 
@@ -480,7 +483,7 @@ describe('BiscottoReview — round-5 findings', () => {
     expect(states).toEqual([['m1', 'rejected']]);
   });
 
-  it('does not deliver into a different conversation than the one submitted for', async () => {
+  it('still delivers into the seat’s own conversation when the owner switches mid-review', async () => {
     let settle!: (d: SudoDecision) => void;
     const approve = vi.fn(() => new Promise<SudoDecision>((r) => (settle = r)));
     const { review, delivered, states, unitRef: unit } = createHarness(approve);
@@ -488,18 +491,22 @@ describe('BiscottoReview — round-5 findings', () => {
     review.submit('peer', guestMessage());
     await vi.waitFor(() => expect(approve).toHaveBeenCalled());
 
-    // Owner switches units while the review sits on screen.
+    // Owner switches units while the review sits on screen. The message was
+    // bound to the SEAT's unit, not the displayed one, so nothing about what
+    // was approved changed.
     unit.jid = 'cone_other';
     settle(allow);
 
     await vi.waitFor(() => expect(states).toHaveLength(2));
-    expect(delivered).toHaveLength(0);
-    expect(states[1]).toEqual(['m1', 'rejected']);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].unitJid).toBe('cone');
+    expect(states[1]).toEqual(['m1', 'approved']);
   });
 
-  it('binds the tool gate to the unit active at submit time', async () => {
+  it('binds the tool gate to the seat’s unit, not the displayed one', async () => {
     const approve = vi.fn(async () => allow);
-    const { review, delivered } = createHarness(approve);
+    const { review, delivered, unitRef: unit } = createHarness(approve);
+    unit.jid = 'cone_other';
     review.submit(
       'peer',
       guestMessage({

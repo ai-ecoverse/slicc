@@ -59,7 +59,12 @@ export async function handleBiscottoMint(request: Request, trayStub: TrayStub): 
   const controllerToken = extractBearer(request);
   if (!controllerToken) return jsonResponse({ error: 'unauthorized' }, 401);
 
-  const body = await readJsonObject<{ label?: string; ttlMs?: number; gates?: unknown }>(request);
+  const body = await readJsonObject<{
+    label?: string;
+    ttlMs?: number;
+    gates?: unknown;
+    unitJid?: unknown;
+  }>(request);
   if (!body) return jsonResponse({ error: 'invalid body' }, 400);
   if (typeof body.label !== 'string') {
     return jsonResponse({ error: 'label is required' }, 400);
@@ -73,6 +78,7 @@ export async function handleBiscottoMint(request: Request, trayStub: TrayStub): 
       label: body.label,
       ttlMs: body.ttlMs,
       gates: body.gates,
+      unitJid: body.unitJid,
       workerBaseUrl: `${url.protocol}//${url.host}`,
     },
     trayStub

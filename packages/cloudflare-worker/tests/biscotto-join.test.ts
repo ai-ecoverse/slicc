@@ -72,7 +72,11 @@ async function join(t: TestTray, token: string, controllerId: string): Promise<R
   );
 }
 
-async function mintSeat(t: TestTray, label = 'Anna'): Promise<{ id: string; token: string }> {
+async function mintSeat(
+  t: TestTray,
+  label = 'Anna',
+  unitJid = 'cone'
+): Promise<{ id: string; token: string }> {
   const res = await t.durable.fetch(
     new Request(`${HOST}/internal/biscotto/mint`, {
       method: 'POST',
@@ -81,6 +85,7 @@ async function mintSeat(t: TestTray, label = 'Anna'): Promise<{ id: string; toke
         controllerToken: t.controllerToken,
         label,
         workerBaseUrl: HOST,
+        unitJid,
       }),
     })
   );
@@ -95,7 +100,14 @@ function joinAnnouncements(socket: FakeWebSocket) {
   // `wsRes.webSocket` is the CLIENT end; what the DO pushes to the leader
   // arrives as `received` on it (the DO holds the server end).
   return socket.received
-    .map((raw) => JSON.parse(raw) as { type: string; trust?: string; biscotto?: { id: string } })
+    .map(
+      (raw) =>
+        JSON.parse(raw) as {
+          type: string;
+          trust?: string;
+          biscotto?: { id: string; unitJid?: string };
+        }
+    )
     .filter((m) => m.type === 'follower.join_requested');
 }
 
@@ -116,6 +128,16 @@ describe('biscotto join path', () => {
     expect(announced[1].biscotto?.id).toBe(seat.id);
   });
 
+  it('announces the unit the seat was minted for, so the leader can bind it', async () => {
+    const clock = { now: Date.parse('2026-08-27T12:00:00.000Z') };
+    const t = await createTestTray(clock);
+    const socket = await attachLeader(t);
+    const seat = await mintSeat(t, 'Anna', 'cone_helix');
+    await join(t, seat.token, 'guest-device');
+    const announced = joinAnnouncements(socket);
+    expect(announced[0].biscotto?.unitJid).toBe('cone_helix');
+  });
+
   it('mints a URL that attaches as the guest when opened as printed', async () => {
     // Regression: the minted URL used the preview subdomain encoding
     // (`<trayId>--<secret>.sliccy.now/`), which the preview worker 404s. Drive
@@ -131,6 +153,7 @@ describe('biscotto join path', () => {
           controllerToken: t.controllerToken,
           label: 'Anna',
           workerBaseUrl: HOST,
+          unitJid: 'cone',
         }),
       })
     );
