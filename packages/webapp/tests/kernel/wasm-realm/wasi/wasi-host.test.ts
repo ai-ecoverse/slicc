@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SyncFsPosixBridge } from '../../../../src/kernel/realm/sync-fs-xhr-bridge.js';
 import {
   CLOCK,
   E,
@@ -14,15 +15,23 @@ import {
   SIZE,
   WHENCE,
 } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
+import { cachingBridge } from '../../../../src/kernel/wasm-realm/wasi/wasi-files.js';
 import { WasiExit, WasiHost } from '../../../../src/kernel/wasm-realm/wasi/wasi-host.js';
-import { FakeFs, FakeKernel, Guest } from './fakes.js';
+import { FakeFs, FakeKernel, Guest, ListingFs } from './fakes.js';
 
 type Call = (name: string, ...args: Array<number | bigint>) => number;
 
-function setup(opts: { inherited?: number[]; env?: Record<string, string> } = {}) {
+function setup(
+  opts: {
+    inherited?: number[];
+    env?: Record<string, string>;
+    fs?: FakeFs;
+    bridge?: (fs: FakeFs) => SyncFsPosixBridge;
+  } = {}
+) {
   const kernel = new FakeKernel();
   for (const fd of opts.inherited ?? []) kernel.add(fd, 'stream', ['inherited\n']);
-  const fs = new FakeFs()
+  const fs = (opts.fs ?? new FakeFs())
     .dir('/workspace')
     .dir('/workspace/p')
     .dir('/tmp')
@@ -34,7 +43,7 @@ function setup(opts: { inherited?: number[]; env?: Record<string, string> } = {}
     cwd: '/workspace/p',
     pid: 9,
     kernel,
-    fs,
+    fs: opts.bridge ? opts.bridge(fs) : fs,
     ...(opts.inherited ? { inherited: opts.inherited.map((fd) => ({ fd })) } : {}),
   });
   const g = new Guest();
@@ -325,6 +334,36 @@ describe('WasiHost: directories', () => {
     s.call('fd_readdir', 3, buf, 30, 0n, used);
     expect(s.g.u32(used)).toBe(30);
     expect(s.call('fd_readdir', 0, buf, 30, 0n, used)).toBe(E.NOTDIR);
+  });
+
+  it('an import storm is one round trip: listing 300 entries, then stat-ing each, asks the bridge once', () => {
+    const fs = new ListingFs();
+    const s = setup({ fs, bridge: (b) => cachingBridge(b) });
+    fs.dir('/tmp/lib');
+    for (let i = 0; i < 300; i++) fs.file(`/tmp/lib/m${i}.py`, `# ${i}`);
+    fs.symlink('m0.py', '/tmp/lib/alias.py');
+    fs.ops.length = 0;
+    const [, fd] = s.open('/tmp/lib');
+    const buf = s.g.alloc(16384);
+    const used = s.g.alloc(4);
+    const seen: Array<{ name: string; type: number }> = [];
+    for (let cookie = 0n; ; ) {
+      expect(s.call('fd_readdir', fd, buf, 16384, cookie, used)).toBe(E.SUCCESS);
+      const batch = parseDirents(s.g, buf, s.g.u32(used)).filter((e) => e.name.length > 0);
+      if (batch.length === 0) break;
+      seen.push(...batch);
+      cookie = BigInt(batch[batch.length - 1].next);
+    }
+    expect(seen).toHaveLength(303);
+    expect(seen.find((e) => e.name === 'alias.py')?.type).toBe(FILETYPE.SYMBOLIC_LINK);
+    const out = s.g.alloc(64);
+    for (let i = 0; i < 300; i++) {
+      const [p, l] = s.g.str(`lib/m${i}.py`);
+      expect(s.call('path_filestat_get', 5, 1, p, l, out)).toBe(E.SUCCESS);
+    }
+    expect(fs.ops.filter((op) => op.includes('/tmp/lib/') || op.startsWith('readdir'))).toEqual([
+      'readdir-stat /tmp/lib',
+    ]);
   });
 });
 

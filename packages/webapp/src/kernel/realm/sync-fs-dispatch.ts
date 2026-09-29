@@ -37,6 +37,8 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         return { ok: true, kind: 'json', json: statJson(await fs.lstat(resolved)) };
       case 'readdir':
         return { ok: true, kind: 'json', json: await fs.readdir(resolved) };
+      case 'readdir-stat':
+        return { ok: true, kind: 'json', json: await readdirStat(fs, resolved) };
       case 'mkdir':
         await fs.mkdir(resolved, { recursive: true });
         return { ok: true, kind: 'void' };
@@ -55,6 +57,23 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
   } catch (err) {
     return toErrno(err);
   }
+}
+
+async function readdirStat(
+  fs: SyncFsTokenEntry['fs'],
+  dir: string
+): Promise<Array<[string, SyncFsStatJson | null]>> {
+  const names = await fs.readdir(dir);
+  const base = dir === '/' ? '' : dir;
+  return Promise.all(
+    names.map(async (name): Promise<[string, SyncFsStatJson | null]> => {
+      try {
+        return [name, statJson(await fs.lstat(`${base}/${name}`))];
+      } catch {
+        return [name, null];
+      }
+    })
+  );
 }
 
 export interface SyncFsStatJson {

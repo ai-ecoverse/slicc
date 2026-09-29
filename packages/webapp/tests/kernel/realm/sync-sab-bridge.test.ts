@@ -230,6 +230,26 @@ describe('createSyncFsSabBridge — fs surface parity with the XHR bridge', () =
     expect(() => bridge.readFile('/secret')).toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect(() => bridge.stat('/x')).toThrow(expect.objectContaining({ code: 'EIO' }));
   });
+
+  it('readdirStat is one readdir-stat request: names with parsed stats, null for a vanished one', () => {
+    const { bridge, k } = bridgeWith(() => ({
+      ok: true,
+      kind: 'json',
+      json: [
+        ['a', { isFile: true, isDirectory: false, size: 3, ino: 7 }],
+        ['gone', null],
+      ],
+    }));
+    expect(bridge.readdirStat?.('/d')).toEqual([
+      ['a', { isFile: true, isDirectory: false, size: 3, ino: 7 }],
+      ['gone', null],
+    ]);
+    expect(k.sent.map((m) => opOf((m as SyncSabReqMsg).req))).toEqual(['readdir-stat']);
+    for (const json of [[[1, null]], [['a', { not: 'a stat' }]], [7], ['a']]) {
+      const bad = bridgeWith(() => ({ ok: true, kind: 'json', json })).bridge;
+      expect(() => bad.readdirStat?.('/d')).toThrow(expect.objectContaining({ code: 'EIO' }));
+    }
+  });
 });
 
 describe('createSyncExecSabTransport — plugs into createSyncExecXhrBridge', () => {

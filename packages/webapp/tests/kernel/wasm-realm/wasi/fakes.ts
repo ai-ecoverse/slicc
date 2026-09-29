@@ -237,6 +237,10 @@ export class FakeFs implements SyncFsPosixBridge {
     return this.statOf(this.node(path, false));
   }
   readdir(path: string): string[] {
+    this.ops.push(`readdir ${path}`);
+    return this.names(path);
+  }
+  protected names(path: string): string[] {
     if (this.node(path).type !== 'dir') throw posix('ENOTDIR');
     const prefix = path === '/' ? '/' : `${path}/`;
     return [...this.nodes.keys()]
@@ -283,6 +287,20 @@ export class FakeFs implements SyncFsPosixBridge {
     this.ops.push(`utimes ${path} ${mtimeMs}`);
     const n = this.node(path);
     if (n.type !== 'link') n.mtimeMs = mtimeMs;
+  }
+}
+
+export class ListingFs extends FakeFs {
+  readdirStat(path: string): Array<[string, SyncFsBridgeStat | null]> {
+    this.ops.push(`readdir-stat ${path}`);
+    const base = path === '/' ? '' : path;
+    const n = this.ops.length;
+    const out = this.names(path).map((name): [string, SyncFsBridgeStat | null] => [
+      name,
+      this.lstat(`${base}/${name}`),
+    ]);
+    this.ops.length = n;
+    return out;
   }
 }
 

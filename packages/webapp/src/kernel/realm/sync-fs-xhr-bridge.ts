@@ -40,6 +40,8 @@ export interface SyncFsPosixBridge extends SyncFsXhrMutatingBridge {
   readlink(path: string): string;
   chmod(path: string, mode: number): void;
   utimes(path: string, atimeMs: number, mtimeMs: number): void;
+
+  readdirStat?(path: string): Array<[string, SyncFsBridgeStat | null]>;
 }
 
 export interface SyncFsPosixArgs {

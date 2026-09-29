@@ -214,6 +214,21 @@ export function cachingBridge(
   return {
     readFile: (p) => bridge.readFile(p),
     readdir: (p) => bridge.readdir(p),
+
+    ...(bridge.readdirStat
+      ? {
+          readdirStat: (p: string) => {
+            const list = (bridge.readdirStat as NonNullable<typeof bridge.readdirStat>)(p);
+            const base = p === '/' ? '' : p;
+            for (const [name, st] of list) {
+              if (!st) continue;
+              lstats.set(`${base}/${name}`, st);
+              if (!st.isSymbolicLink) stats.set(`${base}/${name}`, st);
+            }
+            return list;
+          },
+        }
+      : {}),
     readlink: (p) => bridge.readlink(p),
     stat: (p) => cached(stats, p, () => bridge.stat(p)),
     lstat: (p) => cached(lstats, p, () => bridge.lstat(p)),

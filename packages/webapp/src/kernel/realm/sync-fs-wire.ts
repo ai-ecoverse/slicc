@@ -42,6 +42,7 @@ export type SyncFsOp =
   | 'stat'
   | 'lstat'
   | 'readdir'
+  | 'readdir-stat'
   | 'mkdir'
   | 'rm'
   | 'rename'
