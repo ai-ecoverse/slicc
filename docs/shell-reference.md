@@ -590,6 +590,21 @@ on disk, and `package.json` is not updated. npm and pnpm skip the check when the
 metadata has no hash; ipk refuses instead, since the npm registry publishes
 both fields for every version.
 
+### `ipk install`: version picking
+
+`ipk` picks versions the way pnpm does (`resolveVersion` in
+`shell/ipk/registry.ts`). An empty spec or `latest` takes the `latest` dist-tag.
+An exact version (build metadata ignored) takes that version, even when it is
+deprecated. For a range, `latest` wins whenever it satisfies the range; `*` and
+`x` always take `latest`, even when it is a prerelease. Otherwise the highest
+satisfying version wins. A deprecated pick gives way to the highest live version
+the range admits (for `*` with a prerelease `latest`, the highest live version
+of that release line), unless nothing live satisfies. An empty `deprecated`
+message counts as live, as it does in npm and pnpm 11. pnpm 12 is the one that
+differs here. `tests/shell/ipk/pnpm-picker-oracle.test.ts` checks these rules
+against pnpm 12's own picker, via a committed fixture whose generator
+(`fixtures/generate-pnpm-picker-oracle.mjs`) is not run in CI.
+
 ### `ipk install -g` / `npm install -g`
 
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared

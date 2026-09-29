@@ -20,7 +20,13 @@ import {
   REGISTRY_NPMJS_HOST as REGISTRY_HOST_INTERNAL,
   validateNpmPackageName,
 } from '../supplemental-commands/cdn-url-builder.js';
-import { isValidRange, maxSatisfying } from './semver.js';
+import {
+  exactVersion,
+  isValidRange,
+  maxOnReleaseLine,
+  maxSatisfying,
+  satisfies,
+} from './semver.js';
 
 export const REGISTRY_NPMJS_HOST = REGISTRY_HOST_INTERNAL;
 export const EXPECTED_TARBALL_HOST = REGISTRY_HOST_INTERNAL;
@@ -57,7 +63,7 @@ export interface PackumentVersion {
   type?: 'module' | 'commonjs';
   exports?: unknown;
   bin?: string | Record<string, string>;
-  /** Set by `npm deprecate`: the message. */
+  /** Deprecation message; an empty string does not deprecate (npm's rule). */
   deprecated?: string;
   [key: string]: unknown;
 }
@@ -167,14 +173,24 @@ function isLikelyDistTag(spec: string): boolean {
 }
 
 /**
- * Pick the version that best satisfies `range` against a packument.
+ * Picking a version for `name@range` follows pnpm's picker
+ * (`pick_package_from_meta` in pnpm 12, the same rules as pnpm 11 and
+ * npm-pick-manifest). `pnpm-picker-oracle.test.ts` checks it against pnpm:
+ *   1. Empty / "latest" → the `latest` dist-tag.
+ *   2. An exact version (build metadata ignored) → that version, even when
+ *      it is deprecated.
+ *   3. A semver range, where "x" means "*":
+ *      - when `latest` satisfies it (for "*", whatever `latest` is), `latest`;
+ *      - otherwise the highest satisfying version;
+ *      - either way a deprecated pick gives way to the highest live version
+ *        the range admits, and for "*" with a prerelease `latest`, to the
+ *        highest live version of `latest`'s release line. When nothing live
+ *        satisfies, the deprecated pick stands.
+ *   4. A dist-tag → the version it points at.
  *
- * Resolution order, matching npm's behavior closely enough for ipk:
- *   1. Empty / "*" / "latest" → the `latest` dist-tag.
- *   2. Exact version present in `packument.versions` → that version.
- *   3. A name matching a dist-tag entry → the version it points at.
- *   4. Otherwise: maxSatisfying() against the available versions, deprecated
- *      ones only when nothing else satisfies the range.
+ * A version counts as deprecated when its `deprecated` message is non-empty,
+ * as npm and pnpm 11 have it. pnpm 12 also counts `deprecated: ""`; ipk does
+ * not.
  *
  * Throws a clear error when the packument is empty, the dist-tag points at a
  * missing version, or no version satisfies the supplied range.
@@ -204,19 +220,6 @@ function buildResolveContext(packument: Packument): ResolveContext {
   };
 }
 
-function pickLatest(ctx: ResolveContext): string {
-  const latest = ctx.distTags.latest;
-  if (latest && ctx.versionMap[latest]) return latest;
-  if (latest) {
-    throw new Error(
-      `resolveVersion(${ctx.packageName}): 'latest' dist-tag points to ${latest} but that version is missing from the packument`
-    );
-  }
-  const best = maxSatisfying(ctx.versions, '*');
-  if (best) return best;
-  throw new Error(`resolveVersion(${ctx.packageName}): cannot resolve a latest version`);
-}
-
 function pickDistTag(ctx: ResolveContext, tag: string): string {
   const tagVersion = ctx.distTags[tag];
   if (tagVersion && ctx.versionMap[tagVersion]) return tagVersion;
@@ -225,52 +228,75 @@ function pickDistTag(ctx: ResolveContext, tag: string): string {
   );
 }
 
+/** npm's and pnpm 11's rule: an empty deprecation message is not a deprecation. */
+function isDeprecated(ctx: ResolveContext, version: string): boolean {
+  return Boolean(ctx.versionMap[version]?.deprecated);
+}
+
 /**
- * The highest version in `range`, passing over deprecated ones as npm does
- * unless nothing else satisfies it: a deprecated `1.3.1` must not win over
- * the `1.3.1-2` that superseded it.
+ * pnpm's `non_deprecated_pick`: when `picked` is deprecated, the version to
+ * take instead, or null to keep `picked`.
  */
-function maxSatisfyingLive(ctx: ResolveContext, range: string): string | null {
-  // An empty message is how `npm deprecate pkg@v ""` un-deprecates.
-  const live = ctx.versions.filter((v) => !ctx.versionMap[v]?.deprecated);
-  return maxSatisfying(live, range) ?? maxSatisfying(ctx.versions, range);
+function nonDeprecatedPick(ctx: ResolveContext, picked: string, range: string): string | null {
+  if (!isDeprecated(ctx, picked) || ctx.versions.length <= 1) return null;
+  const live = ctx.versions.filter((v) => !isDeprecated(ctx, v));
+  if (range === '*' && !satisfies(picked, '*')) {
+    // A deprecated prerelease `latest`: stay on its release line.
+    const sameLine = maxOnReleaseLine(live, picked);
+    if (sameLine) return sameLine;
+  }
+  return maxSatisfying(live, range);
+}
+
+/** pnpm's `pick_version_by_version_range`, without lockfile-preferred versions. */
+function pickFromRange(ctx: ResolveContext, range: string): string | null {
+  const latest = ctx.distTags.latest;
+  if (latest && (range === '*' || satisfies(latest, range))) {
+    return nonDeprecatedPick(ctx, latest, range) ?? latest;
+  }
+  const best = maxSatisfying(ctx.versions, range);
+  if (!best) return null;
+  return nonDeprecatedPick(ctx, best, range) ?? best;
+}
+
+function noVersionError(ctx: ResolveContext, requested: string): Error {
+  const n = ctx.versions.length;
+  return new Error(
+    `resolveVersion(${ctx.packageName}): no version satisfies '${requested}' (have ${n} version${n === 1 ? '' : 's'})`
+  );
 }
 
 export function resolveVersion(packument: Packument, range: string): string {
   const ctx = buildResolveContext(packument);
   const requested = (range ?? '').trim();
-  // Empty / "latest" -> latest dist-tag. "*" is a valid range and flows into
-  // maxSatisfying below so it resolves to the highest stable version, NOT
-  // whatever the latest dist-tag happens to point at.
   if (requested === '' || requested === 'latest') {
-    return pickLatest(ctx);
+    if (ctx.distTags.latest === undefined) {
+      throw new Error(`resolveVersion(${ctx.packageName}): packument has no 'latest' dist-tag`);
+    }
+    return pickDistTag(ctx, 'latest');
   }
-  if (ctx.versionMap[requested]) return requested;
 
-  // Valid semver range (including "*", x, X, 1.x) -> resolve via maxSatisfying
+  const exact = exactVersion(requested);
+  if (exact !== null) {
+    if (ctx.versionMap[exact]) return exact;
+    throw noVersionError(ctx, requested);
+  }
+
   if (isValidRange(requested)) {
-    let best: string | null = null;
-    try {
-      best = maxSatisfyingLive(ctx, requested);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+    const picked = pickFromRange(ctx, requested === 'x' ? '*' : requested);
+    if (picked === null) throw noVersionError(ctx, requested);
+    if (!ctx.versionMap[picked]) {
       throw new Error(
-        `resolveVersion(${ctx.packageName}): invalid version or range '${requested}' (${reason})`
+        `resolveVersion(${ctx.packageName}): 'latest' dist-tag points to ${picked} but that version is missing from the packument`
       );
     }
-    if (best) return best;
-    const n = ctx.versions.length;
-    throw new Error(
-      `resolveVersion(${ctx.packageName}): no version satisfies '${requested}' (have ${n} version${n === 1 ? '' : 's'})`
-    );
+    return picked;
   }
 
-  // Known dist-tag
   if (Object.prototype.hasOwnProperty.call(ctx.distTags, requested)) {
     return pickDistTag(ctx, requested);
   }
 
-  // Unknown dist-tag (looks like a tag name) -> clear error
   if (isLikelyDistTag(requested)) {
     const tags = Object.keys(ctx.distTags).join(', ') || 'none';
     throw new Error(
@@ -278,7 +304,6 @@ export function resolveVersion(packument: Packument, range: string): string {
     );
   }
 
-  // Not a valid range and not a dist-tag
   const n = ctx.versions.length;
   throw new Error(
     `resolveVersion(${ctx.packageName}): invalid version or range '${requested}' (have ${n} version${n === 1 ? '' : 's'})`
