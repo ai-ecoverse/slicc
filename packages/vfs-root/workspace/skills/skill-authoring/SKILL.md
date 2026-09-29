@@ -12,25 +12,25 @@ allowed-tools: bash, read_file, write_file, edit
 
 # Skill authoring
 
-A skill is a folder with a `SKILL.md` (and optional companion files) that loads into the agent's system prompt when the description matches the user's intent. This skill is about authoring those folders well.
+A skill is a folder with `SKILL.md` (plus optional companions) loaded when the description matches user intent.
 
 ## Discovery
 
-SLICC discovers five kinds of skill roots:
+| Root                                                  | Source                      | Mutability                |
+| ----------------------------------------------------- | --------------------------- | ------------------------- |
+| `/workspace/skills/<name>/SKILL.md`                   | Bundled or `upskill`        | Install-managed; editable |
+| `.agents/skills/<name>/SKILL.md`                      | Cursor / SuperClaude compat | Read-only                 |
+| `.claude/skills/<name>/SKILL.md`                      | Claude Code compat          | Read-only                 |
+| `<mount>/.claude-plugin/marketplace.json` → `skills/` | Marketplace (mounted repos) | Read-only                 |
+| `<plugin-root>/skills/<name>/SKILL.md`                | `plugin install`            | Read-only                 |
 
-| Root                                                         | Source                                       | Mutability                          |
-| ------------------------------------------------------------ | -------------------------------------------- | ----------------------------------- |
-| `/workspace/skills/<name>/SKILL.md`                          | Bundled or installed via `upskill`           | Install-managed; you can edit them  |
-| `.agents/skills/<name>/SKILL.md` (anywhere)                  | Compatibility (Cursor / SuperClaude)         | Read-only (discovered, not managed) |
-| `.claude/skills/<name>/SKILL.md` (anywhere)                  | Compatibility (Claude Code)                  | Read-only (discovered, not managed) |
-| `<mount>/.claude-plugin/marketplace.json` → plugin `skills/` | Claude Code marketplace (mounted repos)      | Read-only (discovered, not managed) |
-| `<plugin-root>/skills/<name>/SKILL.md`                       | Agent Plugins installed via `plugin install` | Read-only (discovered, not managed) |
+`upskill` installs carry `.upskill` provenance (source, ref, commit, file list) that `upskill list --outdated` and `upskill update [--dry-run]` use. `upskill` never modifies dotfiles in a skill directory — keep credentials and local state in `scripts/.config`; everything else is replaced on update.
 
-Skills under `/workspace/skills/` installed with `upskill` carry a `.upskill` provenance record (source, ref, commit, file list) that `upskill list --outdated` consults and `upskill update [--dry-run]` uses to refresh them. `upskill` never modifies or deletes a **dotfile** in a skill directory, so that is where a skill should keep its credentials and local state (`scripts/.config`) — everything else is replaced on update.
+Marketplace root auto-discovered: mounted directory with `.claude-plugin/marketplace.json` → skills at `<plugin-source>/skills/<name>/SKILL.md`, no install step. Agent Plugins (`plugin.json` manifest): `plugin install <path|repo>` — local dir, `owner/repo`, `owner/repo@branch`, or `https://github.com/owner/repo[/tree/branch[/dir]]` → `/workspace/.plugins/sources/`.
 
-The marketplace root is auto-discovered: when a mounted directory contains `.claude-plugin/marketplace.json`, SLICC reads the manifest, resolves each plugin's `source` path, and discovers skills at `<plugin-source>/skills/<name>/SKILL.md`. No install step needed — mount the repo and the skills are live immediately. Agent Plugins (agent-plugins.org packages with a `plugin.json` manifest) require an explicit `plugin install <path|repo>` — `<repo>` may be a local directory or a GitHub reference (`owner/repo`, `owner/repo@branch`, or a `https://github.com/owner/repo[/tree/branch[/dir]]` URL, downloaded into `/workspace/.plugins/sources/`); their skills then surface automatically. Precedence: native > agents > claude > marketplace > plugin.
+Precedence: native > agents > claude > marketplace > plugin.
 
-When you create a new skill **for SLICC**, put it in `/workspace/skills/<name>/`. The `.agents/`, `.claude/`, and marketplace paths exist so SLICC can pick up skills authored for other agents without modification — don't create new skills there.
+**Create new skills in `/workspace/skills/<name>/` only.**
 
 ## SKILL.md structure
 
@@ -39,141 +39,96 @@ When you create a new skill **for SLICC**, put it in `/workspace/skills/<name>/`
 name: <slug>
 description: |
   Use this when ...
-  ... (1–3 sentences explaining trigger conditions, what's covered, and what's
-  NOT covered if there's a sibling skill that handles related topics.)
 allowed-tools: bash, read_file, write_file, edit
 ---
 
-# Title (matches `name`)
-
-... body ...
+# Title
 ```
 
-### Frontmatter fields
+### Frontmatter
 
-- **`name`** — lowercase, kebab-case. Must match the folder name. This is what `skill list` shows.
-- **`description`** — the trigger string. The agent uses this to decide whether to load the skill. Get this right; everything else is secondary.
-- **`allowed-tools`** — comma-separated list of tools the skill needs. Without this, the agent may load the skill but find it can't execute the steps. Common values:
-  - `bash` — almost every skill.
-  - `read_file, write_file, edit` — for skills that author files (sprinkles, config edits, three-way merges).
-  - Omit only for purely informational skills.
-
-### Writing a good description
-
-The description is a trigger, not a summary. It runs through the agent at every turn — too vague and the skill loads when irrelevant; too narrow and it doesn't load when needed.
-
-**Pattern that works**: "Use this when \<user-facing trigger\>. Covers \<topics\>. \[For \<adjacent topic\> use \<sibling skill\>.\]"
+- **`name`** — lowercase kebab-case; must match folder name. Shown by `skill list`.
+- **`description`** — the trigger. Too vague → loads when irrelevant; too narrow → misses when needed. Pattern: "Use this when \<trigger\>. Covers \<topics\>. \[For \<adjacent\> use \<sibling\>.\]"
+- **`allowed-tools`** — comma-separated tools the skill needs. Without this, the agent may load but can't execute. `bash` almost always; `read_file, write_file, edit` for file authoring; omit only for purely informational skills.
 
 Compare:
 
-- ❌ `description: Licks, webhooks, cron tasks, viewing pages/images, screencapture, onboarding`
-  Keyword soup. The agent has to guess what "licks" or "screencapture" mean for this user.
-- ✅ `description: Use this when setting up event-driven automation in SLICC — webhooks, cron tasks, or filesystem watchers that route events to scoops. Covers webhook, crontask, and fswatch. Read this BEFORE wiring anything that should fire on a schedule, an HTTP call, or a VFS change.`
-  Names the user intent ("setting up event-driven automation"), names the commands the agent will reach for, and tells the agent when to load it.
+- ❌ `Licks, webhooks, cron tasks, viewing pages/images, screencapture`
+- ✅ `Use this when setting up event-driven automation — webhooks, cron, fswatch. Read BEFORE wiring schedules, HTTP calls, or VFS changes.`
 
-Rules of thumb:
-
-- Lead with **"Use this when..."** or **"Use this whenever..."**.
-- Name the **user-facing trigger** (what the user said), not just the implementation.
-- If there's a closely-named sibling skill (dips vs sprinkles, mount vs other storage), say which is which inside the description so the agent doesn't load both.
-- Multi-line YAML scalars are fine for longer descriptions — use the `|` block style.
+Multi-line `|` block style is fine for longer descriptions.
 
 ## Body conventions
 
-- Lead with one sentence stating what the skill is. No preamble.
-- Use tables for option matrices (commands × flags, tradeoffs, etc.).
-- Code blocks are bash unless otherwise needed.
-- Include a "Don't" or "Common errors" section near the end if the skill is failure-prone — the agent will read it before acting.
-- If the skill is large (> ~150 lines), split a reference table or example gallery into a companion `<topic>.md` and have the SKILL.md `read_file` it on demand. The `sprinkles/` skill (style-guide.md) and `dips/` skill (patterns.md) follow this pattern.
+- One-sentence lead. Tables for option matrices. Bash code blocks.
+- "Don't" / "Common errors" for failure-prone skills.
+- Large skills (>~150 lines): split reference into companion `<topic>.md` (see `sprinkles/style-guide.md`, `dips/patterns.md`).
 
 ## Companion files
 
 ### `.jsh` — JavaScript shell scripts
 
-`.jsh` files on the shell's `$PATH` search roots are auto-discovered as shell commands. **Full reference: `./jsh-runtime-extensions.md`.**
+**Full reference: `./jsh-runtime-extensions.md`.**
 
-- **Auto-discovery**: registered as callable commands by filename (without the extension), from the `$PATH` roots — `/workspace/skills`, `/workspace/.mcp/aliases`, `/workspace/bin`, `/shared/bin` by default. A skill can ship its own commands by including a `.jsh` next to `SKILL.md`. Earlier PATH roots win basename collisions, so `/workspace/skills/` beats `/workspace/bin`. Two skills under the same root that ship the same command are not silent: a `.upskill` provenance record wins over a bundled copy, a newer `installed` timestamp wins among provenanced skills, otherwise the first scan hit wins — and `skill list` / `which` name the loser. For commands elsewhere, add their dir to the PATH: `echo 'export PATH="$PATH:/my/tools"' >> ~/.profile`.
-- **Direct execution**: run any script by path with `jsh /tmp/tool.jsh [args…]`. `jsh` is an alias for the Node shim, including `sliccy:` module resolution and argument passthrough; `process.argv[0]` remains `node` for Node compatibility.
-- **Dual-mode**: works in both the CLI server and the Chrome extension (sandbox iframe). Don't rely on CLI-only Node modules.
-- **Top-level `await`**: scripts are wrapped in `AsyncFunction`, so `await` at the top level works. Prefer it — errors surface instead of becoming unhandled rejections. Fire-and-forget `.then()`, unawaited `main()`, `setTimeout`, and `await fetch(…).json()` / `.text()` also keep the realm alive: like Node, the process stays up while I/O (fs/exec/fetch, including reading the response body) or timers are outstanding, and `process.exit()` skips the rest. A Promise with no handle (`new Promise(() => {})`) does **not** keep it alive. `node --check` / `-c` syntax-checks without executing (top-level `await` and ESM `import`/`export` are valid — the same entry transpile `node file.mjs` uses). `node --input-type=module` treats `-e` / stdin / `.js` as ESM.
+- Auto-discovered by filename (no extension) from `$PATH` roots: `/workspace/skills`, `/workspace/.mcp/aliases`, `/workspace/bin`, `/shared/bin`. Earlier roots win collisions. Among skills in same root: `.upskill` provenance > newer `installed` timestamp > first scan — `skill list` / `which` name the loser. Extend PATH: `echo 'export PATH="$PATH:/my/tools"' >> ~/.profile`.
+- Direct: `jsh /tmp/tool.jsh [args…]` — Node shim with `sliccy:` resolution; `process.argv[0]` stays `node` for compatibility.
+- Dual-mode: CLI server + Chrome extension (sandbox iframe). Don't rely on CLI-only Node modules.
+- Top-level `await` via `AsyncFunction`. Fire-and-forget `.then()`, unawaited `main()`, `setTimeout`, `await fetch().json()` keep realm alive while I/O/timers outstanding. `process.exit()` skips rest. `node --check` / `-c` syntax-checks without executing (top-level `await` and ESM valid).
 
-#### Runtime surface (use these — don't reinvent)
+#### Runtime surface
 
-Node-standard bare globals:
+Node globals: `process` (`argv`, `.parseFlags()`, `env`, `cwd()`, `exit`, `exitCode`, `stdout`/`stderr`; `stdin` one-shot buffered), `console`, `fetch` (proxied), `require(p)`, `__dirname`/`__filename`.
 
-| Global                     | Use for                                                                                                                                                                                                                                |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process`                  | `argv`, `env`, `cwd()`, `exit(code)`, `exitCode` (deferred status; honoured after the event-loop drain), `stdout.write`, `stderr.write`; `stdin` is one-shot buffered (no streaming) — `read()`, events, or async iterator, drain once |
-| `console`                  | `log`/`info`/`debug`/`dirxml`/`table`/`dir` → stdout; `warn`/`error`/`assert`/`trace` → stderr (`assert` does not throw); `group*` indent; `time*`/`count*` labeled; `clear` no-op                                                     |
-| `fetch`                    | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS handled).                                                                                                                                                    |
-| `require(p)`               | Synchronous CJS `require`. Use `require('sliccy:<name>')` for capability bridges and `require('fs')` for the VFS bridge (see below).                                                                                                   |
-| `__dirname` / `__filename` | CJS scope vars — the script's own directory and absolute path.                                                                                                                                                                         |
+| `require('sliccy:<name>')`  | Use for                                                                                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sliccy:exec`               | `exec(cmd)` + `.spawn(argv[])`                                                                                                                       |
+| `sliccy:agent`              | `agent(prompt, opts?)` + `.spawn(...)`                                                                                                               |
+| `sliccy:skill`              | `dir`/`root`/`refs`/`assets`/`config()`/`token(providerId)`                                                                                          |
+| `sliccy:http`               | `http.client({ baseUrl, token, headers, retry, timeoutMs })`                                                                                         |
+| `sliccy:browser`            | `findTab`, `ensureTab`, `openWindow`, `windowBounds`, `setWindowBounds`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...)` |
+| `sliccy:usb`/`serial`/`hid` | `list()`/`request()` + device methods (Chromium-only)                                                                                                |
+| `sliccy:computer`           | `register(handlers)` — jsh computer backend                                                                                                          |
+| `sliccy:cli`                | `die`, `out`, `warn`, `help`                                                                                                                         |
+| `sliccy:color`              | ANSI helpers (auto-disabled non-TTY / `NO_COLOR`)                                                                                                    |
+| `sliccy:time`               | `parseDuration`, `ago`, `range`, `future`, `gmailDate`                                                                                               |
+| `sliccy:fmt`                | `trunc`, `col`, `table`, `date`                                                                                                                      |
+| `sliccy:pool`               | `pool(n, items, fn)`                                                                                                                                 |
 
-Capability bridges via `require('sliccy:<name>')` (full reference: `./jsh-runtime-extensions.md`):
+VFS: `require('fs')` / `require('node:fs')` — `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `appendFile`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile`. No bare `fs` global.
 
-| `require('sliccy:<name>')`                    | Use for                                                                                                                                                                                                             |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sliccy:exec`                                 | Callable `exec(cmd)` + `.spawn(argv[])`. Composes with any supplemental command or `.jsh` script.                                                                                                                   |
-| `sliccy:agent`                                | Callable `agent(prompt, opts?)` → sub-scoop final text (parsed when `schema` set) + `.spawn(...)` → `{ finalText, exitCode, stderr }`. `opts`: `model`, `thinking`, `cwd`, `allowedCommands`, `readOnly`, `schema`. |
-| `sliccy:skill`                                | `dir` / `root` / `refs` / `assets` / `config()` / `token(providerId)` — skill-root `references/` and `assets/`, script-dir `.config`, provider tokens.                                                              |
-| `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` — standard API-client builder.                                                                                                                         |
-| `sliccy:browser`                              | `findTab`, `ensureTab`, `openWindow`, `windowBounds`, `setWindowBounds`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...)`.                                                               |
-| `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods. Chromium-only.                                                                                                                                                             |
-| `sliccy:computer`                             | `register(handlers)` — jsh-hosted computer backend (screenshot/input over `computer-call`; keep-alive).                                                                                                             |
-| `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`.                                                                                                                                                  |
-| `sliccy:color`                                | ANSI helpers (`green`, `red`, `bold`, `dim`, …) auto-disabled on non-TTY / `NO_COLOR`.                                                                                                                              |
-| `sliccy:time`                                 | `parseDuration`, `ago`, `range`, `future`, `gmailDate`.                                                                                                                                                             |
-| `sliccy:fmt`                                  | `trunc`, `col`, `table`, `date`.                                                                                                                                                                                    |
-| `sliccy:pool`                                 | `pool(n, items, fn)` — bounded concurrency runner.                                                                                                                                                                  |
+#### Runtime extensions (prefer over hand-rolled)
 
-VFS bridge:
+- `process.argv.parseFlags()` → `{ positional, flags, subcommand, passthrough }`
+- `require('sliccy:browser')` — replaces `playwright-cli tab-list` shell-outs
+- `browser.fetch(tab, url, opts)` — page-context fetch (cookies automatic)
+- `browser.websocket.on(tab, …).filter({…}).forward({ sink })` — **required** for WS-watch; no prototype patches
+- `require('sliccy:http').client({…})` — Retry-After-aware API client
+- `require('sliccy:skill')` — replaces `argv[1]` dirname math and `oauth-token` shell-outs
+- `require('sliccy:computer').register(handlers)` — jsh computer backend
 
-| `require('fs')` / `require('node:fs')` | `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `appendFile`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile` — all paths are VFS, async. There is no bare `fs` global. |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+Full reference: `./jsh-runtime-extensions.md`.
 
-#### Runtime extensions (live — prefer these over hand-rolled equivalents)
-
-Reach these via `require('sliccy:<name>')`. Full reference: `./jsh-runtime-extensions.md`. Use them instead of reimplementing the cross-skill patterns they replace.
-
-- **`process.argv.parseFlags()`** — returns `{ positional, flags, subcommand }`. Replaces the per-skill `--flag=val` / `--flag val` parsing loop.
-- **`require('sliccy:browser')`** — `findTab({ domain | urlMatch })`, `ensureTab(url)`, `openWindow(url, opts?)` (frame-sized window), `windowBounds(tab)`, `setWindowBounds(tab, bounds)` (returns achieved bounds), `eval(tab, fn)`, `evalAsync(tab, fn)`, `cookie(tab, name)`, `localStorage(tab, key)`. Replaces shelling out to `playwright-cli tab-list` and regex-parsing its output.
-- **`browser.fetch(tab, url, opts)`** — page-context fetch (runs inside the tab's origin, so cookies + same-origin headers are automatic). Replaces the `eval-file` temp-file + double-JSON-unwrap dance.
-- **`browser.websocket.on(tab, …).filter({…}).forward({ sink })`** — declarative WebSocket observer with a closed sink set (`webhook` / `scoop` / `vfs` / `log`). **Required** for any new WS-watch use case; do not author page-context `WebSocket.prototype` patches in skill code.
-- **`require('sliccy:http').client({ baseUrl, token, headers, retry })`** — `get`/`post`/`put`/`delete` with merged headers, lazy token resolution, and Retry-After-aware backoff for `retry.on` statuses.
-- **`require('sliccy:skill')`** — `dir` / `root` / `refs` / `assets` / `config()` / `token(providerId)`: replace the per-skill `process.argv[1]` dirname math, ad-hoc `.config` JSON readers, and bespoke `oauth-token` shell-outs. `refs`/`assets` resolve from the skill root (parent of the `scripts/` path segment, including nested helpers).
-- **`require('sliccy:computer')`** — `register(handlers)` for a jsh-hosted computer backend. `register()` keeps a `jshd` unit alive via `computer-call` events. Drive it with the `computer` shell command.
-
-Ship a `.jsh` when the skill needs deterministic, parameterizable behavior the agent shouldn't have to re-derive each time (e.g. a `slicc-handoff` helper, a custom diff formatter, a domain-specific lint).
+Ship `.jsh` for deterministic behavior the agent shouldn't re-derive (handoff helper, diff formatter, domain lint).
 
 ### `.bsh` — browser shell scripts
 
-`.bsh` files auto-execute when the browser navigates to a matching URL:
+Auto-execute on navigation. Filename = hostname pattern (`-.okta.com.bsh` → `*.okta.com`). `// @match` in first 10 lines. Same engine as `.jsh`.
 
-- **Filename = hostname pattern**: `-.okta.com.bsh` matches `*.okta.com`.
-- **`// @match` directive**: restrict to specific URL patterns in the first 10 lines.
-- Same execution engine as `.jsh`.
+## Filesystem
 
-Use `.bsh` for site-specific automations — auto-fillers, lick-emitters, or page transforms that should run whenever the user lands on a particular host.
-
-## Filesystem at a glance
-
-The VFS is stored in IndexedDB; it survives tab closes and refreshes. The `mount` shell command bridges remote storage (local folders, S3-compatible, Adobe DA) into VFS paths — see `/workspace/skills/mount/SKILL.md`.
-
-The VFS supports symbolic links transparently:
+VFS in IndexedDB; survives tab closes. `mount` bridges remote storage — see `/workspace/skills/mount/SKILL.md`.
 
 ```bash
-ln -s /workspace/skills /workspace/skill-link    # Create symlink
-readlink /workspace/skill-link                    # Read link target
-ls -la /workspace/                                # Shows symlinks with -> target
+ln -s /workspace/skills /workspace/skill-link
+readlink /workspace/skill-link
+ls -la /workspace/    # shows -> target
 ```
 
-`cat`, `read_file`, `write_file` etc. follow symlinks automatically.
-
-**Mount points must be empty.** Mounting over existing files is blocked so built-in skills and scripts stay discoverable. `ln -s /mnt/… /shared/x` works: the link lives on VFS, and everything through it reaches the mount. A link cannot live _on_ a mount, though (`EINVAL`): mount backends have no symlink inode.
+`cat`, `read_file`, `write_file` follow symlinks. **Mount points must be empty** (blocks mounting over built-ins). `ln -s /mnt/… /shared/x` works (link on VFS → mount). A link _on_ a mount is `EINVAL` (no symlink inode).
 
 ## Don't
 
-- Don't ship a skill without a description that starts with "Use this when..." — the trigger field IS the skill from the agent's perspective.
+- Don't ship without a description starting "Use this when…" — the trigger field IS the skill from the agent's perspective.
 - Don't put `name:` in Title Case. Lowercase kebab-case. Match the folder.
-- Don't dump shell-command catalogs into a SKILL.md just because they're related — `commands` already lists them. Skills are for **patterns and policy**, not reference material.
+- Don't dump shell-command catalogs into SKILL.md just because they're related — `commands` already lists them. Skills are for **patterns and policy**, not reference material.
 - Don't author skills under `.agents/skills/` or `.claude/skills/`. Those roots are for compatibility discovery from other agents.

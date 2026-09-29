@@ -12,350 +12,213 @@ allowed-tools: bash
 
 # Delegation
 
-Scoops do the heavy lifting; the cone orchestrates and synthesizes. This skill is about choosing how to delegate, not about administering scoops.
+Scoops do heavy lifting; the cone orchestrates and synthesizes.
 
 ## When to delegate
 
-**Default to delegation.** Parallel scoops almost always finish faster, and the cone's job is synthesis.
+**Default to delegation** for parallel independent work.
 
-Delegate when:
+Delegate: multiple sources, time-consuming self-contained tasks, clear briefs.
+Do yourself: single quick lookup, real-time adaptation, overhead > benefit.
 
-- Multiple independent sources (scraping 3 sites = 3 scoops).
-- Time-consuming work that doesn't need direct oversight.
-- Work expressible as a clear, self-contained brief.
+## Brief for authority, not execution
 
-Do it yourself when:
+Don't pre-research, pre-decide, then hand a typist plan. Give question + constraints + access.
 
-- Single quick lookup (one page, one API call).
-- Real-time adaptation needed (navigating broken URLs).
-- Overhead of spawning exceeds benefit.
+| Bad                                                                | Good                                                                       |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| Cone reads 5 files, picks approach, tells scoop "implement X in Y" | "User wants Z; code under `/workspace/src/`. Pick approach and implement." |
+| Cone summarizes docs, asks scoop to write comparison               | "Compare A, B, C at <urls>. Decide and write comparison."                  |
+| Cone isolates bug, asks scoop to fix line 42                       | "Command fails with `<output>`. Find and fix." (or one-shot `agent`)       |
 
-## Brief for authority, not for execution
-
-The most common delegation failure is **the cone doing too much pre-work before delegating**. The cone researches the topic, makes the design decisions, picks the approach, and then hands the scoop a pre-cooked plan to type out. This is bad on three axes:
-
-- **Pollutes the scoop's context.** The brief is bloated with conclusions the scoop now has to re-derive an opinion on, instead of facts it can act on.
-- **Strips the scoop of autonomy.** A scoop that's been told what to think can't push back on a bad call or notice a better path mid-task. You get a typist, not a collaborator.
-- **Wastes the cone's tokens.** The cone's strength is orchestration — picking the right scoops, synthesizing their outputs. Doing the research itself burns the cone's context on work that's parallelizable.
-
-**Heuristic: if the cone reads files, runs commands, or makes decisions before delegating, that should have been part of the scoop's brief.** Hand the scoop the question, the constraints, and the access — let it decide.
-
-| Bad (cone over-prepares)                                                                        | Good (scoop decides)                                                                                                                            |
-| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cone reads 5 files, picks an approach, tells scoop "implement approach X in file Y."            | Scoop is told "the user wants Z; the relevant code is under `/workspace/src/`. Pick an approach and implement it."                              |
-| Cone scrapes 3 docs, summarizes, then asks scoop to "write a comparison based on this summary." | Scoop is told "compare libraries A, B, C for this use case. Their docs are at <urls>. Decide and write the comparison."                         |
-| Cone debugs a failure, isolates the bug, then asks scoop to "fix the off-by-one in line 42."    | Scoop is told "this command fails with `<output>`. Find and fix the bug." (Even better: a one-shot `agent` for cheap, deterministic bug-fixes.) |
-
-Two carve-outs where pre-work IS the cone's job:
-
-1. **Routing decisions.** Picking which scoop gets which slice of a fan-out is orchestration, not pre-cooking.
-2. **Synthesis after the fact.** Reading scoop outputs to combine them is the cone's whole point.
-
-If a scoop comes back with a wrong call, **drop it and re-spawn with a better brief** — don't feed a correction. Corrections compound the autonomy problem.
+Cone's job: routing fan-out slices, synthesizing outputs. Wrong call → drop and re-spawn with better brief, don't correct in place.
 
 ## Scoop lifecycle
 
-Drop scoops when done — but **NEVER drop a scoop that owns a sprinkle**.
+Drop when done. **NEVER drop a scoop that owns a sprinkle.**
 
-Drop when:
+Drop: task complete, stuck/misbehaving. Never: open sprinkle, recurring task, work in progress.
 
-- Task completed and results synthesized.
-- Stuck or misbehaving (drop and re-spawn with a better brief).
+## Three primitives
 
-Never drop when:
-
-- It owns an open sprinkle (must stay alive for the sprinkle's lifetime).
-- Running a recurring/long-running task (feed watcher, webhook handler).
-- Work is still in progress (dropping loses all context).
-
-## Three delegation primitives
-
-| Primitive                    | Conversation             | Sprinkle ownership | Auto-cleanup      | When to use                                                 |
-| ---------------------------- | ------------------------ | ------------------ | ----------------- | ----------------------------------------------------------- |
-| `scoop_scoop` + `feed_scoop` | Persistent (multi-turn)  | Yes                | No (`drop_scoop`) | Long-lived work; sprinkle owners; conversational follow-ups |
-| `scoop_wait` / `scoop_mute`  | Persistent (multi-turn)  | Yes                | No                | Parallel fan-out where you want one synthesis turn          |
-| `agent` (shell command)      | One-shot (single prompt) | No                 | Yes (on exit)     | Cheap, predictable, composable; no cone follow-up needed    |
+| Primitive                    | Conversation | Sprinkle | Cleanup      | Use                             |
+| ---------------------------- | ------------ | -------- | ------------ | ------------------------------- |
+| `scoop_scoop` + `feed_scoop` | Multi-turn   | Yes      | `drop_scoop` | Long-lived, sprinkle owners     |
+| `scoop_wait` / `scoop_mute`  | Multi-turn   | Yes      | No           | Parallel fan-out + synthesis    |
+| `agent` (shell)              | One-shot     | No       | Auto         | Cheap, composable, no follow-up |
 
 ### `agent` — one-shot ephemeral sub-agents
 
-`agent` is a shell command that spawns a one-shot sub-scoop, feeds it a prompt, blocks until the agent loop completes, and prints the final message on stdout. Runs from any bash context (terminal, `feed_scoop` prompt, `.jsh` script, dip lick handler, sprinkle button handler).
+Spawns sub-scoop, blocks, prints final message on stdout. Works from bash, `feed_scoop`, `.jsh`, dips, sprinkles.
 
 ```
 agent <cwd> <allowed-commands> <prompt> [--model <id>] [--workspace-mode <mode>] [--read-only <paths>] [--background-after <s>]
 ```
 
-- `<cwd>` — sole writable prefix (plus `/shared/`, the scoop's scratch folder, and `/tmp/` — the whole shared scratch tree, so a scoop can always reach its `$TMPDIR`). Relative paths resolve against the caller's cwd.
-- `<allowed-commands>` — comma-separated allow-list; `*` for unrestricted.
-- `<prompt>` — forwarded verbatim. The spawned scoop has no access to the caller's history; pack context into the prompt.
-- `--model` — defaults to the parent scoop's model (or the cone's, when invoked from the terminal). Accepts an exact id, a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), or the `provider:model` form `models` prints (`openrouter:openai/gpt-5.6-terra-pro`). A bare id resolves against the selected provider first, then against any other configured provider that offers it; if several do, the error lists the qualified ids to pick from. The scoop runs on the provider the model resolved from. An id that cannot be resolved is a hard error (exit 1) — it never silently falls back to the parent's model. Models from a provider other than the selected one must additionally be allowed in `/etc/models` (see [Model access policy](#model-access-policy)); a blocked model exits 1 and the error quotes the line to add.
-- `--workspace-mode` — isolation policy. Default `shared-readonly` is today's sandbox (parent workspace visible, cwd + `/shared/` + scratch writable, mounts readable). `private` is an isolated sandbox: own cwd/scratch only — no parent workspace, no implicit `/shared/`, mounts are **not** auto-visible. `snapshot` and `shared-live` are not implemented and exit 1.
-- `--read-only` — pure-replace list of read-only paths. Default: the **owning cone's** workspace (plus `/workspace/skills/`) and the invoking shell's cwd. When replacing it, name your own cone's workspace — a literal `/workspace/` is the primary cone's, not yours. Under `--workspace-mode private` the default visible list is empty.
-- `--background-after <seconds>` — how long the spawned scoop's `bash` waits for a command before detaching it and moving on (default 600). Nobody can cancel a spawned scoop's turn, so a command that never returns would otherwise burn the whole run on one call; a detached command reports its exit code back to that scoop as a `Background Command` lick. `0` detaches every command immediately.
+- `<cwd>` — sole writable prefix (+ `/shared/`, scoop scratch, `/tmp/`). Relative paths vs caller cwd.
+- `<allowed-commands>` — comma list; `*` unrestricted.
+- `<prompt>` — verbatim; no caller history.
+- `--model` — defaults parent model. Exact id, shorthand (`haiku`, `sonnet`), or `provider:model`. Bare id resolves selected provider first, then others; ambiguity errors. Hard error if unresolvable. Cross-provider needs `/etc/models` allow (see below).
+- `--workspace-mode` — `shared-readonly` (default): parent workspace visible, cwd+`/shared/`+scratch writable, mounts readable. `private`: isolated — no parent workspace, no implicit `/shared/`, mounts not auto-visible. `snapshot`/`shared-live` unimplemented (exit 1).
+- `--read-only` — pure-replace read list. Default: owning cone's workspace + `/workspace/skills/` + caller cwd. Literal `/workspace/` is primary cone's. Private default: `[]`.
+- `--background-after <s>` — detach slow `bash` commands (default 600). `0` = immediate detach. Detached exit → `Background Command` lick.
 
-**Critical property: no handoff.** Ephemeral scoops do NOT notify the cone on completion. Running `agent` from a non-cone shell does not trigger an unsolicited cone turn. The caller gets the result on stdout, nothing else. This makes `agent` the right choice for cheap, predictable interactions inside dips and sprinkles where you don't want the cone or owning scoop woken up.
+**No handoff.** Ephemeral scoops don't notify cone. Result on stdout only.
 
 ```bash
-# Parallel, collected to one file. No cone turns spawned.
 for url in site-a site-b site-c; do
-  agent "$TMPDIR" "curl,jq" "Fetch https://$url/api, return the top-level title field." >> "$TMPDIR/titles.txt" &
+  agent "$TMPDIR" "curl,jq" "Fetch https://$url/api, return title." >> "$TMPDIR/titles.txt" &
 done
 wait
 
-# Focused refactor with a restricted allow-list.
 agent /workspace/src "rg,sed,node" "Rename getCwd to getCurrentWorkingDirectory across *.ts"
-
-# Cheap one-shot from a faster model.
 agent . '*' 'Summarize the README in one sentence.' --model claude-haiku-4-5
 ```
 
-For dip and sprinkle interaction patterns built on `agent`, see `/workspace/skills/dips/SKILL.md` and `/workspace/skills/sprinkles/SKILL.md`.
+Dip/sprinkle patterns: `/workspace/skills/dips/SKILL.md`, `/workspace/skills/sprinkles/SKILL.md`.
 
-## Shaping the scoop's sandbox: `workspaceMode`, `visiblePaths`, `writablePaths`, `allowedCommands`
+## Sandbox shaping
 
-`scoop_scoop` accepts a named isolation mode plus three sandbox-shaping parameters. **They are how you give a scoop authority — by widening or narrowing what it can read, write, and run.** A scoop that can't reach the files it needs has no autonomy; pre-cooking the brief is what you do to compensate. Get the sandbox right and the brief gets shorter.
+`scoop_scoop` params: `workspaceMode`, `visiblePaths`, `writablePaths`, `allowedCommands`, `canCreateChildren`.
 
-A rarely used argument — `canCreateChildren: true` — is an explicit nested-delegation grant. The new scoop may then `scoop_scoop` / `feed_scoop` / `drop_scoop` its own children. Omit it (the default) so the scoop stays a leaf. A scoop that was not itself granted this cannot pass it on.
+`canCreateChildren: true` grants nested `scoop_scoop`/`feed_scoop`/`drop_scoop`. Default false (leaf). Cannot pass on without grant.
 
-| Param               | What it controls                        | Default                                                                                | Pure replace? |
-| ------------------- | --------------------------------------- | -------------------------------------------------------------------------------------- | ------------- |
-| `workspaceMode`     | Sharing policy for the parent workspace | `"shared-readonly"` (today's scoop). `"private"` isolates.                             | Yes           |
-| `visiblePaths`      | Read-only VFS paths the scoop can SEE   | shared-readonly: `["/workspace/"]`; private: `[]`                                      | Yes           |
-| `writablePaths`     | VFS paths the scoop can READ AND WRITE  | shared-readonly: `["/scoops/<folder>/", "/shared/"]`; private: `["/scoops/<folder>/"]` | Yes           |
-| `allowedCommands`   | Shell command allow-list                | unrestricted (every built-in + `.jsh`)                                                 | Yes           |
-| `canCreateChildren` | Nested-delegation grant                 | `false` (leaf scoop)                                                                   | Yes           |
+| Param               | Default                                                                                | Pure replace? |
+| ------------------- | -------------------------------------------------------------------------------------- | ------------- |
+| `workspaceMode`     | `shared-readonly`                                                                      | Yes           |
+| `visiblePaths`      | shared-readonly: `["/workspace/"]`; private: `[]`                                      | Yes           |
+| `writablePaths`     | shared-readonly: `["/scoops/<folder>/", "/shared/"]`; private: `["/scoops/<folder>/"]` | Yes           |
+| `allowedCommands`   | unrestricted                                                                           | Yes           |
+| `canCreateChildren` | `false`                                                                                | Yes           |
 
-"Pure replace" means what you set is what you get — the value isn't merged with the default. Pass `[]` to drop it entirely. Trailing slashes recommended on path entries (e.g. `/shared/data/`).
+`writablePaths` are always readable. True blind sandbox: `visiblePaths: []` AND `writablePaths: []`. Mounts readable in `shared-readonly` regardless of `visiblePaths`; `private` needs explicit mount paths. `allowedCommands` gates pipelines/recursively. List every absolute root tools write to, or writes escalate for approval. `playwright-cli` in scoops writes to scoop `$TMPDIR/.playwright/` — no extra `writablePaths`.
 
-Subtleties:
+### Choosing
 
-- **`writablePaths` are always readable too.** A true read-nothing sandbox needs both `visiblePaths: []` AND `writablePaths: []`.
-- **Mounts remain readable in `shared-readonly`** (the default) regardless of `visiblePaths`. `private` does **not** auto-include mounts — name a mount in `visiblePaths` / `writablePaths` if the scoop needs it. That's how a mount cannot silently expand every child's authority.
-- **`allowedCommands` applies recursively** — pipelines, command substitutions, and network commands are all gated. Pass `["*"]` for explicit unrestricted.
-- **List every absolute root the scoop's tools write to.** Include any root outside the scoop's folder and `/tmp/` in `writablePaths` (any spelling works: `/x`, `/x/`, `/x/**`), or every such write escalates to you for approval. `playwright-cli` needs nothing here: in a scoop its session log, snapshots and screenshot archive go to the scoop's own `$TMPDIR/.playwright/`, not `/.playwright/`. Prefer pointing skills at `/scoops/<folder>/`, `/shared/`, or `/tmp/` over inventing new VFS roots.
+1. **Read?** → `visiblePaths` (default `/workspace/` fine for project work).
+2. **Write?** → `writablePaths` (tighten for research-only scoops).
+3. **Commands?** → tighten only when known set helps (`["curl","jq"]`, `["rg","sed","node"]`).
 
-### How to choose
+### Don't
 
-Ask three questions, in order:
-
-1. **What does the scoop need to read?** Files it must consume — source tree, docs, mounted data — go in `visiblePaths`. Default `/workspace/` is fine for most "do something in the project" briefs. Add specific paths (`/shared/data/`, `/mnt/da/`) for narrower scopes.
-2. **What is it allowed to change?** Output dirs, the file it's editing, the sprinkle path it owns. Default writable scratch (`/scoops/<folder>/`) plus `/shared/` is fine for scoops producing artifacts. **Tighten this when the scoop should not modify production code** — e.g. a research scoop with `writablePaths: ["/scoops/<folder>/"]` only.
-3. **What commands does it need?** Default unrestricted is right when the scoop will figure out its own toolchain. Tighten only when narrowing to a known set of tools improves reliability or safety — e.g. a scraper with `["curl","jq"]`, or a refactor scoop with `["rg","sed","node"]`.
+- Don't widen `writablePaths` "just in case" — surprise write access is costly to recover from.
+- Don't narrow `allowedCommands` without knowing which commands the scoop needs.
+- Don't forget `writablePaths` are readable — `visiblePaths: []` alone isn't blind.
 
 ### Patterns
 
 ```
-# Default sandbox (shared-readonly): full project, own scratch dir, all commands.
-# Right for most "do this in the project" briefs.
-scoop_scoop({ name: "fix-bug", prompt: "..." })
+scoop_scoop({ name: "fix-bug", prompt: "..." })  # default
 
-# Isolated sandbox. Cannot see the parent workspace or mounts.
 scoop_scoop({ name: "scratch-only", workspaceMode: "private", prompt: "..." })
 
-# Read-only research scoop. Can read everything, can't change anything,
-# can use whatever commands it needs to investigate.
-scoop_scoop({
-  name: "auth-research",
-  visiblePaths: ["/workspace/", "/shared/"],
-  writablePaths: ["/scoops/auth-research/"],
-  prompt: "Map the auth flow across the codebase and write findings to /scoops/auth-research/notes.md."
-})
+scoop_scoop({ name: "auth-research", visiblePaths: ["/workspace/", "/shared/"],
+  writablePaths: ["/scoops/auth-research/"], prompt: "Map auth flow → /scoops/auth-research/notes.md" })
 
-# Sprinkle-owning scoop. Needs write access to its sprinkle path.
-scoop_scoop({
-  name: "giro-winners",
-  writablePaths: ["/scoops/giro-winners/", "/shared/sprinkles/giro-winners/"],
-  prompt: "..."
-})
+scoop_scoop({ name: "giro-winners",
+  writablePaths: ["/scoops/giro-winners/", "/shared/sprinkles/giro-winners/"], prompt: "..." })
 
-# Tight scraper. Only sees public docs, only runs network/json tools,
-# writes to its own scratch.
-scoop_scoop({
-  name: "scraper",
-  visiblePaths: [],
-  writablePaths: ["/scoops/scraper/"],
-  allowedCommands: ["curl", "jq", "rg"],
-  prompt: "Fetch <urls>, extract the price field from each, write a CSV to /scoops/scraper/out.csv."
-})
+scoop_scoop({ name: "scraper", visiblePaths: [], writablePaths: ["/scoops/scraper/"],
+  allowedCommands: ["curl", "jq", "rg"], prompt: "Fetch <urls> → CSV at /scoops/scraper/out.csv" })
 
-# Mount-only scoop. Sees just the DA mount, can write back to it.
-# Under shared-readonly, mounts stay readable even with visiblePaths: [].
-# Under private, name the mount in writablePaths (or visiblePaths) or it is hidden.
-scoop_scoop({
-  name: "da-editor",
-  writablePaths: ["/mnt/da/", "/scoops/da-editor/"],
-  prompt: "Edit /mnt/da/index.html to ..."
-})
+scoop_scoop({ name: "da-editor", writablePaths: ["/mnt/da/", "/scoops/da-editor/"],
+  prompt: "Edit /mnt/da/index.html …" })
 ```
 
-### Don't
+### `background_after`
 
-- Don't widen `writablePaths` "just in case." A scoop with surprise write access can clobber files outside its task — drop and re-spawn with a tighter scope is cheaper than recovering from that.
-- Don't narrow `allowedCommands` to "look secure" if you don't know which commands the scoop will need. The agent will hit a wall mid-task and either lie ("I'll skip that step") or spam tool errors.
-- Don't forget the `writablePaths`-also-readable rule. `visiblePaths: []` alone does not produce a blind sandbox.
-
-### `background_after` — bounding a scoop's slow commands
-
-`scoop_scoop({ background_after: <seconds> })` sets how long that scoop's `bash`
-tool waits for a command before detaching it and continuing the turn (default
-600). This is a resilience knob, not a sandbox one: a scoop's turn cannot be
-cancelled by anyone, so a command that never returns would hang the scoop (and,
-for a blocking `agent` call, its caller) indefinitely. When a detached command
-finishes, that scoop receives a `Background Command` lick with the exit code, a
-preview, and the path to the full output.
-
-```
-# A scoop whose commands must never stall it for more than a minute.
-scoop_scoop({ name: "flaky-net", background_after: 60, allowedCommands: ["curl", "jq"], prompt: "..." })
-```
-
-The scoop can also override the budget per call (`bash({ command, background_after, timeout })`). Each run is a real pid: `ps` lists a detached job and `kill <pid>` stops it, so `timeout` is a kill rather than just a detach.
+`scoop_scoop({ background_after: <s> })` — detach slow commands (default 600). Per-call override: `bash({ command, background_after, timeout })`. Detached jobs have real pids (`ps`, `kill`).
 
 ### Filesystem work limits
 
-Scoop shell commands that use the upstream limits stop at 100,000 traversal entries,
-256 levels, 32 MiB input, or 64 MiB of tracked live buffers. Split large trees or
-inputs across calls when a command reports a limit. Environment variables cannot
-raise these limits. They are not an OPFS quota and do not cover custom `tar`,
-`unzip`, JavaScript, Python, Git, or browser command implementations. Existing
-`timeout` and `background_after` controls still apply independently.
+Upstream limits: 100k traversal entries, 256 levels, 32 MiB input, 64 MiB live buffers. Split large trees. Not OPFS quota; doesn't cover custom `tar`/`unzip`/JS/Python/Git/browser. Independent of `timeout`/`background_after`.
 
-## Parallel orchestration: `scoop_mute` / `scoop_unmute` / `scoop_wait`
+## Parallel orchestration
 
-By default, every non-ephemeral scoop completion fires a `scoop-notify` event that wakes the cone for a fresh turn. Fanning out N scoops in parallel produces N extra cone turns whose only job is to acknowledge "scoop X finished" — expensive in tokens, disruptive to orchestration.
+Default: each scoop completion → `scoop-notify` → cone turn. N parallel scoops = N wasted turns.
 
-These three cone-only tools collapse the fan-out into a single follow-up turn:
+- **`scoop_mute({ scoop_names })`** — stash completions to `/shared/scoop-notifications/*.md`; no cone turn.
+- **`scoop_unmute({ scoop_names })`** — resume + return stashed summaries inline.
+- **`scoop_wait({ scoop_names, timeout_ms? })`** — non-blocking wait; `scoop-wait` lick when all done or timeout. Implicit mute during wait. `timeout_ms: 0` = next tick. Omit = indefinite. Pre-existing mute survives.
 
-- **`scoop_mute({ scoop_names })`** — suspends `scoop-notify` for the listed scoops. Completions arriving while muted are stashed (full response persisted to `/shared/scoop-notifications/*.md`); they do NOT trigger a cone turn.
-- **`scoop_unmute({ scoop_names })`** — resumes notifications AND returns every stashed completion inline as the tool's result. The cone reads the summaries in the current turn instead of one extra turn per scoop.
-- **`scoop_wait({ scoop_names, timeout_ms? })`** — schedules a NON-BLOCKING wait. Returns immediately so the cone can keep working; when every listed scoop completes (or the timeout fires) the orchestrator delivers a single `scoop-wait` channel lick with all captured summaries. Target scoops are implicitly muted for the wait's duration so individual `scoop-notify` events don't pre-empt the eventual lick. `timeout_ms: 0` fires on the next tick with whatever is already done. Omit `timeout_ms` to wait indefinitely. Pre-existing `scoop_mute` state survives the wait.
+> Scoop names resolve via `list_scoops`. Cross-cone scoops need `cross_cone: true` or error (#2360). Leading cone sees `[INHERITED]`/`[FOREIGN: <cone>]`. Cross-cone `feed_scoop` notifies owning cone — use `scoop_wait({ cross_cone: true })` for results.
 
-### When to use which
-
-> Every scoop name you pass to `feed_scoop`, `drop_scoop`, `scoop_mute`, `scoop_unmute` or `scoop_wait` is resolved against what `list_scoops` shows you. Another cone's identically named scoop is never matched by a bare name; the call errors instead (#2360).
->
-> If you are the LEADING cone, `list_scoops` also shows scoops you do not own, tagged `[INHERITED]` (their owning cone is gone) or `[FOREIGN: <cone>]` (another cone owns them). You can feed, wait on, mute and drop those — but only by passing `cross_cone: true` in the same call. Omitting it is an error, not a no-op, so you never touch another cone's work by accident. Two things to know before you do: a cross-cone `feed_scoop` sends its completion notice to the scoop's OWN owner, so use `scoop_wait ({ …, cross_cone: true })` if you need the result yourself; and a batch call refuses the whole batch when any listed scoop needs the flag.
-
-- **Fan-out + synthesis** (your next useful step depends on all scoops) → `scoop_wait`.
-- **Background work you'll check later** → `scoop_mute` now, `scoop_unmute` when you want the summaries.
-- **Single delegation, no parallelism** → don't mute. Default `scoop-notify` is fine.
+- Fan-out + synthesis → `scoop_wait`.
+- Background, check later → `scoop_mute` then `scoop_unmute`.
+- Single delegation → default notify is fine.
 
 ### Examples
 
 ```
-# Fan-out + synthesize:
 feed_scoop({ scoop_name: "writer-a", prompt: "Draft intro" })
 feed_scoop({ scoop_name: "writer-b", prompt: "Draft outro" })
 scoop_wait({ scoop_names: ["writer-a", "writer-b"], timeout_ms: 600000 })
-# Returns immediately. Cone keeps working. When both finish (or 10 min), a single
-# `scoop-wait` lick wakes the cone with both summaries; the next turn synthesizes.
+# Non-blocking. Cone keeps working. When both finish (or 10 min), one
+# scoop-wait lick wakes cone with both summaries.
 
-# Background, poll non-blockingly:
 scoop_mute({ scoop_names: ["scraper"] })
-feed_scoop({ scoop_name: "scraper", prompt: "Collect URLs from the sitemap" })
-# ... do other work ...
+feed_scoop({ scoop_name: "scraper", prompt: "Collect URLs from sitemap" })
+# ... other work ...
 scoop_unmute({ scoop_names: ["scraper"] })
-# Tool result has the stashed summary or "No stashed completions".
+# Tool result has stashed summary or "No stashed completions".
 ```
 
-### Liveness: a quiet fan-out is not a finished fan-out
+### Liveness
 
-"Files look stable and the scoops are still processing" does NOT mean the work
-is done or progressing. A common stall mode: one or more scoops are blocked on
-a pending approval (`sudo_request`) that never reached you, and the whole
-fan-out sits idle while you wait for a `scoop-wait` lick that can't arrive.
+Quiet fan-out ≠ done. Check `list_sudo_requests` for pending approvals. Complete only when all scoops report via `scoop-wait` or `scoop_unmute`. On deny, pass `reason` to `lick_dismiss`.
 
-When a fan-out goes quiet — no completions, no file changes, no progress
-messages — run `list_sudo_requests` before concluding anything. Resolve or
-deny each pending request, then keep waiting. Only treat a fan-out as
-complete when every scoop has actually reported completion (via `scoop_wait`
-lick or `scoop_unmute` summaries), not because output files stopped changing.
+Full responses: `/shared/scoop-notifications/<timestamp>-<folder>-<id>.md` (200 most recent). Summary truncated at 20k chars; read VFS path for full output. Unknown scoop names reported but don't abort. Dropping/re-registering muted scoop is safe — waiters resolve `timedOut: true`, mute cleared.
 
-When you **deny** one, pass `reason` to `lick_dismiss`. The scoop sees the
-subject of its own request and your verdict; without a reason it cannot tell a
-refusal from a misunderstanding, so it retries the same thing or invents a
-workaround. Say what would make it acceptable, if anything would.
+## Cost
 
-### Notes
+`cost` — spend for cone + live scoops. Table labels each row's source. `--json` → `{"budget": <window|null>, "scoops": [...]}` — read `.scoops`. Model column (JSON `model`) is the model that unit runs now (provider-qualified pin), not whichever took most turns. JSON `models` lists each distinct model once.
 
-- Full response is always persisted to `/shared/scoop-notifications/<timestamp>-<folder>-<id>.md` (bounded to the 200 most recent). The summary string in the tool result is truncated at 20 000 characters; read the VFS path when you need the full output.
-- Unknown scoop names are reported in the result but do not abort the call.
-- Dropping or re-registering a muted scoop is safe: `unregisterScoop` releases waiters (resolving as `timedOut: true`) and clears mute/pending state.
+On rolling-allowance providers, `cost` leads with percent USED and reset time — that number, not dollar total, says whether long runs will finish.
 
-## Inspecting delegation cost
+`cost --all` adds dropped scoops from current runtime + frozen sessions in `/sessions/index.json`. Legacy frozen sessions retained with unknown cost, not zero.
 
-Run `cost` to inspect spend for the cone and currently live scoops. The table labels each row's source, and `--json` returns the same live-only scope for scripts as `{"budget": <window|null>, "scoops": [ ... ]}` — read the rows from `.scoops`. The Model column (JSON `model`) is the model that unit is running now — its provider-qualified pin, the id half of `models`' "Currently using" line (a provider-less legacy pin yields to the latest turn when they differ) — not whichever model took the most turns. JSON `models` lists each distinct model once: a bare id and a region- or version-qualified id of the same model are one entry (a suffixed variant such as `-fast` is not), and the entry for the model in use now keeps that current spelling.
+## Model selection
 
-On a provider billing against a rolling allowance (rather than per token), `cost` leads with that budget: percent USED of the window and when it resets. That number, not the dollar total, is what says whether long runs will finish — the allowance is shared, so it can be most of the way gone before this session has cost a cent.
+**Always run `models` first.** `model` accepts exact id, shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), or `provider:model` form. Bare id resolves against selected provider first, then others; multiple matches → error listing qualified ids. Unresolvable id rejected — never silently falls back. Cross-provider needs `/etc/models` allow.
 
-Use `cost --all` only when you need the historical picture: it adds dropped scoops from the current runtime and frozen sessions recorded in `/sessions/index.json`. Combine it with `--json` for structured historical output. Legacy frozen sessions that predate cost persistence are retained with unknown cost rather than reported as zero.
+Intelligence, speed, cost are independent:
 
-## Model selection for scoops
-
-**Always run `models` to verify available models before specifying one.** Model availability depends on the configured provider and API key. `model` accepts an exact id, a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), or the `provider:model` form `models` prints (`openrouter:openai/gpt-5.6-terra-pro`). A bare id resolves against the selected provider first, then against any other configured provider that offers it; matching several is an error listing the qualified ids. The scoop runs on the provider the model resolved from. An id that cannot be resolved is rejected outright — it never silently falls back to the cone's model. Cross-provider models also need an `/etc/models` allow entry (see [Model access policy](#model-access-policy)).
-
-Use `models --json` to compare. Intelligence, speed, and cost are independent dimensions:
-
-- **Cost-sensitive** (renames, formatting, grep-and-replace) → low-cost models.
-- **Complex** (architecture, multi-file refactors, subtle debugging) → high-intelligence.
-- **Latency-sensitive** (interactive workflows, quick lookups) → high-speed.
-- **Default** → omit the parameter; inherits the cone's model.
+- Cost-sensitive (renames, formatting) → low-cost models.
+- Complex (architecture, multi-file refactors) → high-intelligence.
+- Latency-sensitive (interactive) → high-speed.
+- Default → omit; inherits cone's model.
 
 ```bash
-# 1. Verify available models.
 models
-
-# 2. Create scoops with verified IDs.
-scoop_scoop({ name: "fix-typos", model: "claude-haiku-4-5", prompt: "Fix all typos in /workspace/docs/" })
-scoop_scoop({ name: "architect", model: "claude-opus-4-6", prompt: "Design the new plugin system..." })
+scoop_scoop({ name: "fix-typos", model: "claude-haiku-4-5", prompt: "Fix typos in /workspace/docs/" })
+scoop_scoop({ name: "architect", model: "claude-opus-4-6", prompt: "Design the plugin system…" })
 ```
 
-**Error handling**: scoops retry up to 3 times with exponential backoff for transient errors (rate limits, server errors). Non-retryable errors (invalid model, auth failures) fail immediately and notify the cone, bypassing any `scoop_mute` settings.
+Scoops retry up to 3× with exponential backoff for transient errors (rate limits, 5xx). Non-retryable (invalid model, auth) fail immediately, bypassing `scoop_mute`.
 
 ## Browser tabs
 
-Browser-tab handling rules (track your IDs, never close tabs you didn't open, handle "tab not found" gracefully) live in `/workspace/skills/playwright-cli/SKILL.md` under "Multi-Agent Tab Behavior". Read that skill before delegating browser work.
+All scoops share one browser. `playwright-cli` locks **per tab**: different tabs parallel, same tab serializes. One hung navigation stalls only its tab.
 
-### Browser-driving scoops: one tab per scoop
+- **One tab per browser-driving scoop.** No fan-out cap for correctness.
+- Two scoops on same tab queue — hand shared-tab work to one scoop.
+- `note: browser bridge contended — …` on stderr = back-off guidance (stagger or own tab). Command already ran; don't re-run. Bridge-wide wait = global ops (`tab-select`, `--foreground`, attach).
+- CPU/VFS/network scoops fan out freely.
 
-All scoops share ONE browser, but `playwright-cli` locks **per tab**: commands
-on different tabs run in parallel, and commands on the same tab serialize. One
-scoop's slow or hung navigation stalls only its own tab. Fan-out across tabs
-genuinely multiplies browser throughput.
-
-- **Give every browser-driving scoop its own tab; no fan-out cap is needed
-  for correctness.** Browser scoops fan out like any other work, and commands
-  on distinct tabs really do run side by side.
-- **Two scoops on the SAME tab still queue.** If a slice needs a shared tab,
-  hand it to one scoop rather than splitting it.
-- A hung navigation stalls only its own tab, so one stuck scoop no longer
-  detaches every sibling's commands past `background_after`.
-- When a command emits `note: browser bridge contended — ...` on stderr (total
-  lock wait + queue depth, and whether the wait was on **this tab** or
-  **bridge-wide**), that is back-off guidance: instruct the scoop to stagger or
-  move to its own tab, never to re-run the command — it already ran; it was
-  just slow to get the lock. A bridge-wide wait points at the few genuinely
-  global operations (`tab-select`, `--foreground`, attaching to a tab), not at
-  your tab.
-- Scoops doing CPU/VFS/network work (curl, file edits, analysis) fan out
-  freely, as before.
+Track your tab IDs. Never close tabs you didn't open. Handle "tab not found" gracefully. Scoop logs/snapshots go to scoop `$TMPDIR/.playwright/`.
 
 ## Model access policy
 
-`/etc/models` decides which `provider:model` combinations you may spawn against. It
-is keyed by the **selected** provider:
+`/etc/models` — keyed by selected provider:
 
 ```ini
-[adobe]              # while `adobe` is selected…
-openrouter:*         # …any openrouter model may be targeted
--adobe:claude-opus-5 # …but never adobe's own Opus 5
+[adobe]
+openrouter:*
+-adobe:claude-opus-5
 ```
 
-- The selected provider's own models are allowed by default — you never list them.
-- Any other provider's model is denied until an entry allows it. This is a spend
-  boundary: the user may keep separate work and personal accounts.
-- `models` and the picker hide only what a `-` entry denies, so a model you can see
-  is not automatically one you may spawn against; the rejection names the exact
-  line to add.
+- Selected provider's own models allowed by default — never list them.
+- Other provider's models denied until an entry allows. Spend boundary for separate accounts.
+- `models` and picker hide only what `-` denies; visible ≠ spawnable. Rejection names exact line to add.
 
-Do not edit `/etc/models` to unblock yourself — the write requires a human approval
-(`Write /etc/models` in `/etc/sudoers`). Ask the user instead, quoting the line.
+Do not edit `/etc/models` to unblock — write requires human approval (`Write /etc/models` in `/etc/sudoers`). Ask user, quoting the line.

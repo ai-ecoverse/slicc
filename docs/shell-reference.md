@@ -1432,7 +1432,7 @@ Session files live under a per-unit session root: `/.playwright/` for the cone a
 - `<root>/screenshots/` — saved screenshots
 - `<root>/storage-state.json` — default `state-save` output when no filename is given
 
-Use the skill doc at `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md` for the full command list and operating guidance.
+Use `playwright-cli --help` and `playwright-cli <subcommand> --help` for the full command list and operating guidance. (The former bundled playwright-cli skill was removed from the default VFS; the shell command remains.)
 
 ---
 

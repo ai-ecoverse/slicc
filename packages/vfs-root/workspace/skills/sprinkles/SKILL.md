@@ -13,88 +13,50 @@ allowed-tools: bash, read_file, write_file, edit
 
 # Sprinkles
 
-`.shtml` files in `/shared/sprinkles/` become interactive UI panels. Use them for dashboards, forms, and visualizations that persist alongside the chat.
+`.shtml` in `/shared/sprinkles/` → interactive UI panels.
 
 ## Two rendering modes
 
-- **Fragment mode** (default): plain HTML fragments injected into the sidebar. Do NOT use `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, or custom CSS — use the built-in `.sprinkle-*` classes. Scripts get a `slicc` bridge object automatically.
-- **Full-document mode**: complete HTML documents (starting with `<!DOCTYPE html>` or `<html>`) render inside sandboxed iframes. Use this for complex layouts with custom CSS, sidebars, split panes, modals, or canvas/SVG visualizations. The bridge script is auto-injected — `window.slicc` and `window.bridge` are available. The parent page's S2 theme tokens are injected automatically. The iframe sandbox grants `allow-popups`, so a real click handler can `window.open(url, name, 'popup=yes,width=1280,height=800')` and get a sized window handle back (a sized popup is the only way to open a fixed-size, dpr-preserving capture window); it does NOT grant top navigation, so the sprinkle cannot replace the host page.
+- **Fragment** (default): HTML fragments in sidebar. No `<!DOCTYPE>`, `<html>`, custom CSS — use `.sprinkle-*` classes. `slicc` bridge auto-injected.
+- **Full-document**: `<!DOCTYPE html>` or `<html>` → sandboxed iframe. Custom CSS, layouts, canvas/SVG. Bridge + S2 tokens injected. Sandbox: `allow-popups` (sized popup via `window.open(url, name, 'popup=yes,width=1280,height=800')`); no top navigation.
 
-Pick full-document mode when you need custom CSS beyond `.sprinkle-*` classes, complex layouts (sidebar + main, split panes, tabs), or interactive canvas/SVG.
+Pick full-document for custom CSS, complex layouts, canvas/SVG.
 
 ## Light & dark mode
 
-Theming is **automatic**. The parent injects its S2 tokens into every sprinkle and toggles a `.theme-light` class on the sprinkle root — the iframe's `<html>` in full-document mode, or the outermost container injected into the sidebar in fragment mode — whenever the user flips the parent theme. All `var(--s2-*)` tokens swap in lockstep. **Never hard-code colors for one theme.**
-
-- Use S2 tokens (`var(--s2-content-default)`, `var(--s2-bg-layer-2)`, etc.) for everything — see `style-guide.md` for the full reference.
-- For one-off colors not covered by an S2 token, use CSS `light-dark(<light>, <dark>)` and set `color-scheme: light dark` on an ancestor (the root in full-document mode, the outermost container in fragment mode). `light-dark()` returns the dark value only when `color-scheme` is set. This intentionally follows the user's OS `color-scheme` preference for one-off custom colors; S2 tokens still track the parent app's class-based theme toggle in lockstep.
-- **Do NOT use `@media (prefers-color-scheme: ...)`** to swap colors that should mirror the parent app's theme. The parent's theme toggle is a class on the sprinkle root, not the OS preference, so media queries desync from the actual app theme. Use S2 tokens (class-driven) or `light-dark()` (OS-driven, for one-off custom colors only) instead.
+Automatic. Parent injects S2 tokens + toggles `.theme-light` on sprinkle root. Use `var(--s2-*)` tokens — see `style-guide.md`. One-off colors: `light-dark(<light>, <dark>)` + `color-scheme: light dark` on ancestor. **No `@media (prefers-color-scheme)`** for app-theme colors.
 
 ## Layout & viewport
 
-Sprinkles open in **one of four viewport contexts**, and you must design for the narrowest:
+| Float                | Viewport                     | Multi-column? |
+| -------------------- | ---------------------------- | ------------- |
+| Desktop sidebar      | ≈360px rail                  | No            |
+| Desktop pop-out      | Full window                  | Yes           |
+| iOS / Sliccstart     | Full-width, single-column UX | No            |
+| Extension side panel | ≈360px fixed                 | No            |
 
-| Float                            | Default viewport                       | Multi-column safe?      |
-| -------------------------------- | -------------------------------------- | ----------------------- |
-| Desktop (CLI / Electron) sidebar | Narrow rail (≈ 360 px)                 | No — single column only |
-| Desktop full-screen pop-out      | Full window                            | Yes                     |
-| iOS / Sliccstart app frame       | Full-width but always single-column UX | No                      |
-| Chrome extension side panel      | Narrow (≈ 360 px, fixed by Chrome)     | No                      |
+**Default single-column.** Multi-column only useful full-screen on desktop. If needed: full-document mode + `@media (max-width: 600px)` collapse + tell user to pop out. Prefer vertical `.sprinkle-card` stack over grids.
 
-**Default to a single-column layout.** Multi-column layouts (sidebar + main, split panes, three-up grids) only render usefully when the user explicitly pops the sprinkle to full-screen on desktop. They look broken in the rail and on iOS.
-
-If you genuinely need multi-column UI, do all of the following:
-
-1. Build it in **full-document mode** so you can use grid / flex / media queries cleanly.
-2. Use `@media (max-width: 600px)` (or similar) to collapse to single column at narrow widths so the sidebar/iOS view still works.
-3. Tell the user in your reply that this sprinkle is "best viewed full-screen — pop it out from the rail header."
-
-For dashboards with many widgets, prefer a vertical stack of `.sprinkle-card` blocks over a grid. The card stack is responsive by default and looks good in both rail and full-screen.
-
-## Arranging panels with `layout`
-
-The `layout` shell command arranges panels, independent of what's inside each one.
-Every panel is the same kind of thing: chat, each tool panel, and each sprinkle.
+## `layout` command
 
 ```bash
-layout list                         # shipped presets (there is one: the default)
-layout set <preset>                 # reset to a shipped arrangement
-layout save <name>                  # save the CURRENT arrangement as JSON
-layout load <name>                  # load a saved layout or the shipped default
-layout open <surfaceId> <zone>      # place a panel (zone: top|left|middle|right|bottom)
-layout move <surfaceId> <zone>      # relocate a placed panel
-layout close <surfaceId>            # remove it (chat is pinned; it can move, never close)
-layout size <surfaceId> [--width <px|%>] [--height <px|%>]   # exact, pixel-perfect
-layout chat <zone>                  # move the chat panel
-layout reset                        # back to the default
+layout list / layout set <preset> / layout save <name> / layout load <name>
+layout open <surfaceId> <zone>    # top|left|middle|right|bottom
+layout move <surfaceId> <zone> / layout close <surfaceId>
+layout size <surfaceId> [--width <px|%>] [--height <px|%>]
+layout chat <zone> / layout reset
 ```
 
-SLICC ships exactly ONE arrangement (the default). To give a skill its own layout,
-arrange the panels and `layout save <name>` — do not expect named presets beyond the
-default to exist.
+One shipped preset (default). `layout save` captures current arrangement. Zones = Java BorderLayout inside fixed chrome (`top` below scoop/budget strip; `left`/`right` inboard of rails). Two panels in same zone stack.
 
-Opening a sprinkle auto-places it, so `layout open` is only for overriding that.
-`layout size` is the programmatic counterpart to a user dragging a divider — use it
-when you want an exact size rather than a proportion.
-
-The five zones are `top`, `left`, `center`, `right`, `bottom` — Java `BorderLayout`.
-They sit inside the fixed chrome, so `top` is below the scoop/budget strip and
-`left`/`right` are inboard of the rails. A zone holds several panels at once, so
-placing two sprinkles in `left` puts them both there (stacked by default).
-
-### Writing a layout JSON by hand
-
-A layout document has two sections, and **you only ever write `zones`**:
+Hand-write JSON — only author `zones`:
 
 ```jsonc
 {
   "version": 1,
   "id": "my-layout",
   "base": {
-    // DO NOT AUTHOR. The fixed chrome — scoop/budget strip, both rails. Copy it
-    // verbatim from an existing document, or omit it to keep the shipped chrome.
-    "docks": [...],
-    // YOURS. Which panels go in which of the five zones.
+    "docks": [...],  // DO NOT AUTHOR — fixed chrome; copy verbatim or omit
     "zones": {
       "top": ["sprinkle:status-panel"],
       "left": ["chat"],
@@ -105,197 +67,91 @@ A layout document has two sections, and **you only ever write `zones`**:
 }
 ```
 
-A "status bar across the top, below the SLICC bar, between the rails" is
-`zones.top` — NOT a second `docks` entry with `edge: "top"`. `docks` is the app's
-own chrome; adding to it puts your panel in the same strip as the scoop switcher and
-the price counter. Reach for `zones` every time.
+Status bar across top = `zones.top`, NOT a `docks` entry. Prefer `layout save` over hand-editing. User drag persists across reloads — don't re-issue to "restore". ≤700px collapses to chat alone.
 
-Prefer `layout save` over hand-writing JSON: arrange the panels with `layout
-open`/`move`/`size`, then save. Hand-editing is for shipping a layout with a skill.
+## Panel types
 
-The user can also rearrange by hand — there is no edit mode to enter. Hovering a
-panel reveals a grip in its top-left corner; grabbing it shows the five zones as a
-compass. Two kinds of seam drag to resize: between panels inside a zone, and
-between the zones themselves. Their arrangement
-persists across reloads, so do NOT re-issue `layout` commands to "restore" a layout
-you set earlier — you would be overwriting what they did.
+| Kind     | Who   | How                                        |
+| -------- | ----- | ------------------------------------------ |
+| Sprinkle | you   | `.shtml` + `sprinkle open`                 |
+| Built-in | SLICC | chat, rails, files/terminal/memory/monitor |
+| Layout   | you   | JSON + `layout save`/`load`                |
 
-On a narrow viewport (extension side panel, iOS, ≤700px) multi-panel arrangements
-collapse to chat alone, so still design each sprinkle single-column-safe per the
-table above.
-
-## Are panels always sprinkles?
-
-No — but a sprinkle is the only kind YOU can create, and that is the intended path.
-
-| Kind            | Who makes it     | How                                                            |
-| --------------- | ---------------- | -------------------------------------------------------------- |
-| Sprinkle panel  | you              | write `.shtml`, `sprinkle open <name>` — this section          |
-| Built-in panel  | ships with SLICC | chat, both rails, the top strip, files/terminal/memory/monitor |
-| Layout document | you              | JSON naming which panels go where; `layout save`/`load`        |
-
-So: to add UI, write a sprinkle. To rearrange existing UI, write a layout document
-or issue `layout` commands. There is no third mechanism, and no need for one — a
-sprinkle is a full HTML document with a bridge, which covers what a custom panel
-would.
-
-A sprinkle IS tied to a scoop, and that is deliberate: whoever creates one owns it
-for its lifetime and handles its lick events (see "Handling lick events" below).
-A layout document is not tied to anything — it only names panel ids.
-
-### Shipping UI with a skill
-
-A layout document saved under `/workspace/layouts/<name>.json` can be loaded with
-`layout load <name>`, so a skill can ship both its sprinkles and the arrangement
-that presents them. Write the sprinkles, open them, arrange, then `layout save
-<name>` to capture what is on screen.
+Sprinkle tied to scoop (lifetime + licks). Layout is not. Ship layouts at `/workspace/layouts/<name>.json`.
 
 ## Creating a sprinkle
 
-1. `read_file /workspace/skills/sprinkles/style-guide.md` — **always read first** before writing any sprinkle.
-2. **Pick a rail icon** that matches the sprinkle's purpose (see "Sprinkle icon" below). Every new sprinkle MUST declare an icon — the generic Sparkles default is reserved for sprinkles that genuinely have no thematic anchor.
-3. `write_file` to `/shared/sprinkles/<name>/<name>.shtml` (follow the style guide templates).
-4. `bash` → `sprinkle open <name>`.
-5. **CRITICAL: do NOT finish or send a completion message.** You own this sprinkle for its entire lifetime. The cone will send you follow-up instructions (modifications, lick events) via `feed_scoop`. If you finish, you lose your context and cannot handle future work on this sprinkle.
+1. `read_file /workspace/skills/sprinkles/style-guide.md` — **always first**.
+2. Pick rail icon (see below).
+3. `write_file` → `/shared/sprinkles/<name>/<name>.shtml`.
+4. `sprinkle open <name>`.
+5. **Do NOT finish** — you own it for lifetime; `feed_scoop` delivers follow-ups.
 
-### Where sprinkles are discovered
+Discovery: `sprinkle list` scans `/shared`, `/workspace`, `/scoops`, `/home` ≤6 levels deep; skips `node_modules`, `dist`, `build`, `coverage`, dot-dirs. `/tmp`, `/mnt`, `/etc` not listed. `open /path/file.shtml` opens any path.
 
-`sprinkle list` and the rail only see `.shtml` files under `/shared`,
-`/workspace`, `/scoops` and `/home`, no more than six directory levels deep, and
-never inside `node_modules`, `dist`, `build`, `coverage`, or any dot-directory.
-A `.shtml` written to `/tmp`, `/mnt`, `/etc` or a deeply nested build folder
-will not be listed — write to `/shared/sprinkles/<name>/<name>.shtml`. (`open
-/path/to/file.shtml` still opens any path directly.)
+### Updating / lick events
 
-### Updating a sprinkle (when you receive follow-up instructions)
-
-1. Edit `/shared/sprinkles/<name>/<name>.shtml` with the requested changes.
-2. Reload: `sprinkle reload <name>` — keeps the panel in place and sized. Do not `close`+`open` unless the sprinkle is actually closed; `open` on an already-open sprinkle is a no-op.
-3. Do NOT finish — stay ready for more instructions.
-
-### Handling lick events (when the cone forwards a user interaction)
-
-The cone will send you a message with the lick action and your sprinkle name. Only modify YOUR sprinkle — the one matching your scoop name. Process the action and push updates:
-
-- `bash` → `sprinkle send <name> '{"key":"value"}'` to push data to the sprinkle's `slicc.on('update', ...)` handler.
-- Or edit the `.shtml` file and reload if the UI structure needs to change.
-- Do NOT finish — stay ready for more events.
+Edit `.shtml` → `sprinkle reload <name>` (not close+open unless closed). On lick: `sprinkle send <name> '{"key":"value"}'` or edit+reload. Don't finish.
 
 ## Sprinkle icon
 
-Each sprinkle gets its own glyph in the rail so users can tell them apart at a glance. Declare it in the `.shtml`. Three formats, in order of preference:
-
-**1. Lucide icon name** (preferred — covers ~1500 icons from [lucide.dev/icons](https://lucide.dev/icons)):
+Each sprinkle gets a rail glyph. Declare in `<head>` (full-doc) or first element (fragment):
 
 ```html
 <link rel="icon" href="music" />
-```
-
-Use the kebab-case name from lucide.dev. Common picks: `music`, `code`, `terminal`, `chart-bar`, `chart-line`, `calendar`, `calendar-clock`, `clock`, `image`, `file-text`, `globe`, `book-open`, `compass`, `gauge`, `wrench`, `palette`, `bug`, `flask-conical`, `database`, `cloud`, `package`, `shopping-cart`, `dollar-sign`, `mail`, `message-square`, `bell`, `users`, `user`, `settings`, `sparkles`.
-
-**2. SVG file in the sprinkle's directory** (when no Lucide icon fits):
-
-```html
+<!-- Lucide name (preferred) -->
 <link rel="icon" href="/shared/sprinkles/<name>/icon.svg" />
+<!-- SVG file, viewBox 0 0 24 24 -->
+<link rel="icon" href="data:image/svg+xml;utf8,<svg …>" />
+<!-- inline; single-quote href -->
 ```
 
-Author the SVG with `viewBox="0 0 24 24"`. Keep paths simple — the rail renders at 16×16. **Note**: only Lucide icons inherit `currentColor` from the rail; author-supplied SVGs render through `<img>` (script-disabled), so set explicit colors in the SVG itself.
+Lucide only inherit `currentColor`; custom SVGs via `<img>` — set explicit colors. Fallback: Sparkles glyph.
 
-**3. Inline SVG or data URL** (one-off icons, no extra file):
-
-```html
-<link
-  rel="icon"
-  href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="..."/></svg>'
-/>
-```
-
-**Where to put it**: inside `<head>` for full-document mode, or as the very first element in fragment mode.
-
-**Quoting tip**: when the `href` value contains quotes (inline-SVG data URLs do), wrap the attribute in single quotes: `href='data:image/svg+xml;utf8,<svg xmlns="...">...'`.
-
-**Fallback**: if the icon spec is missing or unresolvable, the rail uses a generic Sparkles glyph.
+Common Lucide picks: `music`, `code`, `terminal`, `chart-bar`, `chart-line`, `calendar`, `calendar-clock`, `clock`, `image`, `file-text`, `globe`, `book-open`, `compass`, `gauge`, `wrench`, `palette`, `bug`, `flask-conical`, `database`, `cloud`, `package`, `shopping-cart`, `dollar-sign`, `mail`, `message-square`, `bell`, `users`, `user`, `settings`, `sparkles`, `bike`.
 
 ## Cone orchestration rules
 
-These are the rules the cone follows when sprinkles are involved. They are absolute.
-
-### Rule 1: One scoop per sprinkle, named identically
-
-Scoop name MUST match sprinkle name. Sprinkle `giro-winners` = scoop `giro-winners`.
-
-### Rule 2: Cone never touches sprinkle files or commands
-
-The cone MUST NOT: write/edit `.shtml` files, run `sprinkle open / close / send`, or handle lick events directly. ALL sprinkle work goes through scoops via `feed_scoop`. **Never handle a lick in the cone.**
-
-### Rule 3: Creating sprinkles
-
-Create a scoop, then feed it a complete, self-contained brief:
+1. **Scoop name = sprinkle name.** `giro-winners` sprinkle → `giro-winners` scoop.
+2. **Cone never touches** `.shtml`, `sprinkle open/close/send`, or licks. All via `feed_scoop`. **Never handle a lick in the cone.**
+3. **Create** — `scoop_scoop` + self-contained brief:
 
 ```
 scoop_scoop("giro-winners")
-feed_scoop("giro-winners", "You own the sprinkle 'giro-winners'. Your job:
-1. Run: read_file /workspace/skills/sprinkles/style-guide.md
-2. Research the last 3 Giro d'Italia winners
-3. Pick a rail icon — for cycling, use <link rel=\"icon\" href=\"bike\" /> in <head>. See the sprinkles SKILL.md \"Sprinkle icon\" section for the full list.
-4. Write the sprinkle to /shared/sprinkles/giro-winners/giro-winners.shtml
-5. Run: sprinkle open giro-winners
-6. IMPORTANT: After opening the sprinkle, do NOT finish. Stay ready — you will receive follow-up instructions and lick events for this sprinkle via feed_scoop. Do not send a completion message.")
+feed_scoop("giro-winners", "You own sprinkle 'giro-winners'.
+1. read_file /workspace/skills/sprinkles/style-guide.md
+2. Research last 3 Giro d'Italia winners
+3. Rail icon: <link rel=\"icon\" href=\"bike\" /> in <head>
+4. write_file /shared/sprinkles/giro-winners/giro-winners.shtml
+5. sprinkle open giro-winners
+6. Do NOT finish — stay ready for follow-ups and lick events via feed_scoop.")
 ```
 
-### Rule 4: Modifying sprinkles
-
-Feed the EXISTING scoop that owns it. Do NOT create a new scoop:
+4. **Modify** — feed **existing** scoop, don't create new:
 
 ```
-feed_scoop("giro-winners", "Modify YOUR sprinkle 'giro-winners' at /shared/sprinkles/giro-winners/giro-winners.shtml:
-Add an 'Add Previous Year' button with onclick=\"slicc.lick({action: 'add-year'})\"
-Then reload: sprinkle reload giro-winners
-Stay ready for more work.")
+feed_scoop("giro-winners", "Modify YOUR sprinkle at /shared/sprinkles/giro-winners/giro-winners.shtml:
+Add 'Add Previous Year' button onclick=\"slicc.lick({action:'add-year'})\"
+sprinkle reload giro-winners. Stay ready.")
 ```
 
-### Rule 5: Lick events
-
-Forward to the owning scoop, never handle yourself:
+5. **Licks** — forward to owning scoop:
 
 ```
-feed_scoop("giro-winners", "Lick event on YOUR sprinkle 'giro-winners' (/shared/sprinkles/giro-winners/giro-winners.shtml):
-Action: 'add-year'
-Look up the next previous year's Giro d'Italia winner and update the sprinkle.
-Use: sprinkle send giro-winners '<json>' to push data, or edit the .shtml and reload.
-Stay ready for more lick events.")
+feed_scoop("giro-winners", "Lick on YOUR sprinkle: action 'add-year'.
+Look up next previous year's winner. sprinkle send or edit+reload. Stay ready.")
 ```
 
-## Cheap interactions via `agent`
-
-When a sprinkle button needs to do real work but the owning scoop should NOT be pulled into a turn (it's busy, or the work is purely transactional), route the lick handler through `agent` instead.
-
-Pattern:
-
-1. User clicks → `slicc.lick({action: 'lookup', data: {q: 'foo'}})`.
-2. Cone sees the lick, forwards to the owning scoop with `feed_scoop`.
-3. The scoop's reply runs `agent` against a tight allow-list and writes the result back via `sprinkle send`.
+## Bash commands
 
 ```bash
-# Inside the owning scoop's reply to a lick:
-result=$(agent "$TMPDIR" "curl,jq" "Look up '$Q' in <api>, return the price.")
-sprinkle send giro-winners "$(jq -n --arg r "$result" '{result:$r}')"
+sprinkle list [--runtime <id>]
+sprinkle open <name> / sprinkle close <name>
+sprinkle send <name> '<json>'              # broadcast all instances; exits non-zero if none
+sprinkle send <name> '<json>' --runtime <id>  # one runtime (from `host`; `leader` = local)
+sprinkle chat '<html>'                     # inline chat prompt; blocks until click; JSON result
+open /path/to/file.shtml
 ```
-
-Why this matters: a busy scoop that owns a sprinkle can shell to `agent` to handle a click without growing its own conversation. `agent` is **handoff-free** — the ephemeral sub-scoop doesn't notify the cone or the owning scoop on completion. See `/workspace/skills/delegation/SKILL.md` for the full `agent` reference.
-
-This is the difference between "every click adds a turn to your owning scoop" (expensive, drifts) and "every click is a clean transaction" (predictable, cheap).
-
-## Managing sprinkles via bash
-
-- `sprinkle list` — available sprinkles, plus one `instance:` line per runtime rendering each (leader + reporting followers). `--runtime <id>` narrows it.
-- `sprinkle open <name>` — show a sprinkle in the sidebar.
-- `sprinkle close <name>` — remove it.
-- `sprinkle send <name> '<json>'` — push data (single-quote the JSON!). **Broadcasts** to every open instance, leader and followers. Prints the instances reached; exits non-zero when it reached none, so a vanished push is visible.
-- `sprinkle send <name> '<json>' --runtime <id>` — push to ONE runtime (ids from `host`; `leader` is the local one). Use it to answer a `request-load` from a specific follower panel.
-- Unknown flags are rejected, so a probe that exits 0 means the flag was honoured.
-- `sprinkle chat '<html>'` — show inline HTML in the chat (for quick confirmations / choices). Blocks until the user clicks; returns the lick result as JSON. Use when a tool needs user input mid-execution.
-- `open /path/to/file.shtml` — also opens as a sprinkle.
 
 ```bash
 sprinkle chat '<div class="sprinkle-action-card">
@@ -307,112 +163,74 @@ sprinkle chat '<div class="sprinkle-action-card">
 </div>'
 ```
 
-## Bridge API
+Unknown flags rejected — exit 0 on probe means flag honoured. `sprinkle send` broadcasts to every open instance (leader + followers); `--runtime <id>` targets one follower `request-load` answer.
 
-Available as `slicc` in `<script>` tags and `onclick` attributes:
+## Bridge API (`slicc`)
 
-- `slicc.lick(event)` — send a lick event to the cone (cone routes to the right scoop). Accepts a string shortcut (`slicc.lick('cancel')` → `{ action: 'cancel' }`) or `{ action, data?, target? }`. `target` is a cone/scoop name or folder alias and overrides the sprinkle's configured route for that lick, on the leader and on followers alike. Without it, a click on any copy of the panel goes to the cone that opened it. See payload-shape note below.
-- `slicc.on('update', function(data) {...})` — receive data sent via `sprinkle send`.
+- `slicc.lick(event)` — send lick to cone (routes to scoop). String shortcut: `slicc.lick('cancel')` → `{action:'cancel'}`. `target` overrides sprinkle route (cone/scoop name or folder alias); without it, click goes to cone that opened the panel.
 
-> **Payload shape:** the cone reads `event.data` as the payload — top-level extras outside `action`, `data`, and `target` are silently dropped by the sprinkle bridge. Always use `slicc.lick({ action: 'deploy', data: { env: 'prod' } })`, not `slicc.lick({ action: 'deploy', env: 'prod' })`.
+> **Payload shape:** cone reads `event.data` as payload — top-level extras outside `action`, `data`, `target` silently dropped. Use `slicc.lick({ action:'deploy', data:{ env:'prod' } })`, not `slicc.lick({ action:'deploy', env:'prod' })`.
 
-- `slicc.name` — the sprinkle's name.
-- `slicc.close()` — close the sprinkle.
-- `slicc.minimize()` — collapse the sprinkle panel (rail icon stays visible; user can click to reopen). Does not close or destroy the sprinkle.
-- `slicc.stopCone()` — stop the cone agent.
-- `slicc.selectScoop(target)` — switch the app's view to an already-running scoop or cone (the same thing a switcher-chip click does). `target` is `'scoop:<name>'`, `'cone:<folder>'`, or a bare `'cone'`. Returns `Promise<boolean>`: `true` when the target matched the live roster (including when that unit is already selected); `false` — never thrown — when the string is outside that grammar (a typo, empty, unprefixed name) or nothing matches, so the panel can fall back to emitting a lick. Also `false` while the user is typing in the chat composer (it holds the focus and a non-empty draft): a switch then would readdress or hide their half-written message, so the view stays put — treat it like any other `false`. A click inside your panel never trips this, because the click moves the focus into the panel. Ungated: a panel is agent-authored code in the user's own session. Sprinkle-only — trusted dips do not expose this method.
-- `slicc.selectedScoop()` — read the shell's current selection in that same grammar. Returns `Promise<string | null>`: `'cone'`, `'cone:<folder>'`, or `'scoop:<name>'`, or `null` when nothing is selected or that unit is no longer on the live roster. A read, so it does not switch the view — do not call `selectScoop` just to discover where the shell is (that call succeeds for an already-selected target and switches when the target is someone else). `readDir('/scoops/')` is not a substitute: it lists retired folders and has no liveness. Ungated, sprinkle-only, same as `selectScoop`.
-- `slicc.readFile(path)` — read a VFS file (returns `Promise<string>`).
-- `slicc.writeFile(path, content)` — write text content to a VFS file.
-- `slicc.readDir(path)` — list directory entries (returns `Promise<Array<{name, type}>>`).
-- `slicc.exists(path)` — check if path exists (returns `Promise<boolean>`).
-- `slicc.stat(path)` — get file metadata (returns `Promise<{type, size}>`).
-- `slicc.mkdir(path)` — create a directory (recursive).
-- `slicc.rm(path)` — remove a file.
-- `slicc.screenshot(selector?)` — capture sprinkle DOM as base64 PNG data URL. No argument targets `document.body` (fragment mode: the sprinkle container). The target must have non-zero width AND height; zero-sized elements are rejected, not captured. Works in a hidden tab — you do not need to foreground the sprinkle. Note: the screenshot captures a DOM clone using SVG `foreignObject`. External stylesheets, web fonts, and some computed styles may not be fully reproduced; huge serialised SVGs can fail to rasterise. For best results, use inline styles on elements you intend to screenshot.
-- `slicc.captureScreen()` — capture a screen, window, or browser tab via Chrome's native picker. Takes no arguments. Returns `Promise<{base64: string, width: number, height: number, mimeType: string}>`. On the leader page this opens through the `<slicc-permissions>` Grant prompt first (the Allow click is the user gesture — a sprinkle call arrives after a `postMessage` hop that drops transient activation); the OS picker then appears. The Promise resolves once the user selects a target and the frame is grabbed. Rejects if the user cancels the Grant prompt or the OS picker, or if screen capture is unavailable. Use `slicc.attachImage(shot.base64, 'screenshot.png', shot.mimeType)` to send the result to the agent. Key difference from `screenshot()`: this captures external content (any tab/window/screen), not the sprinkle's own DOM.
+- `slicc.on('update', fn)` — from `sprinkle send`.
+- `slicc.name`, `slicc.close()`, `slicc.minimize()`, `slicc.stopCone()`.
+- `slicc.selectScoop(target)` — switch view to running scoop/cone (switcher-chip equivalent). `'scoop:<name>'`, `'cone:<folder>'`, `'cone'`. `Promise<boolean>`: `true` when matched (including already selected); `false` when outside grammar, no match, or user typing in chat composer (non-empty draft — would hide half-written message). Click in panel never trips this. Ungated, sprinkle-only.
+- `slicc.selectedScoop()` — read current selection same grammar. `Promise<string|null>`. Read-only — don't call `selectScoop` just to discover selection. `readDir('/scoops/')` lists retired folders, not liveness.
+- VFS: `readFile`, `writeFile`, `readDir`, `exists`, `stat`, `mkdir`, `rm`.
+- `slicc.screenshot(selector?)` — base64 PNG data URL. No arg = `document.body` (fragment: sprinkle container). Target needs non-zero width AND height. Works in hidden tab. Captures DOM clone via SVG `foreignObject` — external stylesheets/fonts may not reproduce; huge SVGs can fail. Prefer inline styles on capture targets.
+- `slicc.captureScreen()` — Chrome native picker; `{base64, width, height, mimeType}`. On the leader page opens via `<slicc-permissions>` Grant prompt first (Allow click is the user gesture — `postMessage` drops transient activation), then the OS picker. Rejects on Grant/OS cancel or unavailable. Use `slicc.attachImage(shot.base64, 'screenshot.png', shot.mimeType)` to send to agent. Captures external content (any tab/window/screen), not sprinkle DOM.
 
-### Shell, agent, and jsh globals
+### Shell / agent / jsh globals
 
-The bridge also reaches the **same worker shell** that `.jsh` scripts and `node -e` run in, so a sprinkle can call any supplemental command, any `.jsh` script, or spawn a sub-scoop directly from a button. These mirror the capability bridges reached from `.jsh` via `require('sliccy:<name>')` (documented in `/workspace/skills/skill-authoring/jsh-runtime-extensions.md`). Sprinkle code keeps using the trust-gated `slicc.*` namespace; it does not call `require('sliccy:…')` directly.
+Mirrors `require('sliccy:…')` from jsh (see `jsh-runtime-extensions.md`):
 
-- `slicc.exec(cmd)` — run a shell command in the worker shell. Returns `Promise<{stdout, stderr, exitCode}>`. A non-zero `exitCode` (or `127` when the shell bridge is unavailable) is returned in the result, never thrown. Use `slicc.exec.spawn(argv)` to bypass shell parsing for untrusted args.
-- `slicc.agent(prompt, opts?)` — spawn a one-shot sub-scoop, feed it `prompt`, block until it completes, and resolve with its final message on `stdout`. Returns `Promise<{stdout, exitCode}>`. `opts`: `{cwd?, allowedCommands?, model?, thinking?, readOnly?}`. Sugar over `slicc.exec` building the `agent` command — the same handoff-free delegation as the `agent` shell command. On failure the error text comes back on `stdout` with a non-zero `exitCode`, never thrown.
-- `slicc.fetch(url, init?)` — proxied, secret-injecting fetch (NOT the iframe's CORS-bound native fetch). Resolves to a native `Response` (with `.json()`/`.text()`/`.arrayBuffer()`/`.blob()` and `.ok`/`.status`/`.headers`/`.url`).
-- `slicc.http.client(config)` — higher-level API client over the proxied fetch (`get`/`post`/`put`/`patch`/`delete`). `config`: `{baseUrl?, token?, headers?, retry?, timeoutMs?}`.
-- `slicc.browser.*` — Playwright-style CDP surface (`findTab`, `ensureTab`, `openWindow`, `windowBounds`, `setWindowBounds`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`), mirroring `require('sliccy:browser')` in jsh.
-- `slicc.fetchToFile(url, path)` — download a URL (via the proxied fetch) straight to a VFS file; resolves with the byte count.
-- `slicc.readFileBinary(path)` / `slicc.writeFileBinary(path, bytes)` — binary VFS I/O (parity with `require('fs')` in jsh).
-- `slicc.hid.*` / `slicc.serial.*` / `slicc.usb.*` — stateful device surfaces for WebHID / Web Serial / WebUSB (Chromium-only; absent in the cloud / hosted-leader float). Same opaque handles (`hid1`, `serial1`, `usb1`, …) as the `hid` / `serial` / `usb` shell commands and the `require('sliccy:hid' | 'sliccy:serial' | 'sliccy:usb')` realm modules — discover via `list()` or trigger the OS picker via `request()`. On the leader page `request()` opens through the `<slicc-permissions>` Grant prompt first (the Allow click is the user gesture — a sprinkle or trusted-dip call arrives after a `postMessage` hop that drops transient activation); the OS chooser then appears. For HID, `open(handle)` auto-attaches the input-report stream so every `slicc.hid.on('inputreport', cb)` listener receives `{ handle, reportId, data: Uint8Array }` until `close(handle)` or sprinkle teardown. Use this for keyboard configurators, gamepad dashboards, ESP32 monitor panels — anything that needs a persistent device session across multiple button clicks. The realm bridge in `slicc.exec('node -e …')` resets per call, so push handle ops through `slicc.hid|serial|usb` instead.
+- `slicc.exec(cmd)` → `{stdout, stderr, exitCode}`. `.exec.spawn(argv)`.
+- `slicc.agent(prompt, opts?)` → `{stdout, exitCode}`. `opts`: `cwd`, `allowedCommands`, `model`, `thinking`, `readOnly`.
+- `slicc.fetch(url, init?)` — proxied (not iframe CORS fetch).
+- `slicc.http.client(config)` — `get`/`post`/`put`/`patch`/`delete`.
+- `slicc.browser.*` — `findTab`, `ensureTab`, `openWindow`, `windowBounds`, `setWindowBounds`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`.
+- `slicc.fetchToFile`, `readFileBinary`, `writeFileBinary`.
+- `slicc.hid.*` / `slicc.serial.*` / `slicc.usb.*` — WebHID/Serial/USB (Chromium-only; absent cloud/hosted-leader). Same handles as shell commands (`hid1`, `serial1`, `usb1`). On the leader page `request()` opens via `<slicc-permissions>` Grant prompt first (Allow click is the user gesture — `postMessage` drops transient activation), then the OS chooser. HID `open(handle)` auto-attaches `inputreport` until `close`/teardown. Prefer these over `slicc.exec('node -e …')` (realm bridge resets per call).
 
 ```typescript
-// HID — stateful across the sprinkle's lifetime
-slicc.hid.list(): Promise<HidDeviceInfo[]>
-slicc.hid.request(filters?): Promise<HidDeviceInfo[]>    // Grant prompt → OS chooser
-slicc.hid.open(handle): Promise<void>                    // auto-subscribes inputreport
-slicc.hid.close(handle): Promise<void>
-slicc.hid.sendReport(handle, reportId, data: Uint8Array): Promise<void>
-slicc.hid.on('inputreport', cb): void                    // cb: ({ handle, reportId, data })
-slicc.hid.off('inputreport', cb): void
-
-// Serial — parity list/request/open/close; streaming I/O stays on the realm API.
-slicc.serial.list() / request(filters?) / open(handle, options) / close(handle)
-
-// USB — full transfer surface, so a sprinkle can drive a device itself.
-slicc.usb.list(): Promise<UsbDeviceInfo[]>
-slicc.usb.request(filters?): Promise<UsbDeviceInfo>      // Grant prompt → OS chooser
-slicc.usb.open(handle) / close(handle, opts?) / reset(handle, opts?): Promise<void>
-slicc.usb.selectConfiguration(handle, value): Promise<void>
-slicc.usb.claimInterface(handle, n, opts?) / releaseInterface(handle, n): Promise<void>
-slicc.usb.on('disconnect' | 'claim-lost', cb) / off(...): void
-  // Handles are shared with the `usb` shell command and `require('sliccy:usb')`.
-  // Interface claims are exclusive: a second claim is refused naming the
-  // holder; close/reset refuse while another consumer holds a claim unless
-  // `{ force: true }`. Forced displacement delivers claim-lost then disconnect.
-slicc.usb.clearHalt(handle, 'in' | 'out', endpoint): Promise<void>
-slicc.usb.transferIn(handle, endpoint, length): Promise<{ status, bytes: Uint8Array }>
-slicc.usb.transferOut(handle, endpoint, bytes: Uint8Array): Promise<{ status, bytesWritten }>
-slicc.usb.controlTransferIn(handle, setup, length): Promise<{ status, bytes: Uint8Array }>
-slicc.usb.controlTransferOut(handle, setup, bytes): Promise<{ status, bytesWritten }>
+slicc.hid.list() / request(filters?)  /* Grant → OS chooser */ / open(handle) / close(handle)
+slicc.hid.sendReport(handle, reportId, data: Uint8Array)
+slicc.hid.on('inputreport', cb)  // { handle, reportId, data: Uint8Array }
+slicc.serial.list() / request() / open(handle, opts) / close(handle)
+slicc.usb.list() / request()  /* Grant → OS chooser */ / open(handle) / close(handle, opts?) / reset(handle)
+slicc.usb.claimInterface(handle, n) / releaseInterface(handle, n)
+slicc.usb.transferIn(handle, endpoint, length) / transferOut(handle, endpoint, bytes)
+slicc.usb.controlTransferIn(handle, setup, length) / controlTransferOut(handle, setup, bytes)
 ```
 
-Transfers are on the sprinkle surface, not realm-only, because a `.jsh` cannot
-stream: realm stdout is buffered and delivered when the run completes. Anything
-that reads a device for as long as it stays interesting — a video stream, a
-sensor feed — has to drive the device from the sprinkle and render as it goes.
-
-You hand in and get back real `Uint8Array`s; the base64 the iframe boundary
-needs is handled for you. `UsbDeviceInfo` also carries `configurations`, so an
-interface can be located by class/subclass/protocol without a descriptor read.
+USB interface claims exclusive; `{ force: true }` on close displaces holder via `claim-lost`. Transfers on sprinkle surface (realm stdout buffers until run completes — streaming needs sprinkle-side device drive).
 
 ```html
 <button
-  id="connect"
-  onclick="slicc.hid.request({vendorId:0x320f}).then(d => slicc.hid.open(d[0].handle))"
+  onclick="slicc.exec('git status -s').then(r => slicc.lick({action:'status', data:r.stdout}))"
 >
-  Connect keyboard
-</button>
-<script>
-  slicc.hid.on('inputreport', ({ reportId, data }) => {
-    console.log('report', reportId, [...data].map((b) => b.toString(16)).join(' '));
-  });
-</script>
-```
-
-```html
-<button
-  onclick="slicc.exec('git status -s').then(r => slicc.lick({action: 'status', data: r.stdout}))"
->
-  Refresh status
+  Refresh
 </button>
 ```
 
-> Prefer `slicc.exec`/`slicc.agent` for transactional work that should NOT grow the owning scoop's conversation (see "Cheap interactions via `agent`" above). These run in the same worker shell, so all ~50 supplemental commands and any `.jsh` script are reachable.
+Prefer `slicc.exec`/`slicc.agent` for transactional work. **onclick**: always `slicc`, never `bridge`.
 
-**onclick attributes**: always use `slicc` — e.g. `onclick="slicc.lick({action: 'add-year'})"`. The `slicc` variable is automatically resolved per-sprinkle, so multiple sprinkles won't collide. Do NOT use `bridge` or any other variable name in onclick.
+**CSS**: use `.sprinkle-*` classes only. `read_file style-guide.md` for reference.
 
-**CSS components**: do NOT write custom CSS. Use the built-in `.sprinkle-*` classes: cards, tables, badges, buttons, text fields, progress bars, meters, layout utilities, and more. For inputs use `class="sprinkle-text-field"`, never inline border/padding styles. Run `read_file /workspace/skills/sprinkles/style-guide.md` for the full component reference with markup examples.
+## Cheap interactions via `agent` (detail)
+
+When a sprinkle button needs real work but the owning scoop should NOT be pulled into a turn:
+
+1. User clicks → `slicc.lick({action:'lookup', data:{q:'foo'}})`.
+2. Cone forwards to owning scoop via `feed_scoop`.
+3. Scoop runs `agent` with tight allow-list, writes back via `sprinkle send`.
+
+```bash
+result=$(agent "$TMPDIR" "curl,jq" "Look up '$Q' in <api>, return price.")
+sprinkle send giro-winners "$(jq -n --arg r "$result" '{result:$r}')"
+```
+
+`agent` is handoff-free — ephemeral sub-scoop doesn't notify cone or owning scoop. Difference: every click as owning-scoop turn (expensive, drifts) vs clean transaction (predictable, cheap).
 
 ## Built-in sprinkles
 
-SLICC no longer ships with a catalog of pre-built sprinkles. The only `.shtml` under `/shared/sprinkles/` is `welcome/`, which backs the inline first-run welcome dip — not a panel sprinkle. **Always create sprinkles from scratch** for what the user is asking for, following the "Creating a sprinkle" flow above. Do not assume a built-in sprinkle name exists.
+Only `/shared/sprinkles/welcome/` ships (first-run welcome dip, not a panel sprinkle). **Create from scratch** — do not assume built-in sprinkle names exist.

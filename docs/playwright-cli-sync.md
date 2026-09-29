@@ -156,10 +156,10 @@ When implementing one of the gaps reported by the sync script:
    reads it, so a flag the handler honours but the manifest omits will be rejected
 4. Add it to `AUTO_SNAPSHOT_COMMANDS` in `state.ts` if it mutates page state
 5. Update `packages/webapp/src/shell/supplemental-commands/playwright/help.ts`
-6. **Update `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md`** — this is
-   the agent-facing skill that is injected into the system prompt. If you skip this,
-   the Slicc agent will not know the command exists. Every new command, flag, or
-   behavior change MUST be reflected here.
+6. **Update `playwright/help.ts`** — this is the agent-facing surface for
+   `playwright-cli --help` / `playwright-cli <subcommand> --help`. There is no
+   longer a bundled `playwright-cli` skill in the default VFS; keep help text
+   accurate so agents discover new commands.
 7. Add tests in `packages/webapp/tests/shell/supplemental-commands/playwright-command.test.ts`
 8. Run `node packages/dev-tools/tools/playwright-cli-sync.mjs` — it should no longer
    list the command as a gap

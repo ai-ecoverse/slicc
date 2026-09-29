@@ -10,69 +10,66 @@ allowed-tools: bash
 
 # JavaScript package execution
 
-`ipx` runs package bins from the nearest installed `node_modules`; `npx` is an alias with the same behavior. If no local bin or installed package resolves, it normally installs the requested package and runs its bin.
-
-Before that network install, mapped package names that duplicate SLICC built-ins redirect to the built-in instead. The command exits non-zero and prints an actionable stderr hint naming the built-in and suggesting an invocation with the original arguments. The hint may also include an exact `ipk add` bootstrap; run that bootstrap first when present, then use the suggested built-in.
-
-Prefer the built-in. To deliberately preserve install-and-run behavior for the npm package, put `--force` before its name:
+`ipx` / `npx` — run bins from nearest `node_modules`; else install + run. Mapped names matching SLICC built-ins exit non-zero with stderr hint (built-in name + optional `ipk add` bootstrap). Prefer built-in. Override:
 
 ```bash
 npx --force <package> [args...]
 ipx --force <package> [args...]
 ```
 
-Already-installed packages, locally resolved bins, and unmapped package names keep their normal behavior. Use `commands` to discover available built-ins instead of maintaining a package mapping here.
+Installed packages and unmapped names behave normally. Discover built-ins via `commands`.
 
-## Installing and removing packages
+## Install / remove
 
-`ipk install <pkg>` (also `npm install`, `npm i`, `ipk add`) installs into `<cwd>/node_modules` and records the package in the nearest `package.json` — in the section it already occupies, or in `dependencies` if it is new. `ipk install -D <pkg>` / `npm install --save-dev <pkg>` records new packages in `devDependencies`. A bare name that is already declared is resolved against that existing range, not latest. Versions are picked as pnpm picks them: a range takes the `latest` dist-tag whenever `latest` satisfies it (`*` always takes `latest`), and deprecated versions are passed over unless nothing else fits. Unknown install flags fail instead of being ignored. `ipk install` with no package names installs declared `dependencies`, `devDependencies` and `optionalDependencies` without rewriting `package.json`. `ipk install -g <pkg>` installs into the shared global prefix at `/shared/lib/node_modules`, records direct dependencies in `/shared/lib/package.json`, and publishes PATH-visible `.jsh` delegators under `/shared/bin` for package bins. Every downloaded tarball is checked against the registry's published hash before it is extracted. An `EINTEGRITY` error means that package's bytes did not match and it was not extracted, but packages installed before it may already be on disk and `package.json` was not updated. Check the state with `ipk list`, then retry the install; don't work around it. Installed files keep the package's executable bits (as npm sets them: 0755 for anything the tarball marks executable, 0644 otherwise), and `bin` targets are always executable, so a package's scripts and helpers (e.g. `git submodule` from `@ai-ecoverse/wasm-git`) run without `chmod +x`. A tree installed before this is repaired the next time you install into it. Platform-specific optional dependencies are skipped unless they are built for wasm (`cpu: wasm32`); the `skipping optional dependency … (unsupported platform)` notes are expected, not errors. For a napi-rs package that doesn't list its wasm binding, add `<pkg>-wasm32-wasi` (e.g. `@oxc-parser/binding-wasm32-wasi`) yourself.
+`ipk install` / `npm install` / `npm i` / `ipk add` → `<cwd>/node_modules` + nearest `package.json` (existing section or `dependencies`). `-D` / `--save-dev` → `devDependencies`. Bare declared name resolves existing range (not latest). Range resolution prefers `latest` when it satisfies (`*` → `latest`); skip deprecated unless nothing else fits. Unknown flags fail. No-args install covers `dependencies` + `devDependencies` + `optionalDependencies` without rewriting `package.json`. `-g` → `/shared/lib/node_modules`, manifest `/shared/lib/package.json`, PATH bins `/shared/bin/*.jsh`.
+
+Tarball integrity checked before extract — `EINTEGRITY` means that package was not extracted (earlier packages may already be on disk; `package.json` unchanged). Check `ipk list`, retry. Modes: 0755 if tarball-executable else 0644; `bin` targets always executable (older trees repaired on next install). Optional deps skipped unless `cpu: wasm32`; for napi-rs without a wasm binding, add `<pkg>-wasm32-wasi` yourself.
 
 ```bash
-ipk install lodash              # local project install
-ipk install -D eslint           # record in devDependencies
+ipk install lodash
+ipk install -D eslint
 npm install --save-dev eslint@8.57.1
-ipk install -g typescript       # global install (shared prefix + PATH bin)
-npm uninstall -g typescript     # remove from global manifest and reconcile tree
-npm list -g                     # list direct global dependencies
-npm root -g                     # print /shared/lib/node_modules
+ipk install -g typescript
+npm uninstall -g typescript
+npm list -g && npm root -g
 ```
 
-Global bins installed with `-g` are on the default `$PATH` via `/shared/bin/<name>.jsh` delegators — invoke them by bare name from any cwd (delegators run `ipx --global <bin>` so a same-named local package does not shadow the global install). Local uninstall/list/root work without `-g` against the cwd `package.json`.
+Global bins: `/shared/bin/<name>.jsh` → `ipx --global <bin>` (local doesn't shadow).
 
-## Wasm programs (`wasm`)
+## Wasm (`wasm`)
 
-A global package that ships wasm-realm programs (a `slicc.commands` manifest in its `package.json`, or an `@ai-ecoverse/wasm-*` package with `bin/<x>` + `bin/<x>.wasm`; `"abi": "wasi"` marks WASI programs built from Zig, Go or Rust, which have no glue) makes each program a command: `ipk add -g @ai-ecoverse/wasm-<tool>`, then run it by name. `wasm --list` lists them; `which <name>` shows the package. A built-in of the same name (`sed`, `grep`, `cat`, …) still wins, so run the program with `wasm <name> ARGS...`. `wasm -t <name>` runs it interactively on the panel terminal (a TTY: `wasm -t bash` is a real bash prompt, with job control — ^Z, `jobs`, `fg`, `bg`); the agent's own `bash` tool has no terminal to lend. Installing `@ai-ecoverse/wasm-bash` also moves your own `bash` tool onto GNU bash (real pipes, `trap`, `select`, arrays, bash's exact semantics; `cd` and exports carry between calls, shell functions do not). A WASI module you have as a file runs directly too: `wasm ./tool.wasm ARGS` (or `./tool.wasm` in GNU bash); it sees the VFS with relative paths from your working directory, pipes like any program, and WASIX builds (Wasmer's registry: bash, coreutils, python with `subprocess` and `threading`) run with fork, exec and pipes; threaded builds (`wasm32-wasip1-threads`, pthreads) run a worker per thread, at most 64 per process (`SLICC_WASM_THREADS=N` for fewer). A WASI server gets its socket from `wasm --listen PORT ./server.wasm` (the fd is in `$SLICC_LISTEN_FDS`; Go's `net.FileListener(os.NewFile(fd, ""))` serves on it), reachable from your other programs at `127.0.0.1:PORT`. Supplemental commands work as before. The terminal panel then opens in GNU bash too (`wasm --login` starts it; `exit` returns to the slicc prompt, and `wasm --login` starts it again). `export SLICC_SHELL=just-bash` switches both back. Wasm programs built with socket support talk over a private loopback network: a server listening on `127.0.0.1:PORT` in one of your wasm programs is reachable from your other wasm programs while it runs (the terminal panel and each scoop have networks of their own), and a program reaches the outside over HTTP through your network's proxy: `http_proxy` / `https_proxy` point at `127.0.0.1:3128` by default (`no_proxy` keeps `localhost` direct), so `curl http://…` works the way the shell's `curl` does, masked secrets included. HTTPS works too: the proxy terminates TLS with a certificate from your network's own CA, which `SSL_CERT_FILE` / `CURL_CA_BUNDLE` / `GIT_SSL_CAINFO` point programs at (`$HOME/.config/slicc/realm-ca-*.pem`; `-k` is never needed). A redirect reaches the program as it would any HTTP client (`curl -L` follows it), except on Sliccstart, whose fetch path follows redirects itself. No other traffic leaves: only `localhost` / `127.0.0.1` resolve. Once a Go toolchain package is installed, `go build` / `go run` build Go programs here (`go` is SLICC's driver; the output is a wasip1 program you run as `./prog`, or any `GOOS`/`GOARCH` whose standard library is installed; the standard library and your module's own packages only: no cgo, `//go:embed` or module downloads yet). Once a native CPython is installed, `python3` in GNU bash is native Python, and `pyodide` stays SLICC's Pyodide under its own name. Installed Python packages are on its path by themselves. Once `@ai-ecoverse/wasm-git` is installed, `git` in GNU bash is native git (in just-bash it stays SLICC's built-in; `wasm git …` reaches native git there). Native git authenticates by itself: its default credential helper, `git-credential-slicc`, hands it your GitHub login (or `$GH_TOKEN` / `$GITHUB_TOKEN`, or a `*_TOKEN` secret scoped to the host) masked, so `git clone` / `git push` over HTTPS to a private repo just work, and it commits as SLICC's git identity. Don't put tokens in remote URLs; your `~/.gitconfig` overrides both (`$HOME/.config/slicc/gitconfig` is the realm's system config, rewritten each run).
+`ipk add -g @ai-ecoverse/wasm-<tool>` (or `slicc.commands` / `bin/<x>`+`.wasm`; `"abi":"wasi"` = Zig/Go/Rust, no glue) → run by name. `wasm --list`; `which <name>`. Built-in wins → `wasm <name> ARGS`. `wasm -t <name>` — panel TTY (`wasm -t bash`: job control). File: `wasm ./tool.wasm ARGS` (or `./tool.wasm` in GNU bash). WASIX: fork/exec/pipes; threads (`wasm32-wasip1-threads`) ≤64 workers (`SLICC_WASM_THREADS=N`). Server: `wasm --listen PORT ./server.wasm` (`$SLICC_LISTEN_FDS`). `@ai-ecoverse/wasm-bash` moves agent `bash` + panel (`wasm --login`) to GNU bash (`cd`/exports persist; functions don't). `export SLICC_SHELL=just-bash` reverts.
 
-## Conda / emscripten-forge (`ipk mamba`)
+Sockets: `127.0.0.1:PORT` between wasm programs (panel/scoop networks separate). Outbound HTTP via `http_proxy`/`https_proxy` → `127.0.0.1:3128` (`no_proxy` keeps localhost). HTTPS: proxy TLS with realm CA (`SSL_CERT_FILE` / `CURL_CA_BUNDLE` / `GIT_SSL_CAINFO` → `$HOME/.config/slicc/realm-ca-*.pem`; no `-k`). Redirects as normal (`curl -L`); Sliccstart follows itself. Only `localhost`/`127.0.0.1` resolve.
 
-`ipk mamba install <pkg>[=<version>]` installs emscripten-wasm32 packages from emscripten-forge / conda-forge into `/shared/lib/conda` (not `node_modules`). Executable files (shared objects, scripts) keep their executable bit. Prefer this for **forge C/WASM libraries** (for example `zlib`, `libpng`) that provide headers, `.a`, and SIDE_MODULE `.so` under that prefix.
+Once a Go toolchain package is installed, `go build` / `go run` build here (`go` is SLICC's driver; output is wasip1 run as `./prog`, or any `GOOS`/`GOARCH` whose stdlib is installed; stdlib + module packages only — no cgo, `//go:embed`, or module downloads yet). Native `python3` (once installed) in GNU bash; `pyodide` stays Pyodide. `@ai-ecoverse/wasm-git`: `git` in GNU bash is native (just-bash keeps built-in; `wasm git` for native). Auth via `git-credential-slicc` (GitHub login / `$GH_TOKEN` / `$GITHUB_TOKEN` / host-scoped `*_TOKEN`); don't put tokens in URLs. `~/.gitconfig` overrides; `$HOME/.config/slicc/gitconfig` is realm system config.
 
-Keep using `ipk install` / `ipk add -g` for the **npm** packages that power these built-ins — forge names are not drop-in replacements today:
+## Conda (`ipk mamba`)
 
-- `convert` → `ipk add -g @imagemagick/magick-wasm@…` (forge `imagemagick` has no runnable `convert.wasm`)
-- `ffmpeg` → `ipk add -g @ffmpeg/core@…` (forge `ffmpeg` is libav `.a` only)
-- `python` → `ipk add pyodide@…` (no forge `pyodide`)
+`ipk mamba install <pkg>[=<version>]` → `/shared/lib/conda` (emscripten-forge). Keeps executable bits. For forge C/WASM libs (`zlib`, `libpng`). **Not** replacements for npm built-ins:
+
+- `convert` → `ipk add -g @imagemagick/magick-wasm@…`
+- `ffmpeg` → `ipk add -g @ffmpeg/core@…`
+- `python` → `ipk add pyodide@…`
 
 ```bash
-ipk mamba install zlib          # newest indexed build → /shared/lib/conda
-ipk mamba install zlib=1.3.1    # exact version
-ipk mamba list                  # conda-meta inventory
-ipk mamba uninstall zlib
-ipk mamba --help                # channels, prefix, and thin-installer limits
+ipk mamba install zlib
+ipk mamba install zlib=1.3.1
+ipk mamba list && ipk mamba uninstall zlib && ipk mamba --help
 ```
 
-## Running package.json scripts
+## `package.json` scripts
 
-`npm run <script>` (also `ipk run`, `npm run-script`, and the `npm test` / `start` / `stop` / `restart` shortcuts) runs a `scripts` entry from the nearest `package.json`, in that package's directory. `npm run` with no script name lists what is available — read that list instead of guessing a script name.
+`npm run` / `ipk run` / shortcuts (`npm test`, `start`, `stop`, `restart`):
 
 ```bash
-npm run                      # list scripts
-npm run build                # run build, with prebuild/postbuild around it
-npm run build -- --watch     # pass extra args to the script body
-npm run build --silent       # no banner, script output only (either side of the name)
-npm run lint -- --help       # --help after -- goes to the script, not to npm
+npm run
+npm run build
+npm run build -- --watch
+npm run build --silent
+npm run lint -- --help
 ```
 
-`--silent`/`-s` and `--if-present` are npm's own flags anywhere before `--`; everything after `--` reaches the script untouched. Missing `start` falls back to `node server.js` when the package has one, and missing `restart` to `npm stop --if-present && npm start`.
+`--silent`/`-s`, `--if-present` before `--`; rest goes to script. Missing `start` → `node server.js`; missing `restart` → `npm stop --if-present && npm start`.
 
-A bare bin word in a script body (`vitest run`) is rewritten to `ipx vitest run` when that package is installed, because `$PATH` does not cover `node_modules/.bin` shims. This also applies after keywords like `if`/`then`/`do`. A SLICC built-in with the same name wins, and an unknown word is not installed implicitly — install it with `ipk add <pkg>` first.
+Bare bin in script body → `ipx <bin>` when installed (`$PATH` lacks `node_modules/.bin`). Built-in wins; unknown word not auto-installed — `ipk add <pkg>` first.

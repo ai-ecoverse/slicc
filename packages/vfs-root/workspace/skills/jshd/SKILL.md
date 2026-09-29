@@ -8,31 +8,21 @@ description: |
 allowed-tools: bash
 ---
 
-# jshd: durable background jsh units
+# jshd
 
-Use `jshd` when a `.jsh` script (or skill command) should keep running after the bash call returns, and come back after a reload.
-
-Do **not** use a detached `bash` job (`background_after: 0`) for this. Detached jobs die with the kernel worker. `jshd` persists a unit record and restores `--enable`d units on boot.
+Durable `.jsh` units that outlive bash and restore after reload. Detached bash jobs die with the kernel worker — use `jshd` instead.
 
 ```bash
 jshd start -n watcher --enable --restart always /workspace/watch.jsh
 jshd ls
 jshd logs watcher -n 50
-jshd stop watcher          # stop, do not restart
-kill <pid>                 # same: stop, do not restart
-jshd enable watcher        # restore on next reload
-jshd disable watcher       # leave running, skip restore
-jshd rm watcher            # stop and delete record + log
+jshd stop watcher          # or: kill <pid> — stop, no restart
+jshd enable|disable watcher
+jshd rm watcher            # stop + delete record + log
 ```
 
-Records: `/workspace/.jshd/<name>.json`. Logs: `/workspace/.jshd/log/<name>.log`.
+Records `/workspace/.jshd/<name>.json`; logs `/workspace/.jshd/log/<name>.log`. `ps` shows `kind: jsh`. Restart (`always`/`on-failure`/`no`) applies to natural exit only; 8 failures/60s → `errored` + lick.
 
-`ps` shows the unit as `kind: jsh`. Restart policy (`always` / `on-failure` / `no`) applies only to a natural exit. A crash-loop (8 failures in 60s) marks the unit `errored` and licks the cone.
+Keep-alive = pending timers or host subscriptions (`hid`/`usb`, `sliccy:computer.register`). Computer backends: `require('sliccy:computer').register(...)` — see `examples/fake-computer.jsh`.
 
-Keep-alive is the realm: pending timers or host-event subscriptions (`hid`/`usb` event listeners, `sliccy:computer.register`) keep the worker up. A script that returns with nothing pending exits.
-
-A durable computer backend is a `jshd` unit that calls `require('sliccy:computer').register(...)`. The `register()` subscription to host `computer-call` events is the keep-alive; `handlers.subscribe` is the `computer watch` push path. Example: `/workspace/skills/jshd/examples/fake-computer.jsh`.
-
-`--enable`d units are relaunched after mounts restore and before the cone's first turn. Restored units keep canonical `PATH`, can still `exec` child commands, and run through the cone's `SudoFS` (writes to `/etc/sudoers` still require approval). Restricted scoop shells cannot `jshd start` (or stop/restart/rm/enable/disable) — units are cone-owned.
-
-On the thin Chrome extension, `start` still runs as best effort; `ls` reports the unit is not durable (no DedicatedWorker).
+`--enable`d units relaunch after mounts restore, through cone `SudoFS`. Restricted scoops cannot start/stop/rm/enable/disable. Thin extension: `start` is best-effort; `ls` notes non-durable.

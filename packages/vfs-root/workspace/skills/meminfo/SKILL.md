@@ -8,27 +8,15 @@ description: |
 allowed-tools: bash
 ---
 
-# meminfo — agent-cluster memory diagnostics
+# meminfo
 
-`meminfo` measures real memory usage across the agent cluster — the kernel worker plus its dedicated workers (script realms, vpod pods, ffmpeg, speech) — via the browser's `performance.measureUserAgentSpecificMemory()`.
-
-## When to reach for it
-
-- A command died with an out-of-memory error, or the kernel feels degraded after heavy WASM work.
-- Before/after comparisons: measure, run the suspect workload, measure again, diff the attribution rows.
-- Deciding whether to `vpod stop` / `kill` a heavy background unit before starting another.
-
-## Usage
+Measures agent-cluster memory (kernel worker + dedicated workers) via `performance.measureUserAgentSpecificMemory()`.
 
 ```bash
-meminfo           # human-readable: total + per-attribution rows, largest first
-meminfo --json    # raw measurement for scripted diffing
+meminfo           # total + per-attribution rows, largest first
+meminfo --json    # raw measurement
 ```
 
-Rows attribute bytes to a scope and URL (e.g. `DedicatedWorkerGlobalScope …/kernel-worker.js`), with types like `JavaScript`, `DOM`, `Shared`. Zero-byte rows are dropped; only `--json` shows them.
+Use after OOM/degradation, for before/after diffs, or before starting heavy WASM. Rows name scope/URL and type (`JavaScript`, `DOM`, `Shared`); zero-byte rows appear only in `--json`.
 
-## Expectations and limits
-
-- Requires a cross-origin-isolated runtime. The hosted leader is one; embedded floats (Cherry, Electron overlay) are not and report why instead — that error is expected there, not a bug.
-- The browser randomizes measurement timing (anti-fingerprinting), so a call may take a few seconds — do not treat the delay as a hang.
-- The measurement covers the calling agent cluster, not the whole browser; other tabs and cross-origin iframes are out of scope.
+Requires cross-origin isolation (hosted leader yes; Cherry/Electron overlay no — that error is expected). Timing is randomized (may take seconds). Covers this agent cluster only, not other tabs.

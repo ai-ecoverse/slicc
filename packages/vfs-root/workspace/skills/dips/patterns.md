@@ -1,170 +1,104 @@
 # Dip patterns
 
-A gallery of 10 ready-to-adapt patterns for inline `shtml` widgets. Each pattern is a self-contained example you can copy and modify. See `SKILL.md` for the design rules, card structure, and pre-styled elements that apply to all of them.
+10 copy-adapt `shtml` widgets. Design rules + card structure: `SKILL.md`.
 
-> **Two rules apply to every example below:** (1) use S2 tokens or `light-dark()` for color — never hard-code light/dark values; (2) never set `height`, `max-height`, `min-height`, or `overflow: auto|scroll` on dip containers (the iframe auto-sizes). Canvases are the documented exception — they need pixel dimensions for the drawing buffer.
+> **Every example:** (1) S2 tokens / `light-dark()` — no hard-coded themes; (2) no `height`/`max-height`/`min-height`/`overflow:auto|scroll` on dip containers (iframe auto-sizes). **Exception:** `<canvas>` needs pixel dimensions for the drawing buffer.
 
 ## 1. Drag-on-canvas
 
-Drag control points on `<canvas>` — live computed output.
+Control points on canvas → live output. `slicc.lick({action:'use-value',data:{value:…}})` to commit.
 
 ```shtml
 <canvas id="c"></canvas>
-<div id="output" style="font-family:var(--s2-font-mono);font-size:12px;margin-top:8px"></div>
-<button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action:'use-value',data:{value:currentValue}})">Use this value</button>
 <script>
-  const cv = document.getElementById('c');
-  const ctx = cv.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  // Canvas needs explicit pixel dimensions for its drawing buffer — this
-  // is the one allowed exception to the dip "no fixed heights" rule.
-  const W = 640, H = 260;
-  cv.width = W * dpr; cv.height = H * dpr;
-  cv.style.height = H + 'px';
-  ctx.scale(dpr, dpr);
-  // ... hit detection, drag handling, draw loop
+  const W=640,H=260,dpr=window.devicePixelRatio||1;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px'; ctx.scale(dpr,dpr);
 </script>
 ```
 
-**Use for**: easing curves, color gradients, graph layouts, image crop, timeline scrubbing.
+Easing curves, gradients, crop, timeline scrub.
 
 ## 2. Animated step loop
 
-Async loop with speed slider — algorithm visualization. The bars container has no fixed height — the tallest bar drives the layout, and `align-items:flex-end` keeps them sitting on a common baseline.
+Async loop + speed slider. Bars: `align-items:flex-end`, no fixed height.
 
 ```shtml
 <div id="bars" style="display:flex;align-items:flex-end;gap:3px"></div>
-<div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-  <button onclick="run()">Run</button>
-  <input type="range" id="speed" min="10" max="200" value="80">
-  <span id="status" style="font-size:12px;color:var(--s2-content-secondary)">ready</span>
-</div>
-<script>
-  let running = false;
-  const delay = () => new Promise(r => setTimeout(r, 210 - speed.value));
-  async function run() {
-    if (running) return; running = true;
-    // algorithm loop with await delay()
-    running = false;
-  }
-</script>
+<input type="range" id="speed" min="10" max="200" value="80">
+<script>const delay=()=>new Promise(r=>setTimeout(r,210-speed.value));</script>
 ```
 
-**Use for**: sorting algorithms, data pipeline steps, simulation, process walkthroughs.
+Sorting viz, pipelines, simulations.
 
 ## 3. Keystroke → live output
 
-`oninput` on text fields — instant transformation/matching.
+`oninput` transforms. Escape HTML before highlighting.
 
 ```shtml
-<input type="text" id="pattern" oninput="run()" placeholder="regex pattern">
-<textarea id="target" rows="4" oninput="run()">sample text to match</textarea>
-<div id="err" style="color:var(--s2-negative);font-size:11px"></div>
-<div id="out" style="font-family:var(--s2-font-mono);font-size:12px;padding:10px;background:var(--s2-bg-layer-2);border-radius:8px;margin-top:8px"></div>
-<script>
-  function run() {
-    try {
-      const rx = new RegExp(pattern.value, 'gi');
-      out.innerHTML = target.value
-        .replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
-        .replace(rx, m => '<mark>' + m + '</mark>');
-      err.textContent = '';
-    } catch(e) { err.textContent = e.message; }
-  }
-</script>
+<input id="pattern" oninput="run()">
+<textarea id="target" oninput="run()"></textarea>
+<div id="out" style="font-family:var(--s2-font-mono)"></div>
 ```
 
-**Use for**: regex testers, format validation, search preview, JSON path, CSS selector testers.
+Regex testers, JSON path, CSS selectors.
 
 ## 4. Slider → DOM reflow
 
-Range slider drives visual output (rendered elements, not charts).
+Range drives rendered elements (not charts):
 
 ```shtml
-<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-  <span style="font-size:12px;color:var(--s2-content-secondary);min-width:60px">Base size</span>
-  <input type="range" id="base" min="12" max="24" value="16" step="1" oninput="render()">
-  <span id="baseVal" style="font-family:var(--s2-font-mono);font-size:12px;min-width:30px">16</span>
-</div>
+<input type="range" id="base" min="12" max="24" value="16" oninput="render()">
 <div id="scale"></div>
-<script>
-  function render() {
-    const b = +base.value;
-    baseVal.textContent = b;
-    scale.innerHTML = [3,2,1,0,-1].map(exp => {
-      const sz = (b * Math.pow(1.25, exp)).toFixed(1);
-      return '<div style="font-size:' + sz + 'px;margin-bottom:4px">Sample — ' + sz + 'px</div>';
-    }).join('');
-  }
-  render();
-</script>
 ```
 
-**Use for**: design token explorers, spacing visualizers, animation timing, grid configurators.
+Design tokens, spacing, animation timing.
 
 ## 5. Multi-slider → computed summary
 
-Multiple sliders feed a formula → metric cards.
+Multiple sliders feed a formula → metric cards in `display:grid`:
 
 ```shtml
 <div id="controls"></div>
-<div id="results" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px"></div>
-<script>
-  function calc() {
-    const v1 = +s1.value, v2 = +s2.value;
-    s1out.textContent = v1.toLocaleString();
-    s2out.textContent = v2.toLocaleString();
-    const result = v1 * v2;
-    results.innerHTML = '<div style="background:var(--s2-bg-layer-2);border-radius:8px;padding:12px;text-align:center">' +
-      '<div style="font-size:11px;color:var(--s2-content-secondary)">Result</div>' +
-      '<div style="font-size:22px;font-weight:700">' + result.toLocaleString() + '</div></div>';
-  }
-  calc();
-</script>
+<div id="results" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px"></div>
 ```
 
-**Use for**: pricing calculators, ROI estimators, capacity models, compound growth.
+Pricing, ROI, capacity models.
 
 ## 6. Cascading sliders
 
-Each stage feeds the next — funnel visualization.
+Each stage feeds next — funnel viz.
 
-**Use for**: sales funnels, user journey drop-off, referral chains, pipeline modeling.
+Sales funnels, drop-off, referral chains.
 
 ## 7. Mode picker → visual palette
 
-Select + slider → generated set of visual elements (swatches, variants).
+Select + slider → swatches/variants.
 
-**Use for**: color pickers, design token generators, layout variant pickers.
+Color pickers, token generators.
 
 ## 8. Any-field → all-fields sync
 
-Multiple inputs share a single source-of-truth value. Editing any field updates all others.
-
-Use an `updating` flag to prevent `oninput` re-entrancy:
+Shared value; `updating` flag prevents `oninput` re-entrancy:
 
 ```javascript
-let n = 255,
-  updating = false;
+let updating = false;
 function setAll() {
   if (updating) return;
   updating = true;
-  dec.value = n;
-  hex.value = n.toString(16).toUpperCase();
-  updating = false;
+  /* sync */ updating = false;
 }
 ```
 
-**Use for**: unit converters (px/rem, kg/lb, °C/°F), base converters, encoding/decoding pairs.
+Unit/base converters, encoders.
 
 ## 9. Stacked bar + threshold
 
-N sliders → proportional stacked bar → over/under budget indicator.
+N sliders → proportional bar → over/under budget.
 
-**Use for**: latency budgets, build timing, resource allocation, sprint capacity, page weight budgets.
+Latency budgets, sprint capacity, page weight.
 
 ## 10. Paste → structured tree
 
-Textarea input → parsed recursive DOM tree with collapse/expand.
+Textarea → recursive DOM tree, collapse/expand.
 
-**Use for**: JSON explorers, config viewers, log parsers, schema inspectors, AST browsers.
+JSON explorers, log parsers, AST browsers.

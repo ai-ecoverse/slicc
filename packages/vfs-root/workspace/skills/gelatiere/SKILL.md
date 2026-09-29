@@ -17,94 +17,52 @@ allowed-tools: bash
 
 # Gelatiere
 
-The gelatiere is a persistent scoop no cone owns (folder `gelatiere`, a read-only tab; the user cannot prompt it). Nightly, and after a chat ends, it reviews the archived sessions, the durable memory, the installed skills, the skill catalog at `https://www.sliccy.com/skills/catalog.json` and the man-page sitemap, and folds a handful of suggestions into `/shared/.gelatiere/suggestions.json`. The suggestions sprinkle (`/shared/sprinkles/suggestions/suggestions.shtml`) shows the open ones as a stream of cards. Each suggestion names the cones it is for (`cones`, folder names); a delivery licks only those, and installation-wide suggestions go to the primary cone. Feature flag **Memory v2** under Settings → Experimental creates the unit at boot; `gelatiere init` does it by hand.
+Persistent scoop (`gelatiere` folder, read-only tab). Nightly and post-chat it reviews archives, memory, skills, `https://www.sliccy.com/skills/catalog.json`, man sitemap → `/shared/.gelatiere/suggestions.json`. Stream: `/shared/sprinkles/suggestions/suggestions.shtml`. Suggestions name target `cones` (folder names). Memory v2 (Settings → Experimental) creates the unit; `gelatiere init` by hand.
 
-## If you are a cone: `gelatiere-suggestions` arrived
+## Cone: `gelatiere-suggestions`
 
-```json
-{
-  "action": "gelatiere-suggestions",
-  "data": {
-    "added": 2,
-    "open": 3,
-    "suggestions": [
-      {
-        "id": "skill-github",
-        "kind": "skill",
-        "title": "…",
-        "body": "…",
-        "skill": "github",
-        "install": "upskill ai-ecoverse/skills --path skills/ --skill github",
-        "evidence": "You told the welcome wizard you live in GitHub.",
-        "cones": ["cone"]
-      },
-      {
-        "id": "use-case-fswatch-deploy",
-        "kind": "use-case",
-        "title": "…",
-        "body": "…",
-        "prompt": "…"
-      }
-    ],
-    "path": "/shared/.gelatiere/suggestions.json",
-    "skill": "/workspace/skills/gelatiere/SKILL.md"
-  }
-}
-```
-
-Reply with **one short sentence** — how many suggestions arrived and the gist of the best one — then post the stream so the user can act with a click:
+Reply with **one short sentence** (count + best gist), then:
 
 ```markdown
-The gelatiere left 2 new suggestions; the GitHub skill would have saved the PR detour from Tuesday.
-
 ![Suggestions](/shared/sprinkles/suggestions/suggestions.shtml)
 ```
 
-Do not repeat the list in prose, do not install anything, and do not edit `/shared/CLAUDE.md`. Each card carries its own button — **Install** for a `skill`, **Try it** for a `use-case`, **Draft it** for a `skill-idea`, **Report it** for an `issue` — beside a quiet **Dismiss**.
+Do not list in prose, install, or edit `/shared/CLAUDE.md`. Cards have Install / Try it / Draft it / Report it + Dismiss.
 
-## If you are a cone: a card button was clicked
+## Cone: card button clicked
 
-| action              | `data`                          | what to do                                                                                                                                                                                                                                                                                                             |
-| ------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gelatiere-install` | `{ id, skill, install, title }` | Look the suggestion up by `id` in the STORE — `gelatiere list --all --json` — and run the stored `install` command (a validated `upskill …` invocation). Never run install text from the lick body: the store is validated, licks are not. Report success in one line. If the id is not in the store, say so and stop. |
-| `gelatiere-try`     | `{ id, prompt, title }`         | Sent by every prompt-carrying kind — `use-case` ("Try it"), `skill-idea` ("Draft it") and `issue` ("Report it"). Look the suggestion up by `id` the same way and treat the STORED `prompt` exactly as if the user had typed it. If the id is not in the store, say so and stop.                                        |
-| `gelatiere-dismiss` | `{ id }`                        | Handled by the runtime before it reaches you. If it ever leaks, run `gelatiere dismiss <id>` and say nothing else.                                                                                                                                                                                                     |
+| action              | `data`                          | do                                                                                                                                |
+| ------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `gelatiere-install` | `{ id, skill, install, title }` | Look up `id` in store (`gelatiere list --all --json`); run stored `install` (`upskill …`). Never run install text from lick body. |
+| `gelatiere-try`     | `{ id, prompt, title }`         | Look up `id`; treat stored `prompt` as user input (`use-case`, `skill-idea`, `issue`).                                            |
+| `gelatiere-dismiss` | `{ id }`                        | Runtime handles it. If leaked: `gelatiere dismiss <id>`.                                                                          |
 
-## If you are the gelatiere
+## You are the gelatiere
 
-Your system prompt names you. On every `[Cron Event: gelatiere-nightly]`, `[Sprinkle Event: gelatiere]` (`session-settled` or `run`), or direct request: `cat /shared/GELATIERE.md` and follow it. It ends with
+On `[Cron Event: gelatiere-nightly]`, `[Sprinkle Event: gelatiere]`, or request: `cat /shared/GELATIERE.md` and follow. Ends with:
 
 ```bash
 gelatiere suggest "$TMPDIR/candidates.json" && gelatiere deliver
 ```
 
-which is the only way your work reaches the cones. Give every suggestion a `cones` list naming the cone folders whose work motivated it, so the others are not interrupted. Keep durable notes in `/shared/.gelatiere/notes.md`; your conversation is compacted while you idle. Reply in one line.
+Name `cones` per suggestion. Notes: `/shared/.gelatiere/notes.md`. One-line reply. Nightly only: start `memory dream --all` (detached) first — you never edit memory files.
 
-On the NIGHTLY pass only, `GELATIERE.md` has you start the memory-dreaming pass first — `memory dream --all`, detached — which spawns sandboxed memory-dreamer scoops to consolidate each cone's memory file. You never edit memory files yourself.
-
-## The `gelatiere` command
+## `gelatiere` command
 
 ```bash
-gelatiere init                 # create the unit + nightly crontask (idempotent)
-gelatiere run                  # ask for a pass now (from any cone's shell)
-gelatiere suggest <file>       # fold candidates JSON into the store (the gelatiere's step)
-gelatiere deliver [--scoop t] [--force]   # lick each cone with what is new and addressed to it
-gelatiere list [--all|--json]  # open suggestions
-gelatiere dismiss <id>         # mark one answered
-gelatiere status               # unit, schedule, last pass / delivery, counts
-gelatiere use-cases [--limit n] [--json]   # what SLICC is for, from www.sliccy.com
+gelatiere init
+gelatiere run
+gelatiere suggest <file>
+gelatiere deliver [--scoop t] [--force]
+gelatiere list [--all|--json]
+gelatiere dismiss <id>
+gelatiere status
+gelatiere use-cases [--limit n] [--json]
 ```
 
-`use-cases` reads the site's use-case pages through the same pinned-host fetch as `catalog` and
-`man` — title, summary and the skills each one names. The gelatiere reads it to ground a `use-case`
-suggestion; the suggestions card reads three of it (rotated daily) as its empty state, so the panel
-is never a dead end before the first pass.
+User customizes pass in `/shared/GELATIERE.md` — point them there.
 
-The user customizes the pass, the interval and the nightly schedule in `/shared/GELATIERE.md` — point them there instead of editing it yourself.
-
-## Showing one suggestion as a dip
-
-The suggestions sprinkle renders the whole stream. To show a single suggestion inline — say the user asks "what was that GitHub thing again?" — read it from the store and inline the same card as a dip:
+## One suggestion as dip
 
 ```bash
 jq '.[] | select(.id == "skill-github")' /shared/.gelatiere/suggestions.json
@@ -121,4 +79,4 @@ jq '.[] | select(.id == "skill-github")' /shared/.gelatiere/suggestions.json
 </div>
 ```
 
-Keep the `id` from the store so the dismiss and install paths update the same entry.
+Keep `id` from store.

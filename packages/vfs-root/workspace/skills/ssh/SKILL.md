@@ -10,57 +10,20 @@ description: |
 allowed-tools: bash
 ---
 
-# ssh — run a command on a tray follower
+# ssh
 
-A `slicc … follow <runner>` CLI follower (see `packages/slicc-cli`) can lend its
-machine to you as a remote-exec target. `ssh` runs a command there and returns its
-stdout, stderr, and exit code.
-
-## Discover targets
-
-CLI followers started with a **runner** and iOS followers advertising exec are targets. Find them:
+Run a command on a `slicc … follow <runner>` CLI follower (or iOS exec target).
 
 ```bash
-host           # every follower: [ssh] exec, [computer] capturable screen, [playwright] browser
-ssh --list     # just the exec targets + their runtime ids, each with a MOTD line
-```
-
-A target id looks like `follower-<uuid>`. `ssh --list` prints each target's
-advertised MOTD beneath it so you know what you're connecting to. Browser
-followers are never `ssh` targets. iOS followers accept only
-`open [--universal|--x-callback] <url>`, gate it through on-device scoped
-approval, and launch the approved destination. `--universal` requires a universal
-link; `--x-callback` returns bounded JSON on stdout and distinct success, error,
-or cancel exit codes. An unavailable app fails instead of pretending to launch.
-`host` hides capability-less followers (e.g. transient `prompt`/`exec` CLI
-connections) as a count, so the list stays the actionable targets.
-
-## Run a command
-
-```bash
+host                 # followers: [ssh] [computer] [playwright]
+ssh --list           # exec targets + runtime ids + MOTD
 ssh <runtime-id> "<command>"
-ssh --cwd /some/dir <runtime-id> "ls -la"
-ssh --timeout 30 <runtime-id> "<command>"   # kill on the follower after 30s
+ssh --cwd /dir <runtime-id> "ls -la"
+ssh --timeout 30 <runtime-id> "<command>"
 ```
 
-The command runs as `<runner> <command>` on the follower, where `<runner>` is
-whatever it was started with — e.g. `bash -c`, `sh -c`, or a sandbox like
-`docker exec -i box sh -c`. The runner is fixed by the follower; you cannot change
-it from here. Output is returned once the command completes (buffered, like
-`ssh host cmd`). Ctrl+C / an aborted turn interrupts the remote command.
+Ids look like `follower-<uuid>`. Browser followers are never targets. iOS accepts only `open [--universal|--x-callback] <url>` (on-device approval); `--universal` needs a universal link; `--x-callback` returns bounded JSON with distinct exit codes. `host` hides capability-less followers as a count.
 
-## Trust boundary (read before using)
+Command runs as `<runner> <command>` on the follower (fixed by the follower: `bash -c`, `docker exec …`, etc.). Output buffered until complete; Ctrl+C aborts remote.
 
-- The command executes on the **follower's real machine, as the user who started
-  `slicc … follow`** — this is remote code execution by design.
-- It runs **outside this leader's `/etc/sudoers` policy**. Your sudo rules do NOT
-  gate `ssh` — the follower's own choice of runner is the only sandbox (a
-  container runner scopes it; a bare `bash -c` does not).
-- Treat an exec target like SSH access to someone's box: run only what you'd run
-  there directly, prefer the narrowest command, and never pipe untrusted input
-  into it.
-
-## The other direction
-
-`ssh` goes _down_ the tray, to a follower of yours. To go _up_ — into another
-SLICC leader's virtual shell, given its join URL — use the `slicc` skill.
+**Trust:** real machine, as the user who started `follow`, **outside** this leader's `/etc/sudoers`. Prefer narrow commands; never pipe untrusted input. To talk _up_ into another leader's virtual shell, use the `slicc` skill.

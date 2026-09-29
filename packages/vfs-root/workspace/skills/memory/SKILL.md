@@ -12,37 +12,37 @@ allowed-tools: bash
 
 # memory — inspect and manage durable cone memory
 
-Durable memory is one markdown file per cone — `/workspace/CLAUDE.md` for the primary cone, `/cones/<folder>/CLAUDE.md` for extra cones. Agents write these files only through the `memory_write` tool, which enforces the budget (over budget, a write must shrink the file) and reports the remaining room; other writers are refused. After a chat freezes, a memory-curator scoop rewrites that file from the archived session. A pass reads only its `visiblePaths` from `/etc/MEMORY.md`; a path outside them is unknown to it, never absent — the runtime notes such blind reads on the pass's command results and `memory_write` refuses a line that records one as missing (slicc#3459). A live archive (`/sessions/live-*.md`) is also mined a slice at a time while the chat is still open (`curatedThrough`); "New chat" then mines only the remainder. `/sessions/index.json` is the per-archive ledger of whether that pass succeeded (`memoryCuratedAt`), failed (`memoryFailed`), is still owed (`memoryPending`), or was skipped by the user (`memorySkipped`).
+One markdown file per cone: `/workspace/CLAUDE.md` (primary), `/cones/<folder>/CLAUDE.md` (extra). Agents write via `memory_write` only (budget-enforced). After freeze, a curator scoop rewrites from the archive. Pass reads only `visiblePaths` from `/etc/MEMORY.md`; blind reads are noted and refused as "missing" facts (slicc#3459). Live archives (`/sessions/live-*.md`) mined slice-wise (`curatedThrough`). Ledger: `/sessions/index.json` (`memoryCuratedAt` / `memoryFailed` / `memoryPending` / `memorySkipped`).
 
-## Usage
+## Commands
 
 ```bash
-memory show [--cone <folder>]      # the cone's memory file, verbatim
-memory status [--json] [--check]   # files, budget, curation tally, health
-memory log [--limit N]             # per-archive ledger, newest first
-memory curate [--archive <file>] [--cone <folder>]   # run a curator pass now
-memory dream [--cone <folder>] [--all] [--wait]      # consolidate memory (dreamer pass)
+memory show [--cone <folder>]
+memory status [--json] [--check]
+memory log [--limit N]
+memory curate [--archive <file>] [--cone <folder>]
+memory dream [--cone <folder>] [--all] [--wait]
 ```
 
-## When to reach for it
+## When to use
 
-- "What do you remember about me / this project?" → `memory show`.
-- A fact you expected to be remembered is missing → `memory log` to see whether the session that established it was ever curated; `memory status --check` for systemic failures.
-- After a failed curation (`memoryFailed` in the log) → fix the cause if visible (usually a missing provider or a timeout), then `memory curate --archive <that-file>`.
-- The memory file has grown duplicated, contradictory, or over budget → `memory dream` (add `--wait` to see the dreamer's report; `--all` for every cone with a memory file). The gelatiere's nightly already runs `memory dream --all`, so reach for this manually only when it cannot wait.
-- Extra cones keep separate memory: pass `--cone <folder>` to `show`, `curate`, and `dream`. The folder must exist (`cone`, or a `/cones/<folder>`); `curate` without it targets the cone the archive was frozen from.
+- "What do you remember?" → `memory show`
+- Missing fact → `memory log`; systemic → `memory status --check`
+- `memoryFailed` → fix cause, `memory curate --archive <file>`
+- Bloated/duplicate memory → `memory dream` (`--wait` for report; `--all` all cones). Gelatiere nightly runs `memory dream --all`.
+- Extra cones: `--cone <folder>` (`cone` or `/cones/<folder>`)
 
-## Reading `memory status`
+## `memory status`
 
-- **Budget** grows logarithmically with the archived-session count; the curator is told to stay under it.
-- **Curation tally** counts index entries by ledger state: curated / failed / pending / skipped / unmarked (pre-ledger or freshly frozen).
-- **`--check`** exits non-zero on the two lying-memory shapes: any archive whose last curation attempt failed, or archives reporting success while the primary memory file is missing or empty. A clean run exits 0.
-- **`Scheduled:`** shows the runtime's own health check — the kernel runs the same checks ~90s after boot and daily without being asked, persisting the numbers to `/sessions/.curation/health.json`. If that line says `never ran` long after boot, or names failures, the memory system needs attention even if nobody asked about it.
+- **Budget** — logarithmic with archive count.
+- **Curation tally** — curated / failed / pending / skipped / unmarked.
+- **`--check`** — non-zero on failed curation or success with empty/missing primary memory.
+- **`Scheduled:`** — kernel health (~90s post-boot, daily) → `/sessions/.curation/health.json`.
 
 ## Notes
 
-- `memory curate` runs the exact pass the session freezer runs (snapshot → curator scoop → three-way merge), so concurrent edits to the memory file merge instead of being clobbered. It can take several minutes; the curator's closing report is printed when it lands.
-- `memory dream` consolidates the memory file itself under the same `/etc/MEMORY.md` instructions as curation (its own `dreamTimeoutSeconds` bound), through the same staged draft and merge. When agentic memory is also on, it first mines one uncurated slice of that cone's live transcript (the `curatedThrough` cursor on `/sessions/live-*.md`) so a never-finalized chat still reaches memory. Detached by default; the outcome lands in `/sessions/.curation/dream-<date>-<cone>.md/status.json`.
-- When consolidation cannot fit everything, the dreamer moves reference knowledge into the shared wiki at `/shared/wiki/` (schema: `/shared/wiki/WIKI.md`; browse it with the `wiki` skill) and leaves a pointer line in the memory file.
-- The command does not edit the ledger itself; a manual pass on a still-pending archive is reconciled by the boot catch-up through the bridge's receipt.
-- Everything except `status` requires the **Memory v2** flag (Settings → Experimental).
+- `memory curate` = freezer pass (snapshot → curator → three-way merge). Minutes; report on completion.
+- `memory dream` — same `/etc/MEMORY.md` instructions (`dreamTimeoutSeconds`). With agentic memory, mines live transcript slice first. Outcome: `/sessions/.curation/dream-<date>-<cone>.md/status.json`.
+- Over-budget reference → `/shared/wiki/` (schema: `/shared/wiki/WIKI.md`; `wiki` skill) with pointer in memory file.
+- Manual pass reconciled at boot via bridge receipt.
+- All except `status` need **Memory v2** (Settings → Experimental).

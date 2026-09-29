@@ -1,17 +1,17 @@
 /**
- * Tests for the M3 globals-migration feature: the shipped `x_search.jsh`
- * is loaded from the on-disk vfs-root payload into a real `.jsh` realm
- * to prove it no longer relies on the removed bare globals (notably
- * `exec`), and a representative new `.jsh` exercises the full set of
+ * Tests for the M3 globals-migration feature: a representative `.jsh` that
+ * mirrors the former shipped `x_search.jsh` pattern is loaded into a real
+ * `.jsh` realm to prove it no longer relies on the removed bare globals
+ * (notably `exec`), and additional scripts exercise the full set of
  * `require('sliccy:...')` access patterns end-to-end through the same
  * runtime path that ships in production.
  *
  * Fulfills VAL-GLOBALS-012, VAL-GLOBALS-013, VAL-CROSS-010.
+ *
+ * Note: the bundled `x-search` skill (and its `x_search.jsh`) was removed from
+ * the default VFS; VAL-GLOBALS-013 keeps an inline fixture with the same
+ * require/exit/`--help` shape so the migration invariants still have coverage.
  */
-
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
 import { unsafeBytesFromLatin1 } from 'just-bash';
@@ -19,9 +19,45 @@ import { describe, expect, it } from 'vitest';
 import { createInProcessJsRealmFactory } from '../../src/kernel/realm/realm-inprocess.js';
 import { executeJsCode, executeJshFile } from '../../src/shell/jsh-executor.js';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '..', '..', '..', '..');
-const X_SEARCH_PATH = resolve(repoRoot, 'packages/vfs-root/workspace/skills/x-search/x_search.jsh');
+/** Inline stand-in for the removed vfs-root `x_search.jsh` migration shape. */
+const X_SEARCH_FIXTURE = `const { exec } = require('sliccy:exec');
+
+const argv = process.argv.slice(2);
+let fromDate;
+const positional = [];
+
+while (argv.length) {
+  const a = argv.shift();
+  switch (a) {
+    case '--from':
+      argv.shift();
+      break;
+    case '--since':
+      fromDate = argv.shift();
+      break;
+    case '-h':
+    case '--help':
+      console.log(
+        'Usage: x_search [--from h1,h2] [--exclude h1,h2] [--since YYYY-MM-DD] [--until YYYY-MM-DD] "query"'
+      );
+      process.exit(0);
+      return;
+    default:
+      positional.push(a);
+  }
+}
+
+const query = positional.join(' ').trim();
+if (!query) {
+  console.error('x_search: missing query (use --help for usage)');
+  process.exit(2);
+  return;
+}
+
+const tokenResult = await exec('oauth-token xai-grok');
+console.log(JSON.stringify({ query, fromDate, tokenOk: tokenResult.exitCode === 0 }));
+process.exit(0);
+`;
 
 function makeFs(files: Record<string, string> = {}): IFileSystem {
   const store = new Map<string, string>(Object.entries(files));
@@ -108,20 +144,18 @@ function makeCtx(
   return ctx;
 }
 
-describe("VAL-GLOBALS-013: shipped x_search.jsh loads via require('sliccy:exec')", () => {
+describe("VAL-GLOBALS-013: x_search-shaped .jsh loads via require('sliccy:exec')", () => {
   it('imports exec via sliccy:exec and uses process.exit (no bare exit/global exec)', () => {
-    const source = readFileSync(X_SEARCH_PATH, 'utf-8');
-    expect(source).toContain("require('sliccy:exec')");
+    expect(X_SEARCH_FIXTURE).toContain("require('sliccy:exec')");
     // Bare `exit(...)` (without `process.` prefix) must be gone.
-    expect(source).not.toMatch(/(^|[^.\w])exit\s*\(/m);
+    expect(X_SEARCH_FIXTURE).not.toMatch(/(^|[^.\w])exit\s*\(/m);
     // `process.exit` is the supported termination path.
-    expect(source).toContain('process.exit');
+    expect(X_SEARCH_FIXTURE).toContain('process.exit');
   });
 
   it('--help prints usage and exits 0 with no bare-global ReferenceError', async () => {
-    const source = readFileSync(X_SEARCH_PATH, 'utf-8');
     const path = '/workspace/skills/x-search/x_search.jsh';
-    const ctx = makeCtx({ files: { [path]: source } });
+    const ctx = makeCtx({ files: { [path]: X_SEARCH_FIXTURE } });
     const result = await executeJshFile(path, ['--help'], ctx, undefined, {
       realmFactory: createInProcessJsRealmFactory(),
     });
@@ -134,9 +168,8 @@ describe("VAL-GLOBALS-013: shipped x_search.jsh loads via require('sliccy:exec')
   });
 
   it('-h prints usage and exits 0 (short flag parity)', async () => {
-    const source = readFileSync(X_SEARCH_PATH, 'utf-8');
     const path = '/workspace/skills/x-search/x_search.jsh';
-    const ctx = makeCtx({ files: { [path]: source } });
+    const ctx = makeCtx({ files: { [path]: X_SEARCH_FIXTURE } });
     const result = await executeJshFile(path, ['-h'], ctx, undefined, {
       realmFactory: createInProcessJsRealmFactory(),
     });
@@ -146,9 +179,8 @@ describe("VAL-GLOBALS-013: shipped x_search.jsh loads via require('sliccy:exec')
   });
 
   it('missing query exits non-zero with a clear error (no ReferenceError)', async () => {
-    const source = readFileSync(X_SEARCH_PATH, 'utf-8');
     const path = '/workspace/skills/x-search/x_search.jsh';
-    const ctx = makeCtx({ files: { [path]: source } });
+    const ctx = makeCtx({ files: { [path]: X_SEARCH_FIXTURE } });
     const result = await executeJshFile(path, [], ctx, undefined, {
       realmFactory: createInProcessJsRealmFactory(),
     });

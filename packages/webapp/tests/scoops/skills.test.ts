@@ -328,9 +328,9 @@ describe('no-default-skills', () => {
     await createDefaultSkills(vfs);
     const skills = await loadSkills(vfs, '/workspace/skills');
     const prompt = formatSkillsForPrompt(skills);
-    expect(skills.some((skill) => skill.metadata.name === 'playwright-cli')).toBe(true);
-    expect(prompt).toContain('playwright-cli');
-    expect(prompt).toContain('/workspace/skills/playwright-cli/SKILL.md');
+    expect(skills.some((skill) => skill.metadata.name === 'delegation')).toBe(true);
+    expect(prompt).toContain('delegation');
+    expect(prompt).toContain('/workspace/skills/delegation/SKILL.md');
   });
 
   it('does not seed bundled skills when the flag is on, and the prompt lists only what is on disk', async () => {
@@ -344,13 +344,13 @@ describe('no-default-skills', () => {
     await createDefaultSkills(vfs);
     await createDefaultSharedFiles(vfs);
 
-    await expect(vfs.stat('/workspace/skills/playwright-cli/SKILL.md')).rejects.toThrow();
+    await expect(vfs.stat('/workspace/skills/delegation/SKILL.md')).rejects.toThrow();
     await expect(vfs.stat('/shared/CLAUDE.md')).resolves.toBeTruthy();
 
     const skills = await loadSkills(vfs, '/workspace/skills');
     expect(skills.map((skill) => skill.metadata.name)).toEqual(['custom']);
     const prompt = formatSkillsForPrompt(skills);
     expect(prompt).toContain('**custom**');
-    expect(prompt).not.toContain('playwright-cli');
+    expect(prompt).not.toContain('delegation');
   });
 });

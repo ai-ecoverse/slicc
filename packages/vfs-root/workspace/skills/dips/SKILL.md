@@ -14,22 +14,20 @@ allowed-tools: bash
 
 # Dips
 
-Dips are inline `shtml` code blocks in chat that hydrate into sandboxed interactive widgets. **Ephemeral** — no state persistence, no `readFile`. Only `slicc.lick(event)` is available for agent communication; always pack payloads as `{ action, data: { ... } }` for a predictable shape on the cone side.
+Inline `shtml` → sandboxed widgets. **Ephemeral** — no persistence, no `readFile`. Only `slicc.lick(event)`; pack `{ action, data: { ... } }`.
 
-**Use them generously.** A dip is the right answer any time a response could benefit from visualization, interaction, or a moment of delight. Don't reserve them for "complex" tasks — a slider that lets the user feel a number, a chart that beats a paragraph of stats, a button that's faster than typing "yes" all earn their keep.
+| Dip when …                   | Sprinkle when …                       |
+| ---------------------------- | ------------------------------------- |
+| Widget beats prose           | Persistent dashboard/editor           |
+| Choosing, confirming, tuning | Survives across turns                 |
+| Chart, animation, demo       | Needs `readFile`, `screenshot`, state |
+| Bit of fun                   | Long-running                          |
 
-| Reach for a dip when …                                 | Reach for a sprinkle when …                                     |
-| ------------------------------------------------------ | --------------------------------------------------------------- |
-| The answer would land better as a widget than as prose | The user needs a persistent dashboard / editor / multi-page app |
-| The user is choosing, confirming, or tuning a value    | The UI must survive across turns or sessions                    |
-| You want a chart, animation, or interactive demo       | You need `readFile`, `screenshot`, or any persistent state      |
-| The result deserves a bit of fun                       | The interaction is long-running                                 |
-
-For a gallery of 10 ready-to-adapt patterns (drag-on-canvas, slider→DOM reflow, paste→tree, ...) read the companion file: `read_file /workspace/skills/dips/patterns.md`.
+Patterns gallery: `read_file /workspace/skills/dips/patterns.md`.
 
 ## Card structure
 
-Always wrap interactive content in `.sprinkle-action-card` for visual containment. Don't output bare HTML — cards need a visible boundary.
+Wrap in `.sprinkle-action-card`:
 
 ```shtml
 <div class="sprinkle-action-card">
@@ -42,125 +40,66 @@ Always wrap interactive content in `.sprinkle-action-card` for visual containmen
 </div>
 ```
 
-When the user clicks a button, you receive the lick as a message. Respond conversationally, with another dip, or by spawning a scoop.
+Components: `.sprinkle-progress-bar` (`--progress`), `.sprinkle-status-light`, `.sprinkle-stat-card`, `.sprinkle-table`, `.sprinkle-badge` (`--positive`, `--negative`, `--notice`, `--informative`). Multiple cards: separate `.sprinkle-action-card` each; host adds spacing — no custom card margins.
 
-### Use existing components inside cards
+## Forms & sizing
 
-- **Progress** → `.sprinkle-progress-bar` with `--progress` CSS variable. Not raw colored divs.
-- **Status indicators** → `.sprinkle-status-light` with `--positive` / `--negative` / `--notice` variants.
-- **Stats** → `.sprinkle-stat-card` grid.
-- **Tables** → `.sprinkle-table` with `.sprinkle-badge` for severity.
-- **Badges** → `.sprinkle-badge` variants (`--positive`, `--negative`, `--notice`, `--informative`).
+Bare form elements are pre-styled to match S2: range (4px track, 18px thumb), text/textarea (layer-2 bg, accent focus; `rows` ok — no `overflow:auto` or fixed height), select, button (pill, 28px; `.sprinkle-btn--primary` for accent), canvas (full-width, rounded), mark (accent highlight). No custom CSS for basics.
 
-Multiple cards in one message: each is a separate `.sprinkle-action-card`. The iframe padding owns the outer spacing and the host sheet zeros card margin and adds `margin-top: 12px` between adjacent cards — don't add your own card margins (a class like `.my-card { margin-top: 12px }` loses on specificity). Don't wrap multiple cards in a single container.
+Iframe auto-sizes via `ResizeObserver`. **Never** `height`/`max-height`/`min-height`/`overflow:auto|scroll` on containers. Exception: `<canvas>` needs pixel `width`/`height`. Long content → sprinkle.
 
-## Pre-styled form elements
+## Theme
 
-Inside dips, bare HTML form elements are pre-styled to match S2:
+Inherits parent S2 tokens; `.theme-light` toggles on iframe `<html>`. Use `var(--s2-*)` or `light-dark()` — not `@media (prefers-color-scheme)`. See `/workspace/skills/sprinkles/style-guide.md`.
 
-- `<input type="range">` — 4px track, 18px accent thumb.
-- `<input type="text">`, `<textarea>` — S2 layer-2 background, accent focus ring. `rows` is fine as an initial size; never add `overflow:auto` or a fixed pixel height — the dip auto-sizes (see "Sizing").
-- `<select>` — S2 styled with focus ring.
-- `<button>` — pill-rounded, 28px height, hover state. Use `.sprinkle-btn--primary` class for the accent fill.
-- `<canvas>` — full-width, rounded corners.
-- `<mark>` — accent-tinted highlight.
+## Chart colors
 
-No custom CSS needed for basic widgets. Just write bare HTML.
+| Class       | Use             |
+| ----------- | --------------- |
+| `.c-purple` | Primary, AI/ML  |
+| `.c-teal`   | Success, growth |
+| `.c-coral`  | Secondary       |
+| `.c-pink`   | Tertiary        |
+| `.c-gray`   | Neutral         |
+| `.c-blue`   | Info            |
+| `.c-amber`  | Warning         |
+| `.c-red`    | Error           |
+| `.c-green`  | Complete        |
 
-## Sizing
+Two–three colors per viz, by meaning.
 
-The dip iframe auto-sizes to its content via `ResizeObserver` on `document.body`. **Your content's natural height becomes the iframe height. Don't fight it.**
+## Layout
 
-Never set `height`, `max-height`, `min-height`, `overflow: auto`, or `overflow: scroll` on dip containers. The outer iframe has `overflow: hidden`, so any internal scroller or fixed height clips content instead of growing the iframe. Let content flow and grow.
+Single-column only. Multi-column → sprinkle.
 
-The one exception is `<canvas>`: canvases need explicit pixel `width`/`height` for the drawing buffer. That's a drawing surface, not a scrollable container — set the pixel dimensions you need.
+## `agent` for cheap work
 
-If content is long enough that it would want to scroll, it belongs in a sprinkle.
-
-## Light & dark mode
-
-Dips inherit the parent's theme automatically. The parent injects its S2 tokens and toggles a `.theme-light` class on the iframe's `<html>` whenever the user flips themes; every `var(--s2-*)` token swaps in lockstep. **Never hard-code dark colors** — always use S2 tokens, or `light-dark()` for one-off custom colors (set `color-scheme: light dark` on an ancestor). **Do not use `@media (prefers-color-scheme: ...)`** — the parent toggle is class-based, so media queries desync. See `/workspace/skills/sprinkles/style-guide.md` for the full S2 token reference and a `light-dark()` example.
-
-## Color palette for charts
-
-Use these classes on chart elements, diagram nodes, or badges. Two or three colors per visualization, not six. Assign by meaning, not by sequence.
-
-| Class       | Use for                 |
-| ----------- | ----------------------- |
-| `.c-purple` | Primary category, AI/ML |
-| `.c-teal`   | Success, growth         |
-| `.c-coral`  | Secondary category      |
-| `.c-pink`   | Tertiary category       |
-| `.c-gray`   | Neutral, structural     |
-| `.c-blue`   | Informational           |
-| `.c-amber`  | Warning, in-progress    |
-| `.c-red`    | Error, critical         |
-| `.c-green`  | Success, complete       |
-
-## Layout & viewport
-
-Dips render in the chat column. They are **single-column by design** — don't author multi-column or sidebar+main layouts. The chat column is narrow on iOS / Sliccstart and on the extension side panel; multi-column dips break visually in those floats. If you need multi-column, use a sprinkle and let the user pop it to full-screen.
-
-## Cheap interactions via `agent`
-
-When a dip's lick handler needs to do real work (lookup, transformation, generation) but the cone or owning scoop should NOT be woken up, route the lick to a one-shot `agent` call.
-
-The flow:
-
-1. Dip emits a lick: `slicc.lick({action: 'compute', data: {input: ...}})`.
-2. The lick reaches the cone (or scoop) as a message.
-3. Instead of replying conversationally, the receiver shells out to `agent` with a tight allow-list and a self-contained prompt.
-4. `agent` returns the answer on stdout. The receiver writes the result back to the dip via a follow-up dip or via `sprinkle send` (if the dip was the entry point to a sprinkle flow).
+Dip lick → cone shells `agent` with tight allow-list; stdout → follow-up dip.
 
 ```bash
-# Inside a feed_scoop reply to a dip lick:
 result=$(agent "$TMPDIR" "curl,jq" "Fetch <url>, return field 'price' as a number.")
-# Render a fresh dip with `result` inline.
 ```
 
-`agent` is the right tool here because it has **no handoff**: ephemeral scoops don't notify the cone on completion, so a busy cone or sprinkle-owning scoop isn't pre-empted by every dip click. See `/workspace/skills/delegation/SKILL.md` for the full `agent` reference.
+No handoff — ephemeral scoops don't notify cone. See `/workspace/skills/delegation/SKILL.md`.
 
 ## Design rules
 
-- Use S2 CSS variables for all colors (`var(--s2-content-default)`, `var(--s2-bg-layer-2)`, ...).
-- Round all displayed numbers: `Math.round()`, `.toFixed(2)`, `.toLocaleString()`.
-- Set `step` on range sliders for clean values.
-- Show errors inline (not `alert()`).
-- Sentence case always — never Title Case or ALL CAPS.
-- One root `render()` / `calc()` function triggered by all inputs.
-- Call `render()` on load with defaults so the widget is immediately interactive.
+- S2 tokens for colors; round numbers; `step` on sliders; inline errors; sentence case.
+- One root `render()`/`calc()`; call on load with defaults.
 
 ## Don't
 
-- Don't hardcode hex colors or theme-specific values — use S2 tokens or `light-dark()` (see "Light & dark mode").
-- Don't use `@media (prefers-color-scheme: ...)` to swap colors — the parent's theme toggle is class-based and the media query desyncs.
-- Don't set `height`, `max-height`, `min-height`, `overflow: auto`, or `overflow: scroll` on dip containers — the iframe auto-sizes to content; fixed heights and internal scrollers clip it. Canvases are the one exception (they need pixel dimensions for the drawing buffer). Long content belongs in a sprinkle.
-- Don't build custom progress bars — use `.sprinkle-progress-bar`.
-- Don't build custom status dots — use `.sprinkle-status-light`.
-- Don't use numbered headings (1. File Operations) inside cards — the `__header` IS the heading.
-- Don't put prose / markdown headings between cards — let cards stand alone.
+- Hex colors, `@media (prefers-color-scheme)`, fixed heights/scrollers (except canvas).
+- Custom progress/status dots.
+- Numbered headings inside cards.
+- Prose between cards.
 
 ## Lick patterns
 
 ```javascript
-// Explicit "send to agent" button.
 slicc.lick({ action: 'use-config', data: { config: getCurrentConfig() } });
-
-// Lick on threshold crossing.
-if (total > budget) {
-  slicc.lick({ action: 'over-budget', data: { total, budget, breakdown } });
-}
-
-// Lick on completion.
+if (total > budget) slicc.lick({ action: 'over-budget', data: { total, budget, breakdown } });
 slicc.lick({ action: 'sort-complete', data: { algorithm: algo, comparisons: n } });
 ```
 
-> **Payload shape:** `slicc.lick(eventOrAction)` accepts either a plain
-> action string (`slicc.lick('cancel')`) or an `{ action, data? }`
-> object. **Always pack extra fields inside `data: { ... }`** — the
-> cone reads `event.data` as the payload, so top-level extras either
-> get dropped (sprinkle bridge) or folded into `data` as the whole
-> event object (dip bridge), neither of which gives the cone a
-> predictable shape. The canonical form works identically in both.
-
-The agent receives the lick as a structured message and can respond with prose, another dip, or spawn a scoop.
+`slicc.lick(eventOrAction)` accepts a plain string (`'cancel'`) or `{ action, data? }`. **Always pack extra fields in `data: { ... }`** — cone reads `event.data`; top-level extras get dropped or misfolded. Agent receives the lick and can reply with prose, another dip, or spawn a scoop.

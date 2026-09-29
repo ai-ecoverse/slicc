@@ -27,9 +27,9 @@ describe('upgradeRuntimePath', () => {
   });
 
   it('keeps bundled skills in scope until no-default-skills is on', () => {
-    const skill = 'packages/vfs-root/workspace/skills/playwright-cli/SKILL.md';
+    const skill = 'packages/vfs-root/workspace/skills/delegation/SKILL.md';
     const policy = 'packages/vfs-root/etc/sudoers';
-    expect(upgradeRuntimePath(skill)).toBe('/workspace/skills/playwright-cli/SKILL.md');
+    expect(upgradeRuntimePath(skill)).toBe('/workspace/skills/delegation/SKILL.md');
     expect(upgradeRuntimePath(policy)).toBe('/etc/sudoers');
 
     setFeatureFlagOverride('no-default-skills', 'on');

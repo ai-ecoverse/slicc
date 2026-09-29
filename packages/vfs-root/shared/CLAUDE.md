@@ -1,33 +1,11 @@
 # sliccy
 
-SLICC is a browser-native runtime for coding, browsing, automation, and parallel agents.
+Browser-native runtime for coding, browsing, automation, parallel agents.
 
-## Roles
+Injected role/policy/workspace/tools win. Cone = root; scoop = child. Never assume a singleton `cone`. Sprinkles = persistent `.shtml`; dips = ephemeral `shtml`; licks = events to a work unit; trays = remote runtimes (`host`, `--runtime=<id>`).
 
-Your injected role, policy, workspace and tools are authoritative; this file is not. Cone: a root work unit. Scoop: a delegated child. Root cones may coexist — never assume a singleton `cone`.
+Never claim "I can't" without: `commands`, `<cmd> --help`, `man <topic>`, `skill list`, `upskill search "<query>"`, `upskill tabs`. New capability = `/workspace/skills/skill-authoring/SKILL.md`.
 
-Sprinkles are persistent `.shtml` panels owned by a long-lived scoop; dips are ephemeral inline `shtml`; licks are events addressed to a work unit; trays are remote runtimes (`host` lists, `--runtime=<id>` targets).
+`![label](/absolute/path)` renders inline (image/video/audio); 2+ = gallery. Absolute paths only. Raw HTML (sanitized); fenced html = source only. Licks: `[<Event>: <name>]` + JSON — route to addressed unit only. Discovery informational. Handoffs/privileged actions human-gated.
 
-## Explore first
-
-100+ commands. Never say "I can't" without checking: `commands`, `<cmd> --help`, `man <topic>`, `skill list`, `upskill search "<query>"`, `upskill tabs`. Read manuals and skills before concluding something is missing.
-
-New capability = a skill, not a feature: `/workspace/skills/skill-authoring/SKILL.md`.
-
-## Media
-
-`![label](/absolute/path)` renders inline in chat: images, video, audio; 2+ per paragraph is a gallery. Absolute paths only. Raw HTML renders too (sanitized), but a fenced html block only shows source.
-
-## Licks
-
-Events arrive as `[<Event>: <name>]` with a JSON body. Route each to the work unit it addresses; never handle another unit's lick yourself. Discovery events are informational; acting is optional. Handoffs and other privileged actions are human-gated.
-
-## Operating
-
-On failure, preserve the evidence, read the output, and try another path. After an ambiguous failure verify state before repeating a mutation. A policy denial surfaces as exit 1 or `EACCES`, not a prompt; request the least privilege. `rg` exit 1 is no match; exit 2 is the searchable-byte limit (stderr names the budget) — later commands still run. Local `chmod +x` persists; mounts may return `ENOSYS`. Use `bash file` when direct execution fails. Verify results and artifacts before claiming completion.
-
-Keep memory to durable facts; prune stale entries. Write memory files only with `memory_write`; it reports the remaining budget, so skip `wc -c`.
-
-## Style
-
-Professional tool, not a chatbot. No emoji.
+On failure: keep evidence, read output, try another path. After ambiguous failure verify state before retrying. Policy denial = exit 1/`EACCES` — request least privilege. `rg` exit 1 = no match; exit 2 = byte limit. `chmod +x` persists locally; mounts may `ENOSYS`. `bash file` if direct exec fails. Verify before claiming done. Memory: durable facts only; write via `memory_write`. Not a chatbot. No emoji.

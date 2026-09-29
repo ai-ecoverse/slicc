@@ -1,22 +1,16 @@
-# Lucide Icons Example
+# Lucide Icons in Sprinkles
 
-This shows how to use Lucide icons in inline sprinkles instead of emojis.
+Use `data-lucide` instead of emojis. Browse [lucide.dev/icons](https://lucide.dev/icons).
 
-## Simple confirmation card with icons
+## Confirmation card
 
 ```shtml
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">
-    <i
-      data-lucide="check-circle"
-      class="sprinkle-icon"
-      style="color: var(--uxc-positive-text)"
-    ></i>
+    <i data-lucide="check-circle" class="sprinkle-icon" style="color: var(--uxc-positive-text)"></i>
     Task Completed
   </div>
-  <div class="sprinkle-action-card__body">
-    Your changes have been saved successfully.
-  </div>
+  <div class="sprinkle-action-card__body">Your changes have been saved.</div>
   <div class="sprinkle-action-card__actions">
     <button class="sprinkle-btn" onclick="slicc.lick('dismiss')">
       <i data-lucide="x" class="sprinkle-icon"></i> Dismiss
@@ -25,86 +19,25 @@ This shows how to use Lucide icons in inline sprinkles instead of emojis.
 </div>
 ```
 
-## Status options with icons
+## Action menu
 
 ```shtml
 <div class="sprinkle-action-card">
-  <div class="sprinkle-action-card__header">Select Status</div>
+  <div class="sprinkle-action-card__header"><i data-lucide="file-text" class="sprinkle-icon"></i> Document Actions</div>
   <div class="sprinkle-action-card__body">
     <div class="sprinkle-stack">
-      <button class="sprinkle-btn" onclick="slicc.lick({action:'status',data:{value:'success'}})">
-        <i
-          data-lucide="check-circle"
-          class="sprinkle-icon"
-          style="color: var(--uxc-positive-text)"
-        ></i>
-        Success
-      </button>
-      <button class="sprinkle-btn" onclick="slicc.lick({action:'status',data:{value:'warning'}})">
-        <i
-          data-lucide="alert-triangle"
-          class="sprinkle-icon"
-          style="color: var(--uxc-notice-text)"
-        ></i>
-        Warning
-      </button>
-      <button class="sprinkle-btn" onclick="slicc.lick({action:'status',data:{value:'error'}})">
-        <i
-          data-lucide="x-circle"
-          class="sprinkle-icon"
-          style="color: var(--uxc-negative-text)"
-        ></i>
-        Error
-      </button>
-      <button class="sprinkle-btn" onclick="slicc.lick({action:'status',data:{value:'info'}})">
-        <i data-lucide="info" class="sprinkle-icon" style="color: var(--uxc-accent-text)"></i> Info
-      </button>
+      <button class="sprinkle-btn" onclick="slicc.lick({action:'edit'})"><i data-lucide="edit-3" class="sprinkle-icon"></i> Edit</button>
+      <button class="sprinkle-btn" onclick="slicc.lick({action:'download'})"><i data-lucide="download" class="sprinkle-icon"></i> Download</button>
+      <button class="sprinkle-btn" onclick="slicc.lick({action:'delete'})"><i data-lucide="trash-2" class="sprinkle-icon" style="color: var(--uxc-negative-text)"></i> Delete</button>
     </div>
   </div>
 </div>
 ```
 
-## Action menu with icons
+## Common names
 
-```shtml
-<div class="sprinkle-action-card">
-  <div class="sprinkle-action-card__header">
-    <i data-lucide="file-text" class="sprinkle-icon"></i> Document Actions
-  </div>
-  <div class="sprinkle-action-card__body">
-    <div class="sprinkle-stack">
-      <button class="sprinkle-btn" onclick="slicc.lick({action:'edit'})">
-        <i data-lucide="edit-3" class="sprinkle-icon"></i> Edit
-      </button>
-      <button class="sprinkle-btn" onclick="slicc.lick({action:'download'})">
-        <i data-lucide="download" class="sprinkle-icon"></i> Download
-      </button>
-      <button class="sprinkle-btn" onclick="slicc.lick({action:'share'})">
-        <i data-lucide="share-2" class="sprinkle-icon"></i> Share
-      </button>
-      <button class="sprinkle-btn" onclick="slicc.lick({action:'delete'})">
-        <i
-          data-lucide="trash-2"
-          class="sprinkle-icon"
-          style="color: var(--uxc-negative-text)"
-        ></i>
-        Delete
-      </button>
-    </div>
-  </div>
-</div>
-```
-
-## Common icon names
-
-**Status**: `check`, `check-circle`, `x`, `x-circle`, `alert-triangle`, `alert-circle`, `info`, `help-circle`
-
-**Actions**: `edit`, `edit-2`, `edit-3`, `save`, `download`, `upload`, `trash`, `trash-2`, `plus`, `minus`, `search`
-
-**Navigation**: `arrow-right`, `arrow-left`, `arrow-up`, `arrow-down`, `chevron-right`, `chevron-left`, `chevron-up`, `chevron-down`, `external-link`
-
-**Files**: `file`, `file-text`, `folder`, `folder-open`, `image`, `code`
-
-**UI**: `settings`, `menu`, `more-vertical`, `more-horizontal`, `eye`, `eye-off`, `lock`, `unlock`
-
-Browse all icons at [lucide.dev/icons](https://lucide.dev/icons)
+**Status**: `check`, `check-circle`, `x`, `x-circle`, `alert-triangle`, `info`
+**Actions**: `edit-3`, `save`, `download`, `trash-2`, `plus`, `search`
+**Navigation**: `arrow-right`, `chevron-right`, `external-link`
+**Files**: `file-text`, `folder`, `image`, `code`
+**UI**: `settings`, `menu`, `eye`, `lock`

@@ -343,7 +343,7 @@ Default files bundled into the VFS at startup via `import.meta.glob`:
 | Path                | VFS Target           | Purpose                                                        |
 | ------------------- | -------------------- | -------------------------------------------------------------- |
 | `shared/CLAUDE.md`  | `/shared/CLAUDE.md`  | Agent system-level instructions (loaded into sliccy's context) |
-| `workspace/skills/` | `/workspace/skills/` | Default skill packages (playwright-cli, sprinkles, etc.)       |
+| `workspace/skills/` | `/workspace/skills/` | Default skill packages (delegation, sprinkles, etc.)           |
 | `shared/sprinkles/` | `/shared/sprinkles/` | Default sprinkle panels (welcome)                              |
 
 ### packages/webapp/src/ — Root
