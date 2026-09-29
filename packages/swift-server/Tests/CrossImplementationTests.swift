@@ -412,4 +412,194 @@ final class CrossImplementationTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - Raw-fetch contract (#3571)
+
+    // Pinned in `packages/shared-ts/tests/cross-impl-vectors.test.ts`
+    // ("cross-implementation raw-fetch contract"): what a bridge puts on the
+    // wire in raw mode, so `RawFetchProtocol.swift` answers like node-server.
+
+    private static func pairs(_ list: [(String, String)]) -> RawHeaderList {
+        list.map { RawHeaderPair($0.0, $0.1) }
+    }
+
+    private static let rawFrames: [(RawFetchResponseHead, String)] = [
+        (
+            RawFetchResponseHead(
+                status: 302,
+                statusText: "Found",
+                headers: pairs([("location", "/next"), ("set-cookie", "a=1; Path=/"), ("set-cookie", "b=2")]),
+                url: "https://example.test/start"
+            ),
+            "000000997b22737461747573223a3330322c2273746174757354657874223a22466f756e64222c226865616465"
+                + "7273223a5b5b226c6f636174696f6e222c222f6e657874225d2c5b227365742d636f6f6b6965222c22613d313b"
+                + "20506174683d2f225d2c5b227365742d636f6f6b6965222c22623d32225d5d2c2275726c223a2268747470733a"
+                + "2f2f6578616d706c652e746573742f7374617274227d"
+        ),
+        (
+            RawFetchResponseHead(
+                status: 200,
+                statusText: "",
+                headers: pairs([
+                    ("x-escapes", "q\"b\\s/\u{08}\u{0C}\n\r\t\u{01}\u{1F}\u{7F}"),
+                    ("x-unicode", "bücher 😀 \u{2028}"),
+                ]),
+                url: "https://bücher.example/"
+            ),
+            "0000009c7b22737461747573223a3230302c2273746174757354657874223a22222c2268656164657273223a5b"
+                + "5b22782d65736361706573222c22715c22625c5c732f5c625c665c6e5c725c745c75303030315c75303031667f"
+                + "225d2c5b22782d756e69636f6465222c2262c3bc6368657220f09f988020e280a8225d5d2c2275726c223a2268"
+                + "747470733a2f2f62c3bc636865722e6578616d706c652f227d"
+        ),
+    ]
+
+    private struct RawResponseHeadersVector {
+        let name: String
+        let method: String
+        let status: Int
+        let headers: [(String, String)]
+        let bodyRewritten: Bool
+        let expected: [(String, String)]
+    }
+
+    private static let rawResponseHeaders: [RawResponseHeadersVector] = [
+        .init(
+            name: "decoded gzip drops coding, length and hop fields",
+            method: "GET",
+            status: 200,
+            headers: [
+                ("content-encoding", "gzip"), ("content-length", "42"), ("connection", "X-Hop, keep-alive"),
+                ("x-hop", "local"), ("keep-alive", "timeout=5"), ("etag", "\"v1\""),
+            ],
+            bodyRewritten: false,
+            expected: [("etag", "\"v1\"")]
+        ),
+        .init(
+            name: "HEAD keeps the representation headers",
+            method: "HEAD",
+            status: 200,
+            headers: [("content-encoding", "gzip"), ("content-length", "1234")],
+            bodyRewritten: false,
+            expected: [("content-encoding", "gzip"), ("content-length", "1234")]
+        ),
+        .init(
+            name: "a coding the float does not undo stays with its length",
+            method: "GET",
+            status: 200,
+            headers: [("Content-Encoding", "br"), ("Content-Length", "6")],
+            bodyRewritten: false,
+            expected: [("Content-Encoding", "br"), ("Content-Length", "6")]
+        ),
+        .init(
+            name: "identity coding goes, a rewritten body loses its length",
+            method: "GET",
+            status: 200,
+            headers: [("content-encoding", "identity"), ("content-length", "9"), ("content-type", "text/plain")],
+            bodyRewritten: true,
+            expected: [("content-type", "text/plain")]
+        ),
+        .init(
+            name: "304 keeps everything but hop fields",
+            method: "GET",
+            status: 304,
+            headers: [("content-encoding", "gzip"), ("transfer-encoding", "chunked")],
+            bodyRewritten: true,
+            expected: [("content-encoding", "gzip")]
+        ),
+        .init(
+            name: "gzip then identity counts as decoded",
+            method: "GET",
+            status: 200,
+            headers: [("content-encoding", "gzip, identity"), ("content-length", "3")],
+            bodyRewritten: false,
+            expected: []
+        ),
+    ]
+
+    private static let rawRequestHeadersInput: [(String, String)] = [
+        ("User-Agent", "curl/8.22.0"), ("Cookie", "a=1"), ("Accept-Encoding", "zstd"),
+        ("Connection", "X-Hop, keep-alive"), ("X-Hop", "drop me"), ("Host", "example.test"),
+        ("Content-Length", "3"), ("Expect", "100-continue"), ("TE", "trailers"), ("cookie", "b=2"),
+        ("X-Multi", "1"), ("x-multi", "2"),
+    ]
+    private static let rawRequestHeadersExpected: [(String, String)] = [
+        ("user-agent", "curl/8.22.0"), ("cookie", "a=1; b=2"), ("x-multi", "1, 2"),
+    ]
+
+    private static let rawRequestHeads: [(String, RawFetchRequestHead?)] = [
+        (
+            #"{"url":"https://bücher.example/","method":"PROPFIND","headers":[["X-Name","ü"]]}"#,
+            RawFetchRequestHead(url: "https://bücher.example/", method: "PROPFIND", headers: pairs([("X-Name", "ü")]))
+        ),
+        (
+            #"{"url":"https://e.test/","method":"GET","headers":[]}"#,
+            RawFetchRequestHead(url: "https://e.test/", method: "GET", headers: [])
+        ),
+        (#"{"url":1,"method":"GET","headers":[]}"#, nil),
+        (#"{"url":"https://e.test/","method":"GET /","headers":[]}"#, nil),
+        (#"{"url":"https://e.test/","method":"","headers":[]}"#, nil),
+        (#"{"url":"https://e.test/","method":"GET","headers":[["a"]]}"#, nil),
+        (#"{"url":"https://e.test/","method":"GET","headers":[["a",1]]}"#, nil),
+        (#"{"url":"https://e.test/","method":"GET","headers":[["a",true]]}"#, nil),
+        (#"{"url":"https://e.test/","method":"GET"}"#, nil),
+        ("[]", nil),
+        ("not json", nil),
+    ]
+
+    private static let rawUploadStreams: [(headers: [(String, String)], bodyLength: Int?, canStream: Bool, streams: Bool)] = [
+        ([("Content-Type", "application/octet-stream")], nil, true, true),
+        ([], nil, true, true),
+        ([("Content-Type", "application/json")], nil, true, false),
+        ([("Content-Type", "application/octet-stream"), ("X-Slicc-Hmac-Sign", "TOKEN:x-signature")], nil, true, false),
+        ([("Content-Type", "application/octet-stream")], 1024, true, false),
+        ([("Content-Type", "application/octet-stream")], 8 * 1024 * 1024, true, true),
+        ([("Content-Type", "application/octet-stream")], nil, false, false),
+    ]
+
+    func testRawResponseFramesMatchPinnedBytes() {
+        for (head, hex) in Self.rawFrames {
+            let frame = RawFetchProtocol.encodeResponseFrame(head)
+            XCTAssertEqual(frame.map { String(format: "%02x", $0) }.joined(), hex, "\(head.status)")
+        }
+    }
+
+    func testRawResponseHeadersMatchPinnedTable() {
+        for vector in Self.rawResponseHeaders {
+            let actual = RawFetchProtocol.responseHeaders(
+                method: vector.method,
+                status: vector.status,
+                headers: Self.pairs(vector.headers),
+                bodyRewritten: vector.bodyRewritten,
+                decodedCodings: RawFetchProtocol.decodedCodings
+            )
+            XCTAssertEqual(actual, Self.pairs(vector.expected), vector.name)
+        }
+    }
+
+    func testRawRequestHeadersStripAndFoldLikeTypeScript() {
+        let folded = RawFetchProtocol.foldRequestHeaders(
+            RawFetchProtocol.stripRequestHeaders(Self.pairs(Self.rawRequestHeadersInput))
+        )
+        XCTAssertEqual(folded, Self.pairs(Self.rawRequestHeadersExpected))
+    }
+
+    func testRawRequestHeadsDecodeLikeTypeScript() {
+        for (value, head) in Self.rawRequestHeads {
+            XCTAssertEqual(RawFetchProtocol.decodeRequestHead(value), head, value)
+        }
+    }
+
+    func testRawUploadStreamDecisionsMatchPinnedTable() {
+        for vector in Self.rawUploadStreams {
+            XCTAssertEqual(
+                RawFetchProtocol.uploadStreams(
+                    headers: Self.pairs(vector.headers),
+                    bodyLength: vector.bodyLength,
+                    canStream: vector.canStream
+                ),
+                vector.streams,
+                "\(vector.headers) \(String(describing: vector.bodyLength))"
+            )
+        }
+    }
 }

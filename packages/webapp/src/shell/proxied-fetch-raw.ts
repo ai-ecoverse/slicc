@@ -116,8 +116,8 @@ function fromReply(reply: RawFetchProbeReply): RawFetchCapabilities {
 }
 
 /**
- * Ask the bridge. A bridge that answers without raw mode (swift-server, an
- * older node-server: 400; no bridge: 404) is definitive; one that could not
+ * Ask the bridge. A bridge that answers without raw mode (a node-server or
+ * swift-server that predates it: 400; no bridge: 404) is definitive; one that could not
  * be reached is asked again next time.
  */
 async function probeBridge(url: string): Promise<ProbeAnswer> {
@@ -177,8 +177,8 @@ function probeTarget(): { key: string; probe: () => Promise<ProbeAnswer> } {
 /**
  * Raw-mode capabilities of the current float, asked of the transport once
  * per bridge or extension rather than assumed from the float: a bridge that
- * routes `/api/fetch-proxy` need not implement raw mode (swift-server, an
- * older node-server), nor need an installed extension (one that predates
+ * routes `/api/fetch-proxy` need not implement raw mode (an older
+ * node-server or swift-server), nor need an installed extension (one that predates
  * it). Answers are cached; see {@link ProbeAnswer} for how long.
  */
 export function getRawFetchCapabilities(): Promise<RawFetchCapabilities> {

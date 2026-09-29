@@ -9,15 +9,15 @@
  * with (413 for a body over the float's cap, 403 for a secret used on a
  * domain it is not scoped to).
  *
- * Where a float has no raw mode (Sliccstart's swift-server, a bridge that
+ * Where a float has no raw mode (a node-server or Sliccstart bridge that
  * predates it) the proxy falls back to {@link proxiedFetchTransport}, with
  * that path's reduced semantics (redirects followed, no streaming in the
  * extension): up front when the float says so, or on the first request a
  * bridge answers `unsupported`, which is retried on the fallback.
  *
  * Float differences the proxy passes through: node-server joins repeated
- * response fields (except `Set-Cookie`) with `, ` where the extension keeps
- * them apart; the extension adds `Accept-Language` / `Sec-Fetch-*` upstream
+ * response fields (except `Set-Cookie`) with `, ` where the extension and
+ * swift-server keep them apart; swift-server offers no `br`; the extension adds `Accept-Language` / `Sec-Fetch-*` upstream
  * and decodes zstd; Chrome reads a response ahead of any reader, so there
  * the backpressure the proxy applies stops at the browser.
  */

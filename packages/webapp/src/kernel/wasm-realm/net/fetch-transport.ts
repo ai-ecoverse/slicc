@@ -1,8 +1,8 @@
 /**
  * `fetch-transport.ts` — the realm proxy's fallback {@link RealmTransport}:
  * the browser-shaped proxied fetch (`shell/proxied-fetch.ts`), for a float
- * whose fetch path has no raw mode (`raw-transport.ts` picks): Sliccstart's
- * swift-server, or a bridge that predates raw mode. It rides the
+ * whose fetch path has no raw mode (`raw-transport.ts` picks): a bridge
+ * (node-server or Sliccstart's swift-server) that predates raw mode. It rides the
  * `/api/fetch-proxy` route or the extension service worker's
  * `fetch-proxy.fetch` Port (bridged from the kernel worker through the page). Secrets ride along as they do for the shell's
  * `curl`: a masked value is unmasked where the request leaves (node-server,
