@@ -34,6 +34,7 @@ import { createFfprobeCommand } from './ffprobe-command.js';
 import { createFlagsCommand } from './flags-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createGelatiereCommand } from './gelatiere-command.js';
+import { createGitCredentialCommand, type GitCredentialDeps } from './git-credential-command.js';
 import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
 import { createHfCommand } from './hf-command.js';
@@ -99,7 +100,7 @@ import { createUptimeCommand } from './uptime-command.js';
 import { createUsbCommand } from './usb-command.js';
 import { createV86Command } from './v86-command.js';
 import type { NativeGate } from './wasm/launch.js';
-import { createWasmCommand } from './wasm-command.js';
+import { createWasmCommand, type WasmCommandOptions } from './wasm-command.js';
 import { createWebhookCommand, type WebhookCommandOptions } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWfProgressCommand } from './wf-progress-command.js';
@@ -194,6 +195,13 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * outlives the secret and expands to a value nothing can unmask.
    */
   unsetEnv?: (name: string) => void;
+  /**
+   * The GitHub token and its domains for `git-credential-slicc`, the helper
+   * native git asks (from the shell's `GitCommands` and the OAuth provider).
+   */
+  gitCredential?: Pick<GitCredentialDeps, 'githubToken' | 'githubDomains'>;
+  /** The identity SLICC's `git` commits with, for native git (`wasm`). */
+  gitIdentity?: WasmCommandOptions['gitIdentity'];
   /** Runtime topology and tray-status readers for the webhook command. */
   webhook?: WebhookCommandOptions;
   /** Runtime topology reader for the crontask command. */
@@ -251,6 +259,18 @@ function packageManagerCommands(options: SupplementalCommandsConfig): Command[] 
   ];
 }
 
+/** `wasm` options: the shell's process table, terminal, policy, catalog and git identity. */
+function wasmCommandOptions(options: SupplementalCommandsConfig): WasmCommandOptions {
+  const catalog = options.scriptCatalog;
+  return {
+    buildProcessConfig: options.buildProcessConfig,
+    terminal: options.terminal,
+    gate: options.gateNativeCommand,
+    commands: catalog && (() => catalog.getWasmCommands()),
+    gitIdentity: options.gitIdentity,
+  };
+}
+
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
   const commands: Command[] = [
     createCommandsCommand({
@@ -271,12 +291,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createRmdirCommand(),
     createStatCommand(),
     createCmpCommand(),
-    createWasmCommand({
-      buildProcessConfig: options.buildProcessConfig,
-      terminal: options.terminal,
-      gate: options.gateNativeCommand,
-      commands: options.scriptCatalog && (() => options.scriptCatalog!.getWasmCommands()),
-    }),
+    createWasmCommand(wasmCommandOptions(options)),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),
@@ -343,6 +358,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     // write gating — one properly-composed broker per float (#2276), not an
     // independent one `secret-command.ts` constructs for itself.
     createSecretCommand(secretCommandDeps(options)),
+    createGitCredentialCommand(options.gitCredential),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
     createPbcopyCommand(),

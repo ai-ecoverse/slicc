@@ -60,6 +60,28 @@ Two clone shapes are supported. Prefer the first — the second is an escape hat
 
 Do **not** treat `git config github.token "$(oauth-token github)"` as a long-lived setup. That stores a **snapshot** of the current masked value. When the broker renews, the snapshot goes stale and a bare `fatal: HTTP Error: 401 Unauthorized` used to be the only signal. Prefer leaving the bridge to OAuth login; if you must set `github.token` manually (e.g. a PAT), capture **stdout only** — never `2>&1 | tail` — and know that a 401 will trigger one silent renew+retry before surfacing an actionable hint.
 
+### Native git (`wasm-git`): `git-credential-slicc`
+
+Native git in the wasm realm reaches remotes through the realm's HTTP proxy (see the request-shape table below) and asks for credentials the way git always does, through a credential helper. SLICC configures one by default in a system gitconfig it writes to `~/.config/slicc/gitconfig` and points `GIT_CONFIG_SYSTEM` at (unless the shell exports its own):
+
+```ini
+[credential]
+	helper = slicc
+[user]
+	name = <SLICC git's user.name>
+	email = <SLICC git's user.email>
+```
+
+`git-credential-slicc` is a slicc shell command. On `get` it answers with the credential SLICC's own `git` would use, **masked**:
+
+- for a host the GitHub OAuth token's domains cover (`github.com`, `*.github.com`, … plus any extras), the OAuth mask from `/workspace/.git/github-token`, freshened first exactly as before a built-in `git` network op (an expired token is renewed before it is handed out), else `$GH_TOKEN` / `$GITHUB_TOKEN`, scoped by that secret's own domains (a plain value that is no stored secret goes to GitHub only);
+- for any other host, a `*_TOKEN` / `*_PAT` secret whose domains cover it (an exact domain before a wildcard; a `*` scope counts for no host);
+- nothing for plain `http`, or for a host no credential covers, so a `github.com` token never goes to `evil.example`. Git then fails as it would without credentials.
+
+The username is the URL's, else `x-access-token`. Git sends the pair as `Authorization: Basic`, which the fetch path unmasks at egress like any header, so the remote gets the real token while `git credential fill`, `GIT_TRACE_CURL` and error messages show only the mask. `store` does nothing; `erase` (the remote rejected the credential) renews the OAuth token when it was the one rejected.
+
+The identity lines carry the `user.name` / `user.email` the built-in `git` commits with (the global config the GitHub login seeds, else its defaults). Being system scope, both lines lose to the user's `~/.gitconfig` and a repository's config: set `credential.helper =` (empty) there to drop the slicc helper, or export `GIT_CONFIG_SYSTEM` to use another file.
+
 ### Shell-env naming convention
 
 `secret set` injects the masked value into the owning shell's env and `secret delete` removes it again, so `$NAME` never outlives the secret it stands for. That symmetry matters: a mask whose secret is gone still expands, so the request is built and sent, but the fetch proxy has no secret left to match — it neither unmasks nor 403s, and upstream silently receives a dead credential.

@@ -8,6 +8,7 @@ import { defineCommand } from 'just-bash';
 import type { JshProcessConfig } from '../jsh-executor.js';
 import type { TerminalPort } from '../terminal-port.js';
 import type { InstalledCommandsLookup, NativeGate } from './wasm/launch.js';
+import type { RunWasmOptions } from './wasm/run.js';
 
 export interface WasmCommandOptions {
   /** Registers each process in the process table (`ps`, `kill`), as `node` does. */
@@ -18,6 +19,8 @@ export interface WasmCommandOptions {
   gate?: NativeGate;
   /** The installed commands as the shell's catalog knows them. */
   commands?: InstalledCommandsLookup;
+  /** The identity SLICC's `git` commits with, for native git's system config. */
+  gitIdentity?: RunWasmOptions['gitIdentity'];
 }
 
 export function createWasmCommand(options: WasmCommandOptions = {}): Command {
@@ -28,6 +31,7 @@ export function createWasmCommand(options: WasmCommandOptions = {}): Command {
       terminal: options.terminal,
       gate: options.gate,
       commands: options.commands,
+      gitIdentity: options.gitIdentity,
     });
   });
 }

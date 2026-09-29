@@ -95,13 +95,75 @@ export function realmCaEnv(path: string): Record<string, string> {
   return { SSL_CERT_FILE: path, CURL_CA_BUNDLE: path, GIT_SSL_CAINFO: path };
 }
 
+/** Where the realm's system gitconfig lives, whatever the home: how its variable is recognized. */
+const GIT_CONFIG_MARK = '/.config/slicc/gitconfig';
+
+/** Where native git's system config lives on the VFS: under the home. */
+export function realmGitConfigPath(home: string): string {
+  return `${home.replace(/\/+$/, '')}${GIT_CONFIG_MARK}`;
+}
+
+/** The identity SLICC's own `git` commits with. */
+export interface GitIdentity {
+  name: string;
+  email: string;
+}
+
+/** A gitconfig value, quoted: a backslash or quote escaped, a line break a space. */
+function gitValue(value: string): string {
+  return `"${value.replace(/[\r\n]+/g, ' ').replace(/[\\"]/g, (c) => `\\${c}`)}"`;
+}
+
+/**
+ * Native git's system config (`GIT_CONFIG_SYSTEM`): the credential helper,
+ * `git-credential-slicc` (a shell command the realm runs for it, answering
+ * with SLICC's credentials, masked, for the proxy to unmask at egress), and
+ * SLICC's git identity. System scope, so the user's `~/.gitconfig` and a
+ * repository's config win over both.
+ */
+export function realmGitConfig(identity?: GitIdentity): string {
+  const lines = ['[credential]', '\thelper = slicc'];
+  if (identity) {
+    lines.push(
+      '[user]',
+      `\tname = ${gitValue(identity.name)}`,
+      `\temail = ${gitValue(identity.email)}`
+    );
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Write the realm's system gitconfig to `path` when it differs, and answer
+ * the variable that points native git at it; none when it cannot be written.
+ */
+export async function ensureRealmGitConfig(
+  fs: CaFileSystem,
+  path: string,
+  identity?: GitIdentity
+): Promise<Record<string, string>> {
+  try {
+    const content = realmGitConfig(identity);
+    const current = (await fs.exists(path)) ? await fs.readFile(path) : undefined;
+    if (current !== content) {
+      await fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true });
+      await fs.writeFile(path, content);
+    }
+    return { GIT_CONFIG_SYSTEM: path };
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Whether `name=value` is one of the defaults a program gets from the realm
- * (the proxy, the CA bundle), as opposed to something exported on purpose.
+ * (the proxy, the CA bundle, git's system config), as opposed to something
+ * exported on purpose.
  */
 export function isRealmDefault(name: string, value: string): boolean {
   const proxy = realmNetworkEnv();
   if (name in proxy) return proxy[name] === value;
+  if (name === 'GIT_CONFIG_SYSTEM') return value.endsWith(GIT_CONFIG_MARK);
   return name in realmCaEnv('') && value.includes(CA_FILE_MARK);
 }
 
