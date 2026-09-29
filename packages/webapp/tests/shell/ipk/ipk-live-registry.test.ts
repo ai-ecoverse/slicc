@@ -134,4 +134,17 @@ describe.skipIf(!LIVE_REGISTRY)('ipk against the live npm registry', () => {
     expect(out.notes?.length).toBeGreaterThan(10);
     await fs.dispose();
   }, 120_000);
+
+  it("keeps wasm-git's executable helpers executable (git submodule needs it)", async () => {
+    const fs = await VirtualFS.create({ dbName: `ipk-live-${dbCounter++}`, wipe: true });
+    await installPackages(['@ai-ecoverse/wasm-git@2.55.0-4'], {
+      fs,
+      fetch: nodeFetch,
+      cwd: '/work',
+      global: true,
+    });
+    const core = '/shared/lib/node_modules/@ai-ecoverse/wasm-git/libexec/git-core';
+    expect((await fs.stat(`${core}/git-submodule`)).mode! & 0o7777).toBe(0o755);
+    await fs.dispose();
+  }, 300_000);
 });

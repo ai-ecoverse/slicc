@@ -1,5 +1,6 @@
 import type { SecureFetch } from 'just-bash';
-import { FsError, type VirtualFS } from '../../fs/index.js';
+import { FsError, type MetadataUpdate, type VirtualFS } from '../../fs/index.js';
+import { normalizeFileMode } from './file-modes.js';
 import { type ExtractedCondaEntry, extractCondaArchive } from './mamba-extract.js';
 import { CONDA_META_DIR, CONDA_PREFIX, DEFAULT_CONDA_CHANNELS } from './mamba-prefix.js';
 import {
@@ -173,6 +174,7 @@ async function writeEntries(
   }
 
   const written: string[] = [];
+  const modes: MetadataUpdate[] = [];
 
   const files = entries.filter((e) => !e.symlink && !e.directory);
   const links = entries.filter((e) => e.symlink);
@@ -190,8 +192,11 @@ async function writeEntries(
       bytes = relocatePrefixBytes(bytes, placeholder, prefix, pathsMeta.get(entry.path)?.file_mode);
     }
     await fs.writeFile(target, bytes);
+    modes.push({ path: target, mode: normalizeFileMode(entry.mode) });
     written.push(entry.path);
   }
+
+  await fs.updateMetadataBatch(modes);
 
   const symlinkBatch: Array<{ target: string; path: string }> = [];
   for (const entry of links) {

@@ -118,6 +118,21 @@ describe('mamba-installer', () => {
     expect(await listInstalledCondaPackages(fs)).toEqual([]);
   });
 
+  it("keeps the archive's executable bits, normalized to 0755 / 0644", async () => {
+    const archive = new Uint8Array(readFileSync(FIXTURE));
+    const indexes = new Map<string, RepodataIndex>([[`${CHANNEL}|emscripten-wasm32`, mockIndex()]]);
+    const outcome = await installCondaPackages(['zlib'], {
+      fs,
+      fetch: mockFetch(archive),
+      channels: [CHANNEL],
+      indexes,
+    });
+    expect(outcome.errors).toEqual([]);
+
+    expect((await fs.stat(`${CONDA_PREFIX}/lib/libz.so.1.3.1`)).mode! & 0o7777).toBe(0o755);
+    expect((await fs.stat(`${CONDA_PREFIX}/include/zlib.h`)).mode! & 0o7777).toBe(0o644);
+  });
+
   it('creates archive symlinks in one batch (not per member)', async () => {
     const archive = new Uint8Array(readFileSync(FIXTURE));
     const indexes = new Map<string, RepodataIndex>([[`${CHANNEL}|emscripten-wasm32`, mockIndex()]]);

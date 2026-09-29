@@ -6,6 +6,7 @@ import {
   DEFAULT_FETCH_CONCURRENCY,
   type Limiter,
 } from './concurrency.js';
+import { EXECUTABLE_MODE, normalizeFileMode } from './file-modes.js';
 import {
   preflightGlobalBinDelegators,
   reconcileGlobalBinDelegators,
@@ -124,6 +125,7 @@ function chooseSavedRange(input: ParsedSpec, resolvedVersion: string): string {
 }
 
 async function writeEntries(fs: VirtualFS, installDir: string, entries: TarEntry[]): Promise<void> {
+  const modes = new Map<string, number>();
   for (const entry of entries) {
     if (!entry.path) continue;
     const safePath = entry.path.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -136,7 +138,32 @@ async function writeEntries(fs: VirtualFS, installDir: string, entries: TarEntry
       await ensureDir(fs, target.slice(0, lastSlash));
     }
     await fs.writeFile(target, entry.bytes);
+    modes.set(safePath, normalizeFileMode(entry.mode));
   }
+  for (const binPath of binTargets(entries)) {
+    if (modes.has(binPath)) modes.set(binPath, EXECUTABLE_MODE);
+  }
+  await fs.updateMetadataBatch(
+    [...modes].map(([path, mode]) => ({ path: joinPath(installDir, path), mode }))
+  );
+}
+
+function binTargets(entries: TarEntry[]): string[] {
+  const manifestEntry = entries.find((e) => e.path === 'package.json');
+  if (!manifestEntry) return [];
+  let manifest: InstalledPackageManifest;
+  try {
+    manifest = JSON.parse(
+      new TextDecoder().decode(manifestEntry.bytes)
+    ) as InstalledPackageManifest;
+  } catch {
+    return [];
+  }
+  const bin = manifest.bin;
+  if (typeof bin !== 'string' && (typeof bin !== 'object' || bin === null)) return [];
+  return Object.values(normalizeBin(bin, manifest.name ?? ''))
+    .filter((p): p is string => typeof p === 'string')
+    .map(normalizeBinPath);
 }
 
 async function readJsonOr<T>(fs: VirtualFS, path: string, fallback: T): Promise<T> {
@@ -350,7 +377,11 @@ interface MaterializeContext {
   limit: Limiter;
 
   failed: boolean;
+
+  reextractMatching: boolean;
 }
+
+const MODES_MARKER = '.ipk-modes-v1';
 
 async function installNodeFiles(
   ctx: MaterializeContext,
@@ -365,7 +396,7 @@ async function installNodeFiles(
       installedManifestPath,
       null
     );
-    if (installed?.version === node.version) return;
+    if (installed?.version === node.version && !ctx.reextractMatching) return;
   }
 
   const tarballBytes = await fetchTarball(node.resolved, ctx.fetch, { timeoutMs: ctx.timeoutMs });
@@ -420,16 +451,19 @@ async function materializePlan(
   const topNames = Object.keys(plan.root);
   if (topNames.length === 0) return;
   await ensureDir(fs, modulesDir);
+  const markerPath = joinPath(modulesDir, MODES_MARKER);
   const ctx: MaterializeContext = {
     fs,
     fetch,
     timeoutMs,
     limit: createLimiter(concurrency ?? DEFAULT_FETCH_CONCURRENCY),
     failed: false,
+    reextractMatching: !(await fs.exists(markerPath)),
   };
   await allSettledOrThrow(
     topNames.map((name) => materializeNode(ctx, modulesDir, plan.root[name]))
   );
+  if (ctx.reextractMatching) await fs.writeFile(markerPath, '');
 }
 
 function unscopedName(pkgName: string): string {

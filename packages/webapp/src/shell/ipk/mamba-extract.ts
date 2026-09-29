@@ -7,6 +7,8 @@ export interface ExtractedCondaEntry {
   directory?: boolean;
 
   symlink?: string;
+
+  mode?: number;
 }
 
 function assertSafeRelPath(path: string, label: string): string {
@@ -33,6 +35,7 @@ function tarEntriesToExtracted(entries: TarEntry[], label: string): ExtractedCon
       path,
       bytes: entry.bytes,
       ...(entry.directory ? { directory: true } : {}),
+      ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
     });
   }
   return out;
