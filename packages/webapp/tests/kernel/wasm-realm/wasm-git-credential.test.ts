@@ -306,6 +306,12 @@ function secretStore(): SecretBackend {
 }
 
 let shell: Bash | undefined;
+/**
+ * Every command that reached just-bash: a script run by path (a hook,
+ * `git-submodule`) must never be here, since the realm runs it through its
+ * `#!` interpreter (GNU bash).
+ */
+const shellCalls: string[] = [];
 /** just-bash over the same filesystem: what runs a command no wasm program provides. */
 const justBash = (): Bash => {
   shell ??= new Bash({ fs: fs as unknown as IFileSystem, cwd: '/home/user' });
@@ -320,7 +326,10 @@ function shellContext(helperCalls: string[]) {
   });
   const exec = async (command: string, opts: ExecOptions) => {
     // Anything else no wasm program provides runs in just-bash, as in the shell.
-    if (!command.endsWith('git-credential-slicc')) return justBash().exec(command, opts);
+    if (!command.endsWith('git-credential-slicc')) {
+      shellCalls.push(command);
+      return justBash().exec(command, opts);
+    }
     const stdin = typeof opts.stdin === 'string' ? opts.stdin : '';
     helperCalls.push(`${opts.args?.[0]} ${/host=(.*)/.exec(stdin)?.[1]}`);
     return helper.execute(
@@ -561,6 +570,8 @@ describe.skipIf(!HAVE)('native git as the everyday git (real git)', () => {
     );
     expect(r.exitCode, r.stderr).toBe(0);
     expect(r.stdout).toBe('hook ran as .git/hooks/pre-commit in 5\nblocked=1\ntwo\n');
+    // It ran through its `#!` interpreter, never through the shell's fallback.
+    expect(shellCalls.filter((c) => c.includes('hooks/'))).toEqual([]);
     expect(r.stderr).toContain('blocked by hook');
   }, 120_000);
 
@@ -610,6 +621,7 @@ describe.skipIf(!HAVE)('native git as the everyday git (real git)', () => {
     );
     expect(r.exitCode, r.stderr).toBe(0);
     expect(r.stdout).toBe('from the submodule\nsub\n');
+    expect(shellCalls.filter((c) => c.includes('git-submodule'))).toEqual([]);
     expect(r.stderr).not.toContain(REAL);
     // The superproject and the submodule each asked for (and got) a credential.
     expect(helperCalls.filter((c) => c === `get ${HOST}`).length).toBeGreaterThanOrEqual(2);
