@@ -7,11 +7,7 @@ import {
 import type { SecureFetch } from 'just-bash';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes, type SecureFetchRequestBody } from './fetch-body.js';
-import {
-  type RawFetchCapabilities,
-  type RawProxiedFetch,
-  usesFetchProxyEndpoint,
-} from './proxied-fetch-raw-types.js';
+import { type RawProxiedFetch, usesFetchProxyEndpoint } from './proxied-fetch-raw-types.js';
 import { isProxyError, readProxyErrorMessage } from './proxy-error.js';
 import {
   decodeForbiddenResponseHeaders as _decodeForbiddenResponseHeaders,
@@ -85,7 +81,9 @@ export {
   type RawProxiedFetch,
 } from './proxied-fetch-raw-types.js';
 
-export async function getRawFetchCapabilities(): Promise<RawFetchCapabilities> {
+export async function getRawFetchCapabilities(): Promise<
+  import('./proxied-fetch-raw-types.js').RawFetchCapabilities
+> {
   const raw = await import('./proxied-fetch-raw.js');
   return raw.getRawFetchCapabilities();
 }

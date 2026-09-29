@@ -294,9 +294,11 @@ interface ChromeAPI {
           tabId: number;
           type: string;
           frameId: number;
+          statusCode: number;
+          statusLine?: string;
           responseHeaders?: Array<{ name: string; value?: string }>;
         }) => void,
-        filter: { urls: string[]; types?: string[] },
+        filter: { urls: string[]; types?: string[]; tabId?: number },
         extraInfoSpec?: string[]
       ): void;
     };

@@ -89,7 +89,7 @@ function getDnr(): DnrLike | null {
 
 let nextDnrRuleId = 1_000_000;
 
-function randomFragmentToken(): string {
+export function randomFragmentToken(): string {
   const c = (globalThis as { crypto?: Crypto }).crypto;
   if (c && typeof c.randomUUID === 'function') return c.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
@@ -97,20 +97,26 @@ function randomFragmentToken(): string {
 
 export async function installForbiddenHeaderRule(
   url: string,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  options: {
+    fragment?: string;
+
+    alsoRestore?: ReadonlySet<string>;
+  } = {}
 ): Promise<{ fetchUrl: string; cleanup: () => Promise<void> }> {
   const dnr = getDnr();
   const requestHeaders: Array<{ header: string; operation: 'set'; value: string }> = [];
   for (const [k, v] of Object.entries(headers)) {
-    if (isForbiddenRequestHeader(k)) {
+    if (isForbiddenRequestHeader(k) || options.alsoRestore?.has(k.toLowerCase())) {
       requestHeaders.push({ header: k.toLowerCase(), operation: 'set', value: v });
     }
   }
+  const tagged = options.fragment ? `${url.split('#')[0]}#${options.fragment}` : url;
   if (!dnr || requestHeaders.length === 0) {
-    return { fetchUrl: url, cleanup: async () => {} };
+    return { fetchUrl: tagged, cleanup: async () => {} };
   }
   const id = nextDnrRuleId++;
-  const fragment = `slicc-req-${randomFragmentToken()}`;
+  const fragment = options.fragment ?? `slicc-req-${randomFragmentToken()}`;
 
   const fetchUrl = `${url.split('#')[0]}#${fragment}`;
   const rule: DnrRule = {
@@ -291,18 +297,41 @@ async function handleProxyMessage(
   await processProxyRequest(port, pipeline, msg, signal);
 }
 
+function refuseRaw(port: PortLike): (raw: unknown) => void {
+  port.postMessage({
+    type: 'raw-response-error',
+    code: 'unsupported',
+    status: 501,
+    error: 'raw fetch: this service worker has no raw mode',
+  });
+  return () => {};
+}
+
+export type RawSessionStarter = (first: unknown, signal: AbortSignal) => (raw: unknown) => void;
+
 export function handleFetchProxyConnectionAsync(
   port: PortLike,
-  pipelinePromise: Promise<SecretsPipeline>
+  pipelinePromise: Promise<SecretsPipeline>,
+  startRaw?: RawSessionStarter
 ): void {
   const ac = new AbortController();
   let started = false;
+  let rawSink: ((raw: unknown) => void) | null = null;
 
   port.onDisconnect.addListener(() => ac.abort());
 
   port.onMessage.addListener((raw) => {
+    if (rawSink) {
+      rawSink(raw);
+      return;
+    }
     if (started) return;
     started = true;
+    const type = (raw as { type?: unknown } | null)?.type;
+    if (type === 'raw-request' || type === 'raw-probe') {
+      rawSink = startRaw?.(raw, ac.signal) ?? refuseRaw(port);
+      return;
+    }
     handleProxyMessage(port, pipelinePromise, raw, ac.signal).catch((err) => {
       send(port, {
         type: 'response-error',

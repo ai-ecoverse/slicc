@@ -3,6 +3,9 @@ import type {
   ComputerInputEvent,
   FollowerBiscottoGate,
   OAuthExtraDomainsStore,
+  RawFetchErrorCode,
+  RawFetchResponseHead,
+  RawHeaderList,
   SignAndForwardReply,
 } from '@slicc/shared-ts';
 import type { SecretRequest, SecretRequestOutcome } from '../base/secret-request-registry.js';
@@ -419,6 +422,24 @@ export type PanelRpcRequest =
       };
     }
   | {
+      op: 'raw-fetch-open';
+      payload: {
+        url: string;
+        method: string;
+        headers: RawHeaderList;
+        hasBody: boolean;
+        bodyLength?: number;
+      };
+    }
+  | {
+      op: 'raw-fetch-probe';
+      payload: Record<string, never>;
+    }
+  | { op: 'raw-fetch-write'; payload: { id: string; chunk: Uint8Array | null } }
+  | { op: 'raw-fetch-head'; payload: { id: string } }
+  | { op: 'raw-fetch-read'; payload: { id: string } }
+  | { op: 'raw-fetch-cancel'; payload: { id: string } }
+  | {
       op: 'sudo-request';
       payload: { request: SudoRequest; mode?: 'resolve' | 'tray-first' };
     }
@@ -665,6 +686,16 @@ export interface PanelRpcResults {
     head: { status: number; statusText: string; headers: Record<string, string> };
     body: ArrayBuffer;
   };
+  'raw-fetch-open': { id: string };
+  'raw-fetch-probe': {
+    supported: boolean;
+    requestBodyStreaming: boolean;
+    maxRequestBodyBytes: number;
+  };
+  'raw-fetch-write': { ok: true } | RawFetchRpcFailure;
+  'raw-fetch-head': { ok: true; head: RawFetchResponseHead; hasBody: boolean } | RawFetchRpcFailure;
+  'raw-fetch-read': { ok: true; chunk: Uint8Array | null } | RawFetchRpcFailure;
+  'raw-fetch-cancel': { ok: true };
   'permission-request': { grants: PermissionRpcGrant[] };
 
   'secret-request': SecretRequestOutcome;
@@ -704,6 +735,13 @@ export type PermissionRpcGrant =
   | { kind: 'serial'; handle: string }
   | { kind: 'filesystem'; idbKey: string; dirName: string }
   | { kind: 'camera' | 'microphone' | 'screenshare'; ok: true };
+
+export interface RawFetchRpcFailure {
+  ok: false;
+  code: RawFetchErrorCode;
+  status: number;
+  error: string;
+}
 
 export interface HearRpcStatus {
   state: 'idle' | 'loading' | 'ready' | 'failed';

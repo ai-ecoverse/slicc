@@ -6,17 +6,12 @@ import {
   type RawFetchResponseHead,
 } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  setBridgeToken,
-  setExtensionDelegateId,
-  setLocalApiBaseUrl,
-} from '../../src/base/api-endpoint.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../src/base/api-endpoint.js';
 import {
   createProxiedStreamingFetch,
   getRawFetchCapabilities,
   RawFetchError,
   resetRawFetchCapabilities,
-  setChromeExtensionRealm,
 } from '../../src/shell/proxied-fetch.js';
 
 const url = 'https://github.com/o/r.git/info/refs?service=git-upload-pack';
@@ -351,21 +346,5 @@ describe('raw proxied fetch — bridge floats (CLI, cloud)', () => {
     fetchSpy.mockResolvedValue(new Response('ok'));
     await createProxiedStreamingFetch()(url);
     expect(fetchSpy.mock.calls[0]![1].headers['X-Target-URL']).toBe(url);
-  });
-});
-
-describe('raw proxied fetch — extension float', () => {
-  afterEach(() => {
-    setChromeExtensionRealm(null);
-    setExtensionDelegateId(null);
-  });
-
-  it('is unsupported until the extension grows a raw transport', async () => {
-    setChromeExtensionRealm(true);
-    expect((await getRawFetchCapabilities()).supported).toBe(false);
-    await expect(createProxiedStreamingFetch({ mode: 'raw' })(url)).rejects.toMatchObject({
-      code: 'unsupported',
-      status: 501,
-    });
   });
 });

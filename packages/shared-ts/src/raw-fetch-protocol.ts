@@ -69,7 +69,17 @@ const RAW_RESPONSE_SKIP_HEADERS = new Set([
   'upgrade',
 ]);
 
-const DECODED_CODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
+export const NODE_DECODED_CODINGS: ReadonlySet<string> = new Set([
+  'gzip',
+  'x-gzip',
+  'deflate',
+  'br',
+]);
+
+export const BROWSER_DECODED_CODINGS: ReadonlySet<string> = new Set([
+  ...NODE_DECODED_CODINGS,
+  'zstd',
+]);
 
 export const RAW_FETCH_ACCEPT_ENCODING = 'gzip, deflate, br';
 
@@ -82,13 +92,15 @@ export function rawAcceptEncoding(headers: Record<string, string>): string | und
 export function isDecodedPartialResponse(input: {
   status: number;
   headers: RawHeaderList;
+
+  decodedCodings?: ReadonlySet<string>;
 }): boolean {
   if (input.status !== 206) return false;
   const encoding = input.headers
     .filter(([name]) => name.toLowerCase() === 'content-encoding')
     .map(([, value]) => value)
     .join(',');
-  return codingsWereDecoded(encoding);
+  return codingsWereDecoded(encoding, input.decodedCodings ?? NODE_DECODED_CODINGS);
 }
 
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
@@ -133,12 +145,12 @@ export function foldRawRequestHeaders(headers: RawHeaderList): Record<string, st
   return out;
 }
 
-function codingsWereDecoded(contentEncoding: string): boolean {
+function codingsWereDecoded(contentEncoding: string, decodedCodings: ReadonlySet<string>): boolean {
   const codings = contentEncoding
     .split(',')
     .map((c) => c.trim().toLowerCase())
     .filter((c) => c !== '' && c !== 'identity');
-  return codings.length > 0 && codings.every((c) => DECODED_CODINGS.has(c));
+  return codings.length > 0 && codings.every((c) => decodedCodings.has(c));
 }
 
 export interface RawResponseHeaderInput {
@@ -147,6 +159,8 @@ export interface RawResponseHeaderInput {
   headers: RawHeaderList;
 
   bodyRewritten: boolean;
+
+  decodedCodings?: ReadonlySet<string>;
 }
 
 export function rawResponseHasBody(method: string, status: number): boolean {
@@ -164,7 +178,7 @@ export function rawResponseHeaders(input: RawResponseHeaderInput): RawHeaderList
     .filter(([name]) => name.toLowerCase() === 'content-encoding')
     .map(([, value]) => value)
     .join(',');
-  const decoded = codingsWereDecoded(encoding);
+  const decoded = codingsWereDecoded(encoding, input.decodedCodings ?? NODE_DECODED_CODINGS);
   const dropLength = decoded || input.bodyRewritten;
   return withoutHop.filter(([name]) => {
     const lower = name.toLowerCase();
@@ -239,4 +253,50 @@ export function decodeRawResponseFrame(
   }
   if (!isRawResponseHead(head)) throw new Error('raw fetch: malformed response head');
   return { head, rest: buffer.subarray(4 + length) };
+}
+
+export type RawFetchErrorCode =
+  | 'unsupported'
+  | 'request-body-too-large'
+  | 'forbidden-secret'
+  | 'upstream'
+  | 'bridge';
+
+export const RAW_FETCH_TAG_PREFIX = 'slicc-raw-';
+
+export const RAW_FETCH_PORT_CHUNK_BYTES = 256 * 1024;
+
+export const RAW_FETCH_PORT_WINDOW = 4;
+
+export const RAW_FETCH_BUFFERED_REQUEST_BODY_CAP = 256 * 1024 * 1024;
+
+export const RAW_FETCH_STREAM_THRESHOLD_BYTES = 8 * 1024 * 1024;
+
+export type RawPortRequestMsg =
+  | { type: 'raw-probe' }
+  | {
+      type: 'raw-request';
+      head: RawFetchRequestHead;
+
+      hasBody: boolean;
+
+      bodyLength?: number;
+
+      credits: number;
+    }
+  | { type: 'raw-body-chunk'; dataBase64: string }
+  | { type: 'raw-body-end' }
+  | { type: 'raw-credit'; chunks: number };
+
+export type RawPortResponseMsg =
+  | { type: 'raw-probe-reply'; reply: RawFetchProbeReply }
+  | { type: 'raw-body-credit'; chunks: number }
+  | { type: 'raw-response-head'; head: RawFetchResponseHead; hasBody: boolean }
+  | { type: 'raw-response-chunk'; dataBase64: string }
+  | { type: 'raw-response-end' }
+  | { type: 'raw-response-error'; code: RawFetchErrorCode; status: number; error: string };
+
+export function reasonFromStatusLine(statusLine: string | undefined): string {
+  const match = /^HTTP\/\S+\s+\d{3}\s*(.*)$/.exec(statusLine ?? '');
+  return match?.[1]?.trim() ?? '';
 }

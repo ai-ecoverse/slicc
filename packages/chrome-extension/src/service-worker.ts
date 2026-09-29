@@ -19,6 +19,7 @@ import {
   setCherryPanelRecoveryDeps,
 } from './cherry-panel-sw.js';
 import { installDiscoveryObserver } from './discovery-sw.js';
+import { rawSessionStarter } from './fetch-proxy-raw.js';
 import { handleFetchProxyConnectionAsync, type PortLike } from './fetch-proxy-shared.js';
 import { installHandoffNotifications } from './handoff-notifications-sw.js';
 import {
@@ -30,6 +31,7 @@ import {
   writeStoredLeaderTabId,
 } from './leader-tab-sw.js';
 import { handleMountMessage, handleMountSignAndForwardPort } from './mount-backends-sw.js';
+import { createRawFetchCapture, installRawFetchCapture } from './raw-fetch-capture.js';
 import { handleRelayMessage } from './relay-sw.js';
 import {
   buildReloadedPipelinePromise,
@@ -83,6 +85,9 @@ installDiscoveryObserver();
 
 installCdpProxyListeners();
 
+const rawFetchDeps = { capture: createRawFetchCapture() };
+installRawFetchCapture(rawFetchDeps.capture);
+
 const SW_MESSAGE_HANDLERS: readonly SwMessageHandler[] = [
   handleCapturePopupMessage,
   handleRelayMessage,
@@ -120,7 +125,11 @@ function connectExternalFetchProxy(port: ChromeRuntimePort): void {
   pipelinePromise.catch((err) => {
     console.error('[sw] external fetch-proxy init failed', err);
   });
-  handleFetchProxyConnectionAsync(port as PortLike, pipelinePromise);
+  handleFetchProxyConnectionAsync(
+    port as PortLike,
+    pipelinePromise,
+    rawSessionStarter(port as PortLike, pipelinePromise, rawFetchDeps)
+  );
 }
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -141,5 +150,9 @@ chrome.runtime.onConnect.addListener((port) => {
   pipelinePromise.catch((err) => {
     console.error('[sw] fetch-proxy init failed', err);
   });
-  handleFetchProxyConnectionAsync(port as PortLike, pipelinePromise);
+  handleFetchProxyConnectionAsync(
+    port as PortLike,
+    pipelinePromise,
+    rawSessionStarter(port as PortLike, pipelinePromise, rawFetchDeps)
+  );
 });

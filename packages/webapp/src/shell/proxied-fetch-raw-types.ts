@@ -1,13 +1,15 @@
-import type { RawFetchResponseHead, RawHeaderList } from '@slicc/shared-ts';
+import type { RawFetchErrorCode, RawFetchResponseHead, RawHeaderList } from '@slicc/shared-ts';
 import { getChromeExtensionRealm, getExtensionDelegateId } from '../base/api-endpoint.js';
 
-export type { RawHeaderList } from '@slicc/shared-ts';
+export type { RawFetchErrorCode, RawHeaderList } from '@slicc/shared-ts';
 
 export interface RawFetchInit {
   method?: string;
 
   headers?: RawHeaderList;
   body?: Uint8Array | Blob | ReadableStream<Uint8Array>;
+
+  bodyLength?: number;
   signal?: AbortSignal;
 }
 
@@ -24,13 +26,6 @@ export interface RawFetchCapabilities {
 
   maxRequestBodyBytes: number;
 }
-
-export type RawFetchErrorCode =
-  | 'unsupported'
-  | 'request-body-too-large'
-  | 'forbidden-secret'
-  | 'upstream'
-  | 'bridge';
 
 export class RawFetchError extends Error {
   constructor(
