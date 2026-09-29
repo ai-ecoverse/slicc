@@ -10,8 +10,8 @@ import {
   main,
   parsePublishCli,
   publicRecord,
-  redactCriteria,
   REPORT_MARKER,
+  redactCriteria,
   stage,
   taskSetEnvelope,
 } from './publish.mjs';
@@ -157,6 +157,32 @@ describe('what may be published', () => {
 });
 
 describe('stage', () => {
+  it("redacts rubric item ids in the run's copied upstream results and report", () => {
+    const out = outDir();
+    const failed = 'judge output is invalid: finding A5_line_fields is not_assessable';
+    write(join(out, 'results/SLICC_h_skills_builtin_model_m_bench_BU_Bench_V1.json'), [
+      { error: failed },
+    ]);
+    write(join(out, 'report.md'), `## run report\n- ${failed}\n`);
+    const target = join(tmp(), 'stage');
+    stage({ out, stage: target, run: 'r1', sets: [] });
+    const upstream = readFileSync(
+      join(target, 'runs/r1/results/SLICC_h_skills_builtin_model_m_bench_BU_Bench_V1.json'),
+      'utf8'
+    );
+    expect(upstream).not.toContain('A5_line_fields');
+    expect(upstream).toContain('finding [criterion] is not_assessable');
+    expect(readFileSync(join(target, 'runs/r1/report.md'), 'utf8')).not.toContain('A5_line_fields');
+    // A result file for our own set is copied as it is.
+    expect(readFileSync(join(target, 'runs/r1/results/SLICC_x.json'), 'utf8')).toContain(
+      'tasks_completed'
+    );
+    expect(redactCriteria(['A1_answer', { e: 'B12_total' }])).toEqual([
+      '[criterion]',
+      { e: '[criterion]' },
+    ]);
+  });
+
   it('stages the run, encrypted own traces, merged records, results, report and card', () => {
     const out = outDir();
     const dataset = tmp();
