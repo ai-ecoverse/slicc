@@ -7,7 +7,13 @@ import {
   sinkFile,
 } from '../../../kernel/wasm-realm/fd-table.js';
 import type { WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
-import { realmNetworkEnv } from '../../../kernel/wasm-realm/net/realm-network.js';
+import {
+  ensureRealmCaFile,
+  isRealmDefault,
+  realmCaPath,
+  realmNetworkEnv,
+} from '../../../kernel/wasm-realm/net/realm-network.js';
+import { ownerKey } from '../../../kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
@@ -165,8 +171,30 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
   return { fds, collected: () => ({ stdout: '', note: '' }), release: () => lease.release() };
 }
 
-function programEnv(ctx: CommandContext, call: Invocation): Record<string, string> {
-  const env = { ...realmNetworkEnv(), ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
+export function withoutRealmDefaults(
+  env: Readonly<Record<string, string>>,
+  had: Readonly<Record<string, string>>
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name, value]) => name in had || !isRealmDefault(name, value))
+  );
+}
+
+async function caEnv(
+  ctx: CommandContext,
+  options: RunWasmOptions
+): Promise<Record<string, string>> {
+  const owner = ownerKey(options.processConfig?.owner);
+  const home = ctx.exportedEnv?.HOME ?? ctx.env.get('HOME') ?? '/tmp';
+  return ensureRealmCaFile(ctx.fs, realmCaPath(home, owner), owner);
+}
+
+function programEnv(
+  ctx: CommandContext,
+  call: Invocation,
+  network: Record<string, string>
+): Record<string, string> {
+  const env = { ...network, ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
   if (call.tty && (!env.TERM || env.TERM === 'dumb')) {
     env.TERM = 'xterm-256color';
     env.COLORTERM ??= 'truecolor';
@@ -301,7 +329,7 @@ export async function runWasmCommand(
       module: call.module ? ctx.fs.resolvePath(ctx.cwd, call.module) : modulePath(gluePath),
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
-      env: programEnv(ctx, call),
+      env: programEnv(ctx, call, { ...realmNetworkEnv(), ...(await caEnv(ctx, options)) }),
       defaults: programDefaults(call, options),
       cwd: ctx.cwd,
       fds,

@@ -194,7 +194,8 @@ export class WasmSession {
   ) {
     this.net = loopbackNet(ownerKey(processConfig?.owner));
 
-    enableRealmNetwork(this.net, { process: processConfig });
+    const owner = ownerKey(processConfig?.owner);
+    enableRealmNetwork(this.net, { process: processConfig, tls: { owner } });
   }
 
   commands(): Promise<Map<string, WasmCommand>> {

@@ -803,7 +803,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     outputTeeId: string | undefined,
     capturePipeStatus: boolean
   ): Promise<BashExecResult & { pipeStatus?: number[] }> {
-    const { runWasmCommand } = await import('./supplemental-commands/wasm/run.js');
+    const { runWasmCommand, withoutRealmDefaults } = await import(
+      './supplemental-commands/wasm/run.js'
+    );
     const sudoReason = extractLeadingCommentReason(command);
     const env: Record<string, string> = {
       ...this.lastEnv,
@@ -825,7 +827,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const pathBefore = this.lastEnv.PATH;
     if (run.state) {
       this.cwd = run.state.cwd;
-      this.lastEnv = carriedEnv(run.state.env, [RUN_PID_ENV, SUDO_REASON_ENV, OUTPUT_TEE_ENV]);
+
+      this.lastEnv = carriedEnv(withoutRealmDefaults(run.state.env, env), [
+        RUN_PID_ENV,
+        SUDO_REASON_ENV,
+        OUTPUT_TEE_ENV,
+      ]);
     }
 
     if (this.lastEnv.PATH !== pathBefore) await this.syncJshCommands().catch(() => undefined);

@@ -1,3 +1,4 @@
+import { Duplex } from 'node:stream';
 import {
   HttpError,
   Incoming,
@@ -127,3 +128,43 @@ export function scripted(
 }
 
 export const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export function duplex(conn: KernelSocket): Duplex {
+  let reading = false;
+  const stream: Duplex = new Duplex({
+    read() {
+      if (reading) return;
+      reading = true;
+      void (async () => {
+        try {
+          for (;;) {
+            const bytes = await conn.read(64 * 1024);
+            if (bytes.length === 0) {
+              stream.push(null);
+              return;
+            }
+            if (!stream.push(Buffer.from(bytes))) break;
+          }
+        } catch {
+          stream.push(null);
+        } finally {
+          reading = false;
+        }
+      })();
+    },
+    write(chunk: Buffer, _enc, done) {
+      conn.write(new Uint8Array(chunk)).then(() => done(), done);
+    },
+    final(done) {
+      try {
+        conn.shutdown(1);
+      } catch {}
+      done();
+    },
+    destroy(_err, done) {
+      conn.close();
+      done(null);
+    },
+  });
+  return stream;
+}

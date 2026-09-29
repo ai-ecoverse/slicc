@@ -27,6 +27,7 @@ export const REASON: Readonly<Record<number, string>> = {
   411: 'Length Required',
   413: 'Content Too Large',
   417: 'Expectation Failed',
+  421: 'Misdirected Request',
   431: 'Request Header Fields Too Large',
   501: 'Not Implemented',
   502: 'Bad Gateway',
@@ -62,6 +63,14 @@ export class Incoming {
     const out = this.buf.slice(0, n);
     this.buf = this.buf.subarray(n);
     return out;
+  }
+
+  async some(max: number, signal?: AbortSignal): Promise<Uint8Array> {
+    if (this.buf.length > 0) return this.take(Math.min(max, this.buf.length));
+    if (this.eof) return new Uint8Array(0);
+    const chunk = await this.source.read(max, signal);
+    if (chunk.length === 0) this.eof = true;
+    return chunk;
   }
 
   async head(limit: number, signal?: AbortSignal): Promise<Uint8Array | null> {

@@ -5,6 +5,7 @@ import {
   type ByteSource,
   chunk,
   fieldTokens,
+  fieldValues,
   HttpError,
   Incoming,
   LAST_CHUNK,
@@ -44,11 +45,18 @@ export interface TunnelTarget {
   port: number;
 }
 
+export interface HttpSink {
+  write(bytes: Uint8Array, signal?: AbortSignal): Promise<unknown>;
+}
+
+export type ServeHttp = (source: ByteSource, sink: HttpSink, origin: string) => Promise<void>;
+
 export type TunnelHandler = (
   conn: KernelSocket,
   incoming: Incoming,
   target: TunnelTarget,
-  signal: AbortSignal
+  signal: AbortSignal,
+  serveHttp: ServeHttp
 ) => Promise<void>;
 
 export interface RealmProxyOptions {
@@ -180,6 +188,24 @@ function keepsAlive(req: RequestHead): boolean {
   return req.minor >= 1 || tokens.includes('keep-alive');
 }
 
+export function tunnelRequestUrl(req: RequestHead, origin: string): string {
+  const base = new URL(origin);
+  let url: URL;
+  try {
+    url = new URL(req.target, req.target.startsWith('/') ? base : undefined);
+  } catch {
+    throw new HttpError(400, 'malformed request target');
+  }
+  const hosts = fieldValues(req.headers, 'host');
+  const hostOk = hosts.every(
+    (h) => URL.canParse(`https://${h}`) && new URL(`https://${h}`).host === base.host
+  );
+  if (url.origin !== base.origin || !hostOk) {
+    throw new HttpError(421, `this tunnel is for ${base.host}`);
+  }
+  return url.href;
+}
+
 export function requestUrl(req: RequestHead): string {
   if (req.target.startsWith('/')) {
     throw new HttpError(400, 'this is a proxy: send the absolute URL (GET http://host/path)');
@@ -250,6 +276,17 @@ function untilAborted(
     signal.addEventListener('abort', onAbort, { once: true });
     response.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
   });
+}
+
+interface Exchange {
+  sink: HttpSink;
+  incoming: Incoming;
+
+  origin?: string;
+
+  conn?: KernelSocket;
+
+  socket: KernelSocket;
 }
 
 function plainResponse(status: number, message: string): RealmTransportResponse {
@@ -336,35 +373,39 @@ export class RealmProxy {
     this.connections.add(conn);
     const incoming = new Incoming(timedSource(conn, this.limits.idleMs, this.stop.signal));
     try {
-      for (;;) {
-        const head = await incoming.head(this.limits.maxHead);
-        if (!head || !(await this.exchange(conn, incoming, head))) break;
-      }
-    } catch (e) {
-      if (e instanceof HttpError) await this.refuse(conn, e);
+      await this.requests({ sink: conn, incoming, conn, socket: conn });
     } finally {
       this.connections.delete(conn);
       conn.close();
     }
   }
 
-  private async refuse(conn: KernelSocket, error: HttpError): Promise<void> {
+  private async requests(ctx: Exchange): Promise<void> {
     try {
-      await this.relay(conn, 'GET', 1, plainResponse(error.status, error.message), false);
+      for (;;) {
+        const head = await ctx.incoming.head(this.limits.maxHead);
+        if (!head || !(await this.exchange(ctx, head))) break;
+      }
+    } catch (e) {
+      if (e instanceof HttpError) await this.refuse(ctx.sink, e);
+    }
+  }
+
+  private async refuse(sink: HttpSink, error: HttpError): Promise<void> {
+    try {
+      await this.relay(sink, 'GET', 1, plainResponse(error.status, error.message), false);
     } catch {}
   }
 
-  private async exchange(
-    conn: KernelSocket,
-    incoming: Incoming,
-    head: Uint8Array
-  ): Promise<boolean> {
+  private async exchange(ctx: Exchange, head: Uint8Array): Promise<boolean> {
+    const { sink: conn, incoming } = ctx;
     const req = parseRequestHead(head);
     if (req.method === 'CONNECT') {
-      await this.connect(conn, incoming, req);
+      if (!ctx.conn) throw new HttpError(400, 'CONNECT inside a tunnel');
+      await this.connect(ctx.conn, incoming, req);
       return false;
     }
-    const url = requestUrl(req);
+    const url = ctx.origin ? tunnelRequestUrl(req, ctx.origin) : requestUrl(req);
     const keep = keepsAlive(req);
     const framing = requestFraming(req.headers);
     const reserve =
@@ -381,7 +422,7 @@ export class RealmProxy {
         const body = await readBody(incoming, framing, this.cap());
 
         const waiting = new AbortController();
-        void watchHangup(conn, abort, waiting.signal);
+        void watchHangup(ctx.socket, abort, waiting.signal);
         try {
           response = await this.upstream(req, url, body, abort.signal);
         } finally {
@@ -401,11 +442,7 @@ export class RealmProxy {
     return this.options.transport.traits.maxRequestBody;
   }
 
-  private async expectContinue(
-    conn: KernelSocket,
-    req: RequestHead,
-    hasBody: boolean
-  ): Promise<void> {
+  private async expectContinue(conn: HttpSink, req: RequestHead, hasBody: boolean): Promise<void> {
     const expect = fieldTokens(req.headers, 'expect');
     if (expect.length === 0) return;
     if (expect.length !== 1 || expect[0] !== '100-continue') {
@@ -440,7 +477,7 @@ export class RealmProxy {
   }
 
   private async relay(
-    conn: KernelSocket,
+    conn: HttpSink,
     method: string,
     minor: number,
     response: RealmTransportResponse,
@@ -489,7 +526,9 @@ export class RealmProxy {
     }
     await conn.write(latin1Bytes('HTTP/1.1 200 Connection Established\r\n\r\n'), this.stop.signal);
     try {
-      await tunnel(conn, incoming, target, this.stop.signal);
+      await tunnel(conn, incoming, target, this.stop.signal, (source, sink, origin) =>
+        this.requests({ sink, incoming: new Incoming(source), origin, socket: conn })
+      );
     } catch (e) {
       if (!(e instanceof KernelError))
         log.warn('tunnel failed', { host: target.host, error: String(e) });

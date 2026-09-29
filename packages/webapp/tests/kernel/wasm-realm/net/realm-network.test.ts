@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ProcessManager } from '../../../../src/kernel/process-manager.js';
+import type { RealmCa } from '../../../../src/kernel/wasm-realm/net/realm-ca.js';
 import {
+  type CaFileSystem,
   enableRealmNetwork,
+  ensureRealmCaFile,
+  realmCaPath,
   realmNetworkEnv,
   realmProxy,
 } from '../../../../src/kernel/wasm-realm/net/realm-network.js';
@@ -79,5 +83,68 @@ describe('realmNetworkEnv', () => {
       no_proxy: 'localhost,.localhost,127.0.0.1,127.0.0.0/8',
       NO_PROXY: 'localhost,.localhost,127.0.0.1,127.0.0.0/8',
     });
+  });
+});
+
+describe('the realm CA file', () => {
+  function memFs(
+    files = new Map<string, string>()
+  ): CaFileSystem & { files: Map<string, string>; writes: number } {
+    const fs = {
+      files,
+      writes: 0,
+      exists: async (p: string) => files.has(p),
+      readFile: async (p: string) => files.get(p) ?? '',
+      writeFile: async (p: string, c: string) => {
+        fs.writes++;
+        files.set(p, c);
+      },
+      mkdir: async () => undefined,
+    };
+    return fs;
+  }
+  const fakeCa = (pem: string) => async () => ({ pem }) as unknown as RealmCa;
+
+  it('lives under the owner’s home, named for the owner', () => {
+    expect(realmCaPath('/home/user/', 'cone:')).toBe('/home/user/.config/slicc/realm-ca-cone.pem');
+    expect(realmCaPath('/scoops/a/home', 'scoop:a@b/c')).toBe(
+      '/scoops/a/home/.config/slicc/realm-ca-scoop-a-b-c.pem'
+    );
+  });
+
+  it('writes the public certificate once and points curl, OpenSSL and git at it', async () => {
+    const fs = memFs();
+    const path = '/home/user/.config/slicc/realm-ca-cone.pem';
+    const env = await ensureRealmCaFile(fs, path, 'cone:', fakeCa('PEM-1'));
+    expect(env).toEqual({ SSL_CERT_FILE: path, CURL_CA_BUNDLE: path, GIT_SSL_CAINFO: path });
+    expect(fs.files.get(path)).toBe('PEM-1');
+    await ensureRealmCaFile(fs, path, 'cone:', fakeCa('PEM-1'));
+    expect(fs.writes).toBe(1);
+
+    await ensureRealmCaFile(fs, path, 'cone:', fakeCa('PEM-2'));
+    expect(fs.files.get(path)).toBe('PEM-2');
+  });
+
+  it('leaves the variables out when the CA or the file cannot be had', async () => {
+    const failing = async () => {
+      throw new Error('no IndexedDB');
+    };
+    expect(await ensureRealmCaFile(memFs(), '/x.pem', 'cone:', failing)).toEqual({});
+    const readOnly = { ...memFs(), writeFile: async () => Promise.reject(new Error('EACCES')) };
+    expect(await ensureRealmCaFile(readOnly, '/x.pem', 'cone:', fakeCa('P'))).toEqual({});
+  });
+});
+
+describe('CONNECT without TLS', () => {
+  it('is 501 when the network has TLS turned off', async () => {
+    const net = new LoopbackNet();
+    enableRealmNetwork(net, {
+      transport: () => scripted(() => reply(200, [])).transport,
+      tls: false,
+    });
+    const c = Client.open(net);
+    await c.send('CONNECT example.com:443 HTTP/1.1\r\n\r\n');
+    expect((await c.response()).status).toBe(501);
+    realmProxy(net)?.close();
   });
 });
