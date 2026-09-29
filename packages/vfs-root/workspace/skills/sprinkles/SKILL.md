@@ -343,12 +343,12 @@ The bridge also reaches the **same worker shell** that `.jsh` scripts and `node 
 - `slicc.browser.*` — Playwright-style CDP surface (`findTab`, `ensureTab`, `openWindow`, `windowBounds`, `setWindowBounds`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`), mirroring `require('sliccy:browser')` in jsh.
 - `slicc.fetchToFile(url, path)` — download a URL (via the proxied fetch) straight to a VFS file; resolves with the byte count.
 - `slicc.readFileBinary(path)` / `slicc.writeFileBinary(path, bytes)` — binary VFS I/O (parity with `require('fs')` in jsh).
-- `slicc.hid.*` / `slicc.serial.*` / `slicc.usb.*` — stateful device surfaces for WebHID / Web Serial / WebUSB (Chromium-only; absent in the cloud / hosted-leader float). Same opaque handles (`hid1`, `serial1`, `usb1`, …) as the `hid` / `serial` / `usb` shell commands and the `require('sliccy:hid' | 'sliccy:serial' | 'sliccy:usb')` realm modules — discover via `list()` or trigger the OS picker via `request()` (a button-click is a real user gesture). For HID, `open(handle)` auto-attaches the input-report stream so every `slicc.hid.on('inputreport', cb)` listener receives `{ handle, reportId, data: Uint8Array }` until `close(handle)` or sprinkle teardown. Use this for keyboard configurators, gamepad dashboards, ESP32 monitor panels — anything that needs a persistent device session across multiple button clicks. The realm bridge in `slicc.exec('node -e …')` resets per call, so push handle ops through `slicc.hid|serial|usb` instead.
+- `slicc.hid.*` / `slicc.serial.*` / `slicc.usb.*` — stateful device surfaces for WebHID / Web Serial / WebUSB (Chromium-only; absent in the cloud / hosted-leader float). Same opaque handles (`hid1`, `serial1`, `usb1`, …) as the `hid` / `serial` / `usb` shell commands and the `require('sliccy:hid' | 'sliccy:serial' | 'sliccy:usb')` realm modules — discover via `list()` or trigger the OS picker via `request()`. On the leader page `request()` opens through the `<slicc-permissions>` Grant prompt first (the Allow click is the user gesture — a sprinkle call arrives after a `postMessage` hop that drops transient activation); the OS chooser then appears. For HID, `open(handle)` auto-attaches the input-report stream so every `slicc.hid.on('inputreport', cb)` listener receives `{ handle, reportId, data: Uint8Array }` until `close(handle)` or sprinkle teardown. Use this for keyboard configurators, gamepad dashboards, ESP32 monitor panels — anything that needs a persistent device session across multiple button clicks. The realm bridge in `slicc.exec('node -e …')` resets per call, so push handle ops through `slicc.hid|serial|usb` instead.
 
 ```typescript
 // HID — stateful across the sprinkle's lifetime
 slicc.hid.list(): Promise<HidDeviceInfo[]>
-slicc.hid.request(filters?): Promise<HidDeviceInfo[]>    // needs button-click gesture
+slicc.hid.request(filters?): Promise<HidDeviceInfo[]>    // Grant prompt → OS chooser
 slicc.hid.open(handle): Promise<void>                    // auto-subscribes inputreport
 slicc.hid.close(handle): Promise<void>
 slicc.hid.sendReport(handle, reportId, data: Uint8Array): Promise<void>
@@ -360,7 +360,7 @@ slicc.serial.list() / request(filters?) / open(handle, options) / close(handle)
 
 // USB — full transfer surface, so a sprinkle can drive a device itself.
 slicc.usb.list(): Promise<UsbDeviceInfo[]>
-slicc.usb.request(filters?): Promise<UsbDeviceInfo>      // needs button-click gesture
+slicc.usb.request(filters?): Promise<UsbDeviceInfo>      // Grant prompt → OS chooser
 slicc.usb.open(handle) / close(handle, opts?) / reset(handle, opts?): Promise<void>
 slicc.usb.selectConfiguration(handle, value): Promise<void>
 slicc.usb.claimInterface(handle, n, opts?) / releaseInterface(handle, n): Promise<void>
