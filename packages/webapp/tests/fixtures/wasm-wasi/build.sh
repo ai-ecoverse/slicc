@@ -5,6 +5,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 zig cc -target wasm32-wasi -Os -s "$HERE/wasitest.c" -o "$HERE/wasitest.wasm"
+zig cc -target wasm32-wasi -Os -s "$HERE/wasisock.c" -o "$HERE/wasisock.wasm"
 zig build-exe "$HERE/zigtest.zig" -target wasm32-wasi -O ReleaseSmall -fstrip \
   -femit-bin="$HERE/zigtest.wasm"
 rm -f "$HERE/zigtest.wasm.o"

@@ -3,19 +3,21 @@ import { type FdTable, KernelError, pollFile } from './fd-table.js';
 export interface SelectResult {
   read: number[];
   write: number[];
+
+  hangup?: number[];
 }
 
 function ready(fds: FdTable, read: readonly number[], write: readonly number[]): SelectResult {
-  return {
-    read: read.filter((fd) => {
+  const hangup = new Set<number>();
+  const pick = (list: readonly number[], dir: 'readable' | 'writable') =>
+    list.filter((fd) => {
       const state = pollFile(fds.get(fd).file);
-      return state.readable || state.hangup;
-    }),
-    write: write.filter((fd) => {
-      const state = pollFile(fds.get(fd).file);
-      return state.writable || state.hangup;
-    }),
-  };
+      if (state.hangup) hangup.add(fd);
+      return state[dir] || state.hangup;
+    });
+  const out: SelectResult = { read: pick(read, 'readable'), write: pick(write, 'writable') };
+  if (hangup.size > 0) out.hangup = [...hangup];
+  return out;
 }
 
 function interruption(signal: AbortSignal): { promise: Promise<never>; done(): void } {

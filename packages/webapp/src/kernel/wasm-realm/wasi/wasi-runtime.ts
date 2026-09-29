@@ -57,7 +57,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     pid: init.pid,
     kernel: { sys, call },
     fs: cachingBridge(createSyncFsSabBridge(transport)),
-    inherited: (init.fds ?? []).map((f) => f.fd),
+    inherited: (init.fds ?? []).map((f) => ({ fd: f.fd, kind: f.kind, flags: f.flags })),
   });
   const instance = await WebAssembly.instantiate(init.program.module, {
     [PREVIEW1]: host.imports(),

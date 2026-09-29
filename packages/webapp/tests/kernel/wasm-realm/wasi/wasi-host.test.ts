@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   CLOCK,
   E,
+  EVENT_FD_READWRITE_HANGUP,
   EVENTTYPE,
   FDFLAGS,
   FILETYPE,
   FSTFLAGS,
   OFLAGS,
+  RIFLAGS,
   RIGHTS,
+  SDFLAGS,
   SIZE,
   WHENCE,
 } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
@@ -32,7 +35,7 @@ function setup(opts: { inherited?: number[]; env?: Record<string, string> } = {}
     pid: 9,
     kernel,
     fs,
-    ...(opts.inherited ? { inherited: opts.inherited } : {}),
+    ...(opts.inherited ? { inherited: opts.inherited.map((fd) => ({ fd })) } : {}),
   });
   const g = new Guest();
   host.mem.bind(g.memory);
@@ -510,13 +513,6 @@ describe('WasiHost: clocks, randomness, poll, exit', () => {
     expect(s.call('poll_oneoff', subs, events, 0, n)).toBe(E.INVAL);
   });
 
-  it('sockets are phase 5b: ENOTSUP', () => {
-    const { call } = setup();
-    for (const name of ['sock_accept', 'sock_recv', 'sock_send', 'sock_shutdown']) {
-      expect(call(name, 0, 0, 0, 0, 0, 0)).toBe(E.NOTSUP);
-    }
-  });
-
   it('an address outside memory is EFAULT; an error without a code propagates', () => {
     const { call, fs } = setup();
     expect(call('fd_write', 1, 0x7fffffff, 1, 0)).toBe(E.FAULT);
@@ -619,5 +615,137 @@ describe('WasiHost: review round (#3638)', () => {
     ]);
     expect(call('proc_raise', 31)).toBe(E.INVAL);
     expect(call('proc_raise', 0)).toBe(E.INVAL);
+  });
+});
+
+describe('WasiHost: sockets (5b)', () => {
+  function listening(conns: string[][] = []) {
+    const kernel = new FakeKernel();
+    const l = kernel.add(3, 'socket');
+    l.pending = conns;
+    const fs = new FakeFs().dir('/w');
+    const host = new WasiHost({
+      args: ['p'],
+      env: { SLICC_LISTEN_FDS: 'stale' },
+      cwd: '/w',
+      pid: 9,
+      kernel,
+      fs,
+      inherited: [{ fd: 3, kind: 'socket', flags: 0o4000 }],
+    });
+    const g = new Guest();
+    host.mem.bind(g.memory);
+    const imports = host.imports() as Record<string, (...a: Array<number | bigint>) => number>;
+    const call: Call = (name, ...args) => imports[name](...args);
+
+    const fd = [...kernel.table].find(([, e]) => e === l)?.[0] as number;
+    return { kernel, host, g, call, fd };
+  }
+
+  it('names the inherited listener’s new number in $SLICC_LISTEN_FDS, over a stale one', () => {
+    const { call, g, fd } = listening();
+    const count = g.alloc(4);
+    const size = g.alloc(4);
+    call('environ_sizes_get', count, size);
+    const env = g.alloc(g.u32(size));
+    call('environ_get', g.alloc(g.u32(count) * 4), env);
+    expect(g.read(env, g.u32(size))).toContain(`SLICC_LISTEN_FDS=${fd}\0`);
+  });
+
+  it('accepts (EAGAIN while none waits, the listener being non-blocking), receives, peeks, sends, shuts down', () => {
+    const { call, g, kernel, fd } = listening();
+    const out = g.alloc(4);
+    expect(call('sock_accept', fd, 0, out)).toBe(E.AGAIN);
+    (kernel.table.get(fd) as { pending?: string[][] }).pending = [['GET / HTTP/1.0\r\n']];
+    expect(call('sock_accept', fd, FDFLAGS.NONBLOCK, out)).toBe(E.SUCCESS);
+    const conn = g.u32(out);
+    const [iov, n, buf] = g.iov(4);
+    const len = g.alloc(4);
+    const flags = g.alloc(2);
+    expect(call('sock_recv', conn, iov, n, RIFLAGS.PEEK, len, flags)).toBe(E.SUCCESS);
+    expect(g.read(buf, g.u32(len))).toBe('GET ');
+    const [wiov, wn] = g.iov('HTTP/1.0 200 OK\r\n');
+    expect(call('sock_send', conn, wiov, wn, 0, len)).toBe(E.SUCCESS);
+    expect(g.u32(len)).toBe(17);
+    expect(kernel.out(conn)).toBe('HTTP/1.0 200 OK\r\n');
+    expect(call('sock_shutdown', conn, SDFLAGS.WR)).toBe(E.SUCCESS);
+    expect(call('sock_shutdown', conn, SDFLAGS.RD | SDFLAGS.WR)).toBe(E.SUCCESS);
+    expect(call('sock_shutdown', conn, SDFLAGS.RD)).toBe(E.SUCCESS);
+    expect(kernel.table.get(conn)?.shut).toEqual([1, 2, 0]);
+    expect(call('sock_shutdown', conn, 0)).toBe(E.INVAL);
+    expect(call('sock_shutdown', conn, 4)).toBe(E.INVAL);
+
+    const st = g.alloc(SIZE.FDSTAT);
+    call('fd_fdstat_get', conn, st);
+    expect(g.view.getUint8(st)).toBe(FILETYPE.SOCKET_STREAM);
+    expect(g.view.getUint16(st + 2, true) & FDFLAGS.NONBLOCK).toBe(FDFLAGS.NONBLOCK);
+  });
+
+  it('MSG_WAITALL reads until the buffer is full or the peer is done', () => {
+    const { call, g, kernel, fd } = listening([['ab', 'cd', 'e']]);
+    const out = g.alloc(4);
+    call('sock_accept', fd, 0, out);
+    const conn = g.u32(out);
+    const [iov, n, buf] = g.iov(4);
+    const len = g.alloc(4);
+    call('sock_recv', conn, iov, n, RIFLAGS.WAITALL, len, g.alloc(2));
+    expect(g.read(buf, g.u32(len))).toBe('abcd');
+    call('sock_recv', conn, iov, n, RIFLAGS.WAITALL, len, g.alloc(2));
+    expect(g.read(buf, g.u32(len))).toBe('e');
+    void kernel;
+  });
+
+  it('MSG_WAITALL keeps what it read when a later read fails (EAGAIN, EINTR): a short count, no error', () => {
+    for (const drained of ['EAGAIN', 'EINTR']) {
+      const { call, g, kernel, fd } = listening([['ab']]);
+      const out = g.alloc(4);
+      call('sock_accept', fd, 0, out);
+      const conn = g.u32(out);
+      (kernel.table.get(conn) as { drained?: string }).drained = drained;
+      const [iov, n, buf] = g.iov(4);
+      const len = g.alloc(4);
+      expect(call('sock_recv', conn, iov, n, RIFLAGS.WAITALL, len, g.alloc(2))).toBe(E.SUCCESS);
+      expect(g.read(buf, g.u32(len))).toBe('ab');
+    }
+  });
+
+  it('MSG_WAITALL fills a buffer larger than one read (1 MiB), each kernel read within that cap', () => {
+    const MiB = 1024 * 1024;
+    const { call, g, kernel, fd } = listening([['a'.repeat(MiB), 'b'.repeat(MiB / 2)]]);
+    const out = g.alloc(4);
+    call('sock_accept', fd, 0, out);
+    const conn = g.u32(out);
+    const [iov, n, buf] = g.iov(MiB + MiB / 2);
+    const len = g.alloc(4);
+    expect(call('sock_recv', conn, iov, n, RIFLAGS.WAITALL, len, g.alloc(2))).toBe(E.SUCCESS);
+    expect(g.u32(len)).toBe(MiB + MiB / 2);
+    expect(g.read(buf + MiB, 1)).toBe('b');
+    expect(Math.max(...(kernel.table.get(conn)?.reads ?? []))).toBeLessThanOrEqual(MiB);
+  });
+
+  it('a peer gone is EPIPE for sock_send (no SIGPIPE); a socket call on a non-socket is ENOTSOCK', () => {
+    const { call, g, kernel, fd } = listening([['x']]);
+    const out = g.alloc(4);
+    call('sock_accept', fd, 0, out);
+    const conn = g.u32(out);
+    (kernel.table.get(conn) as { broken?: boolean }).broken = true;
+    const [iov, n] = g.iov('y');
+    expect(call('sock_send', conn, iov, n, 0, out)).toBe(E.PIPE);
+    expect(call('sock_recv', 1, iov, n, 0, out, out)).toBe(E.NOTSOCK);
+    expect(call('sock_accept', 3, 0, out)).toBe(E.NOTSOCK);
+  });
+
+  it('poll_oneoff flags a hangup on an fd event', () => {
+    const { call, g, kernel } = setup();
+    (kernel.table.get(0) as { hangup?: boolean }).hangup = true;
+    const subs = g.alloc(SIZE.SUBSCRIPTION);
+    const events = g.alloc(SIZE.EVENT);
+    const n = g.alloc(4);
+    g.view.setBigUint64(subs, 5n, true);
+    g.view.setUint8(subs + 8, EVENTTYPE.FD_READ);
+    g.view.setUint32(subs + 16, 0, true);
+    expect(call('poll_oneoff', subs, events, 1, n)).toBe(E.SUCCESS);
+    expect(g.u32(n)).toBe(1);
+    expect(g.view.getUint16(events + 24, true)).toBe(EVENT_FD_READWRITE_HANGUP);
   });
 });

@@ -20,6 +20,8 @@ export interface WasiKernel {
 
 type Device = 'null' | 'zero' | 'urandom';
 
+const O_NONBLOCK = 0o4000;
+
 const DEVICES: Readonly<Record<string, Device>> = {
   '/dev/null': 'null',
   '/dev/zero': 'zero',
@@ -51,17 +53,22 @@ export class WasiFds {
     private readonly fs: SyncFsPosixBridge
   ) {}
 
-  setup(cwd: string, inherited: readonly number[]): void {
+  setup(
+    cwd: string,
+    inherited: ReadonlyArray<{ fd: number; kind?: KernelFdKind; flags?: number }>
+  ): void {
     for (const fd of [0, 1, 2]) this.table.set(fd, kernelEntry());
     const preopens = this.preopens(cwd);
     const top = 3 + preopens.length;
-    for (const fd of inherited) {
+    for (const { fd, kind, flags } of inherited) {
       let at = fd;
       if (fd < top) {
         at = this.kernel.call({ op: 'fd-dup', fd, min: top }) as number;
         this.kernel.sys.close(fd);
       }
-      this.table.set(at, kernelEntry());
+
+      const nonblock = ((flags ?? 0) & O_NONBLOCK) !== 0;
+      this.table.set(at, { ...kernelEntry(), nonblock, ...(kind ? { kind } : {}) });
     }
     preopens.forEach((entry, i) => {
       this.kernel.call({ op: 'fd-reserve', fd: 3 + i });
@@ -93,6 +100,17 @@ export class WasiFds {
 
   find(fd: number): WasiEntry | undefined {
     return this.table.get(fd);
+  }
+
+  sockets(): number[] {
+    return [...this.table]
+      .filter(([, e]) => e.type === 'kernel' && e.kind === 'socket')
+      .map(([fd]) => fd)
+      .sort((a, b) => a - b);
+  }
+
+  adopt(fd: number, kind: KernelFdKind, nonblock: boolean): void {
+    this.table.set(fd, { type: 'kernel', kind, nonblock, append: false });
   }
 
   get(fd: number): WasiEntry {

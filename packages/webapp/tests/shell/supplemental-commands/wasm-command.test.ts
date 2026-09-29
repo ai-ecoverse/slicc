@@ -112,6 +112,34 @@ describe('wasm command', () => {
     expect(compile).not.toHaveBeenCalled();
   });
 
+  it('--listen hands the program a non-blocking listener at its lowest free fd, named in $SLICC_LISTEN_FDS', async () => {
+    spawn.mockImplementation((opts) => ({
+      pid: opts.pid,
+      exited: Promise.resolve(0),
+      kill: vi.fn(),
+    }));
+    const files = { '/w/srv.wasm': '\0asm\x01\0\0\0' };
+    const shell = {
+      ...ctx(files),
+      exportedEnv: { A: '1', SLICC_LISTEN_FDS: 'stale' },
+    } as CommandContext;
+    const r = await runWasmCommand(['--listen', '127.0.0.1:18431', 'srv.wasm'], shell);
+    expect(r.exitCode).toBe(0);
+    const opts = spawn.mock.calls[0][0];
+    expect(opts.fds.get(3).file.constructor.name).toBe('KernelSocket');
+    expect(opts.fds.statusFlags(3)).toBe(0o4000);
+    expect(opts.env.SLICC_LISTEN_FDS).toBe('3');
+
+    const taken = await runWasmCommand(['--listen', '18431', 'srv.wasm'], ctx(files));
+    expect(taken).toMatchObject({ exitCode: 1, stderr: 'wasm: --listen 18431: EADDRINUSE\n' });
+    const bad = await runWasmCommand(['--listen', 'localhost:x', 'srv.wasm'], ctx(files));
+    expect(bad).toMatchObject({
+      exitCode: 1,
+      stderr: 'wasm: --listen localhost:x: not a [HOST:]PORT\n',
+    });
+    expect((await runWasmCommand(['--listen'], ctx(files))).exitCode).toBe(2);
+  });
+
   it('lets a proxy setting the shell exports win over the realm default, even an empty one', async () => {
     compile.mockResolvedValue({});
     spawn.mockImplementation((opts) => ({

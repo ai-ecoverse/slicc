@@ -7,7 +7,7 @@ import {
   type ChildSpawnRequest,
   SpawnError,
 } from '../../../kernel/wasm-realm/children.js';
-import { type FdTable, KernelError, type OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
+import { type FdTable, KernelError, OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import { JobTable } from '../../../kernel/wasm-realm/jobs.js';
 import {
@@ -16,7 +16,12 @@ import {
 } from '../../../kernel/wasm-realm/net/realm-network.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
-import { type LoopbackNet, loopbackNet, ownerKey } from '../../../kernel/wasm-realm/socket.js';
+import {
+  type LoopbackNet,
+  loopbackNet,
+  ownerKey,
+  type SockAddr,
+} from '../../../kernel/wasm-realm/socket.js';
 import type { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
 import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
@@ -351,6 +356,10 @@ export class WasmSession {
     const denial = await this.gate?.('kill', [`-${name.slice(3)}`, String(pid)], {});
     if (denial) throw new KernelError('EPERM');
     return this.processConfig?.processManager.signal(pid, name) ?? false;
+  }
+
+  listen(addr: SockAddr): OpenFile {
+    return new OpenFile(this.net.listen(addr));
   }
 
   signalAll(sig: number): void {
