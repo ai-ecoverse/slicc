@@ -50,6 +50,12 @@ describe('handleBiscottoMint', () => {
     });
   });
 
+  it('forwards the unit the seat is bound to', async () => {
+    const tray = stub();
+    await handleBiscottoMint(post({ label: 'Anna', unitJid: 'cone_helix' }, 'Bearer tok-1'), tray);
+    expect(tray.calls[0].body).toMatchObject({ unitJid: 'cone_helix' });
+  });
+
   it('401s without a bearer, and never reaches the durable object', async () => {
     const tray = stub();
     expect((await handleBiscottoMint(post({ label: 'Anna' }), tray)).status).toBe(401);

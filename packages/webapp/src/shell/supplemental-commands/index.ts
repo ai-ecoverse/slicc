@@ -324,8 +324,14 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPdftkCommand('pdf'),
     // Both spellings: `biscotti` with no args lists, which is how anyone who
     // has one would say it.
-    createBiscottoCommand('biscotto'),
-    createBiscottoCommand('biscotti'),
+    createBiscottoCommand('biscotto', {
+      getParentJid: options.getParentJid,
+      isScoop: options.isScoop,
+    }),
+    createBiscottoCommand('biscotti', {
+      getParentJid: options.getParentJid,
+      isScoop: options.isScoop,
+    }),
     createPdftoppmCommand('pdftoppm'),
     // poppler's cairo-backed sibling takes the same flags we support.
     createPdftoppmCommand('pdftocairo'),

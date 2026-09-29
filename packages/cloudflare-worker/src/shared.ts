@@ -181,6 +181,17 @@ export interface BiscottoRecord {
   /** ISO revocation tombstone. Once set the token never resolves again. */
   revokedAt?: string;
   gates: BiscottoGates;
+  /**
+   * The unit (cone or scoop JID) the seat was minted for — the one that ran
+   * `biscotto serve`. The leader shows the guest this unit and nothing else.
+   * Stamped by the leader at mint, authenticated by the controller token like
+   * the rest of the record, and never supplied by the guest.
+   *
+   * Required for every NEW mint (`mintBiscotto` 400s without it). Optional
+   * here only because records persisted before the binding existed lack it;
+   * they still resolve, and the leader shows such a seat nothing.
+   */
+  unitJid?: string;
   /** Last successful attach. Informational, for `biscotti` listing. */
   lastSeenAt?: string;
 }

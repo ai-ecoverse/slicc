@@ -140,6 +140,15 @@ export interface FollowerBiscottoIdentity {
   expiresAt?: string;
   /** Human label the owner gave this guest; rendered as message attribution. */
   label: string;
+  /**
+   * The ONE unit (cone or scoop JID) this seat shares — the unit that ran
+   * `biscotto serve`, recorded on the seat at mint. Everything the guest
+   * receives, every snapshot it is sent, and every message it submits is bound
+   * to this unit, never to whatever unit the owner happens to be displaying.
+   * Absent on a seat minted before the binding existed: such a seat is shown
+   * nothing and cannot submit, because no unit can be inferred safely.
+   */
+  unitJid?: string;
   /** Approver for each gate, resolved by the hub from the stored seat. */
   gates: FollowerBiscottoGates;
 }

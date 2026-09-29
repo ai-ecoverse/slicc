@@ -97,7 +97,15 @@ describe('the seat channel enforces it', () => {
   it('still delivers the shared thread', () => {
     const reg = registry();
     const ch = channel();
-    const follower = reg.addFollower('peer', ch, { trust: 'biscotto' });
+    const follower = reg.addFollower('peer', ch, {
+      trust: 'biscotto',
+      biscotto: {
+        id: 'seat1',
+        label: 'Anna',
+        unitJid: 'cone',
+        gates: { message: { approver: 'user' }, tool: { approver: 'user' } },
+      },
+    });
 
     follower.sync.send({ type: 'snapshot', messages: [], scoopJid: 'cone' } as never);
     expect(ch.sent).toHaveLength(1);

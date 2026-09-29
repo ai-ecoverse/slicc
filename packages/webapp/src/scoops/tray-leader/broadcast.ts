@@ -148,19 +148,13 @@ export class BroadcastManager {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower) return;
 
+    if (follower.trust === 'biscotto') {
+      await this.sendSeatSnapshot(bootstrapId, follower);
+      return;
+    }
     const { options } = this.context;
     const activeJid = options.getScoopJid();
-    // A guest is shared ONE thread, not the cone. `scoops.select` is denied for
-    // exactly this reason — but `request_snapshot` carries its own `scoopJid`
-    // and the validation below only checks that the unit EXISTS, so honouring
-    // it would let a guest read every scoop transcript through the front door
-    // the allowlist was supposed to have closed. Both the requested and the
-    // remembered JID are ignored; pinning to `activeJid` also makes the
-    // `getMessagesForScoop` branch below unreachable for a guest.
-    let targetJid =
-      follower.trust === 'biscotto'
-        ? activeJid
-        : (scoopJid ?? follower.selectedScoopJid ?? activeJid);
+    let targetJid = scoopJid ?? follower.selectedScoopJid ?? activeJid;
     try {
       const scoops = options.getScoops?.();
       if (scoops && !scoops.some((scoop) => scoop.jid === targetJid)) targetJid = activeJid;
@@ -193,6 +187,54 @@ export class BroadcastManager {
       messageCount: messages.length,
       scoopJid: targetJid,
     });
+  }
+
+  /**
+   * A guest's snapshot: the unit its seat was minted for, and nothing else.
+   *
+   * Both the JID a guest requests and the unit the owner is displaying are
+   * ignored. `request_snapshot` carries its own `scoopJid` (honouring it would
+   * let a guest read any transcript), and pinning to the DISPLAYED unit handed
+   * a seat minted on one cone whatever cone the owner switched to — on every
+   * reconnect and every new-session broadcast. Every failure sends an empty
+   * transcript tagged with the seat's unit rather than falling back to the
+   * displayed one; a seat with no recorded unit is sent nothing.
+   */
+  private async sendSeatSnapshot(bootstrapId: string, follower: ConnectedFollower): Promise<void> {
+    const seatJid = follower.biscotto?.unitJid;
+    if (!seatJid) {
+      this.context.log.warn('Biscotto seat has no bound unit — sending no snapshot', {
+        bootstrapId,
+        biscottoId: follower.biscotto?.id,
+      });
+      return;
+    }
+    const { options } = this.context;
+    let messages: ChatMessage[] = [];
+    try {
+      const scoops = options.getScoops?.();
+      const exists = !scoops || scoops.some((scoop) => scoop.jid === seatJid);
+      if (!exists) {
+        this.context.log.warn('Biscotto seat unit no longer exists — sending an empty snapshot', {
+          bootstrapId,
+        });
+      } else if (seatJid === options.getScoopJid()) {
+        messages = options.getMessages();
+      } else if (options.getMessagesForScoop) {
+        messages = await Promise.resolve(options.getMessagesForScoop(seatJid));
+      }
+    } catch (err) {
+      this.context.log.warn('Could not read the seat unit transcript — sending an empty snapshot', {
+        bootstrapId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      messages = [];
+    }
+    // The follower may have left while the transcript was read.
+    const current = this.context.followers.followers.get(bootstrapId);
+    if (current !== follower) return;
+    follower.selectedScoopJid = seatJid;
+    sendSnapshot(follower.sync, messages, seatJid);
   }
 
   broadcastSnapshot(): void {

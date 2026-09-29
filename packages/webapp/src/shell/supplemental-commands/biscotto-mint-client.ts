@@ -20,6 +20,8 @@ export interface BiscottoListItem {
   revokedAt?: string;
   lastSeenAt?: string;
   gates: BiscottoGatesWire;
+  /** The unit the seat is bound to; absent on seats minted before the binding. */
+  unitJid?: string;
   /** False once revoked or past expiry. */
   active: boolean;
 }
@@ -40,6 +42,8 @@ export interface MintBiscottoArgs {
   label: string;
   ttlMs?: number;
   gates?: BiscottoGatesWire;
+  /** The unit the seat shares — the cone or scoop that ran `biscotto serve`. */
+  unitJid?: string;
 }
 
 export interface MintBiscottoResult {
@@ -49,6 +53,7 @@ export interface MintBiscottoResult {
   label: string;
   expiresAt?: string;
   gates: BiscottoGatesWire;
+  unitJid?: string;
 }
 
 async function workerError(prefix: string, response: Response): Promise<Error> {
@@ -78,7 +83,12 @@ export async function mintBiscottoViaWorker(
     // Forwarded as a whole object rather than rebuilt field-by-field: a
     // rebuild here is exactly how `approver` and `requester` were silently
     // dropped elsewhere in this feature.
-    body: JSON.stringify({ label: args.label, ttlMs: args.ttlMs, gates: args.gates }),
+    body: JSON.stringify({
+      label: args.label,
+      ttlMs: args.ttlMs,
+      gates: args.gates,
+      unitJid: args.unitJid,
+    }),
   });
   if (!res.ok) throw await workerError('Biscotto mint failed', res);
   return res.json() as Promise<MintBiscottoResult>;

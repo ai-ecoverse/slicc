@@ -35,7 +35,9 @@ function help(name: string): CommandResult {
       `       biscotti\n\n` +
       '  Hand someone a revocable guest seat on this cone. They get a private\n' +
       '  URL showing the live transcript and a composer; what they send is\n' +
-      '  reviewed before it reaches the cone.\n\n' +
+      '  reviewed before it reaches the cone. The seat shares the conversation of\n' +
+      '  the cone that runs this command, and nothing else — switching\n' +
+      '  the UI to another conversation does not show it to the guest.\n\n' +
       '  --label        Who the seat is for. Shown on every approval prompt as the\n' +
       '                 authenticated identity, beside what they actually wrote.\n' +
       '  --expires      How long the seat lives (30m, 12h, 7d). Max 30d.\n' +
@@ -181,7 +183,9 @@ function formatList(biscotti: PanelRpcResults['tray-list-biscotti']['biscotti'])
 export async function runBiscotto(
   name: string,
   args: string[],
-  _ctx: ResolvedCommandContext
+  _ctx: ResolvedCommandContext,
+  unitJid?: string,
+  fromScoop = false
 ): Promise<CommandResult> {
   const fail = (message: string): CommandResult => ({
     stdout: '',
@@ -207,8 +211,29 @@ export async function runBiscotto(
       case 'serve': {
         const parsed = parseServeArgs(rest);
         if (typeof parsed === 'string') return fail(parsed);
+        // The seat shares the unit whose shell ran this, and only that unit.
+        // Without one there is nothing safe to bind it to — the unit the owner
+        // happens to be DISPLAYING is exactly the binding that leaked other
+        // conversations to guests — so refuse rather than guess.
+        if (!unitJid) {
+          return fail(
+            'cannot tell which conversation to share from this shell; run it from the cone whose thread the guest should see'
+          );
+        }
+        // A seat both shows its unit and delivers the guest's messages into
+        // it. A scoop is read-only to people (asks go to its owning cone), so
+        // a scoop-bound seat would let a guest write straight into a scoop.
+        // Re-binding to the owning cone instead would silently share the whole
+        // cone transcript when the scoop was asked to share only its own work,
+        // so the mint is refused and the cone decides.
+        if (fromScoop) {
+          return fail(
+            'a seat cannot be minted from a scoop: guests, like users, never talk to a scoop directly. Ask the owning cone to run `biscotto serve`'
+          );
+        }
         const payload: PanelRpcPayloadFor<'tray-mint-biscotto'> = {
           label: parsed.label,
+          unitJid,
           ...(parsed.ttlMs === undefined ? {} : { ttlMs: parsed.ttlMs }),
           gates: parsed.gates,
         };

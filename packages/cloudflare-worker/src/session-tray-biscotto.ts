@@ -54,6 +54,8 @@ export interface MintBiscottoRequest {
   /** Lifetime in ms. Omitted = lives as long as the tray. */
   ttlMs?: number;
   gates?: Partial<BiscottoGates>;
+  /** The unit the seat shares — the cone or scoop that ran `biscotto serve`. */
+  unitJid?: string;
 }
 
 export interface MintBiscottoResult {
@@ -62,6 +64,7 @@ export interface MintBiscottoResult {
   label: string;
   expiresAt?: string;
   gates: BiscottoGates;
+  unitJid?: string;
 }
 
 /**
@@ -77,6 +80,8 @@ export interface BiscottoSummary {
   revokedAt?: string;
   lastSeenAt?: string;
   gates: BiscottoGates;
+  /** The unit the seat is bound to. Absent on seats minted before the binding existed. */
+  unitJid?: string;
   /** False once revoked or past expiry — precomputed so callers don't re-derive the clock. */
   active: boolean;
 }
@@ -135,6 +140,42 @@ function sanitizeLabel(raw: string): string {
   return flattened.slice(0, MAX_LABEL_LENGTH);
 }
 
+/** JIDs are short machine identifiers; anything else is a malformed mint. */
+const MAX_UNIT_JID_LENGTH = 256;
+
+/**
+ * Validate the unit a new seat is bound to. REQUIRED at mint: a leader that
+ * does not send one predates the binding, and it also predates the seat-side
+ * filter that keeps other units' traffic off a guest's channel, so a seat it
+ * minted would keep showing the guest whatever unit the owner displays. Such
+ * a mint is refused rather than recorded — including during a rolling deploy.
+ *
+ * Only the MINT is strict. Records persisted before the binding existed keep
+ * `unitJid` absent and still resolve at the join door; the current leader
+ * shows such a seat nothing and refuses its messages.
+ *
+ * The value must be a plain identifier: it is compared for equality on the
+ * leader, and a value with control characters or whitespace is not a JID.
+ */
+function sanitizeUnitJid(raw: unknown): string {
+  if (raw === undefined || raw === null) {
+    throw new BiscottoRouteError(
+      'unitJid is required: this leader cannot bind the seat to one conversation; update the leader and mint again',
+      400
+    );
+  }
+  if (
+    typeof raw !== 'string' ||
+    raw.length === 0 ||
+    raw.length > MAX_UNIT_JID_LENGTH ||
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting them is the point.
+    /[\u0000-\u0020\u007f]/.test(raw)
+  ) {
+    throw new BiscottoRouteError('unitJid must be a non-empty identifier', 400);
+  }
+  return raw;
+}
+
 function normalizeGates(gates: Partial<BiscottoGates> | undefined): BiscottoGates {
   return {
     message: normalizeBiscottoGate(gates?.message as Partial<BiscottoGate> | undefined),
@@ -175,6 +216,7 @@ export async function mintBiscotto(
   assertController(tray, deps, req.controllerToken);
 
   const label = sanitizeLabel(req.label ?? '');
+  const unitJid = sanitizeUnitJid(req.unitJid);
   if (req.ttlMs !== undefined) {
     if (!Number.isSafeInteger(req.ttlMs) || req.ttlMs <= 0) {
       throw new BiscottoRouteError('--expires must be a positive duration', 400);
@@ -201,6 +243,7 @@ export async function mintBiscotto(
     createdAt: deps.isoNow(),
     expiresAt: req.ttlMs === undefined ? undefined : new Date(deps.now() + req.ttlMs).toISOString(),
     gates: normalizeGates(req.gates),
+    unitJid,
   };
   tray.biscotti.push(record);
   await deps.persistTray();
@@ -211,6 +254,7 @@ export async function mintBiscotto(
     label: record.label,
     expiresAt: record.expiresAt,
     gates: record.gates,
+    ...(record.unitJid ? { unitJid: record.unitJid } : {}),
   };
 }
 
@@ -257,6 +301,7 @@ function summarize(record: BiscottoRecord, now: number): BiscottoSummary {
     revokedAt: record.revokedAt,
     lastSeenAt: record.lastSeenAt,
     gates: record.gates,
+    ...(record.unitJid ? { unitJid: record.unitJid } : {}),
     active: isBiscottoActive(record, now),
   };
 }
@@ -292,6 +337,7 @@ export async function dispatchBiscottoRoute(
     ttlMs?: number;
     gates?: Partial<BiscottoGates>;
     workerBaseUrl?: string;
+    unitJid?: string;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -309,6 +355,7 @@ export async function dispatchBiscottoRoute(
               label: body.label ?? '',
               ttlMs: body.ttlMs,
               gates: body.gates,
+              unitJid: body.unitJid,
               workerBaseUrl: body.workerBaseUrl ?? '',
             },
             deps
