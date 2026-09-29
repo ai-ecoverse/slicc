@@ -537,6 +537,12 @@ export class WasmProcess {
         this.children.watch(req.pid, (state, sig) =>
           state === 'stopped' ? this.stop(sig) : this.cont()
         );
+        // The old image is gone: the program holds its own copies of what it
+        // inherited, and nothing else stays open, close-on-exec descriptors
+        // least of all. Holding them until the program ends would keep a
+        // pipe from its EOF: git reads its exec-notify pipe until the
+        // close-on-exec end closes, while its pager waits for git's output.
+        await this.fds.closeAll();
         try {
           const waited = await this.children.wait(req.pid, false);
           const termsig = waited[1] & 0x7f;

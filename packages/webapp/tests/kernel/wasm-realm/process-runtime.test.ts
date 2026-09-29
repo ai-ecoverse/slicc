@@ -216,6 +216,36 @@ describe('evaluateGlue', () => {
     expect([fns.pipe2, fns.socket, fns.accept4]).toEqual([undefined, undefined, undefined]);
   });
 
+  // The fork emulation's shape: a fork's unwind pushed a keepalive, and
+  // settle() takes the fork by clearing `forking`; `forked` returns the count.
+  const forkGlue = (toolchainPops: boolean) =>
+    [
+      'var runtimeKeepaliveCounter = 0;',
+      'function runtimeKeepalivePop() { runtimeKeepaliveCounter -= 1; }',
+      `var SliccFork = { forking: false${toolchainPops ? ', balancesKeepalive: true' : ''} };`,
+      'Module.fork = () => {',
+      '  SliccFork.forking = true;',
+      '  runtimeKeepaliveCounter += 1;',
+      '  SliccFork.forking = false;',
+      `  ${toolchainPops ? 'runtimeKeepalivePop();' : ''}`,
+      '  return runtimeKeepaliveCounter;',
+      '};',
+    ].join('\n');
+
+  it("pops the keepalive of each fork the toolchain's fork emulation leaves pushed", () => {
+    const module: { sliccEnv: object; fork?: () => number } = { sliccEnv: {} };
+    evaluateGlue(forkGlue(false), module);
+    // Balanced after every fork: exit() runs exitRuntime (atexit, stdio flush).
+    expect(module.fork?.()).toBe(0);
+    expect(module.fork?.()).toBe(0);
+  });
+
+  it('leaves the keepalive to a fork emulation that balances it itself', () => {
+    const module: { sliccEnv: object; fork?: () => number } = { sliccEnv: {} };
+    evaluateGlue(forkGlue(true), module);
+    expect(module.fork?.()).toBe(0);
+  });
+
   it('runs a glue without a filesystem', () => {
     const module: { sliccEnv: object; FS?: object } = { sliccEnv: {} };
     evaluateGlue('var ENV = {};', module);

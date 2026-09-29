@@ -244,6 +244,26 @@ describe('WasmProcess stop and continue', () => {
   });
 });
 
+describe('WasmProcess exec', () => {
+  it('an exec releases the old image’s descriptors while the program runs', async () => {
+    let end!: (code: number) => void;
+    const spawner = async (_req: unknown, fds: FdTable) => {
+      await fds.closeAll(); // the program took what it inherited
+      return { pid: 40, exited: new Promise<number>((resolve) => (end = resolve)) };
+    };
+    const { read, write } = openPipe();
+    const fds = new FdTable();
+    fds.installAt(3, write); // a close-on-exec pipe to its parent
+    const p = new WasmProcess(5, fds, { spawner });
+    await p.syscall({ op: 'proc-spawn', file: 'x', argv: ['x'], env: {}, cwd: '/', stdio: [] });
+    const execing = p.syscall({ op: 'proc-exec', pid: 40 });
+    // The parent sees EOF now, not when the program ends.
+    expect(await read.file.read?.(8)).toHaveLength(0);
+    end(0);
+    expect(await execing).toMatchObject({ ok: true, json: [40, 0] });
+  });
+});
+
 describe('waitpid by process group', () => {
   it('waits for the caller’s group (0), a named group (-pgid), or any child (-1)', async () => {
     const jobs = new JobTable();
