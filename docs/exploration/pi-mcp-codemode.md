@@ -20,7 +20,7 @@ them up as built-in extensions.
 | `@earendil-works/pi-codemode`                                | `quickjs-wasi@3.6.2`  | `CodemodeSandbox`: model-written JS runs in a fresh QuickJS-NG wasm VM, one worker per `execute()`. The only thing a script can do is call the injected `tools.*` / globals. `renderDeclarations()` turns tool schemas into TypeScript for the tool description, and `store`/`load` keep state across calls. |
 | `pi-coding-agent/dist/extensions/{mcp,codemode,tool-search}` | Node fs/path/http/TUI | The `mcp.json` config, `mcp__<server>__<tool>` naming, exposure modes, the `codemode` and `tool_search` tools, BM25 `searchTools()`, and resource tools.                                                                                                                                                     |
 
-Exposure modes (`docs/mcp.md` in pi-coding-agent) control how the model
+Exposure modes ([Pi's MCP docs](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/mcp.md)) control how the model
 reaches each server's tools:
 
 - `codemode` (default): callable from scripts and listed in the `codemode`
@@ -88,7 +88,8 @@ catches up, both clients sit behind one interface (Phase 1).
 
 ## Phase 1: MCP tools through `pi-mcp`
 
-A new module, `packages/webapp/src/shell/mcp/connection-manager.ts`, lives in
+A new connection-manager module (proposed: `connection-manager.ts` next to the
+existing `shell/mcp/client.ts`) lives in
 the kernel worker and is shared by the agent tools and the shell:
 
 - It owns one live connection per entry in `/workspace/.mcp/servers.json`.
