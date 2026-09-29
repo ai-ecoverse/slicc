@@ -258,8 +258,11 @@ afterAll(async () => {
 async function install(vfs: VirtualFS, name: string): Promise<void> {
   const src = `${MODULES}/@ai-ecoverse/${name}`;
   const dest = `${NM}/${name}`;
-  for (const file of tree(src))
+  for (const file of tree(src)) {
     await vfs.writeFile(`${dest}/${file}`, readFileSync(join(src, file)));
+    // As ipk extracts it: an executable in the tarball stays executable.
+    if (statSync(join(src, file)).mode & 0o111) await vfs.chmod(`${dest}/${file}`, 0o755);
+  }
   const manifest = JSON.parse(readFileSync(`${src}/package.json`, 'utf8')) as {
     slicc: {
       env?: Record<string, string>;
@@ -573,6 +576,23 @@ describe.skipIf(!HAVE)('native git as the everyday git (real git)', () => {
     // It ran through its `#!` interpreter, never through the shell's fallback.
     expect(shellCalls.filter((c) => c.includes('hooks/'))).toEqual([]);
     expect(r.stderr).toContain('blocked by hook');
+  }, 120_000);
+
+  it('clones, adds as a submodule and pushes to local repositories (upload-pack, receive-pack)', async () => {
+    // git runs `git-upload-pack` / `git-receive-pack` through `sh -c` with its
+    // exec path first on PATH, where wasm-git ships them as executable copies
+    // of bin/git's glue with no module of their own.
+    const r = await realmSh(
+      'cd /home/user/work && git init -q -b main sub6 && ' +
+        'git -C sub6 -c user.email=a@b -c user.name=A commit -q --allow-empty -m one && ' +
+        'git clone -q sub6 lc1 && git clone -q --no-local sub6 lc2 && ' +
+        'git init -q -b main super && cd super && ' +
+        'git -c protocol.file.allow=always submodule add -q ../sub6 sub && cd .. && ' +
+        'git init -q -b main --bare bare.git && git -C lc1 push -q ../bare.git main && ' +
+        'for r in lc1 lc2 super/sub bare.git; do echo "$r $(git -C $r log --oneline | wc -l)"; done'
+    );
+    expect(r.exitCode, r.stderr).toBe(0);
+    expect(r.stdout.replace(/ +/g, ' ')).toBe('lc1 1\nlc2 1\nsuper/sub 1\nbare.git 1\n');
   }, 120_000);
 
   it('stashes and pops, and lists the stash', async () => {

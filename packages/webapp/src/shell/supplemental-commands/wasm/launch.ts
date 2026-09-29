@@ -72,6 +72,12 @@ const SIGNAL_NAME = new Map(
 /** A path into the shell's command registry: `/usr/bin/<name>` or its alias `/bin/<name>`. */
 const REGISTRY_PATH = /^\/(?:usr\/)?bin\/([^/]+)$/;
 
+/** The installed package a path lies in (`…/node_modules/[@scope/]name`). */
+const PACKAGE_ROOT = /^(.*\/node_modules\/(?:@[^/]+\/)?[^/]+)\//;
+
+/** The module an Emscripten glue loads (`locateFile("x.wasm")`). */
+const LOCATED_MODULE = /locateFile\(\s*["']([^"'/]+\.wasm)["']\s*\)/;
+
 /** How much of a script its `#!` line may take (Linux: 256 bytes). */
 const SHEBANG_MAX = 256;
 
@@ -413,9 +419,41 @@ export class WasmSession {
       return bash && { glue: bash.glue, module: bash.wasm, argv0: 'sh', defaults: bash.env };
     }
     const glue = this.ctx.fs.resolvePath(cwd, file);
+    if (!(await this.ctx.fs.exists(glue))) return undefined;
     const module = modulePath(glue);
-    if (!(await this.ctx.fs.exists(glue)) || !(await this.ctx.fs.exists(module))) return undefined;
-    return { glue, module, argv0: baseName(argv0 || file) };
+    if (await this.ctx.fs.exists(module)) return { glue, module, argv0: baseName(argv0 || file) };
+    return this.packagedCopy(glue, argv0 || file);
+  }
+
+  /**
+   * A glue without a module of its own that is a copy of one of its
+   * package's programs runs that program, under its own name: wasm-git's
+   * `libexec/git-core/git-upload-pack` is `bin/git`'s glue (it locates
+   * `git.wasm`, which sits next to `bin/git`), and git runs a dashed builtin
+   * by its argv[0]. Anything else stays no wasm program.
+   */
+  private async packagedCopy(glue: string, argv0: string): Promise<WasmTarget | undefined> {
+    const root = PACKAGE_ROOT.exec(glue)?.[1];
+    if (root === undefined) return undefined;
+    let text: string;
+    try {
+      text = await this.ctx.fs.readFile(glue);
+    } catch {
+      return undefined;
+    }
+    const located = LOCATED_MODULE.exec(text)?.[1];
+    if (located === undefined) return undefined;
+    for (const command of (await this.commands()).values()) {
+      if (command.wasm.startsWith(`${root}/`) && command.wasm.endsWith(`/${located}`)) {
+        return {
+          glue: command.glue,
+          module: command.wasm,
+          argv0: baseName(argv0),
+          defaults: command.env,
+        };
+      }
+    }
+    return undefined;
   }
 
   /** fork(2) of process `ppid`: the same program, resumed from the parent's state. */
