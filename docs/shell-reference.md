@@ -761,6 +761,12 @@ both; a package or command of any other ABI offers nothing.
 }
 ```
 
+A WASI server gets its socket from `wasm --listen [HOST:]PORT PROGRAM`: a
+non-blocking listening socket on the owner's loopback network (HOST defaults to
+`127.0.0.1`), which `$SLICC_LISTEN_FDS` names — `wasm --listen 8080 ./httpd.wasm &`,
+then `curl http://127.0.0.1:8080/` from another native program. A taken port is
+exit 1. It works for any wasm program, WASI or Emscripten.
+
 Paths are package-relative and may not leave the package; `argv0` (default: the
 command name) picks the program of a multi-call binary. `env`, on `slicc` and per
 command (which wins), gives the program environment defaults; the caller's
