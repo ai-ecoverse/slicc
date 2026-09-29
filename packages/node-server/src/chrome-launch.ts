@@ -465,13 +465,22 @@ export function findChromeExecutable(options: FindChromeExecutableOptions = {}):
     : (chromeForTesting ?? installedChrome);
 }
 
-async function readJsonFile(filePath: string): Promise<JsonObject> {
+async function readJsonFile(
+  filePath: string,
+  readFileImpl: (path: string) => Promise<string> = (path) => readFile(path, 'utf8')
+): Promise<JsonObject | null> {
+  let raw: string;
   try {
-    const raw = await readFile(filePath, 'utf8');
+    raw = await readFileImpl(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    return null;
+  }
+  try {
     const parsed = JSON.parse(raw) as unknown;
-    return isJsonObject(parsed) ? parsed : {};
+    return isJsonObject(parsed) ? parsed : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -534,11 +543,15 @@ export async function ensureQaProfileScaffold(projectRoot: string): Promise<Chro
 
     const localStatePath = join(profile.userDataDir, 'Local State');
     const preferencesPath = join(profile.userDataDir, 'Default', 'Preferences');
-    const localState = seedLocalState(await readJsonFile(localStatePath), definition);
-    const preferences = seedPreferences(await readJsonFile(preferencesPath), definition);
 
-    await writeJsonFile(localStatePath, localState);
-    await writeJsonFile(preferencesPath, preferences);
+    const localStateBase = await readJsonFile(localStatePath);
+    if (localStateBase !== null) {
+      await writeJsonFile(localStatePath, seedLocalState(localStateBase, definition));
+    }
+    const preferencesBase = await readJsonFile(preferencesPath);
+    if (preferencesBase !== null) {
+      await writeJsonFile(preferencesPath, seedPreferences(preferencesBase, definition));
+    }
   }
 
   return profiles;
@@ -651,10 +664,18 @@ export const TAB_LIFECYCLE_EXEMPT_SITES = [
   'localhost',
 ];
 
-export async function seedChromeProfilePreferences(userDataDir: string): Promise<void> {
+export interface SeedChromeProfilePreferencesDeps {
+  readFileImpl?: (path: string) => Promise<string>;
+}
+
+export async function seedChromeProfilePreferences(
+  userDataDir: string,
+  deps: SeedChromeProfilePreferencesDeps = {}
+): Promise<void> {
   const prefsPath = join(userDataDir, 'Default', 'Preferences');
   try {
-    const prefs = await readJsonFile(prefsPath);
+    const prefs = await readJsonFile(prefsPath, deps.readFileImpl);
+    if (prefs === null) return;
     prefs['tab_freezing_enabled'] = false;
     const performanceTuning = ensureObject(prefs, 'performance_tuning');
     const highEfficiencyMode = ensureObject(performanceTuning, 'high_efficiency_mode');

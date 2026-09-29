@@ -35,6 +35,23 @@ test('stat carries mode and mtimeMs', async () => {
   }
 });
 
+test('stat carries the backend’s inode: the same across a rewrite, new for a replaced file', async () => {
+  const token = await scopedToken('/scoops/x/');
+  const ino = async (path: string) => {
+    const r = await posix(token, { op: 'stat', path });
+    return r.ok && r.kind === 'json' ? (r.json as { ino?: number }).ino : undefined;
+  };
+  const first = await ino('in.txt');
+  expect(typeof first).toBe('number');
+  const write = (text: string) =>
+    posix(token, { op: 'write', path: 'in.txt', body: new TextEncoder().encode(text) });
+  expect((await write('yo')).ok).toBe(true);
+  expect(await ino('in.txt')).toBe(first);
+  expect((await posix(token, { op: 'unlink', path: 'in.txt' })).ok).toBe(true);
+  expect((await write('hi')).ok).toBe(true);
+  expect(await ino('in.txt')).not.toBe(first);
+});
+
 test('unlink removes a file and refuses a directory', async () => {
   const token = await scopedToken('/scoops/x/');
   expect((await posix(token, { op: 'mkdir', path: 'd' })).ok).toBe(true);

@@ -973,19 +973,39 @@ describe('seedChromeProfilePreferences', () => {
     expect(after.performance_tuning.tab_discarding.exceptions).toEqual(TAB_LIFECYCLE_EXEMPT_SITES);
   });
 
-  it('replaces a corrupt Preferences file with a valid seeded one', async () => {
+  it('leaves a corrupt Preferences file untouched (fail closed)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
     tempDirs.push(dir);
     const prefsPath = join(dir, 'Default', 'Preferences');
     await mkdir(join(dir, 'Default'), { recursive: true });
-    await writeFile(prefsPath, 'not valid json {');
+    const corrupt = 'not valid json {';
+    await writeFile(prefsPath, corrupt);
 
     await seedChromeProfilePreferences(dir);
 
-    const after = JSON.parse(await readFile(prefsPath, 'utf8')) as {
-      tab_freezing_enabled: boolean;
-    };
-    expect(after.tab_freezing_enabled).toBe(false);
+    expect(await readFile(prefsPath, 'utf8')).toBe(corrupt);
+  });
+
+  it('does not wipe existing Preferences on a non-ENOENT read fault', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    const durable = JSON.stringify({
+      profile: { name: 'keep-me-forever', content_settings: { exceptions: { cookies: {} } } },
+      extensions: { settings: { abcdefghijklmnop: { state: 1 } } },
+      account_info: [{ email: 'user@example.com' }],
+    });
+    await writeFile(prefsPath, durable);
+    const eacces = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+
+    await seedChromeProfilePreferences(dir, {
+      readFileImpl: async () => {
+        throw eacces;
+      },
+    });
+
+    expect(await readFile(prefsPath, 'utf8')).toBe(durable);
   });
 });
 

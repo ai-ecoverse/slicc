@@ -295,6 +295,11 @@ export class KernelStreams {
   private ops(kfd: number, base: StreamOps): StreamOps {
     return {
       ...base,
+
+      llseek: () =>
+        this.call(() => {
+          throw new SyscallError('ESPIPE');
+        }),
       read: (s, buffer, offset, length) =>
         this.call(() => {
           const opts = nonblocking(s) ? { nonblock: true } : undefined;

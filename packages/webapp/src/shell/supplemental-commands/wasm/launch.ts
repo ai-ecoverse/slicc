@@ -38,6 +38,8 @@ const SIGNAL_NAME = new Map(
 
 const REGISTRY_PATH = /^\/(?:usr\/)?bin\/([^/]+)$/;
 
+const SHEBANG_MAX = 256;
+
 let nextPid = 40000;
 
 export type NativeGate = (
@@ -338,15 +340,46 @@ export class WasmSession {
     };
   }
 
+  private async interpreted(
+    req: ChildSpawnRequest
+  ): Promise<{ target: WasmTarget; file: string; args: string[] } | undefined> {
+    if (!req.file.includes('/') || REGISTRY_PATH.test(req.file)) return undefined;
+    let head: Uint8Array;
+    try {
+      head = (
+        await this.ctx.fs.readFileBuffer(this.ctx.fs.resolvePath(req.cwd, req.file))
+      ).subarray(0, SHEBANG_MAX);
+    } catch {
+      return undefined;
+    }
+    if (head[0] !== 0x23 || head[1] !== 0x21) return undefined; // #!
+    const line = new TextDecoder().decode(head).slice(2).split('\n')[0].trim();
+    const [interp, ...rest] = line.split(/[ \t]+/);
+    if (!interp) return undefined;
+    const target = await this.resolve(interp, interp, req.cwd);
+    if (!target) return undefined;
+
+    const arg = rest.join(' ');
+    return {
+      target,
+      file: interp,
+      args: [...(arg ? [arg] : []), req.file, ...req.argv.slice(1)],
+    };
+  }
+
   private spawner(ppid: number): ChildSpawner {
     return async (req, fds) => {
-      const target = await this.resolve(req.file, req.argv[0] ?? req.file, req.cwd);
-      if (!target) return this.runShellChild(req, fds, ppid);
-      const denial = await this.gate?.(commandName(req.file), req.argv.slice(1), req.env);
+      const direct = await this.resolve(req.file, req.argv[0] ?? req.file, req.cwd);
+      const run = direct
+        ? { target: direct, file: req.file, args: req.argv.slice(1) }
+        : await this.interpreted(req);
+      if (!run) return this.runShellChild(req, fds, ppid);
+
+      const denial = await this.gate?.(commandName(run.file), run.args, req.env);
       if (denial) return this.deniedChild(req, fds, ppid, denial);
       const handle = await this.launch({
-        ...target,
-        args: req.argv.slice(1),
+        ...run.target,
+        args: run.args,
         env: req.env,
         cwd: req.cwd,
         fds,

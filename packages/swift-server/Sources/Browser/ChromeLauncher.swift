@@ -133,6 +133,9 @@ struct ChromeLauncher: Sendable {
     
     
     private let runningPidsForBundle: @Sendable (URL) -> Set<pid_t>
+    
+    
+    private let preferencesDataReader: @Sendable (URL) throws -> Data
 
     init(
         logger: Logger = Logger(label: "slicc.chrome-launcher"),
@@ -172,7 +175,8 @@ struct ChromeLauncher: Sendable {
                     }
                     return app.processIdentifier
                 })
-        }
+        },
+        preferencesDataReader: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }
     ) {
         self.logger = logger
         self.fileExists = fileExists
@@ -185,6 +189,7 @@ struct ChromeLauncher: Sendable {
         self.chromePidDiscoveryTimeout = chromePidDiscoveryTimeout
         self.fetchData = fetchData
         self.runningPidsForBundle = runningPidsForBundle
+        self.preferencesDataReader = preferencesDataReader
     }
 
     func findChromeExecutable() -> String? {
@@ -418,20 +423,37 @@ struct ChromeLauncher: Sendable {
     
     
     
+    
+    
+    
+    
     func seedProfilePreferences(userDataDir: String) {
         let defaultDir = URL(fileURLWithPath: userDataDir, isDirectory: true)
             .appendingPathComponent("Default", isDirectory: true)
         let prefsPath = defaultDir.appendingPathComponent("Preferences")
         try? FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
-        var prefs: [String: Any] = [:]
-        if let data = try? Data(contentsOf: prefsPath),
-            let parsed = try? JSONSerialization.jsonObject(with: data),
-            let existing = parsed as? [String: Any]
-        {
-            prefs = existing
+
+        let prefs: [String: Any]
+        do {
+            let data = try preferencesDataReader(prefsPath)
+            guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return  
+            }
+            prefs = parsed
+        } catch {
+            
+            
+            let ns = error as NSError
+            let isMissing =
+                (ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError)
+                || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT))
+            guard isMissing else { return }
+            prefs = [:]
         }
-        prefs["tab_freezing_enabled"] = false
-        var performanceTuning = prefs["performance_tuning"] as? [String: Any] ?? [:]
+
+        var mutablePrefs = prefs
+        mutablePrefs["tab_freezing_enabled"] = false
+        var performanceTuning = mutablePrefs["performance_tuning"] as? [String: Any] ?? [:]
         var highEfficiencyMode = performanceTuning["high_efficiency_mode"] as? [String: Any] ?? [:]
         highEfficiencyMode["state"] = 0
         performanceTuning["high_efficiency_mode"] = highEfficiencyMode
@@ -442,8 +464,8 @@ struct ChromeLauncher: Sendable {
         }
         tabDiscarding["exceptions"] = exceptions
         performanceTuning["tab_discarding"] = tabDiscarding
-        prefs["performance_tuning"] = performanceTuning
-        guard let out = try? JSONSerialization.data(withJSONObject: prefs) else { return }
+        mutablePrefs["performance_tuning"] = performanceTuning
+        guard let out = try? JSONSerialization.data(withJSONObject: mutablePrefs) else { return }
         try? out.write(to: prefsPath)
     }
 

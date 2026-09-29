@@ -214,6 +214,53 @@ final class ChromeLauncherTests: XCTestCase {
         )
     }
 
+    func testSeedProfilePreferencesLeavesCorruptFileUntouched() throws {
+        
+        
+        let launcher = makeLauncher()
+        let dir = NSTemporaryDirectory() + "slicc-seed-prefs-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let defaultDir = dir + "/Default"
+        try FileManager.default.createDirectory(
+            atPath: defaultDir, withIntermediateDirectories: true)
+        let prefsPath = defaultDir + "/Preferences"
+        let corrupt = "not valid json {"
+        try corrupt.write(toFile: prefsPath, atomically: true, encoding: .utf8)
+
+        launcher.seedProfilePreferences(userDataDir: dir)
+
+        let after = try String(contentsOfFile: prefsPath, encoding: .utf8)
+        XCTAssertEqual(after, corrupt)
+    }
+
+    func testSeedProfilePreferencesDoesNotWipeOnReadFault() throws {
+        
+        
+        
+        let eacces = NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES))
+        let launcher = ChromeLauncher(
+            preferencesDataReader: { _ in throw eacces }
+        )
+        let dir = NSTemporaryDirectory() + "slicc-seed-prefs-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let defaultDir = dir + "/Default"
+        try FileManager.default.createDirectory(
+            atPath: defaultDir, withIntermediateDirectories: true)
+        let prefsPath = defaultDir + "/Preferences"
+        let durable: [String: Any] = [
+            "profile": ["name": "keep-me-forever"],
+            "extensions": ["settings": ["abcdefghijklmnop": ["state": 1]]],
+            "account_info": [["email": "user@example.com"]],
+        ]
+        let durableData = try JSONSerialization.data(withJSONObject: durable)
+        try durableData.write(to: URL(fileURLWithPath: prefsPath))
+
+        launcher.seedProfilePreferences(userDataDir: dir)
+
+        let after = try Data(contentsOf: URL(fileURLWithPath: prefsPath))
+        XCTAssertEqual(after, durableData)
+    }
+
     func testResolveAppBundleWalksUpFromCanonicalChromeExecutable() {
         let launcher = makeLauncher()
 

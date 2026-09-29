@@ -362,6 +362,52 @@ describe('WasmSession', () => {
     expect(fds.has(0)).toBe(false);
   });
 
+  it('runs a `#!` script by path with its interpreter, as execve does (git’s hooks on GNU bash)', async () => {
+    fakeProcesses();
+    const BASH = '/shared/lib/node_modules/@ai-ecoverse/wasm-bash';
+    const exec = vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
+    const files = {
+      ...installed,
+      [`${BASH}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-bash',
+        slicc: { commands: { bash: { glue: 'bin/bash', wasm: 'bin/bash.wasm' } } },
+      }),
+      [`${BASH}/bin/bash`]: 'BASH',
+      [`${BASH}/bin/bash.wasm`]: 'W',
+      '/r/.git/hooks/pre-commit': '#!/bin/sh\necho hook\n',
+      '/r/tool-with-arg': '#!/usr/bin/bash -e\necho\n',
+      '/r/perl-script': '#!/usr/bin/perl\nprint 1\n',
+    };
+    const gate = vi.fn(async () => null);
+    const session = new WasmSession(ctx(files, exec), undefined, () => {}, gate);
+    const spawner = await parentSpawner(session);
+    await spawner(
+      { file: '.git/hooks/pre-commit', argv: ['.git/hooks/pre-commit', 'x'], env: {}, cwd: '/r' },
+      stdio()
+    );
+    let opts = spawn.mock.calls.at(-1)![0];
+
+    expect(opts.program.glue).toBe('BASH');
+    expect(opts.argv0).toBe('sh');
+    expect(opts.args).toEqual(['.git/hooks/pre-commit', 'x']);
+
+    expect(gate).toHaveBeenLastCalledWith('sh', ['.git/hooks/pre-commit', 'x'], {});
+
+    await spawner(
+      { file: '/r/tool-with-arg', argv: ['/r/tool-with-arg'], env: {}, cwd: '/r' },
+      stdio()
+    );
+    opts = spawn.mock.calls.at(-1)![0];
+    expect(opts.args).toEqual(['-e', '/r/tool-with-arg']);
+
+    const perl = await spawner(
+      { file: '/r/perl-script', argv: ['/r/perl-script'], env: {}, cwd: '/r' },
+      stdio()
+    );
+    expect(await perl.exited).toBe(0);
+    expect(exec).toHaveBeenCalledWith('/r/perl-script', expect.objectContaining({ args: [] }));
+  });
+
   it('refuses a shell child without an exec (ENOSYS)', async () => {
     fakeProcesses();
     const session = new WasmSession(ctx(installed), undefined, () => {});
