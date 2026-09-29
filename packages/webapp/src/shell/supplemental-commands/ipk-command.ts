@@ -255,9 +255,10 @@ async function runManifestInstall(
   const stdout = outcome.results.map(
     (r) => `${name}: installed ${r.name}@${r.version} -> ${r.installPath}`
   );
-  const stderr = outcome.errors.map(
-    (e) => `${name}: failed to install ${e.spec}: ${describeError(e.error)}`
-  );
+  const stderr = [
+    ...(outcome.notes ?? []).map((note) => `${name}: ${note}`),
+    ...outcome.errors.map((e) => `${name}: failed to install ${e.spec}: ${describeError(e.error)}`),
+  ];
 
   return {
     stdout: stdout.length > 0 ? `${stdout.join('\n')}\n` : '',
@@ -313,9 +314,10 @@ async function runInstall(
   const stdout = outcome.results.map(
     (r) => `${name}: installed ${r.name}@${r.version} -> ${r.installPath}`
   );
-  const stderr = outcome.errors.map(
-    (e) => `${name}: failed to install ${e.spec}: ${describeError(e.error)}`
-  );
+  const stderr = [
+    ...(outcome.notes ?? []).map((note) => `${name}: ${note}`),
+    ...outcome.errors.map((e) => `${name}: failed to install ${e.spec}: ${describeError(e.error)}`),
+  ];
 
   if (global && outcome.results.length > 0) {
     await refreshGlobalBinCommands(deps);

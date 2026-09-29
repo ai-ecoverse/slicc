@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import type { SecureFetch } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
-import { installPackage } from '../../../src/shell/ipk/installer.js';
+import { installPackage, installPackages } from '../../../src/shell/ipk/installer.js';
 import {
   fetchPackument,
   type PackumentVersion,
@@ -108,4 +108,30 @@ describe.skipIf(!LIVE_REGISTRY)('ipk against the live npm registry', () => {
       expect(abbreviatedBytes, name).toBeLessThan(fullBytes);
     }
   }, 180_000);
+
+  it("installs only the wasm build among sharp's platform binaries", async () => {
+    const fs = await VirtualFS.create({ dbName: `ipk-live-${dbCounter++}`, wipe: true });
+    const out = await installPackages(['sharp@^0.35'], { fs, fetch: nodeFetch, cwd: '/work' });
+    expect(out.errors).toEqual([]);
+    const img = (await fs.readDir('/work/node_modules/@img')).map((e) => e.name).sort();
+
+    expect(img).toContain('sharp-webcontainers-wasm32');
+    expect(img).toContain('sharp-wasm32');
+    expect(img.filter((n) => /linux|darwin|win32|freebsd/.test(n))).toEqual([]);
+    expect(out.notes?.some((n) => n.includes('@img/sharp-linux-x64@'))).toBe(true);
+    console.log(
+      `[ipk-live] sharp: installed @img/${img.join(', @img/')}; ${out.notes?.length} skipped`
+    );
+    await fs.dispose();
+  }, 180_000);
+
+  it('installs the esbuild wrapper without any of its native binaries', async () => {
+    const fs = await VirtualFS.create({ dbName: `ipk-live-${dbCounter++}`, wipe: true });
+    const out = await installPackages(['esbuild@^0.25'], { fs, fetch: nodeFetch, cwd: '/work' });
+    expect(out.errors).toEqual([]);
+    await expect(fs.exists('/work/node_modules/esbuild/package.json')).resolves.toBe(true);
+    await expect(fs.exists('/work/node_modules/@esbuild')).resolves.toBe(false);
+    expect(out.notes?.length).toBeGreaterThan(10);
+    await fs.dispose();
+  }, 120_000);
 });

@@ -439,7 +439,7 @@ export class RealmProxy {
   }
 
   private cap(): number {
-    return this.options.transport.traits.maxRequestBody;
+    return Math.min(this.options.transport.traits.maxRequestBody, this.limits.bodyBudget);
   }
 
   private async expectContinue(conn: HttpSink, req: RequestHead, hasBody: boolean): Promise<void> {
@@ -472,7 +472,9 @@ export class RealmProxy {
     } catch (e) {
       if (signal.aborted) throw e;
       const message = e instanceof Error ? e.message : String(e);
-      return plainResponse(502, message || 'upstream request failed');
+      const status = (e as { status?: unknown } | null)?.status;
+      const own = typeof status === 'number' && status >= 400 && status <= 599 ? status : 502;
+      return plainResponse(own, message || 'upstream request failed');
     }
   }
 

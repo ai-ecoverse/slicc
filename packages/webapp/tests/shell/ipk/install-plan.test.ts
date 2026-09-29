@@ -12,6 +12,8 @@ interface PackumentInput {
   versions: string[];
   distTags?: Record<string, string>;
   deps?: Record<string, Record<string, string>>;
+
+  extra?: Record<string, Record<string, unknown>>;
 }
 
 function makePackument(input: PackumentInput): Packument {
@@ -24,6 +26,7 @@ function makePackument(input: PackumentInput): Packument {
         tarball: `https://registry.npmjs.org/${input.name}/-/${tarballBasename(input.name, v)}`,
       },
       dependencies: input.deps?.[v] ?? {},
+      ...input.extra?.[v],
     };
   }
   return {
@@ -559,5 +562,177 @@ describe('resolveDependencyTree: concurrent packument fetching', () => {
     await expect(
       resolveDependencyTree({ rootDependencies: { a: '^1' }, fetchPackument: supplier })
     ).rejects.toThrow(/failed to resolve missing@\^1: unknown package: missing/);
+  });
+});
+
+describe('resolveDependencyTree: optional dependencies on the wasm host', () => {
+  const native = (os: string, cpu: string) => ({ os: [os], cpu: [cpu] });
+
+  function napiPackage(): PackumentInput[] {
+    const bindings: Record<string, { os?: string[]; cpu: string[] }> = {
+      'napi-darwin-arm64': native('darwin', 'arm64'),
+      'napi-linux-x64-gnu': { ...native('linux', 'x64') },
+      'napi-win32-x64-msvc': native('win32', 'x64'),
+      'napi-wasm32-wasi': { cpu: ['wasm32'] },
+    };
+    return [
+      {
+        name: 'napi',
+        versions: ['1.0.0'],
+        extra: {
+          '1.0.0': {
+            optionalDependencies: Object.fromEntries(
+              Object.keys(bindings).map((b) => [b, '1.0.0'])
+            ),
+          },
+        },
+      },
+      ...Object.entries(bindings).map(([name, platform]) => ({
+        name,
+        versions: ['1.0.0'],
+        extra: { '1.0.0': platform },
+      })),
+    ];
+  }
+
+  it('installs only the wasm32-wasi binding of a napi-rs package', async () => {
+    const plan = await resolveDependencyTree({
+      rootDependencies: { napi: '^1' },
+      fetchPackument: makeSupplier(napiPackage()),
+    });
+    expect(Object.keys(plan.root).sort()).toEqual(['napi', 'napi-wasm32-wasi']);
+    expect(plan.skippedOptional.map((s) => s.name).sort()).toEqual([
+      'napi-darwin-arm64',
+      'napi-linux-x64-gnu',
+      'napi-win32-x64-msvc',
+    ]);
+    const linux = plan.skippedOptional.find((s) => s.name === 'napi-linux-x64-gnu');
+    expect(linux?.note).toBe(
+      'skipping optional dependency napi-linux-x64-gnu@1.0.0 (unsupported platform): ' +
+        'Unsupported platform for napi-linux-x64-gnu@1.0.0: wanted {"os":["linux"],"cpu":["x64"]} (current: {"os":"wasi","cpu":"wasm32"})'
+    );
+  });
+
+  it('still installs an esbuild-style wrapper whose optional binaries are all native', async () => {
+    const binaries = ['darwin-arm64', 'linux-x64', 'win32-x64'];
+    const plan = await resolveDependencyTree({
+      rootDependencies: { esb: '^0.25.0' },
+      fetchPackument: makeSupplier([
+        {
+          name: 'esb',
+          versions: ['0.25.0'],
+          extra: {
+            '0.25.0': {
+              optionalDependencies: Object.fromEntries(
+                binaries.map((b) => [`@esb/${b}`, '0.25.0'])
+              ),
+            },
+          },
+        },
+        ...binaries.map((b) => {
+          const [os, cpu] = b.split('-');
+          return { name: `@esb/${b}`, versions: ['0.25.0'], extra: { '0.25.0': native(os, cpu) } };
+        }),
+      ]),
+    });
+    expect(Object.keys(plan.root)).toEqual(['esb']);
+    expect(plan.skippedOptional).toHaveLength(3);
+  });
+
+  it('installs an optional dependency whose os list only negates other platforms', async () => {
+    const plan = await resolveDependencyTree({
+      rootDependencies: { app: '^1' },
+      fetchPackument: makeSupplier([
+        {
+          name: 'app',
+          versions: ['1.0.0'],
+          extra: { '1.0.0': { optionalDependencies: { posixy: '^1', winonly: '^1' } } },
+        },
+        { name: 'posixy', versions: ['1.0.0'], extra: { '1.0.0': { os: ['!win32'] } } },
+        { name: 'winonly', versions: ['1.0.0'], extra: { '1.0.0': { os: ['win32'] } } },
+      ]),
+    });
+    expect(Object.keys(plan.root).sort()).toEqual(['app', 'posixy']);
+    expect(plan.skippedOptional.map((s) => s.name)).toEqual(['winonly']);
+  });
+
+  it('follows unconstrained optional dependencies and their own dependencies', async () => {
+    const plan = await resolveDependencyTree({
+      rootDependencies: { app: '^1' },
+      fetchPackument: makeSupplier([
+        {
+          name: 'app',
+          versions: ['1.0.0'],
+          extra: { '1.0.0': { optionalDependencies: { opt: '^1' } } },
+        },
+        { name: 'opt', versions: ['1.0.0'], deps: { '1.0.0': { leaf: '^1' } } },
+        { name: 'leaf', versions: ['1.0.0'] },
+      ]),
+    });
+    expect(Object.keys(plan.root).sort()).toEqual(['app', 'leaf', 'opt']);
+    expect(plan.skippedOptional).toEqual([]);
+  });
+
+  it('skips an optional dependency that cannot be resolved instead of failing', async () => {
+    const plan = await resolveDependencyTree({
+      rootDependencies: { app: '^1' },
+      fetchPackument: makeSupplier([
+        {
+          name: 'app',
+          versions: ['1.0.0'],
+          extra: { '1.0.0': { optionalDependencies: { gone: '^1' } } },
+        },
+      ]),
+    });
+    expect(Object.keys(plan.root)).toEqual(['app']);
+    expect(plan.skippedOptional[0]?.note).toMatch(
+      /^skipping optional dependency gone@\^1 \(.*unknown package: gone\)$/
+    );
+  });
+
+  it('treats a name in both dependencies and optionalDependencies as optional', async () => {
+    const plan = await resolveDependencyTree({
+      rootDependencies: { app: '^1' },
+      fetchPackument: makeSupplier([
+        {
+          name: 'app',
+          versions: ['1.0.0'],
+          deps: { '1.0.0': { fsev: '^1' } },
+          extra: { '1.0.0': { optionalDependencies: { fsev: '^1' } } },
+        },
+        { name: 'fsev', versions: ['1.0.0'], extra: { '1.0.0': { os: ['darwin'] } } },
+      ]),
+    });
+    expect(Object.keys(plan.root)).toEqual(['app']);
+  });
+
+  it('keeps installing a non-optional dependency whatever its os/cpu say', async () => {
+    const plan = await resolveDependencyTree({
+      rootDependencies: { app: '^1' },
+      fetchPackument: makeSupplier([
+        { name: 'app', versions: ['1.0.0'], deps: { '1.0.0': { nat: '^1' } } },
+        { name: 'nat', versions: ['1.0.0'], extra: { '1.0.0': native('linux', 'x64') } },
+      ]),
+    });
+    expect(Object.keys(plan.root).sort()).toEqual(['app', 'nat']);
+    expect(plan.skippedOptional).toEqual([]);
+  });
+
+  it('skips a root named in optionalRoots when its platform does not match', async () => {
+    const supplier = makeSupplier([
+      { name: 'nat', versions: ['1.0.0'], extra: { '1.0.0': native('darwin', 'arm64') } },
+      { name: 'js', versions: ['1.0.0'] },
+    ]);
+    const plan = await resolveDependencyTree({
+      rootDependencies: { nat: '^1', js: '^1' },
+      fetchPackument: supplier,
+      optionalRoots: new Set(['nat']),
+    });
+    expect(Object.keys(plan.root)).toEqual(['js']);
+    const asRequired = await resolveDependencyTree({
+      rootDependencies: { nat: '^1' },
+      fetchPackument: supplier,
+    });
+    expect(Object.keys(asRequired.root)).toEqual(['nat']);
   });
 });

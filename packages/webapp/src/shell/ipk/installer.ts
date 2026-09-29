@@ -51,6 +51,8 @@ export interface InstallFailure {
 export interface InstallPackagesResult {
   results: InstallResult[];
   errors: InstallFailure[];
+
+  notes?: string[];
 }
 
 export interface ParsedSpec {
@@ -162,6 +164,19 @@ async function readInstalledJsonOr<T>(fs: VirtualFS, path: string, fallback: T):
   } catch {
     return fallback;
   }
+}
+
+function optionalRootNames(
+  manifest: ProjectManifest,
+  explicit: Iterable<string> = []
+): Set<string> {
+  const names = new Set(Object.keys(manifest.optionalDependencies ?? {}));
+  for (const name of explicit) names.delete(name);
+  return names;
+}
+
+function skipNotes(plan: InstallPlan): string[] {
+  return plan.skippedOptional.map((s) => s.note);
 }
 
 interface ProjectManifest {
@@ -666,6 +681,10 @@ export async function installPackages(
     rootDependencies,
     fetchPackument: supplier,
     concurrency,
+    optionalRoots: optionalRootNames(
+      existingManifest,
+      directs.map((d) => d.parsed.name)
+    ),
   });
 
   const modulesDir = globalInstall ? GLOBAL_NODE_MODULES : joinPath(cwd, 'node_modules');
@@ -705,7 +724,7 @@ export async function installPackages(
     };
   });
 
-  return { results, errors: stageErrors };
+  return { results, errors: stageErrors, notes: skipNotes(plan) };
 }
 
 export async function installPackage(
@@ -724,6 +743,8 @@ export interface InstallFromManifestResult {
   results: InstallResult[];
   errors: InstallFailure[];
   empty: boolean;
+
+  notes?: string[];
 }
 
 export class ManifestNotFoundError extends Error {
@@ -756,6 +777,8 @@ function collectManifestEntries(manifest: ProjectManifest): ManifestEntry[] {
   const combined = new Map<string, string>();
   addNamedRanges(combined, manifest.devDependencies);
   addNamedRanges(combined, manifest.dependencies);
+
+  addNamedRanges(combined, manifest.optionalDependencies);
   return Array.from(combined.entries()).map(([name, range]) => ({ name, range }));
 }
 
@@ -786,6 +809,8 @@ export async function installFromManifest(
 
   const validated: ManifestEntry[] = [];
   const errors: InstallFailure[] = [];
+  const optionalRoots = optionalRootNames(manifest);
+  const notes: string[] = [];
   warmPackuments(
     supplier,
     entries.map((entry) => entry.name),
@@ -797,12 +822,18 @@ export async function installFromManifest(
       resolveVersion(packument, entry.range);
       validated.push(entry);
     } catch (err) {
-      errors.push({ spec: `${entry.name}@${entry.range}`, error: toError(err) });
+      if (optionalRoots.has(entry.name)) {
+        notes.push(
+          `skipping optional dependency ${entry.name}@${entry.range} (${toError(err).message})`
+        );
+      } else {
+        errors.push({ spec: `${entry.name}@${entry.range}`, error: toError(err) });
+      }
     }
   }
 
   if (validated.length === 0) {
-    return { results: [], errors, empty: false };
+    return { results: [], errors, empty: false, notes };
   }
 
   const rootDependencies: Record<string, string> = {};
@@ -814,6 +845,7 @@ export async function installFromManifest(
     rootDependencies,
     fetchPackument: supplier,
     concurrency,
+    optionalRoots,
   });
 
   const modulesDir = joinPath(cwd, 'node_modules');
@@ -835,7 +867,7 @@ export async function installFromManifest(
     })
     .filter((r): r is InstallResult => r !== null);
 
-  return { results, errors, empty: false };
+  return { results, errors, empty: false, notes: [...notes, ...skipNotes(plan)] };
 }
 
 function packageListedInManifest(manifest: ProjectManifest, name: string): boolean {
@@ -930,6 +962,7 @@ export async function syncGlobalInstallTree(
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
+    optionalRoots: optionalRootNames(manifest),
   });
 
   await pruneTopLevelPackages(fs, GLOBAL_NODE_MODULES, new Set(Object.keys(plan.root)));
@@ -1035,6 +1068,7 @@ async function syncLocalInstallTree(
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
+    optionalRoots: optionalRootNames(manifest),
   });
 
   await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));

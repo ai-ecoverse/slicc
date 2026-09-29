@@ -1,4 +1,5 @@
 import { createLimiter, DEFAULT_FETCH_CONCURRENCY } from './concurrency.js';
+import { describeUnsupportedPlatform, isPlatformSupported } from './platform.js';
 import type { Packument, PackumentVersion } from './registry.js';
 import { resolveVersion } from './registry.js';
 import { satisfies } from './semver.js';
@@ -17,6 +18,17 @@ export interface InstallNode {
 
 export interface InstallPlan {
   root: Record<string, InstallNode>;
+
+  skippedOptional: SkippedOptional[];
+}
+
+export interface SkippedOptional {
+  name: string;
+  range: string;
+
+  version?: string;
+
+  note: string;
 }
 
 export type PackumentSupplier = (name: string) => Promise<Packument> | Packument;
@@ -26,6 +38,8 @@ export interface ResolveDependencyTreeOptions {
   fetchPackument: PackumentSupplier;
 
   concurrency?: number;
+
+  optionalRoots?: ReadonlySet<string>;
 }
 
 export async function resolveDependencyTree(
@@ -35,7 +49,13 @@ export async function resolveDependencyTree(
   const packumentCache = new Map<string, Promise<Packument>>();
   const limit = createLimiter(options.concurrency ?? DEFAULT_FETCH_CONCURRENCY);
   const prefetched = new Set<string>();
+  const skipped = new Map<string, SkippedOptional>();
   let settled = false;
+
+  function skip(entry: SkippedOptional): void {
+    const key = `${entry.name}@${entry.version ?? entry.range}`;
+    if (!skipped.has(key)) skipped.set(key, entry);
+  }
 
   function getPackument(name: string): Promise<Packument> {
     let cached = packumentCache.get(name);
@@ -49,33 +69,60 @@ export async function resolveDependencyTree(
     return cached;
   }
 
-  function prefetch(name: string, range: string): void {
-    const key = `${name}@${range}`;
+  function prefetch(edge: Edge): void {
+    const key = `${edge.name}@${edge.range}`;
     if (settled || prefetched.has(key)) return;
     prefetched.add(key);
-    getPackument(name).then(
+    getPackument(edge.name).then(
       (packument) => {
         let entry: PackumentVersion | undefined;
         try {
-          entry = packument.versions[resolveVersion(packument, range)];
+          entry = packument.versions[resolveVersion(packument, edge.range)];
         } catch {
           return;
         }
-        for (const [depName, depRange] of Object.entries(entry?.dependencies ?? {})) {
-          prefetch(depName, depRange);
-        }
+        if (!entry || (edge.optional && !isPlatformSupported(entry))) return;
+        for (const child of edgesOf(entry)) prefetch(child);
       },
       () => undefined
     );
   }
 
-  async function place(name: string, range: string, ancestors: InstallNode[]): Promise<void> {
+  async function resolveOptional(edge: Edge): Promise<ResolvedEdge | null> {
+    let resolved: ResolvedEdge;
+    try {
+      resolved = await resolveEdge(edge.name, edge.range, getPackument);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      skip({
+        name: edge.name,
+        range: edge.range,
+        note: `skipping optional dependency ${edge.name}@${edge.range} (${reason})`,
+      });
+      return null;
+    }
+    if (isPlatformSupported(resolved.entry)) return resolved;
+    const id = `${edge.name}@${resolved.version}`;
+    skip({
+      name: edge.name,
+      range: edge.range,
+      version: resolved.version,
+      note: `skipping optional dependency ${id} (unsupported platform): ${describeUnsupportedPlatform(id, resolved.entry)}`,
+    });
+    return null;
+  }
+
+  async function place(edge: Edge, ancestors: InstallNode[]): Promise<void> {
+    const { name, range } = edge;
     const nearest = findNearest(name, ancestors, top);
     if (nearest && satisfies(nearest.version, range)) {
       return;
     }
 
-    const resolved = await resolveEdge(name, range, getPackument);
+    const resolved = edge.optional
+      ? await resolveOptional(edge)
+      : await resolveEdge(name, range, getPackument);
+    if (!resolved) return;
     if (isInProgress(name, resolved.version, ancestors)) {
       const requester = ancestors[0];
       if (requester) {
@@ -88,24 +135,46 @@ export async function resolveDependencyTree(
     attachNode(top, node, nearest, ancestors);
 
     const childAncestors: InstallNode[] = [node, ...ancestors];
-    const deps = resolved.entry.dependencies ?? {};
-    for (const [depName, depRange] of Object.entries(deps)) prefetch(depName, depRange);
-    for (const [depName, depRange] of Object.entries(deps)) {
-      await place(depName, depRange, childAncestors);
+    const children = edgesOf(resolved.entry);
+    for (const child of children) prefetch(child);
+    for (const child of children) {
+      await place(child, childAncestors);
     }
   }
 
-  const roots = Object.entries(options.rootDependencies);
-  for (const [name, range] of roots) prefetch(name, range);
+  const roots: Edge[] = Object.entries(options.rootDependencies).map(([name, range]) => ({
+    name,
+    range,
+    optional: options.optionalRoots?.has(name) ?? false,
+  }));
+  for (const root of roots) prefetch(root);
   try {
-    for (const [name, range] of roots) {
-      await place(name, range, []);
+    for (const root of roots) {
+      await place(root, []);
     }
   } finally {
     settled = true;
   }
 
-  return { root: top };
+  return { root: top, skippedOptional: [...skipped.values()] };
+}
+
+interface Edge {
+  name: string;
+  range: string;
+
+  optional: boolean;
+}
+
+function edgesOf(entry: PackumentVersion): Edge[] {
+  const edges = new Map<string, Edge>();
+  for (const [name, range] of Object.entries(entry.dependencies ?? {})) {
+    edges.set(name, { name, range, optional: false });
+  }
+  for (const [name, range] of Object.entries(entry.optionalDependencies ?? {})) {
+    edges.set(name, { name, range, optional: true });
+  }
+  return [...edges.values()];
 }
 
 function findNearest(

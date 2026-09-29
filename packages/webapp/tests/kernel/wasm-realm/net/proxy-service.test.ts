@@ -144,6 +144,20 @@ describe('RealmProxy: forwarding', () => {
     expect((await chunked.response()).status).toBe(413);
   });
 
+  it('caps a body at what it buffers when the transport accepts more (no wait for budget that never frees)', async () => {
+    const t = scripted((req) => reply(200, [], `${req.body?.length}`), { maxRequestBody: 1 << 30 });
+    const { client } = start({ transport: t.transport, limits: { bodyBudget: 16 } });
+    const c = client();
+    await c.send(
+      'PUT http://h.test/ HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n'
+    );
+    expect((await c.response()).body).toBe('5');
+    await c.send('PUT http://h.test/ HTTP/1.1\r\nContent-Length: 17\r\n\r\n');
+    const res = await c.response();
+    expect(res.status).toBe(413);
+    expect(res.body).toContain('over 16 bytes');
+  });
+
   it('sends no body for HEAD, 204 and 304, and keeps a HEAD length an encoded transport vouches for', async () => {
     const t = scripted(
       (req) =>
@@ -195,6 +209,26 @@ describe('RealmProxy: forwarding', () => {
 
     await c.send('GET http://evil.test/ HTTP/1.1\r\n\r\n');
     expect((await c.response()).status).toBe(502);
+  });
+});
+
+describe('RealmProxy: transport errors', () => {
+  it.each([
+    [413, 413],
+    [403, 403],
+    [501, 501],
+    [200, 502],
+    [undefined, 502],
+  ])('answers an error with status %s as %s', async (status, answered) => {
+    const t = scripted(() => {
+      throw Object.assign(new Error('refused'), status === undefined ? {} : { status });
+    });
+    const { client } = start({ transport: t.transport });
+    const c = client();
+    await c.send('GET http://h.test/ HTTP/1.1\r\n\r\n');
+    const res = await c.response();
+    expect(res.status).toBe(answered);
+    expect(res.body).toBe('slicc realm proxy: refused\n');
   });
 });
 

@@ -53,6 +53,10 @@ export interface PackumentVersion {
   bin?: string | Record<string, string>;
 
   deprecated?: string;
+
+  os?: string | string[];
+  cpu?: string | string[];
+  libc?: string | string[];
   [key: string]: unknown;
 }
 
