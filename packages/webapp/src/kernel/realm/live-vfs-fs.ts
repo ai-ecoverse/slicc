@@ -204,6 +204,32 @@ export function liveNodePath(node: LiveFsNode): string {
   return parts.length === 0 ? root || '/' : `${root}/${parts.reverse().join('/')}`;
 }
 
+/**
+ * The inode number of VFS path `path`, for a backend that names none (S3,
+ * DA): the same in every process and realm that mounts it (a node's own id is
+ * not: each module numbers its nodes as it meets them), so what one program
+ * recorded about a file still matches in the next. git keeps each file's stat
+ * data in its index and takes any change for a modified file: with
+ * per-process numbers, every new git process saw every tracked file as
+ * changed (`git stash create` on a clean tree failed, and `git pull` with
+ * it). Where the backend names the entry's inode (ZenFS, hostfs), that is
+ * used instead: a file replaced at its path, even with the same size and
+ * mtime, is then a new inode, as on Linux. A 53-bit hash of the path
+ * (cyrb53), never 0.
+ */
+export function inodeOf(path: string): number {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < path.length; i++) {
+    const c = path.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0) || 1;
+}
+
 /** Emscripten `st_mode` for a bridge stat. */
 function modeFromStat(st: SyncFsBridgeStat): number {
   const type = st.isSymbolicLink ? S_IFLNK : st.isDirectory ? S_IFDIR : S_IFREG;
@@ -359,7 +385,7 @@ function createNodeOps(h: LiveHelpers): LiveNodeOps {
       const mtime = new Date(st.mtimeMs ?? 0);
       return {
         dev: 1,
-        ino: node.id,
+        ino: st.ino ?? inodeOf(liveNodePath(node)),
         mode: node.mode,
         nlink: 1,
         uid: 0,

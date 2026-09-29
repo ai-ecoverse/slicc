@@ -31,6 +31,11 @@ export interface SyncFsBridgeStat {
   mode?: number;
   /** Modification time, ms since epoch, when the responder sent one. */
   mtimeMs?: number;
+  /**
+   * The backing entry's inode, when the backend names one (ZenFS, hostfs): the
+   * same across rewrites, new for a file replaced at the path.
+   */
+  ino?: number;
 }
 
 /** What the `fs` shim consumes — read/write plus read-only metadata. */
@@ -101,6 +106,7 @@ export function parseSyncFsStat(json: unknown): SyncFsBridgeStat | null {
     size: s.size,
     ...(typeof s.mode === 'number' ? { mode: s.mode } : {}),
     ...(typeof s.mtimeMs === 'number' ? { mtimeMs: s.mtimeMs } : {}),
+    ...(typeof s.ino === 'number' ? { ino: s.ino } : {}),
   };
 }
 

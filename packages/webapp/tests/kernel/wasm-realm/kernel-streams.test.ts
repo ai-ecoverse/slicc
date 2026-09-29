@@ -69,6 +69,17 @@ describe('KernelStreams', () => {
     expect(streams.map((s) => s.sliccKernelFd)).toEqual([0, 1, 2]);
   });
 
+  it('refuses lseek on a pipe, socket or terminal (ESPIPE = 70), whatever the placeholder under it', () => {
+    // A stream placeholder sits on /dev/null, whose own seek succeeds: GNU bash
+    // then took a pipe for a file, read ahead and seeked back, losing the rest.
+    const { fs, streams } = fakeFs();
+    streams[0]!.stream_ops = { ...streams[0]!.stream_ops, llseek: () => 0 };
+    wireKernelStdio(fs, new KernelStreams(fs, fakeSys()));
+    expect(() => streams[0]!.stream_ops.llseek!(streams[0]!, 0, 1)).toThrow(
+      expect.objectContaining({ errno: 70 })
+    );
+  });
+
   it('raises a kernel error as the matching Emscripten errno (EIO = 29)', () => {
     const sys = fakeSys({
       read: () => {

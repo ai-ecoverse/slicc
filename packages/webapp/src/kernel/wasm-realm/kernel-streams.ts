@@ -369,6 +369,15 @@ export class KernelStreams {
   private ops(kfd: number, base: StreamOps): StreamOps {
     return {
       ...base,
+      // A pipe, socket or terminal has no offset: lseek fails with ESPIPE (a
+      // VFS file description gets its own, `attachFile`). The placeholder's
+      // `/dev/null` seek would succeed, and GNU bash, taking the descriptor for
+      // a file, reads ahead and seeks back: `cmd | while read l` lost every
+      // line after the first.
+      llseek: () =>
+        this.call(() => {
+          throw new SyscallError('ESPIPE');
+        }),
       read: (s, buffer, offset, length) =>
         this.call(() => {
           const opts = nonblocking(s) ? { nonblock: true } : undefined;
