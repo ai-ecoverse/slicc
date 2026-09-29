@@ -106,6 +106,26 @@ function importedMemory(
   return memory;
 }
 
+/** `table` counted and timed under `tag.*` when stats are on, else itself. */
+function traced<T extends object>(stats: WasiStats | undefined, tag: string, table: T): T {
+  return stats ? stats.wrap(tag, table) : table;
+}
+
+/** `call`, each syscall counted and timed under `kernel.<op>`. */
+function timedCalls(stats: WasiStats, call: (req: WasmSyscall) => unknown) {
+  return (req: WasmSyscall): unknown => stats.time(`kernel.${req.op}`, () => call(req));
+}
+
+/** The stats table on the program's stderr, if it still has one. */
+function report(stats: WasiStats, sys: { write(fd: number, bytes: Uint8Array): unknown }): void {
+  stats.phase('run');
+  try {
+    sys.write(2, new TextEncoder().encode(stats.report()));
+  } catch {
+    /* no stderr left to report on */
+  }
+}
+
 export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike): Promise<number> {
   // No handlers to run: the kernel applies each signal's default action itself.
   const transport = new SignalGate(
@@ -128,10 +148,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     if (!r.ok) throw new SyscallError(r.errno);
     return r.kind === 'json' ? r.json : undefined;
   };
-  if (stats) {
-    const kernelCall = call;
-    call = (req) => stats.time(`kernel.${req.op}`, () => kernelCall(req));
-  }
+  if (stats) call = timedCalls(stats, call);
   const bridge = createSyncFsSabBridge(transport);
   const fork = init.fork?.wasi;
   const host = new WasiHost({
@@ -140,8 +157,8 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     cwd: fork?.cwd ?? init.cwd,
     pid: init.pid,
     ...(init.ppid !== undefined ? { ppid: init.ppid } : {}),
-    kernel: { sys: stats ? stats.wrap('kernel', sys) : sys, call },
-    fs: cachingBridge(stats ? stats.wrap('fs', bridge) : bridge),
+    kernel: { sys: traced(stats, 'kernel', sys), call },
+    fs: cachingBridge(traced(stats, 'fs', bridge)),
     ...(fork
       ? { forked: { fds: fork.fds, cloexec: fork.cloexec } }
       : { inherited: (init.fds ?? []).map((f) => ({ fd: f.fd, kind: f.kind, flags: f.flags })) }),
@@ -157,8 +174,8 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     module,
     linkImports(
       module,
-      stats ? stats.wrap('wasi', preview1) : preview1,
-      wasix && stats ? stats.wrap('wasix', wasix) : wasix,
+      traced(stats, 'wasi', preview1),
+      wasix && traced(stats, 'wasix', wasix),
       memory
     )
   );
@@ -185,13 +202,6 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
   } finally {
     // What the program wrote to the files it has open must not be lost with the worker.
     host.flushAll();
-    if (stats) {
-      stats.phase('run');
-      try {
-        sys.write(2, new TextEncoder().encode(stats.report()));
-      } catch {
-        /* no stderr left to report on */
-      }
-    }
+    if (stats) report(stats, sys);
   }
 }
