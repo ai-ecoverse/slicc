@@ -31,6 +31,7 @@ import {
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai/compat';
 import { getApiKeyForProvider } from '../src/providers/account-store.js';
+import { toPiTranscriptContext } from '../src/providers/pi-transcript-context.js';
 import type { ModelMetadata, ProviderConfig } from '../src/providers/types.js';
 
 // ── Constants ──────────────────────────────────────────────────────
@@ -224,7 +225,7 @@ async function pumpCerebrasCompletions(
       baseUrl: CEREBRAS_BASE_URL,
       api: OPENAI_COMPLETIONS_API,
     } as Model<'openai-completions'>;
-    const inner = streamOpenAICompletions(proxyModel, context, options);
+    const inner = streamOpenAICompletions(proxyModel, toPiTranscriptContext(context), options);
     for await (const event of inner) stream.push(event);
     stream.end();
   } catch (error) {
@@ -257,7 +258,11 @@ async function pumpSimpleCerebrasCompletions(
       baseUrl: CEREBRAS_BASE_URL,
       api: OPENAI_COMPLETIONS_API,
     } as Model<'openai-completions'>;
-    const inner = streamSimpleOpenAICompletions(proxyModel, context, options);
+    const inner = streamSimpleOpenAICompletions(
+      proxyModel,
+      toPiTranscriptContext(context),
+      options
+    );
     for await (const event of inner) stream.push(event);
     stream.end();
   } catch (error) {

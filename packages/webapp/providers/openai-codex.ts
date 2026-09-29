@@ -42,6 +42,7 @@ import {
   bridgeRefreshBlocked,
   noteBridgeTokenRequired,
 } from '../src/providers/bridge-token-required.js';
+import { toPiTranscriptContext } from '../src/providers/pi-transcript-context.js';
 import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../src/providers/pkce.js';
 import type {
   InterceptingOAuthLauncher,
@@ -333,7 +334,7 @@ async function pumpCodexStream(
       baseUrl: CODEX_BASE_URL,
       api: OPENAI_CODEX_RESPONSES_API,
     } as Model<'openai-codex-responses'>;
-    const inner = streamOpenAICodexResponses(proxyModel, context, {
+    const inner = streamOpenAICodexResponses(proxyModel, toPiTranscriptContext(context), {
       ...options,
       apiKey: accessToken,
       transport: 'sse',
@@ -360,7 +361,7 @@ async function pumpSimpleCodexStream(
       baseUrl: CODEX_BASE_URL,
       api: OPENAI_CODEX_RESPONSES_API,
     } as Model<'openai-codex-responses'>;
-    const inner = streamSimpleOpenAICodexResponses(proxyModel, context, {
+    const inner = streamSimpleOpenAICodexResponses(proxyModel, toPiTranscriptContext(context), {
       ...options,
       apiKey: accessToken,
       transport: 'sse',

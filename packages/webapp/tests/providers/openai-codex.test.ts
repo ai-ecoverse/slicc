@@ -1,4 +1,5 @@
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
@@ -275,7 +276,9 @@ describe('openai-codex onOAuthLoginIntercepted', () => {
       api: CODEX_API,
       provider: 'openai-codex',
     } as Model<Api>;
-    await drain(provider.stream(model, { systemPrompt: '', messages: [], tools: [] }, {}));
+    await drain(
+      provider.stream(model, normalizeContext({ systemPrompt: '', messages: [], tools: [] }), {})
+    );
 
     const { getAccounts } = await import('../../src/ui/provider-settings.js');
     const account = getAccounts().find((candidate) => candidate.providerId === 'openai-codex');

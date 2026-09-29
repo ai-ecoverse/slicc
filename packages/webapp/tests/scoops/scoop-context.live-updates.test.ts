@@ -63,7 +63,9 @@ function scoopRecord(overrides: Partial<RegisteredScoop> = {}): RegisteredScoop 
 }
 
 function fakeAgent(state: Partial<Agent['state']> = {}): Agent {
-  return { state: { model: REASONING, thinkingLevel: 'off', systemPrompt: '', ...state } } as Agent;
+  return {
+    state: { model: REASONING, thinkingLevel: 'off', systemPrompt: '', messages: [], ...state },
+  } as Agent;
 }
 
 /** Minimal `localStorage` — the effort lock is the only key read here. */
@@ -167,10 +169,11 @@ describe('rebuildSystemPrompt', () => {
       getGlobalMemory: async () => 'GLOBAL NOTES',
     });
 
-    expect(agent.state.systemPrompt).not.toBe('stale');
-    expect(agent.state.systemPrompt).toContain('GLOBAL NOTES');
-    expect(agent.state.systemPrompt).toContain('CONE NOTES');
-    expect(agent.state.systemPrompt).toContain('SKILLS: demo');
+    const prompt = (agent.state.messages[0] as { content: string }).content;
+    expect(prompt).not.toBe('stale');
+    expect(prompt).toContain('GLOBAL NOTES');
+    expect(prompt).toContain('CONE NOTES');
+    expect(prompt).toContain('SKILLS: demo');
   });
 
   it('survives a unit with no memory file yet', async () => {
@@ -190,6 +193,6 @@ describe('rebuildSystemPrompt', () => {
       getGlobalMemory: async () => '',
     });
 
-    expect(agent.state.systemPrompt).toContain('SKILLS: demo');
+    expect((agent.state.messages[0] as { content: string }).content).toContain('SKILLS: demo');
   });
 });

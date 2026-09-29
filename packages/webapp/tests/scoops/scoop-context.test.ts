@@ -1355,14 +1355,17 @@ describe('ScoopContext.reloadSkills', () => {
     const callbacks = createMockCallbacks();
     const ctx = new ScoopContext(testScoop, callbacks, {} as VirtualFS);
 
-    // Inject mock agent with state that tracks systemPrompt changes
+    // Pi 0.99 derives its prompt from the leading transcript message.
     const agent = {
       prompt: vi.fn(),
       abort: vi.fn(),
       subscribe: vi.fn(() => () => {}),
       followUp: vi.fn(),
       clearAllQueues: vi.fn(),
-      state: { isStreaming: false, systemPrompt: 'old prompt' },
+      state: {
+        isStreaming: false,
+        messages: [{ role: 'system', content: 'old prompt', timestamp: 0 }],
+      },
     };
     (ctx as any).agent = agent;
     (ctx as any).status = 'ready';
@@ -1381,7 +1384,7 @@ describe('ScoopContext.reloadSkills', () => {
 
     await ctx.reloadSkills();
 
-    const newPrompt = agent.state.systemPrompt;
+    const newPrompt = agent.state.messages[0].content;
     expect(newPrompt).not.toBe('old prompt');
     expect(newPrompt).toContain('test-skill');
     expect(newPrompt).toContain('A test skill');

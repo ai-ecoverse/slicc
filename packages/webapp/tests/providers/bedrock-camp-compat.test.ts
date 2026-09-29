@@ -19,6 +19,7 @@ import {
 import {
   BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
   BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  BEDROCK_CAMP_GPT61_EFFORT_MAP,
   bedrockCampOpenAIEffortMap,
   bedrockCampRegionFromBaseUrl,
   isBedrockCampClaudeModel,
@@ -138,6 +139,7 @@ describe('isBedrockCampCompatible', () => {
       'global.openai.gpt-6-sol',
       'global.openai.gpt-6-luna',
       'global.openai.gpt-6-astra',
+      'global.openai.gpt-6.1-sol',
       'global.moonshotai.kimi-k3',
     ]) {
       expect(isBedrockCampCompatible({ id }, 'us-west-2'), id).toBe(true);
@@ -189,7 +191,7 @@ describe('isBedrockCampCompatible', () => {
       'global.openai.gpt-6-terra',
       'global.openai.gpt-6-sol-pro',
       'global.openai.gpt-6',
-      'global.openai.gpt-6.1-sol',
+      'global.openai.gpt-6.1-sol-pro',
       'global.openai.gpt-6-6-sol',
       'global.moonshotai.kimi-k3.5',
       'global.moonshotai.kimi-k3-thinking',
@@ -269,6 +271,7 @@ describe('bedrockCampOpenAIEffortMap', () => {
       expect(isBedrockCampGpt6Model({ id: `global.openai.gpt-6-${variant}` })).toBe(true);
     }
     expect(isBedrockCampGpt6Model({ id: 'global.openai.gpt-6-terra' })).toBe(false);
+    expect(isBedrockCampGpt6Model({ id: 'global.openai.gpt-6.1-sol' })).toBe(true);
     expect(isBedrockCampGpt6Model({ id: 'global.anthropic.claude-opus-5-5' })).toBe(false);
   });
 
@@ -277,6 +280,7 @@ describe('bedrockCampOpenAIEffortMap', () => {
     ['GPT-6 Sol', BEDROCK_CAMP_GPT6_EFFORT_MAP],
     ['GPT-6 Astra', BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP],
     ['GPT-6 Luna (Global)', BEDROCK_CAMP_GPT6_EFFORT_MAP],
+    ['GPT-6.1 Sol (Global)', BEDROCK_CAMP_GPT61_EFFORT_MAP],
   ])('recognizes opaque application profiles named %s', (name, effortMap) => {
     const model = {
       id: 'arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/opaque',
@@ -307,6 +311,21 @@ describe('bedrockCampOpenAIEffortMap', () => {
       BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP
     );
     expect(BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP.off).toBeNull();
+  });
+
+  it('omits unsupported off and minimal efforts on GPT-6.1 Sol', () => {
+    expect(bedrockCampOpenAIEffortMap({ id: 'global.openai.gpt-6.1-sol' })).toBe(
+      BEDROCK_CAMP_GPT61_EFFORT_MAP
+    );
+    expect(BEDROCK_CAMP_GPT61_EFFORT_MAP).toEqual({
+      off: null,
+      minimal: null,
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'xhigh',
+      max: 'max',
+    });
   });
 
   it('marks minimal unsupported and maps the rest one to one', () => {

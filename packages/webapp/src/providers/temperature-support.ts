@@ -24,7 +24,8 @@ import { claudeRejectsTemperature } from './claude-model-version.js';
  * Non-Claude Bedrock models that reject `temperature` the same way.
  *
  * The newest third-party models on Bedrock have followed Anthropic in
- * dropping the param: `openai.gpt-5.6-*`, `openai.gpt-6-{sol,luna,astra}` and
+ * dropping the param: `openai.gpt-5.6-*`, `openai.gpt-6-{sol,luna,astra}`,
+ * `openai.gpt-6.1-sol` and
  * `moonshotai.kimi-k3` answer `400 "This model doesn't support the
  * temperature field. Remove temperature and try again."` (verified on
  * `bedrock-runtime.us-west-2`). Only models the bedrock-camp
@@ -44,7 +45,8 @@ import { claudeRejectsTemperature } from './claude-model-version.js';
  * spelled out per variant like the allowlist, and `kimi-k3` must not also
  * match a future `kimi-k3.5` or `kimi-k30` nobody has measured.
  */
-const NON_CLAUDE_REJECTS_TEMPERATURE_RE = /gpt-5[.-]6|gpt-6-(?:sol|luna|astra)|kimi-k3(?![\d.])/;
+const NON_CLAUDE_REJECTS_TEMPERATURE_RE =
+  /gpt-5[.-]6|gpt-6-(?:sol|luna|astra)|gpt-6[.-]1-sol(?=$|-\()|kimi-k3(?![\d.])/;
 
 function nonClaudeRejectsTemperature(modelId: string, modelName?: string): boolean {
   const values = modelName ? [modelId, modelName] : [modelId];

@@ -47,7 +47,8 @@
 const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac|au|jp)\./;
 const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?:[4-9]|\d\d)/;
 // Verified live on `bedrock-runtime.us-west-2` (see `docs/pitfalls.md` §5):
-// openai.gpt-5.6-{sol,terra,luna}, openai.gpt-6-{sol,luna,astra} and
+// openai.gpt-5.6-{sol,terra,luna}, openai.gpt-6-{sol,luna,astra},
+// openai.gpt-6.1-sol and
 // moonshotai.kimi-k3 do implicit prompt caching — cacheWrite on the first
 // call, cacheRead on every repeat, including with a system prompt and
 // toolConfig attached — and emit tool calls reliably.
@@ -59,7 +60,7 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 //
 // All of them reject `temperature` (`temperature-support.ts` strips it).
 // gpt-5.6 rejects every `additionalModelRequestFields` thinking shape, and
-// kimi-k3 ignores every shape, so neither gets one. gpt-6 accepts only
+// kimi-k3 ignores every shape, so neither gets one. gpt-6 and gpt-6.1 accept only
 // `reasoning.effort`, which `buildAdditionalModelRequestFields` sends (see
 // `bedrockCampOpenAIEffortMap`). gpt-5.6 does not accept an explicit `cachePoint` block either —
 // caching is automatic and sending one 403s — and `supportsPromptCaching` is
@@ -70,7 +71,7 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // exact default-deny hole this list exists to avoid — and would accept the
 // `gpt-5-6-` spelling, which no Bedrock id uses and which was never verified.
 const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
-  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra))|moonshotai\.kimi-k3)$/;
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3)$/;
 // Matches standard (us-east-1), FIPS (us-east-1-fips) and China
 // (cn-north-1.amazonaws.com.cn) Bedrock runtime hosts.
 const BEDROCK_RUNTIME_HOST_RE =
@@ -142,6 +143,12 @@ export const BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP: BedrockCampEffortMap = Object.f
   off: null,
 });
 
+/** GPT-6.1 Sol rejects both `none` and `minimal`; low through max answer. */
+export const BEDROCK_CAMP_GPT61_EFFORT_MAP: BedrockCampEffortMap = Object.freeze({
+  ...BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  off: null,
+});
+
 /** Opaque application inference profiles identify the underlying model by name. */
 export function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
   const values = modelName ? [modelId, modelName] : [modelId];
@@ -151,11 +158,13 @@ export function getModelMatchCandidates(modelId: string, modelName?: string): st
   });
 }
 
-const BEDROCK_CAMP_GPT6_RE = /(?:^|[.-]openai[.-])gpt-6-(sol|luna|astra)(?:-\([^)]+\))?$/;
+const BEDROCK_CAMP_GPT6_RE =
+  /(?:^|[.-]openai[.-])gpt-6(?:-(sol|luna|astra)|[.-]1-sol)(?:-\([^)]+\))?$/;
 
 function bedrockCampGpt6Variant(model: { id: string; name?: string }): string | undefined {
   for (const candidate of getModelMatchCandidates(model.id, model.name)) {
-    const variant = BEDROCK_CAMP_GPT6_RE.exec(candidate)?.[1];
+    const match = BEDROCK_CAMP_GPT6_RE.exec(candidate);
+    const variant = match && (match[1] ?? '6.1-sol');
     if (variant) return variant;
   }
   return undefined;
@@ -176,6 +185,7 @@ export function bedrockCampOpenAIEffortMap(model: {
 }): BedrockCampEffortMap | null {
   const variant = bedrockCampGpt6Variant(model);
   if (!variant) return null;
+  if (variant === '6.1-sol') return BEDROCK_CAMP_GPT61_EFFORT_MAP;
   return variant === 'astra' ? BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP : BEDROCK_CAMP_GPT6_EFFORT_MAP;
 }
 

@@ -83,13 +83,17 @@ export async function rebuildSystemPrompt(
   const scoopMemory = await readUnitMemory(deps.fs, deps.unit.workspace.memoryPath);
   const globalMemory = await deps.getGlobalMemory();
 
-  agent.state.systemPrompt = buildScoopSystemPrompt(
+  const systemPrompt = buildScoopSystemPrompt(
     deps.scoop,
     deps.unit,
     globalMemory,
     scoopMemory,
     skills
   );
+  agent.state.messages = [
+    { role: 'system', content: systemPrompt, timestamp: Date.now() },
+    ...agent.state.messages.filter((message) => message.role !== 'system'),
+  ];
 
   log.info('Skills reloaded', { folder: deps.scoop.folder, skillCount: skills.length });
 }
