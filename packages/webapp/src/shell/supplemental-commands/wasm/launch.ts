@@ -72,6 +72,9 @@ const SIGNAL_NAME = new Map(
 /** A path into the shell's command registry: `/usr/bin/<name>` or its alias `/bin/<name>`. */
 const REGISTRY_PATH = /^\/(?:usr\/)?bin\/([^/]+)$/;
 
+/** How much of a script its `#!` line may take (Linux: 256 bytes). */
+const SHEBANG_MAX = 256;
+
 /** Pids when there is no process table (unit tests). */
 let nextPid = 40000;
 
@@ -429,15 +432,52 @@ export class WasmSession {
     };
   }
 
+  /**
+   * A script a program runs by path (git's hooks, a `./configure`): `#!interp
+   * [arg]` on its first line names the program that runs it, with the script's
+   * path as its argument, as execve(2) does. Undefined for anything else, or
+   * an interpreter that is no wasm program (the shell runs such a script).
+   */
+  private async interpreted(
+    req: ChildSpawnRequest
+  ): Promise<{ target: WasmTarget; file: string; args: string[] } | undefined> {
+    if (!req.file.includes('/') || REGISTRY_PATH.test(req.file)) return undefined;
+    let head: Uint8Array;
+    try {
+      head = (
+        await this.ctx.fs.readFileBuffer(this.ctx.fs.resolvePath(req.cwd, req.file))
+      ).subarray(0, SHEBANG_MAX);
+    } catch {
+      return undefined;
+    }
+    if (head[0] !== 0x23 || head[1] !== 0x21) return undefined; // #!
+    const line = new TextDecoder().decode(head).slice(2).split('\n')[0].trim();
+    const [interp, ...rest] = line.split(/[ \t]+/);
+    if (!interp) return undefined;
+    const target = await this.resolve(interp, interp, req.cwd);
+    if (!target) return undefined;
+    // Linux passes what follows the interpreter as one argument.
+    const arg = rest.join(' ');
+    return {
+      target,
+      file: interp,
+      args: [...(arg ? [arg] : []), req.file, ...req.argv.slice(1)],
+    };
+  }
+
   private spawner(ppid: number): ChildSpawner {
     return async (req, fds) => {
-      const target = await this.resolve(req.file, req.argv[0] ?? req.file, req.cwd);
-      if (!target) return this.runShellChild(req, fds, ppid);
-      const denial = await this.gate?.(commandName(req.file), req.argv.slice(1), req.env);
+      const direct = await this.resolve(req.file, req.argv[0] ?? req.file, req.cwd);
+      const run = direct
+        ? { target: direct, file: req.file, args: req.argv.slice(1) }
+        : await this.interpreted(req);
+      if (!run) return this.runShellChild(req, fds, ppid);
+      // The program that runs is what the policy sees: a script's interpreter.
+      const denial = await this.gate?.(commandName(run.file), run.args, req.env);
       if (denial) return this.deniedChild(req, fds, ppid, denial);
       const handle = await this.launch({
-        ...target,
-        args: req.argv.slice(1),
+        ...run.target,
+        args: run.args,
         env: req.env,
         cwd: req.cwd,
         fds,
