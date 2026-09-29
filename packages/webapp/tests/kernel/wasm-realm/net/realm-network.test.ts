@@ -5,7 +5,11 @@ import {
   type CaFileSystem,
   enableRealmNetwork,
   ensureRealmCaFile,
+  ensureRealmGitConfig,
+  isRealmDefault,
   realmCaPath,
+  realmGitConfig,
+  realmGitConfigPath,
   realmNetworkEnv,
   realmProxy,
 } from '../../../../src/kernel/wasm-realm/net/realm-network.js';
@@ -132,6 +136,42 @@ describe('the realm CA file', () => {
     expect(await ensureRealmCaFile(memFs(), '/x.pem', 'cone:', failing)).toEqual({});
     const readOnly = { ...memFs(), writeFile: async () => Promise.reject(new Error('EACCES')) };
     expect(await ensureRealmCaFile(readOnly, '/x.pem', 'cone:', fakeCa('P'))).toEqual({});
+  });
+});
+
+describe('the realm’s system gitconfig', () => {
+  function memFs(files = new Map<string, string>()) {
+    return {
+      files,
+      exists: async (p: string) => files.has(p),
+      readFile: async (p: string) => files.get(p) ?? '',
+      writeFile: async (p: string, c: string) => void files.set(p, c),
+      mkdir: async () => undefined,
+    };
+  }
+
+  it('names the slicc credential helper and SLICC’s identity, quoted', () => {
+    expect(realmGitConfig()).toBe('[credential]\n\thelper = slicc\n');
+    expect(realmGitConfig({ name: 'A "B" \\ C\nD', email: 'a@b.c' })).toBe(
+      '[credential]\n\thelper = slicc\n[user]\n\tname = "A \\"B\\" \\\\ C D"\n\temail = "a@b.c"\n'
+    );
+  });
+
+  it('is written under the home when it changed, and counts as a realm default', async () => {
+    const fs = memFs();
+    const path = realmGitConfigPath('/home/user/');
+    expect(path).toBe('/home/user/.config/slicc/gitconfig');
+    expect(await ensureRealmGitConfig(fs, path)).toEqual({ GIT_CONFIG_SYSTEM: path });
+    expect(fs.files.get(path)).toBe(realmGitConfig());
+    await ensureRealmGitConfig(fs, path, { name: 'N', email: 'e@x' });
+    expect(fs.files.get(path)).toContain('name = "N"');
+    expect(isRealmDefault('GIT_CONFIG_SYSTEM', path)).toBe(true);
+    expect(isRealmDefault('GIT_CONFIG_SYSTEM', '/etc/gitconfig')).toBe(false);
+  });
+
+  it('leaves the variable out when the file cannot be written', async () => {
+    const readOnly = { ...memFs(), writeFile: async () => Promise.reject(new Error('EACCES')) };
+    expect(await ensureRealmGitConfig(readOnly, '/x/gitconfig')).toEqual({});
   });
 });
 

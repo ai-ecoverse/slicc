@@ -263,6 +263,28 @@ describe('GitCommands', () => {
     }
   });
 
+  it('githubCredential: the token git would use, freshened (or renewed) first', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_expired');
+    const ensureFreshGithubToken = vi.fn(async (opts?: { force?: boolean }) => {
+      await globalFs.writeFile(
+        '/workspace/.git/github-token',
+        opts?.force ? 'ghp_masked_renewed' : 'ghp_masked_fresh'
+      );
+    });
+    const helperGit = new GitCommands({ fs: vfs, globalDbName, ensureFreshGithubToken });
+
+    expect(await helperGit.githubCredential({})).toBe('ghp_masked_fresh');
+    expect(await helperGit.githubCredential({}, { force: true })).toBe('ghp_masked_renewed');
+    expect(ensureFreshGithubToken).toHaveBeenLastCalledWith({ force: true });
+
+    await globalFs.rm('/workspace/.git/github-token');
+    const plain = new GitCommands({ fs: vfs, globalDbName });
+    expect(await plain.githubCredential({ GH_TOKEN: 'gh', GITHUB_TOKEN: 'gt' })).toBe('gh');
+    expect(await plain.githubCredential({ GITHUB_TOKEN: 'gt' })).toBe('gt');
+    expect(await plain.githubCredential({})).toBeUndefined();
+  });
+
   it('continues a network operation with existing auth when token renewal fails', async () => {
     const globalFs = await VirtualFS.create({ dbName: globalDbName });
     await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_existing');
@@ -3539,6 +3561,19 @@ EOF`);
       await git.execute(['add', 'file.txt'], '/project');
       await git.execute(['commit', '-m', 'initial'], '/project');
       expect(await readLatestAuthor('/project')).toEqual({
+        name: 'Octocat',
+        email: '1+octocat@users.noreply.github.com',
+      });
+    });
+
+    it('identity(): the global config (the GitHub login’s), else the defaults, for native git', async () => {
+      expect(await git.identity()).toEqual({ name: 'Test User', email: 'test@example.com' });
+      const globalFs = await VirtualFS.create({ dbName: globalDbName });
+      await globalFs.writeFile(
+        '/workspace/.gitconfig',
+        '[user]\n\tname = Octocat\n\temail = 1+octocat@users.noreply.github.com\n'
+      );
+      expect(await git.identity()).toEqual({
         name: 'Octocat',
         email: '1+octocat@users.noreply.github.com',
       });

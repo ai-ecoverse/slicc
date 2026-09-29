@@ -9,8 +9,11 @@ import {
 import type { WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import {
   ensureRealmCaFile,
+  ensureRealmGitConfig,
+  type GitIdentity,
   isRealmDefault,
   realmCaPath,
+  realmGitConfigPath,
   realmNetworkEnv,
 } from '../../../kernel/wasm-realm/net/realm-network.js';
 import { ownerKey } from '../../../kernel/wasm-realm/socket.js';
@@ -103,6 +106,8 @@ export interface RunWasmOptions {
   defaults?: Readonly<Record<string, string>>;
 
   commands?: InstalledCommandsLookup;
+
+  gitIdentity?: () => Promise<GitIdentity | undefined>;
 }
 
 function installed(
@@ -185,8 +190,19 @@ async function caEnv(
   options: RunWasmOptions
 ): Promise<Record<string, string>> {
   const owner = ownerKey(options.processConfig?.owner);
-  const home = ctx.exportedEnv?.HOME ?? ctx.env.get('HOME') ?? '/tmp';
-  return ensureRealmCaFile(ctx.fs, realmCaPath(home, owner), owner);
+  return ensureRealmCaFile(ctx.fs, realmCaPath(homeOf(ctx), owner), owner);
+}
+
+function homeOf(ctx: CommandContext): string {
+  return ctx.exportedEnv?.HOME ?? ctx.env.get('HOME') ?? '/tmp';
+}
+
+async function gitEnv(
+  ctx: CommandContext,
+  options: RunWasmOptions
+): Promise<Record<string, string>> {
+  const identity = await options.gitIdentity?.().catch(() => undefined);
+  return ensureRealmGitConfig(ctx.fs, realmGitConfigPath(homeOf(ctx)), identity);
 }
 
 function programEnv(
@@ -329,7 +345,11 @@ export async function runWasmCommand(
       module: call.module ? ctx.fs.resolvePath(ctx.cwd, call.module) : modulePath(gluePath),
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
-      env: programEnv(ctx, call, { ...realmNetworkEnv(), ...(await caEnv(ctx, options)) }),
+      env: programEnv(ctx, call, {
+        ...realmNetworkEnv(),
+        ...(await caEnv(ctx, options)),
+        ...(await gitEnv(ctx, options)),
+      }),
       defaults: programDefaults(call, options),
       cwd: ctx.cwd,
       fds,

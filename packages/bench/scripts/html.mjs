@@ -4,8 +4,16 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chartLegend, modelSlots, rankingChart, toolUseChart, valueChart } from './charts.mjs';
+import { modelColors } from './models.mjs';
 import { listFiles } from './publish.mjs';
-import { configKey, percent, reportData, versionLine } from './results.mjs';
+import {
+  COMPARISON_KINDS,
+  canonicalRecords,
+  configKey,
+  percent,
+  reportData,
+  versionLine,
+} from './results.mjs';
 
 const esc = (v) =>
   String(v ?? '').replace(
@@ -71,6 +79,15 @@ function deltaList(title, deltas, label) {
     })
     .join('\n');
   return `<h3>${esc(title)}</h3><ul class="deltas">${items}</ul>`;
+}
+
+function paletteStyle(cls, slots) {
+  const colors = modelColors([...slots.keys()]);
+  const decl = (mode) =>
+    [...slots.entries()]
+      .map(([m, i]) => `--series-${i}: ${colors.get(m)?.[mode] ?? 'var(--muted)'};`)
+      .join(' ');
+  return `<style>.${cls} { ${decl('light')} } @media (prefers-color-scheme: dark) { .${cls} { ${decl('dark')} } }</style>\n`;
 }
 
 export const SMALL_SAMPLE = 10;
@@ -205,11 +222,13 @@ const STYLE = `
 :root { color-scheme: light dark; --bg:#fff; --fg:#1b1f24; --muted:#5f6b7a; --line:#d8dee4; --card:#f6f8fa;
   --pass:#2b8a3e; --partial:#e8a200; --fail:#d6336c; --error:#868e96; --unjudged:#adb5bd;
   --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --series-4:#eda100;
-  --series-5:#e87ba4; --series-6:#008300; --series-7:#4a3aa7; --series-8:#e34948; }
+  --series-5:#e87ba4; --series-6:#008300; --series-7:#4a3aa7; --series-8:#e34948;
+  --series-9:#0e8fa3; --series-10:#8a5a2b; --series-11:#7a8a00; --series-12:#b04fc4; }
 @media (prefers-color-scheme: dark) { :root { --bg:#0f1216; --fg:#e6e9ee; --muted:#9aa5b1; --line:#2d333b;
   --card:#171b21; --pass:#51cf66; --partial:#fcc419; --fail:#ff6b8b; --error:#868e96; --unjudged:#5c636b;
   --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500;
-  --series-5:#d55181; --series-6:#008300; --series-7:#9085e9; --series-8:#e66767; } }
+  --series-5:#d55181; --series-6:#008300; --series-7:#9085e9; --series-8:#e66767;
+  --series-9:#27b3c9; --series-10:#c08a55; --series-11:#aebd2c; --series-12:#c77ad6; } }
 * { box-sizing: border-box; }
 body { margin: 0 auto; max-width: 1200px; padding: 24px; background: var(--bg); color: var(--fg);
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -248,7 +267,13 @@ table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .pair { margin: 0; font-size: 12px; color: var(--muted); }
 .deltas li { margin: 3px 0; } .up { color: var(--pass); font-weight: 600; } .down { color: var(--fail); font-weight: 600; }
 .scatter { width: 100%; max-width: 760px; height: auto; } .axis { stroke: var(--muted); }
-.value { width: 100%; max-width: 900px; height: auto; } .ranking { max-width: 100%; height: auto; }
+.value { width: 100%; max-width: 1400px; height: auto; }
+.value .point-label { font-size: 14px; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; } .value .point-label:not(.on-hover) { font-weight: 600; }
+.value .on-hover { opacity: 0; pointer-events: none; transition: opacity .12s; }
+.value .pt:hover .on-hover, .value .pt:focus-within .on-hover { opacity: 1; }
+.value .pt:hover circle, .value .pt:focus circle { stroke: var(--fg); stroke-width: 2; }
+.value .pt:focus { outline: none; } .value .pt:focus-visible circle { stroke-width: 3; }
+.value .leader { stroke: var(--muted); stroke-width: 1; } .ranking { max-width: 100%; height: auto; }
 .label { fill: var(--muted); font-size: 12px; }
 .mark { fill: var(--c); stroke: var(--c); }
 .mark.with { stroke: var(--bg); stroke-width: 2; }
@@ -277,15 +302,16 @@ footer { margin-top: 40px; font-size: 13px; color: var(--muted); }
 `;
 
 export function reportHtml(
-  records,
+  input,
   { title = 'SLICC Bench', generated = new Date().toISOString() } = {}
 ) {
+  const records = canonicalRecords(input);
   const data = reportData(records);
   const judges = data.judges.length
     ? data.judges.map((j) => `<code>${esc(j)}</code>`).join(', ')
     : 'none yet';
   const sections = data.benchmarks
-    .map((b) => {
+    .map((b, bi) => {
       const rs = records.filter((r) => r.benchmark === b.benchmark);
       const configs = b.configs.map((c) => ({
         harness: c.harness,
@@ -293,7 +319,7 @@ export function reportHtml(
         skills: c.skills,
       }));
       const slots = modelSlots(b.configs.map((c) => c.model));
-      return `<section>
+      return `${paletteStyle(`bench-${bi}`, slots)}<section class="bench-${bi}">
 <h2>${esc(b.benchmark)} <small>${rs.length} runs, ${new Set(rs.map((r) => r.task_id)).size} tasks</small></h2>
 <p class="muted">${esc(versionLine(b.slicc_versions)).replace('**Mixed:**', '<strong>Mixed:</strong>')}</p>
 <h3>Ranking <small>score = mean rubric score × 100, over judged runs</small></h3>
@@ -307,7 +333,13 @@ ${toolUseChart(b.configs, slots)}
 <h3>Configurations</h3>
 <div class="cards">${b.configs.map(card).join('\n')}</div>
 ${configTable(b)}
-${deltaList(`What models change (paired, against ${b.model_deltas[0]?.from ?? ''})`, b.model_deltas, (d) => `${d.skills}, ${d.to}`)}
+${COMPARISON_KINDS.map(([kind, title]) =>
+  deltaList(
+    title,
+    b.model_deltas.filter((d) => d.kind === kind),
+    (d) => `${d.skills}, ${d.from} → ${d.to}`
+  )
+).join('\n')}
 <h3>Tasks <small>hardest first; hover a cell for time and cost</small></h3>
 ${matrix(rs, configs)}
 <h3>Time and cost per run</h3>

@@ -63,9 +63,55 @@ export function realmCaEnv(path: string): Record<string, string> {
   return { SSL_CERT_FILE: path, CURL_CA_BUNDLE: path, GIT_SSL_CAINFO: path };
 }
 
+const GIT_CONFIG_MARK = '/.config/slicc/gitconfig';
+
+export function realmGitConfigPath(home: string): string {
+  return `${home.replace(/\/+$/, '')}${GIT_CONFIG_MARK}`;
+}
+
+export interface GitIdentity {
+  name: string;
+  email: string;
+}
+
+function gitValue(value: string): string {
+  return `"${value.replace(/[\r\n]+/g, ' ').replace(/[\\"]/g, (c) => `\\${c}`)}"`;
+}
+
+export function realmGitConfig(identity?: GitIdentity): string {
+  const lines = ['[credential]', '\thelper = slicc'];
+  if (identity) {
+    lines.push(
+      '[user]',
+      `\tname = ${gitValue(identity.name)}`,
+      `\temail = ${gitValue(identity.email)}`
+    );
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+export async function ensureRealmGitConfig(
+  fs: CaFileSystem,
+  path: string,
+  identity?: GitIdentity
+): Promise<Record<string, string>> {
+  try {
+    const content = realmGitConfig(identity);
+    const current = (await fs.exists(path)) ? await fs.readFile(path) : undefined;
+    if (current !== content) {
+      await fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true });
+      await fs.writeFile(path, content);
+    }
+    return { GIT_CONFIG_SYSTEM: path };
+  } catch {
+    return {};
+  }
+}
+
 export function isRealmDefault(name: string, value: string): boolean {
   const proxy = realmNetworkEnv();
   if (name in proxy) return proxy[name] === value;
+  if (name === 'GIT_CONFIG_SYSTEM') return value.endsWith(GIT_CONFIG_MARK);
   return name in realmCaEnv('') && value.includes(CA_FILE_MARK);
 }
 

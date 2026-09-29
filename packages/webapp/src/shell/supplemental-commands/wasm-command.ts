@@ -3,6 +3,7 @@ import { defineCommand } from 'just-bash';
 import type { JshProcessConfig } from '../jsh-executor.js';
 import type { TerminalPort } from '../terminal-port.js';
 import type { InstalledCommandsLookup, NativeGate } from './wasm/launch.js';
+import type { RunWasmOptions } from './wasm/run.js';
 
 export interface WasmCommandOptions {
   buildProcessConfig?: (env?: ReadonlyMap<string, string>) => JshProcessConfig | undefined;
@@ -12,6 +13,8 @@ export interface WasmCommandOptions {
   gate?: NativeGate;
 
   commands?: InstalledCommandsLookup;
+
+  gitIdentity?: RunWasmOptions['gitIdentity'];
 }
 
 export function createWasmCommand(options: WasmCommandOptions = {}): Command {
@@ -22,6 +25,7 @@ export function createWasmCommand(options: WasmCommandOptions = {}): Command {
       terminal: options.terminal,
       gate: options.gate,
       commands: options.commands,
+      gitIdentity: options.gitIdentity,
     });
   });
 }

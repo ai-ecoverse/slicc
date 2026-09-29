@@ -34,6 +34,7 @@ import { createFfprobeCommand } from './ffprobe-command.js';
 import { createFlagsCommand } from './flags-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createGelatiereCommand } from './gelatiere-command.js';
+import { createGitCredentialCommand, type GitCredentialDeps } from './git-credential-command.js';
 import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
 import { createHfCommand } from './hf-command.js';
@@ -99,7 +100,7 @@ import { createUptimeCommand } from './uptime-command.js';
 import { createUsbCommand } from './usb-command.js';
 import { createV86Command } from './v86-command.js';
 import type { NativeGate } from './wasm/launch.js';
-import { createWasmCommand } from './wasm-command.js';
+import { createWasmCommand, type WasmCommandOptions } from './wasm-command.js';
 import { createWebhookCommand, type WebhookCommandOptions } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWfProgressCommand } from './wf-progress-command.js';
@@ -150,6 +151,10 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
 
   unsetEnv?: (name: string) => void;
 
+  gitCredential?: Pick<GitCredentialDeps, 'githubToken' | 'githubDomains'>;
+
+  gitIdentity?: WasmCommandOptions['gitIdentity'];
+
   webhook?: WebhookCommandOptions;
 
   crontask?: CrontaskCommandOptions;
@@ -190,6 +195,17 @@ function packageManagerCommands(options: SupplementalCommandsConfig): Command[] 
   ];
 }
 
+function wasmCommandOptions(options: SupplementalCommandsConfig): WasmCommandOptions {
+  const catalog = options.scriptCatalog;
+  return {
+    buildProcessConfig: options.buildProcessConfig,
+    terminal: options.terminal,
+    gate: options.gateNativeCommand,
+    commands: catalog && (() => catalog.getWasmCommands()),
+    gitIdentity: options.gitIdentity,
+  };
+}
+
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
   const commands: Command[] = [
     createCommandsCommand({
@@ -210,12 +226,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createRmdirCommand(),
     createStatCommand(),
     createCmpCommand(),
-    createWasmCommand({
-      buildProcessConfig: options.buildProcessConfig,
-      terminal: options.terminal,
-      gate: options.gateNativeCommand,
-      commands: options.scriptCatalog && (() => options.scriptCatalog!.getWasmCommands()),
-    }),
+    createWasmCommand(wasmCommandOptions(options)),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),
@@ -277,6 +288,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createLocalLlmCommand(),
 
     createSecretCommand(secretCommandDeps(options)),
+    createGitCredentialCommand(options.gitCredential),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
     createPbcopyCommand(),

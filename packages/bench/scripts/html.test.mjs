@@ -92,14 +92,16 @@ describe('reportHtml', () => {
     const at = order.map((s) => html.indexOf(s));
     expect(at.every((v, i) => v > 0 && (i === 0 || v > at[i - 1]))).toBe(true);
     expect(html).toContain('class="bar-value">100</text>');
-    expect(html).toContain('<svg viewBox="0 0 760 380" class="value"');
+    expect(html).toContain('<svg viewBox="0 0 1100 620" class="value"');
     expect(html.match(/<article class="card lift">/g)).toHaveLength(2);
     expect(html).toContain('<p class="big up">+25.0%<small> score lift</small></p>');
     expect(html).toContain('<svg class="dumbbell up"');
     expect(html).toContain('<p class="pair">none 0.80 → builtin 1.00 (+0.20)</p>');
     expect(html).toContain('<dd>1 <span class="chip warn">small sample</span></dd>');
     expect(html.indexOf('Skills lift')).toBeLessThan(html.indexOf('<h3>Configurations</h3>'));
-    expect(html).toContain('What models change (paired, against opus)');
+
+    expect(html).toMatch(/<style>\.bench-0 \{ --series-1: hsl\(/);
+    expect(html).toContain('<section class="bench-0">');
     expect(html).toContain('<h3>Answered without tools');
     expect(html).toContain('<td class="cell pass"');
     expect(html).toContain('<td class="cell error" title="error · error: leader went away');

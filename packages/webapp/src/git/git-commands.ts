@@ -205,15 +205,31 @@ export class GitCommands {
     };
   }
 
-  private resolveAuthToken(): string | undefined {
+  private resolveAuthToken(env = this.currentEnv): string | undefined {
     if (this.githubToken) return this.githubToken;
-    const env = this.currentEnv;
     if (!env) return undefined;
     const gh = readEnvVar(env, 'GH_TOKEN');
     if (gh) return gh;
     const gt = readEnvVar(env, 'GITHUB_TOKEN');
     if (gt) return gt;
     return undefined;
+  }
+
+  async githubCredential(
+    env: Readonly<Record<string, string>>,
+    opts?: { force?: boolean }
+  ): Promise<string | undefined> {
+    await this.ensureFreshGithubToken(opts);
+    await this.loadGithubToken();
+    return this.resolveAuthToken(env);
+  }
+
+  async identity(): Promise<{ name: string; email: string }> {
+    const globalFs = await this.getGlobalFs();
+    return {
+      name: (await readGlobalGitConfigValue(globalFs, 'user.name')) ?? this.authorName,
+      email: (await readGlobalGitConfigValue(globalFs, 'user.email')) ?? this.authorEmail,
+    };
   }
 
   private getGlobalFs(): Promise<VirtualFS> {

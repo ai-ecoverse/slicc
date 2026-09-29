@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { pathSegment } from './format.mjs';
 import {
+  canonicalRecords,
   configKey,
   judgeModels,
   pairedDelta,
@@ -282,6 +283,27 @@ describe('skills lift', () => {
   });
 });
 
+describe('canonicalRecords', () => {
+  it('pools @default with the plain model, renumbering clashing repeats', () => {
+    const records = [
+      rec('t1', 'claude-opus-5-5', 'builtin', 1),
+      rec('t1', 'claude-opus-5-5@default', 'builtin', 0),
+      rec('t2', 'claude-opus-5-5@default', 'builtin', 0.5),
+    ];
+    const out = canonicalRecords(records);
+    expect(out.map((r) => [r.task_id, r.config.model, r.repeat])).toEqual([
+      ['t1', 'claude-opus-5-5', 1],
+      ['t1', 'claude-opus-5-5', 2],
+      ['t2', 'claude-opus-5-5', 1],
+    ]);
+    const [cfg] = reportData(records).benchmarks[0].configs;
+    expect(cfg).toMatchObject({ model: 'claude-opus-5-5', runs: 3, mean_score: 0.5 });
+    expect(configKey({ model: 'claude-opus-5-5@default', skills: 'builtin' })).toBe(
+      configKey({ model: 'claude-opus-5-5', skills: 'builtin' })
+    );
+  });
+});
+
 describe('reportMarkdown', () => {
   it('tables every configuration and states skill and model deltas', () => {
     const md = reportMarkdown(RECORDS);
@@ -289,8 +311,6 @@ describe('reportMarkdown', () => {
     expect(md).toContain('| sonnet | none | 3 | 0 | 1 | 1 | 0 | 1 | 0.25 | 10 | 0.100 |');
     expect(md).toContain('**What skills add** (lift over `none`, paired by task and repeat):');
     expect(md).toContain('- sonnet, `builtin`: score +300.0% (0.25 → 1.00)');
-    expect(md).toContain('**What models change**');
-    expect(md).toMatch(/- `builtin`, opus: score -\d+\.\d% \(\d\.\d\d → \d\.\d\d\)/);
     expect(md).toContain('(n=0)');
   });
 
@@ -304,10 +324,28 @@ describe('reportMarkdown', () => {
     );
   });
 
+  it('lists model comparisons by kind: tier, effort, version', () => {
+    const md = reportMarkdown([
+      rec('t1', 'claude-sonnet-5-5', 'builtin', 0.5),
+      rec('t1', 'claude-opus-5-5', 'builtin', 0.75),
+      rec('t1', 'claude-opus-5-5@max', 'builtin', 1),
+      rec('t1', 'claude-sonnet-5', 'builtin', 0.25),
+    ]);
+    expect(md).toContain('**One tier up at the same provider** (paired by task and repeat):');
+    expect(md).toContain(
+      '- `builtin`, claude-sonnet-5-5 → claude-opus-5-5: score +50.0% (0.50 → 0.75)'
+    );
+    expect(md).toContain('**Thinking effort, against the same model at its default**');
+    expect(md).toContain('- `builtin`, claude-opus-5-5 → claude-opus-5-5@max: score +33.3%');
+    expect(md).toContain('**Against the older version**');
+    expect(md).toContain('- `builtin`, claude-sonnet-5 → claude-sonnet-5-5: score +100.0%');
+  });
+
   it('omits deltas for a single configuration', () => {
     const md = reportMarkdown([rec('t1', 'm', 's', 1)]);
     expect(md).not.toContain('What skills add');
-    expect(md).not.toContain('What models change');
+    expect(md).not.toContain('Against the');
+    expect(md).not.toContain('One tier up');
   });
 });
 

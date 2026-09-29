@@ -185,10 +185,12 @@ describe('stage', () => {
       ['claude-opus-5-5', 1],
       ['claude-sonnet-5', 0],
     ]);
+
     expect(smoke.model_deltas[0]).toMatchObject({
-      from: 'claude-opus-5-5',
-      to: 'claude-sonnet-5',
-      score: -1,
+      kind: 'rung',
+      from: 'claude-sonnet-5',
+      to: 'claude-opus-5-5',
+      score: 1,
       n: 1,
     });
     expect(files.filter((f) => f.startsWith('results/'))).toHaveLength(3);

@@ -1,14 +1,31 @@
 import { OUTCOMES, pathSegment } from './format.mjs';
+import { canonicalModel, modelComparisons } from './models.mjs';
 
 function isNoneSkills(skills) {
   return skills === 'none' || (typeof skills === 'string' && skills.startsWith('none+'));
 }
 
 export function configKey(c) {
+  const model = canonicalModel(c.model);
   if (isNoneSkills(c.skills) && c.default_skills !== false && c.default_skills !== true) {
-    return `${c.model}|${c.skills}|preflag`;
+    return `${model}|${c.skills}|preflag`;
   }
-  return `${c.model}|${c.skills}`;
+  return `${model}|${c.skills}`;
+}
+
+export function canonicalRecords(records) {
+  const used = new Map();
+  return records.map((r) => {
+    const model = canonicalModel(r.config?.model);
+    const key = `${r.benchmark}|${configKey({ ...r.config, model })}|${r.task_id}`;
+    const taken = used.get(key) ?? new Set();
+    used.set(key, taken);
+    let repeat = r.repeat ?? 1;
+    while (taken.has(repeat)) repeat += 1;
+    taken.add(repeat);
+    if (model === r.config?.model && repeat === r.repeat) return r;
+    return { ...r, repeat, config: { ...r.config, model } };
+  });
 }
 
 export function summaryFileName(benchmark, config) {
@@ -187,7 +204,8 @@ function delta(records, from, to, extra) {
   };
 }
 
-export function reportData(records) {
+export function reportData(input) {
+  const records = canonicalRecords(input);
   const benchmarks = [...new Set(records.map((r) => r.benchmark))].map((benchmark) => {
     const rs = records.filter((r) => r.benchmark === benchmark);
     const configs = [...new Map(rs.map((r) => [configKey(r.config), r.config])).values()];
@@ -210,12 +228,13 @@ export function reportData(records) {
         skillDeltas.push(delta(rs, cfg(m, base), cfg(m, s), { model: m, from: base, to: s }));
       }
     }
+
     const modelDeltas = [];
     for (const s of skills) {
-      for (const m of models.slice(1)) {
-        modelDeltas.push(
-          delta(rs, cfg(models[0], s), cfg(m, s), { skills: s, from: models[0], to: m })
-        );
+      const here = models.filter((m) => configs.some((c) => c.model === m && c.skills === s));
+      for (const { kind, from, to } of modelComparisons(here)) {
+        const d = delta(rs, cfg(from, s), cfg(to, s), { kind, skills: s, from, to });
+        if (d.n > 0) modelDeltas.push(d);
       }
     }
     return {
@@ -234,6 +253,13 @@ export function reportData(records) {
   });
   return { judges: judgeModels(records), benchmarks };
 }
+
+export const COMPARISON_KINDS = [
+  ['version', 'Against the older version'],
+  ['sibling', 'Against the sibling at the other provider'],
+  ['rung', 'One tier up at the same provider'],
+  ['effort', 'Thinking effort, against the same model at its default'],
+];
 
 const fmt = (x, d = 2) => (x == null ? '–' : x.toFixed(d));
 const signed = (x, d = 2) => (x == null ? '–' : `${x >= 0 ? '+' : ''}${x.toFixed(d)}`);
@@ -302,12 +328,14 @@ export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
         ...b.skill_deltas.map((d) => deltaLine(`${d.model}, \`${d.to}\``, d))
       );
     }
-    if (b.model_deltas.length) {
+    for (const [kind, title] of COMPARISON_KINDS) {
+      const ds = b.model_deltas.filter((d) => d.kind === kind);
+      if (!ds.length) continue;
       lines.push(
         '',
-        `**What models change** (paired, against \`${b.model_deltas[0].from}\`):`,
+        `**${title}** (paired by task and repeat):`,
         '',
-        ...b.model_deltas.map((d) => deltaLine(`\`${d.skills}\`, ${d.to}`, d))
+        ...ds.map((d) => deltaLine(`\`${d.skills}\`, ${d.from} → ${d.to}`, d))
       );
     }
     lines.push('');

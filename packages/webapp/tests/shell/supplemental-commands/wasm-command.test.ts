@@ -8,7 +8,10 @@ vi.mock('../../../src/kernel/realm/wasm-compiler.js', () => ({ compileWasmFromVf
 
 import { LOGIN_RC, LOGIN_RC_FD } from '../../../src/kernel/login-shell-marks.js';
 import { sinkFile } from '../../../src/kernel/wasm-realm/fd-table.js';
-import { realmNetworkEnv } from '../../../src/kernel/wasm-realm/net/realm-network.js';
+import {
+  realmGitConfig,
+  realmNetworkEnv,
+} from '../../../src/kernel/wasm-realm/net/realm-network.js';
 import {
   SECRET_FUNCTION,
   SECRET_FUNCTION_ENV,
@@ -102,6 +105,37 @@ describe('wasm command', () => {
     expect(env.https_proxy).toBe('http://corp:8080');
     expect(env.http_proxy).toBe('');
     expect(env.no_proxy).toBe(realmNetworkEnv().no_proxy);
+  });
+
+  it('points native git at a system config with the slicc helper and SLICC’s identity', async () => {
+    compile.mockResolvedValue({});
+    spawn.mockImplementation((opts) => ({
+      pid: opts.pid,
+      exited: Promise.resolve(0),
+      kill: vi.fn(),
+    }));
+    const files: Record<string, string> = { '/w/git.js': 'G', '/w/git.wasm': 'W' };
+    const writable = () => {
+      const c = ctx(files);
+      c.exportedEnv = { HOME: '/home/u' };
+      Object.assign(c.fs, {
+        writeFile: async (p: string, content: string) => {
+          files[p] = content;
+        },
+        mkdir: async () => undefined,
+      });
+      return c;
+    };
+    const identity = { name: 'Octo Cat', email: 'octo@example.com' };
+    await runWasmCommand(['git.js'], writable(), { gitIdentity: async () => identity });
+    const path = '/home/u/.config/slicc/gitconfig';
+    expect(spawn.mock.calls[0][0].env.GIT_CONFIG_SYSTEM).toBe(path);
+    expect(files[path]).toBe(realmGitConfig(identity));
+
+    const own = writable();
+    own.exportedEnv = { HOME: '/home/u', GIT_CONFIG_SYSTEM: '/etc/gitconfig' };
+    await runWasmCommand(['git.js'], own, { gitIdentity: async () => identity });
+    expect(spawn.mock.calls[1][0].env.GIT_CONFIG_SYSTEM).toBe('/etc/gitconfig');
   });
 
   it('starts the program with the extra descriptors close-on-exec: its own, not its children', async () => {
@@ -517,6 +551,7 @@ describe('withoutRealmDefaults', () => {
     );
     const ran = {
       ...realmNetworkEnv(),
+      GIT_CONFIG_SYSTEM: '/home/user/.config/slicc/gitconfig',
       SSL_CERT_FILE: '/home/user/.config/slicc/realm-ca-cone.pem',
       GIT_SSL_CAINFO: '/etc/ssl/mine.pem',
       http_proxy: 'http://corp:8080',
