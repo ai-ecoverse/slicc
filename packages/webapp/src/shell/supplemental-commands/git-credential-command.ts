@@ -16,6 +16,19 @@ import { resolveFloatTopology } from '../float-topology.js';
 import { stdinAsText } from '../just-bash-compat.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
 
+/** The helper's command name (`credential.helper=slicc`). */
+export const GIT_CREDENTIAL_HELPER = 'git-credential-slicc';
+
+/**
+ * Commands that are another command's plumbing, by the command whose policy
+ * they share: native git runs `git-credential-slicc` for every authenticated
+ * request, so it is allowed exactly when `git` is and never asks for an
+ * approval of its own (the git call that runs it went through the gate). It
+ * widens nothing: it only ever prints masks the agent can already see, each
+ * only to a host its domains cover.
+ */
+export const PLUMBING: ReadonlyMap<string, string> = new Map([[GIT_CREDENTIAL_HELPER, 'git']]);
+
 /** Where SLICC's GitHub token counts when nothing narrower is known about it. */
 export const GITHUB_DOMAINS = ['github.com', '*.github.com'];
 
@@ -170,7 +183,7 @@ default (credential.helper=slicc). Reads git's key=value request on stdin.
 `;
 
 export function createGitCredentialCommand(deps: GitCredentialDeps = {}): Command {
-  return defineCommand('git-credential-slicc', async (args, ctx) => {
+  return defineCommand(GIT_CREDENTIAL_HELPER, async (args, ctx) => {
     const op = args[0];
     if (op === undefined || op === '-h' || op === '--help') {
       return { stdout: HELP, stderr: '', exitCode: op === undefined ? 1 : 0 };

@@ -545,8 +545,8 @@ skips the network call and does not verify that the remote exists.
 
 ### Native git (`wasm-git`) next to the built-in `git`
 
-`git` is SLICC's built-in (isomorphic-git) until a package provides a native
-one (`ipk add -g @ai-ecoverse/wasm-git`). Then it depends on the shell:
+In GNU bash, `git` is native git once `@ai-ecoverse/wasm-git` is installed;
+in just-bash it stays SLICC's built-in (isomorphic-git). In detail:
 
 - **just-bash** (`SLICC_SHELL=just-bash`, or no `wasm-bash`): the built-in wins,
   as for any installed command of a built-in's name; `wasm git …` runs the

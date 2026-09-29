@@ -99,7 +99,7 @@ import {
   SUDO_REFUSED_EXIT_CODE,
 } from './sudo/command-guard.js';
 import { extractLeadingCommentReason, SUDO_REASON_ENV } from './sudo/command-reason.js';
-import { GITHUB_DOMAINS } from './supplemental-commands/git-credential-command.js';
+import { GITHUB_DOMAINS, PLUMBING } from './supplemental-commands/git-credential-command.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
 import { sayStdioPlugin } from './supplemental-commands/say-stdio-rewrite.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
@@ -1518,7 +1518,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   }
 
   private wrapCommandForSudo(command: Command): Command {
-    if (!this.isTransparentGatingEnabled()) return command;
+    // Plumbing runs inside a call of its command, which the gate already saw.
+    if (!this.isTransparentGatingEnabled() || PLUMBING.has(command.name)) return command;
     const guard = (args: string[], reason?: string) =>
       this.gateCommandDispatch(command.name, args, reason);
     return {
@@ -1659,9 +1660,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     await fs.writeFile(path, `${prefix}NOPASSWD Cmnd  ${safe}\n`);
   }
 
-  /** True when `name` is registrable/executable under the allow-list. */
+  /**
+   * True when `name` is registrable/executable under the allow-list. Plumbing
+   * (`git-credential-slicc`) is allowed exactly when its command is.
+   */
   private isCommandAllowed(name: string): boolean {
-    return this.allowedCommands === null || this.allowedCommands.has(name);
+    return this.allowedCommands === null || this.allowedCommands.has(PLUMBING.get(name) ?? name);
   }
 
   private async doSyncJshCommands(): Promise<void> {
