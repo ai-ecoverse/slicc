@@ -268,8 +268,14 @@ export function resolveTaskIds(entries, dir = SUBSETS_DIR) {
   return [...new Set(out)];
 }
 
+/**
+ * The tasks to run: the set's order, or the order `--tasks` lists them in. Order decides shard
+ * placement (`shardRuns`), so a nested subset whose smaller list comes first keeps every earlier
+ * task on its shard when a resumed run extends it.
+ */
 export function selectTasks(tasks, { taskIds, limit }) {
-  let picked = taskIds ? tasks.filter((t) => taskIds.includes(t.id)) : tasks;
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  let picked = taskIds ? taskIds.map((id) => byId.get(id)).filter(Boolean) : tasks;
   if (limit && limit > 0) picked = picked.slice(0, limit);
   return picked;
 }

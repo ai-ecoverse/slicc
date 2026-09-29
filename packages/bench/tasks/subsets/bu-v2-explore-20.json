@@ -2,7 +2,7 @@
   "name": "bu-v2-explore-20",
   "set": "bu-v2",
   "description": "20 BU Bench V2.1 tasks for quick explorations; compare configurations on the same frozen list so new runs pair with old ones.",
-  "method": "Drop tasks with no signal (every configuration within 0.05, or all below 0.1), split the rest into four difficulty bands by mean score, and sample 5 tasks per band at random from the cheaper half. Random within bands, not top-discrimination: cross-validated on held-out configurations, cherry-picking the most discriminating tasks called clear differences wrong 7-9% of the time against 1.6% (20 tasks) and 0.1% (40 tasks) for random, because a single run's score has about 0.17 noise (test-retest r=0.78).",
+  "method": "Drop tasks with no signal (every configuration within 0.05, or all below 0.1), split the rest into four difficulty bands by mean score, and sample 5 tasks per band (seed 20260929) at random from the cheaper half. Random within bands, not top-discrimination: cross-validated on held-out configurations, cherry-picking the most discriminating tasks called clear differences wrong 7-9% of the time against 1.6% (20 tasks) and 0.1% (40 tasks) for random, because a single run's score has about 0.17 noise (test-retest r=0.78).",
   "source": {
     "date": "2026-09-29",
     "configurations": [

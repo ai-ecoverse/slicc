@@ -206,7 +206,7 @@ describe('loadSet', () => {
 describe('planning', () => {
   it('filters tasks and orders runs skills → repeat → task → model', () => {
     const tasks = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
-    expect(selectTasks(tasks, { taskIds: ['c', 'a'] }).map((t) => t.id)).toEqual(['a', 'c']);
+    expect(selectTasks(tasks, { taskIds: ['c', 'a'] }).map((t) => t.id)).toEqual(['c', 'a']);
     expect(selectTasks(tasks, { limit: 2 }).map((t) => t.id)).toEqual(['a', 'b']);
     expect(selectTasks(tasks, { limit: 0 })).toHaveLength(3);
     const runs = planRuns([{ benchmark: 'B', tasks: tasks.slice(0, 2) }], {
@@ -401,13 +401,35 @@ describe('main', () => {
     expect(() => resolveTaskIds(['@../x'], dir)).toThrow(/unknown task subset/);
   });
 
+  it('keeps every task of a nested subset on its shard when the run is extended', () => {
+    const tasks = Array.from({ length: 12 }, (_, i) => ({ id: `t${String(i).padStart(2, '0')}` }));
+    const small = ['t09', 't02', 't05', 't11'];
+    const large = [...small, 't00', 't07', 't03', 't10'];
+    const set = { benchmark: 'B' };
+    const placement = (ids) => {
+      const runs = planRuns([{ ...set, tasks: selectTasks(tasks, { taskIds: ids }) }], {
+        models: ['m'],
+        skills: [{ name: 'builtin' }],
+        repeats: 1,
+      });
+      const where = {};
+      for (let k = 1; k <= 3; k++)
+        for (const r of shardRuns(runs, { index: k, count: 3 })) where[r.task.id] = k;
+      return where;
+    };
+    const before = placement(small);
+    const after = placement(large);
+    for (const id of small) expect(after[id]).toBe(before[id]);
+  });
+
   it('ships nested BU V2.1 explore subsets: 40 contains 20', () => {
     const read = (n) => JSON.parse(readFileSync(join(SUBSETS_DIR, `${n}.json`), 'utf8'));
     const e20 = read('bu-v2-explore-20');
     const e40 = read('bu-v2-explore-40');
     expect(e20.tasks).toHaveLength(20);
     expect(e40.tasks).toHaveLength(40);
-    expect(e20.tasks.every((t) => e40.tasks.includes(t))).toBe(true);
+    // The 20 come first, in the same order, so extending a run keeps their shards.
+    expect(e40.tasks.slice(0, 20)).toEqual(e20.tasks);
     expect(new Set(e40.tasks).size).toBe(40);
     for (const t of e40.tasks) expect(t).toMatch(/^bu2-\d{3}$/);
     // Tasks with no signal stay out.
