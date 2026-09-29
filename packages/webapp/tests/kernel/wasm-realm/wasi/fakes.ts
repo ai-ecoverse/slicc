@@ -132,8 +132,11 @@ export class FakeKernel implements WasiKernel {
       }
       case 'fd-renumber':
         this.table.set(req.to, this.get(req.from));
-        this.table.delete(req.from);
+        if (!req.keep) this.table.delete(req.from);
         return undefined;
+      case 'proc-spawn':
+        // Nothing to run here: every program is missing.
+        throw posix('ENOENT');
       case 'fd-info': {
         const e = this.get(req.fd);
         return { tty: e.kind === 'tty', kind: e.kind };

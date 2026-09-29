@@ -37,8 +37,17 @@ export interface WasiKernel {
 
 type Device = 'null' | 'zero' | 'urandom';
 
-/** musl's O_NONBLOCK, as the kernel keeps a socket's status flags. */
+/** musl's open(2) flags, as the kernel keeps them (a socket's O_NONBLOCK, a promoted file's mode). */
 const O_NONBLOCK = 0o4000;
+const O_WRONLY = 0o1;
+const O_RDWR = 0o2;
+const O_APPEND = 0o2000;
+
+/** One descriptor of a forked parent, as its child rebuilds it (kernel ones keep their numbers). */
+export type WasiForkFd =
+  | { fd: number; type: 'kernel'; nonblock: boolean; append: boolean }
+  | { fd: number; type: 'dir'; path: string; preopen?: string }
+  | { fd: number; type: 'device'; device: 'null' | 'zero' | 'urandom' };
 
 const DEVICES: Readonly<Record<string, Device>> = {
   '/dev/null': 'null',
@@ -165,28 +174,145 @@ export class WasiFds {
     return this.table.values();
   }
 
-  /** A worker-held descriptor at the number the kernel reserves for it. */
-  private install(e: WasiEntry): number {
-    const fd = this.kernel.call({ op: 'fd-reserve' }) as number;
+  /** A worker-held descriptor at the number the kernel reserves for it (the lowest free >= `min`). */
+  private install(e: WasiEntry, min = 3): number {
+    const fd = this.kernel.call({ op: 'fd-reserve', ...(min > 3 ? { min } : {}) }) as number;
     this.table.set(fd, e);
     return fd;
+  }
+
+  // ------------------------------------------------------------ WASIX (5c)
+
+  /** FD_CLOEXEC, per fd: what an exec or spawn leaves behind. */
+  readonly cloexec = new Set<number>();
+
+  /** dup(2) / F_DUPFD: the lowest free fd >= `min` on the same description. */
+  dup(fd: number, min: number, cloexec: boolean): number {
+    const e = this.get(fd);
+    let at: number;
+    if (e.type === 'kernel') {
+      at = this.kernel.call({ op: 'fd-dup', fd, min: Math.max(3, min) }) as number;
+      this.table.set(at, { ...e });
+    } else {
+      if (e.type === 'file') e.file.refs++;
+      at = this.install(e.type === 'file' ? e : { ...e }, min);
+    }
+    if (cloexec) this.cloexec.add(at);
+    return at;
+  }
+
+  /** pipe(2): a kernel pipe; [read end, write end]. */
+  pipe(): [number, number] {
+    const [r, w] = this.kernel.sys.pipe();
+    this.table.set(r, { type: 'kernel', kind: 'stream', nonblock: false, append: false });
+    this.table.set(w, { type: 'kernel', kind: 'stream', nonblock: false, append: false });
+    return [r, w];
+  }
+
+  /** chdir(2): relative paths (and `.`) resolve from `path` now. */
+  chdir(path: string): void {
+    const dot = this.table.get(3);
+    if (dot?.type === 'dir' && dot.preopen === '.') dot.path = path;
+  }
+
+  /**
+   * Hand every buffered file to the kernel (a fork or an exec shares it): each
+   * description becomes a kernel one at its own number, with the bytes and
+   * offset it has; fds that shared a description share the kernel's.
+   */
+  promoteFiles(): void {
+    const promoted = new Map<LocalFile, number>();
+    for (const [fd, e] of [...this.table]) {
+      if (e.type !== 'file') continue;
+      const first = promoted.get(e.file);
+      if (first !== undefined) {
+        this.kernel.call({ op: 'fd-promote', fd, share: first });
+      } else {
+        const f = e.file;
+        this.kernel.call({
+          op: 'fd-promote',
+          fd,
+          path: f.path,
+          flags: (f.writable ? (f.readable ? O_RDWR : O_WRONLY) : 0) | (f.append ? O_APPEND : 0),
+          position: f.offset,
+          contents: f.buffer.contents(),
+          ...(f.buffer.isOrphan() ? { orphan: true } : {}),
+        });
+        promoted.set(f, fd);
+      }
+      this.table.set(fd, { type: 'kernel', kind: 'file', nonblock: false, append: e.file.append });
+    }
+    for (const file of promoted.keys()) {
+      if (--file.buffer.opens <= 0) this.buffers.delete(file.path);
+    }
+  }
+
+  /** The table as a forked child rebuilds it (after `promoteFiles`: no buffered files are left). */
+  snapshot(): WasiForkFd[] {
+    const out: WasiForkFd[] = [];
+    for (const [fd, e] of this.table) {
+      if (e.type === 'kernel')
+        out.push({ fd, type: 'kernel', nonblock: e.nonblock, append: e.append });
+      else if (e.type === 'dir')
+        out.push({ fd, type: 'dir', path: e.path, ...(e.preopen ? { preopen: e.preopen } : {}) });
+      else if (e.type === 'device') out.push({ fd, type: 'device', device: e.device });
+    }
+    return out;
+  }
+
+  /** A forked child's table: its parent's, as `snapshot` gave it (the kernel copied the numbers). */
+  restore(fds: readonly WasiForkFd[], cloexec: readonly number[]): void {
+    this.table.clear();
+    for (const f of fds) {
+      if (f.type === 'kernel')
+        this.table.set(f.fd, { type: 'kernel', nonblock: f.nonblock, append: f.append });
+      else if (f.type === 'dir')
+        this.table.set(f.fd, {
+          type: 'dir',
+          path: f.path,
+          ...(f.preopen ? { preopen: f.preopen } : {}),
+        });
+      else this.table.set(f.fd, { type: 'device', device: f.device });
+    }
+    for (const fd of cloexec) this.cloexec.add(fd);
+  }
+
+  /** Kernel descriptors (fd → the kernel's, the same number) a spawned or exec'd program starts with: not close-on-exec. */
+  inheritable(): Map<number, number> {
+    const out = new Map<number, number>();
+    for (const [fd, e] of this.table) {
+      if (e.type === 'kernel' && !this.cloexec.has(fd)) out.set(fd, fd);
+    }
+    return out;
   }
 
   close(fd: number): void {
     const e = this.get(fd);
     this.table.delete(fd);
+    this.cloexec.delete(fd);
     this.kernel.sys.close(fd);
     this.release(e);
   }
 
-  /** fd_renumber: `to` becomes `from` (what was at `to` closes), `from` is gone. */
-  renumber(from: number, to: number): void {
+  /**
+   * fd_renumber: `to` becomes `from` (what was at `to` closes), `from` is
+   * gone — or, `keep`ing it, stays open beside it (WASIX's fd_renumber is
+   * dup2: wasix-libc's dup2 calls it, and the program closes `from` itself).
+   */
+  renumber(from: number, to: number, keep = false): void {
     const e = this.get(from);
     const old = this.get(to);
     if (from === to) return;
-    this.kernel.call({ op: 'fd-renumber', from, to });
-    this.table.delete(from);
-    this.table.set(to, e);
+    this.kernel.call({ op: 'fd-renumber', from, to, ...(keep ? { keep } : {}) });
+    this.cloexec.delete(to);
+    if (keep) {
+      if (e.type === 'file') e.file.refs++;
+      this.table.set(to, e.type === 'file' ? e : { ...e });
+    } else {
+      this.table.delete(from);
+      this.table.set(to, e);
+      if (this.cloexec.delete(from)) this.cloexec.add(to);
+    }
     this.release(old);
   }
 

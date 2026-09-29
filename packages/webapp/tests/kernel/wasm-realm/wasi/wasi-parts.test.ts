@@ -133,10 +133,22 @@ describe('unsupportedImport', () => {
     expect(unsupportedImport(module([[P1, 'fd_write', 'func']], ['_start']))).toBeUndefined();
   });
 
-  it('refuses WASIX, threads, Emscripten glue imports and reactors, saying which', () => {
-    expect(unsupportedImport(module([['wasix_32v1', 'proc_fork', 'func']], ['_start']))).toContain(
-      'WASIX'
+  it('accepts WASIX, with the memory the kernel recorded and its thread-spawn', () => {
+    const memory = { module: 'env', name: 'memory', initial: 2, shared: true };
+    const wasix = module(
+      [
+        ['wasix_32v1', 'proc_fork', 'func'],
+        ['env', 'memory', 'memory'],
+        ['wasi', 'thread-spawn', 'func'],
+      ],
+      ['_start']
     );
+    expect(unsupportedImport(wasix, memory)).toBeUndefined();
+    // A memory nobody recorded is still refused.
+    expect(unsupportedImport(wasix)).toContain('threaded');
+  });
+
+  it('refuses wasip1-threads, Emscripten glue imports and reactors, saying which', () => {
     expect(unsupportedImport(module([['env', 'memory', 'memory']], ['_start']))).toContain(
       'threaded'
     );

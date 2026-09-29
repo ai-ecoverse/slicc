@@ -31,7 +31,7 @@ import {
   WHENCE,
   wasiErrnoOf,
 } from './wasi-abi.js';
-import { deviceOf, WasiFds, type WasiKernel } from './wasi-fds.js';
+import { deviceOf, WasiFds, type WasiForkFd, type WasiKernel } from './wasi-fds.js';
 import {
   type DirListing,
   normalize,
@@ -56,14 +56,18 @@ export interface WasiHostOptions {
   env: Readonly<Record<string, string>>;
   cwd: string;
   pid: number;
+  /** Its parent's pid (getppid); absent: 1. */
+  ppid?: number;
   kernel: WasiKernel;
   fs: SyncFsPosixBridge;
   /** Kernel fds beyond 0-2 the process starts with, and how the kernel backs them. */
   inherited?: ReadonlyArray<{ fd: number; kind?: KernelFdKind; flags?: number }>;
+  /** A forked child: its parent's table (the kernel copied the numbers), instead of a fresh one. */
+  forked?: { fds: readonly WasiForkFd[]; cloexec: readonly number[] };
 }
 
 /** An import: numbers in, an errno out (or nothing). */
-type WasiFunction = (...args: never[]) => number | undefined;
+export type WasiFunction = (...args: never[]) => number | undefined;
 
 const NS_PER_MS = 1_000_000n;
 /** The largest read one syscall serves (the kernel's own cap). */
@@ -115,10 +119,14 @@ export class WasiHost {
   private cache: Record<string, WasiFunction> | undefined;
   /** The sockets the process inherited, where the preopens left them. */
   private readonly listening: number[];
+  /** The working directory (WASIX chdir moves it; preview1 has none of its own). */
+  cwd: string;
 
-  constructor(private readonly o: WasiHostOptions) {
+  constructor(readonly o: WasiHostOptions) {
+    this.cwd = o.cwd;
     this.fds = new WasiFds(o.kernel, o.fs);
-    this.fds.setup(o.cwd, o.inherited ?? []);
+    if (o.forked) this.fds.restore(o.forked.fds, o.forked.cloexec);
+    else this.fds.setup(o.cwd, o.inherited ?? []);
     this.listening = this.fds.sockets();
   }
 
@@ -152,7 +160,7 @@ export class WasiHost {
     // Go's wasip1 runtime takes its working directory from $PWD; the
     // inherited sockets moved above the preopens, and $SLICC_LISTEN_FDS says where.
     const listen = this.listening.length > 0 ? { SLICC_LISTEN_FDS: this.listening.join(' ') } : {};
-    const env = { PWD: this.o.cwd, ...this.o.env, ...listen };
+    const env = { PWD: this.cwd, ...this.o.env, ...listen };
     return Object.entries(env).map(([k, v]) => `${k}=${v}`);
   }
 
@@ -632,7 +640,7 @@ function direntRecord(next: number, ino: bigint, name: string, filetype: number)
  * `code` (the kernel's, the bridge's, the host's own) is that errno; a
  * RangeError (an address outside memory) is EFAULT. `proc_exit` unwinds.
  */
-function wrap(table: Record<string, WasiFunction>): Record<string, WasiFunction> {
+export function wrap(table: Record<string, WasiFunction>): Record<string, WasiFunction> {
   const out: Record<string, WasiFunction> = {};
   for (const [name, fn] of Object.entries(table)) {
     out[name] = (...args: never[]) => {
