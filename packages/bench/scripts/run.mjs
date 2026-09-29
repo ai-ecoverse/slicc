@@ -25,6 +25,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createLeader } from './executors.mjs';
 import {
@@ -140,7 +141,7 @@ export function parseCli(argv) {
     models,
     skills: list(values.skills).map(parseSkillsCondition),
     repeats,
-    taskIds: values.tasks ? list(values.tasks) : null,
+    taskIds: values.tasks ? resolveTaskIds(list(values.tasks)) : null,
     limit: values.limit ? Number.parseInt(values.limit, 10) : null,
     shard,
     timeout,
@@ -236,6 +237,35 @@ export function shardRuns(runs, shard) {
   return runs.filter(
     (r) => order.get(`${r.set.benchmark}\u0000${r.task.id}`) % shard.count === shard.index - 1
   );
+}
+
+/** Named task subsets (`--tasks @bu-v2-explore-20`): task ids only, never task text. */
+export const SUBSETS_DIR = fileURLToPath(new URL('../tasks/subsets/', import.meta.url));
+
+/**
+ * Expand `@name` entries to the ids in `tasks/subsets/<name>.json`, keeping plain ids and the
+ * order given, without duplicates. An unknown subset fails with the ones that exist.
+ */
+export function resolveTaskIds(entries, dir = SUBSETS_DIR) {
+  const out = [];
+  for (const e of entries) {
+    if (!e.startsWith('@')) {
+      out.push(e);
+      continue;
+    }
+    const name = e.slice(1);
+    const file = join(dir, `${name}.json`);
+    if (!/^[\w.-]+$/.test(name) || !existsSync(file)) {
+      const known = existsSync(dir)
+        ? readdirSync(dir)
+            .filter((f) => f.endsWith('.json'))
+            .map((f) => `@${f.slice(0, -5)}`)
+        : [];
+      throw new Error(`unknown task subset ${e} (known: ${known.join(', ') || 'none'})`);
+    }
+    out.push(...JSON.parse(readFileSync(file, 'utf8')).tasks);
+  }
+  return [...new Set(out)];
 }
 
 export function selectTasks(tasks, { taskIds, limit }) {

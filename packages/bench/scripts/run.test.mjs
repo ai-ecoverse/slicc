@@ -16,8 +16,10 @@ import {
   planRuns,
   readTrace,
   recordPath,
+  resolveTaskIds,
   resumeAction,
   runConfig,
+  SUBSETS_DIR,
   selectTasks,
   shardRuns,
   tracePath,
@@ -384,6 +386,33 @@ describe('main', () => {
     expect(await main([...args, '--limit', '1', '--plan'], { log: vi.fn() })).toBe(0);
     expect(out.mock.calls.map((c) => c[0])).toEqual(['Own\tbuiltin\tm\tr1\town-1']);
     out.mockRestore();
+  });
+
+  it('expands @subset task names and rejects unknown ones', () => {
+    const dir = tmp();
+    writeFileSync(
+      join(dir, 'mini.json'),
+      JSON.stringify({ set: 'Own', tasks: ['own-2', 'own-1'] })
+    );
+    expect(resolveTaskIds(['@mini', 'own-3', 'own-1'], dir)).toEqual(['own-2', 'own-1', 'own-3']);
+    expect(() => resolveTaskIds(['@nope'], dir)).toThrow(
+      /unknown task subset @nope \(known: @mini\)/
+    );
+    expect(() => resolveTaskIds(['@../x'], dir)).toThrow(/unknown task subset/);
+  });
+
+  it('ships nested BU V2.1 explore subsets: 40 contains 20', () => {
+    const read = (n) => JSON.parse(readFileSync(join(SUBSETS_DIR, `${n}.json`), 'utf8'));
+    const e20 = read('bu-v2-explore-20');
+    const e40 = read('bu-v2-explore-40');
+    expect(e20.tasks).toHaveLength(20);
+    expect(e40.tasks).toHaveLength(40);
+    expect(e20.tasks.every((t) => e40.tasks.includes(t))).toBe(true);
+    expect(new Set(e40.tasks).size).toBe(40);
+    for (const t of e40.tasks) expect(t).toMatch(/^bu2-\d{3}$/);
+    // Tasks with no signal stay out.
+    for (const t of e40.source.excluded_no_signal) expect(e40.tasks).not.toContain(t);
+    expect(resolveTaskIds(['@bu-v2-explore-20'])).toEqual(e20.tasks);
   });
 
   it('prints the plan without touching a leader', async () => {

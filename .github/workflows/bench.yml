@@ -55,7 +55,7 @@ on:
         description: 'Runs per task, model and skills condition'
         default: '1'
       tasks:
-        description: 'Only these task ids, comma-separated (empty: all)'
+        description: 'Only these task ids, comma-separated, or @name for a subset in packages/bench/tasks/subsets (e.g. @bu-v2-explore-20); empty: all'
         default: ''
       limit:
         description: 'Only the first N tasks of each set (empty: all)'
