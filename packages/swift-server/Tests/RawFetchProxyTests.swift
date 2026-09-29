@@ -548,61 +548,6 @@ final class RawFetchProxyTests: XCTestCase {
         }
     }
 
-    /// A refusal answered before the upload is read must not leave that
-    /// upload on a kept-alive connection, or the next request on it parses
-    /// the leftover bytes as its request line. The live test client keeps
-    /// one connection, so the probe below rides the refused request's.
-    func testARefusalBeforeTheUploadIsReadKeepsTheConnectionUsable() async throws {
-        let injector = SecretInjector(secrets: [
-            .init(name: "GITHUB_TOKEN", realValue: Self.token, maskedValue: Self.masked, domains: ["api.github.com"])
-        ])
-        let rawClient = RawFetchProxy.makeHTTPClient()
-        let defaultClient = HTTPClient(eventLoopGroupProvider: .singleton)
-        let router = Router()
-        registerAPIRoutes(
-            router: router,
-            lickSystem: LickSystem(),
-            config: .forTests(),
-            httpClient: defaultClient,
-            secretInjector: injector,
-            rawFetchHTTPClient: rawClient
-        )
-        let refusals: [(String, HTTPResponse.Status)] = [
-            (#"{"url":"https://evil.test/","method":"POST","headers":[["Authorization","Bearer \#(Self.masked)"]]}"#, .forbidden),
-            (#"{"url":"https://e.test/","method":"POST","headers":[["bad name","x"]]}"#, .badRequest),
-            (#"{"url":1}"#, .badRequest),
-        ]
-        do {
-            try await Application(responder: router.buildResponder()).test(.live) { client in
-                for (head, status) in refusals {
-                    let body = ByteBuffer(string: "GET /api/agent-activity HTTP/1.1\r\nHost: x\r\n\r\n")
-                    try await client.execute(
-                        uri: "/api/fetch-proxy",
-                        method: .post,
-                        headers: [HTTPField.Name(RawFetchProtocol.requestHeader)!: head, .contentType: "text/plain"],
-                        body: body
-                    ) { response in
-                        XCTAssertEqual(response.status, status, head)
-                    }
-                    try await client.execute(
-                        uri: "/api/fetch-proxy",
-                        method: .post,
-                        headers: [HTTPField.Name(RawFetchProtocol.probeHeader)!: "1"]
-                    ) { response in
-                        XCTAssertEqual(response.status, .ok, "request after \(head)")
-                        XCTAssertTrue(String(buffer: response.body).contains("rawFetch"), "request after \(head)")
-                    }
-                }
-            }
-        } catch {
-            try? await rawClient.shutdown()
-            try? await defaultClient.shutdown()
-            throw error
-        }
-        try await rawClient.shutdown()
-        try await defaultClient.shutdown()
-    }
-
     // MARK: - Streaming
 
     private final class Gate: @unchecked Sendable {
@@ -724,6 +669,61 @@ final class RawFetchProxyTests: XCTestCase {
 }
 
 extension RawFetchProxyTests {
+    /// A refusal answered before the upload is read must not leave that
+    /// upload on a kept-alive connection, or the next request on it parses
+    /// the leftover bytes as its request line. The live test client keeps
+    /// one connection, so the probe below rides the refused request's.
+    func testARefusalBeforeTheUploadIsReadKeepsTheConnectionUsable() async throws {
+        let injector = SecretInjector(secrets: [
+            .init(name: "GITHUB_TOKEN", realValue: Self.token, maskedValue: Self.masked, domains: ["api.github.com"])
+        ])
+        let rawClient = RawFetchProxy.makeHTTPClient()
+        let defaultClient = HTTPClient(eventLoopGroupProvider: .singleton)
+        let router = Router()
+        registerAPIRoutes(
+            router: router,
+            lickSystem: LickSystem(),
+            config: .forTests(),
+            httpClient: defaultClient,
+            secretInjector: injector,
+            rawFetchHTTPClient: rawClient
+        )
+        let refusals: [(String, HTTPResponse.Status)] = [
+            (#"{"url":"https://evil.test/","method":"POST","headers":[["Authorization","Bearer \#(Self.masked)"]]}"#, .forbidden),
+            (#"{"url":"https://e.test/","method":"POST","headers":[["bad name","x"]]}"#, .badRequest),
+            (#"{"url":1}"#, .badRequest),
+        ]
+        do {
+            try await Application(responder: router.buildResponder()).test(.live) { client in
+                for (head, status) in refusals {
+                    let body = ByteBuffer(string: "GET /api/agent-activity HTTP/1.1\r\nHost: x\r\n\r\n")
+                    try await client.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .post,
+                        headers: [HTTPField.Name(RawFetchProtocol.requestHeader)!: head, .contentType: "text/plain"],
+                        body: body
+                    ) { response in
+                        XCTAssertEqual(response.status, status, head)
+                    }
+                    try await client.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .post,
+                        headers: [HTTPField.Name(RawFetchProtocol.probeHeader)!: "1"]
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok, "request after \(head)")
+                        XCTAssertTrue(String(buffer: response.body).contains("rawFetch"), "request after \(head)")
+                    }
+                }
+            }
+        } catch {
+            try? await rawClient.shutdown()
+            try? await defaultClient.shutdown()
+            throw error
+        }
+        try await rawClient.shutdown()
+        try await defaultClient.shutdown()
+    }
+
     /// The webapp's `decodeRawResponseFrame`, for reading answers back.
     fileprivate static func decodeFrame(_ bytes: [UInt8]) -> (RawFetchResponseHead, [UInt8])? {
         guard bytes.count >= 4 else { return nil }
