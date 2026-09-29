@@ -21,13 +21,23 @@ export const GIT_CREDENTIAL_HELPER = 'git-credential-slicc';
 
 /**
  * Commands that are another command's plumbing, by the command whose policy
- * they share: native git runs `git-credential-slicc` for every authenticated
- * request, so it is allowed exactly when `git` is and never asks for an
- * approval of its own (the git call that runs it went through the gate). It
- * widens nothing: it only ever prints masks the agent can already see, each
- * only to a host its domains cover.
+ * they share: allowed exactly when that command is, and never asking for an
+ * approval of their own (the call that runs them went through the gate).
+ * Native git runs `git-credential-slicc` for every authenticated request (it
+ * only ever prints masks the agent can already see, each only to a host its
+ * domains cover), `git-upload-pack` / `git-receive-pack` for a local clone,
+ * fetch or push, and `git-remote-http(s)` for an HTTP(S) remote: each serves
+ * that git call and nothing else. (`git-shell`, and the `ext::` transport's
+ * commands, are no plumbing: they run what they are told to.)
  */
-export const PLUMBING: ReadonlyMap<string, string> = new Map([[GIT_CREDENTIAL_HELPER, 'git']]);
+export const PLUMBING: ReadonlyMap<string, string> = new Map([
+  [GIT_CREDENTIAL_HELPER, 'git'],
+  ['git-upload-pack', 'git'],
+  ['git-receive-pack', 'git'],
+  ['git-upload-archive', 'git'],
+  ['git-remote-http', 'git'],
+  ['git-remote-https', 'git'],
+]);
 
 /** Where SLICC's GitHub token counts when nothing narrower is known about it. */
 export const GITHUB_DOMAINS = ['github.com', '*.github.com'];

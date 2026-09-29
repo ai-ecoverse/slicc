@@ -118,6 +118,45 @@ describe('WasmSession', () => {
     spawn.mockReset();
   });
 
+  it("runs a glue copy without its own module as its package's program (git's dashed builtins)", async () => {
+    const GIT = '/shared/lib/node_modules/@ai-ecoverse/wasm-git';
+    // libexec/git-core/git-upload-pack is bin/git's glue, byte for byte: it
+    // loads "git.wasm", which sits next to bin/git, not next to it.
+    const glue = 'var Module;function findWasmBinary(){return locateFile("git.wasm")}';
+    const files = {
+      [`${GIT}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-git',
+        slicc: {
+          env: { GIT_EXEC_PATH: 'libexec/git-core' },
+          commands: { git: { glue: 'bin/git', wasm: 'bin/git.wasm' } },
+        },
+      }),
+      [`${GIT}/bin/git`]: glue,
+      [`${GIT}/bin/git.wasm`]: 'W',
+      [`${GIT}/libexec/git-core/git-upload-pack`]: glue,
+      [`${GIT}/libexec/git-core/git-lost`]: 'var Module;locateFile("lost.wasm")',
+      // Another package's glue does not borrow git's module.
+      [`${PKG}/package.json`]: installed[`${PKG}/package.json`],
+      [`${PKG}/bin/other`]: glue,
+    };
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    const target = await session.resolve(
+      `${GIT}/libexec/git-core/git-upload-pack`,
+      'git-upload-pack',
+      '/w'
+    );
+    expect(target).toMatchObject({
+      glue: `${GIT}/bin/git`,
+      module: `${GIT}/bin/git.wasm`,
+      argv0: 'git-upload-pack', // git runs a dashed builtin by its argv[0]
+    });
+    expect(target?.defaults?.GIT_EXEC_PATH).toBe(`${GIT}/libexec/git-core`);
+    expect(
+      await session.resolve(`${GIT}/libexec/git-core/git-lost`, 'git-lost', '/w')
+    ).toBeUndefined();
+    expect(await session.resolve(`${PKG}/bin/other`, 'other', '/w')).toBeUndefined();
+  });
+
   it('resolves installed names and paths with a module; nothing else', async () => {
     const session = new WasmSession(ctx(installed), undefined, () => {});
     expect(await session.resolve('tac', 'tac', '/w')).toEqual({
@@ -306,6 +345,34 @@ describe('WasmSession', () => {
       MODE: 'mine',
       A: '1',
     });
+  });
+
+  it("keeps the realm's git system config over a package's GIT_CONFIG_NOSYSTEM default", async () => {
+    fakeProcesses();
+    const files = {
+      ...installed,
+      [`${PKG}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-gnu',
+        slicc: {
+          env: { GIT_CONFIG_NOSYSTEM: '1' },
+          commands: { tac: { glue: 'bin/core', wasm: 'bin/core.wasm', argv0: 'tac' } },
+        },
+      }),
+    };
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    const target = await session.resolve('tac', 'tac', '/w');
+    const launch = (env: Record<string, string>) =>
+      session.launch({ ...target!, args: [], env, cwd: '/w', fds: stdio() });
+    const realm = { GIT_CONFIG_SYSTEM: '/home/u/.config/slicc/gitconfig' };
+    // The credential helper and SLICC's identity live in that file.
+    await launch(realm);
+    expect(spawn.mock.calls.at(-1)![0].env).toEqual(realm);
+    // Another system config, or none from the realm: the package's default holds.
+    await launch({ GIT_CONFIG_SYSTEM: '/etc/mine' });
+    expect(spawn.mock.calls.at(-1)![0].env.GIT_CONFIG_NOSYSTEM).toBe('1');
+    // An exported GIT_CONFIG_NOSYSTEM always wins.
+    await launch({ ...realm, GIT_CONFIG_NOSYSTEM: '1' });
+    expect(spawn.mock.calls.at(-1)![0].env.GIT_CONFIG_NOSYSTEM).toBe('1');
   });
 
   it('starts a wasm child as a process parented to its spawner', async () => {

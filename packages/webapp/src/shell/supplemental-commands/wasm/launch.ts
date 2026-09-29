@@ -25,7 +25,10 @@ import {
 import { type FdTable, KernelError, type OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
 import { JobTable } from '../../../kernel/wasm-realm/jobs.js';
-import { enableRealmNetwork } from '../../../kernel/wasm-realm/net/realm-network.js';
+import {
+  enableRealmNetwork,
+  isRealmDefault,
+} from '../../../kernel/wasm-realm/net/realm-network.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
 import { type LoopbackNet, loopbackNet, ownerKey } from '../../../kernel/wasm-realm/socket.js';
@@ -56,6 +59,25 @@ export const SECRET_FUNCTION =
  * process is bash (as `bash` or `sh`): every one, the command's own or one a
  * program starts (make's recipe shell), unless its environment has one.
  */
+/**
+ * A command's environment defaults under the caller's environment, which wins.
+ * A package's `GIT_CONFIG_NOSYSTEM` would also switch off the system config
+ * the realm points git at (its credential helper and SLICC's identity), so
+ * it does not apply over that one; exported, it does.
+ */
+function withDefaults(
+  defaults: Readonly<Record<string, string>> | undefined,
+  env: Record<string, string>
+): Record<string, string> {
+  if (!defaults) return env;
+  const realmGitConfig =
+    env.GIT_CONFIG_SYSTEM !== undefined &&
+    isRealmDefault('GIT_CONFIG_SYSTEM', env.GIT_CONFIG_SYSTEM);
+  if (!realmGitConfig || !('GIT_CONFIG_NOSYSTEM' in defaults)) return { ...defaults, ...env };
+  const { GIT_CONFIG_NOSYSTEM: _off, ...rest } = defaults;
+  return { ...rest, ...env };
+}
+
 function withSecretFunction(argv0: string, env: Record<string, string>): Record<string, string> {
   if (!/^(ba)?sh$/.test(baseName(argv0)) || SECRET_FUNCTION_ENV in env) return env;
   return { ...env, [SECRET_FUNCTION_ENV]: SECRET_FUNCTION };
@@ -71,6 +93,12 @@ const SIGNAL_NAME = new Map(
 
 /** A path into the shell's command registry: `/usr/bin/<name>` or its alias `/bin/<name>`. */
 const REGISTRY_PATH = /^\/(?:usr\/)?bin\/([^/]+)$/;
+
+/** The installed package a path lies in (`…/node_modules/[@scope/]name`). */
+const PACKAGE_ROOT = /^(.*\/node_modules\/(?:@[^/]+\/)?[^/]+)\//;
+
+/** The module an Emscripten glue loads (`locateFile("x.wasm")`). */
+const LOCATED_MODULE = /locateFile\(\s*["']([^"'/]+\.wasm)["']\s*\)/;
 
 /** How much of a script its `#!` line may take (Linux: 256 bytes). */
 const SHEBANG_MAX = 256;
@@ -284,10 +312,7 @@ export class WasmSession {
       await req.fds.closeAll();
       throw e;
     }
-    const env = withSecretFunction(
-      req.argv0,
-      req.defaults ? { ...req.defaults, ...req.env } : req.env
-    );
+    const env = withSecretFunction(req.argv0, withDefaults(req.defaults, req.env));
     return this.start({ ...req, env, program: { glue, module } });
   }
 
@@ -413,9 +438,41 @@ export class WasmSession {
       return bash && { glue: bash.glue, module: bash.wasm, argv0: 'sh', defaults: bash.env };
     }
     const glue = this.ctx.fs.resolvePath(cwd, file);
+    if (!(await this.ctx.fs.exists(glue))) return undefined;
     const module = modulePath(glue);
-    if (!(await this.ctx.fs.exists(glue)) || !(await this.ctx.fs.exists(module))) return undefined;
-    return { glue, module, argv0: baseName(argv0 || file) };
+    if (await this.ctx.fs.exists(module)) return { glue, module, argv0: baseName(argv0 || file) };
+    return this.packagedCopy(glue, argv0 || file);
+  }
+
+  /**
+   * A glue without a module of its own that is a copy of one of its
+   * package's programs runs that program, under its own name: wasm-git's
+   * `libexec/git-core/git-upload-pack` is `bin/git`'s glue (it locates
+   * `git.wasm`, which sits next to `bin/git`), and git runs a dashed builtin
+   * by its argv[0]. Anything else stays no wasm program.
+   */
+  private async packagedCopy(glue: string, argv0: string): Promise<WasmTarget | undefined> {
+    const root = PACKAGE_ROOT.exec(glue)?.[1];
+    if (root === undefined) return undefined;
+    let text: string;
+    try {
+      text = await this.ctx.fs.readFile(glue);
+    } catch {
+      return undefined;
+    }
+    const located = LOCATED_MODULE.exec(text)?.[1];
+    if (located === undefined) return undefined;
+    for (const command of (await this.commands()).values()) {
+      if (command.wasm.startsWith(`${root}/`) && command.wasm.endsWith(`/${located}`)) {
+        return {
+          glue: command.glue,
+          module: command.wasm,
+          argv0: baseName(argv0),
+          defaults: command.env,
+        };
+      }
+    }
+    return undefined;
   }
 
   /** fork(2) of process `ppid`: the same program, resumed from the parent's state. */
