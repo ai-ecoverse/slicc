@@ -58,6 +58,8 @@ export interface SpawnWasmOptions {
 
   fork?: ForkState;
 
+  ppid?: number;
+
   kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
 
   jobs?: JobTable;
@@ -184,6 +186,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     env: opts.env,
     cwd: opts.cwd,
     sab,
+    ...(opts.ppid !== undefined ? { ppid: opts.ppid } : {}),
     ...(opts.fork ? { fork: opts.fork } : { fds: inheritedFds(opts.fds) }),
   };
 

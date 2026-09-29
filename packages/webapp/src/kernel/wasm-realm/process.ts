@@ -52,8 +52,18 @@ export type WasmSyscall =
   | { op: 'fd-select'; read: number[]; write: number[]; timeoutMs: number }
   | { op: 'fd-info'; fd: number }
   | { op: 'fd-dup'; fd: number; min?: number }
-  | { op: 'fd-reserve'; fd?: number }
-  | { op: 'fd-renumber'; from: number; to: number }
+  | { op: 'fd-reserve'; fd?: number; min?: number }
+  | { op: 'fd-renumber'; from: number; to: number; keep?: boolean }
+  | {
+      op: 'fd-promote';
+      fd: number;
+      share?: number;
+      path?: string;
+      flags?: number;
+      position?: number;
+      contents?: Uint8Array;
+      orphan?: boolean;
+    }
   | { op: 'fd-open-tty' }
   | { op: 'tty-get'; fd: number }
   | { op: 'tty-set'; fd: number; termios: Termios }
@@ -133,6 +143,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-dup',
   'fd-reserve',
   'fd-renumber',
+  'fd-promote',
   'fd-open-tty',
   'tty-get',
   'tty-set',
@@ -365,11 +376,14 @@ export class WasmProcess {
       case 'fd-dup':
         return { ok: true, kind: 'json', json: this.fds.dup(req.fd, req.min ?? 3) };
       case 'fd-reserve':
-        return { ok: true, kind: 'json', json: this.reserve(req.fd) };
+        return { ok: true, kind: 'json', json: this.reserve(req.fd, req.min) };
+      case 'fd-promote':
+        this.promote(req);
+        return { ok: true, kind: 'void' };
       case 'fd-renumber':
         if (req.from !== req.to) {
           this.fds.dup2(req.from, req.to);
-          await Promise.resolve(this.fds.close(req.from));
+          if (!req.keep) await Promise.resolve(this.fds.close(req.from));
         }
         return { ok: true, kind: 'void' };
       case 'fd-open-tty': {
@@ -396,8 +410,25 @@ export class WasmProcess {
     }
   }
 
-  private reserve(fd: number | undefined): number {
-    if (fd === undefined) return this.fds.install(heldFile(), 3);
+  private promote(req: Extract<WasmSyscall, { op: 'fd-promote' }>): void {
+    if (!this.fds.get(req.fd).file.held) throw new KernelError('EBADF');
+    if (req.share !== undefined) {
+      this.fds.dup2(req.share, req.fd);
+      return;
+    }
+    if (!this.options.fs || req.path === undefined) throw new KernelError('EINVAL');
+    const file = vfsFile(this.options.fs, {
+      path: req.path,
+      flags: req.flags ?? 0,
+      position: req.position ?? 0,
+      ...(req.contents !== undefined ? { contents: req.contents } : {}),
+      ...(req.orphan ? { orphan: true } : {}),
+    });
+    this.fds.installAt(req.fd, file);
+  }
+
+  private reserve(fd: number | undefined, min = 3): number {
+    if (fd === undefined) return this.fds.install(heldFile(), Math.max(3, min));
     if (this.fds.has(fd)) throw new KernelError('EBADF');
     this.fds.installAt(fd, heldFile());
     return fd;

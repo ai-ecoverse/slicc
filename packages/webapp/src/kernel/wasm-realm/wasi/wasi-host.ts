@@ -16,7 +16,7 @@ import {
   WHENCE,
   wasiErrnoOf,
 } from './wasi-abi.js';
-import { deviceOf, WasiFds, type WasiKernel } from './wasi-fds.js';
+import { deviceOf, WasiFds, type WasiForkFd, type WasiKernel } from './wasi-fds.js';
 import {
   type DirListing,
   normalize,
@@ -39,13 +39,17 @@ export interface WasiHostOptions {
   env: Readonly<Record<string, string>>;
   cwd: string;
   pid: number;
+
+  ppid?: number;
   kernel: WasiKernel;
   fs: SyncFsPosixBridge;
 
   inherited?: ReadonlyArray<{ fd: number; kind?: KernelFdKind; flags?: number }>;
+
+  forked?: { fds: readonly WasiForkFd[]; cloexec: readonly number[] };
 }
 
-type WasiFunction = (...args: never[]) => number | undefined;
+export type WasiFunction = (...args: never[]) => number | undefined;
 
 const NS_PER_MS = 1_000_000n;
 
@@ -96,9 +100,13 @@ export class WasiHost {
 
   private readonly listening: number[];
 
-  constructor(private readonly o: WasiHostOptions) {
+  cwd: string;
+
+  constructor(readonly o: WasiHostOptions) {
+    this.cwd = o.cwd;
     this.fds = new WasiFds(o.kernel, o.fs);
-    this.fds.setup(o.cwd, o.inherited ?? []);
+    if (o.forked) this.fds.restore(o.forked.fds, o.forked.cloexec);
+    else this.fds.setup(o.cwd, o.inherited ?? []);
     this.listening = this.fds.sockets();
   }
 
@@ -128,7 +136,7 @@ export class WasiHost {
 
   private environ(): string[] {
     const listen = this.listening.length > 0 ? { SLICC_LISTEN_FDS: this.listening.join(' ') } : {};
-    const env = { PWD: this.o.cwd, ...this.o.env, ...listen };
+    const env = { PWD: this.cwd, ...this.o.env, ...listen };
     return Object.entries(env).map(([k, v]) => `${k}=${v}`);
   }
 
@@ -576,7 +584,7 @@ function direntRecord(next: number, ino: bigint, name: string, filetype: number)
   return record;
 }
 
-function wrap(table: Record<string, WasiFunction>): Record<string, WasiFunction> {
+export function wrap(table: Record<string, WasiFunction>): Record<string, WasiFunction> {
   const out: Record<string, WasiFunction> = {};
   for (const [name, fn] of Object.entries(table)) {
     out[name] = (...args: never[]) => {

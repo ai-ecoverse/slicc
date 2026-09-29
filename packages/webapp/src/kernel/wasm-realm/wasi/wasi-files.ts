@@ -79,6 +79,14 @@ export class FileBuffer {
     this.orphaned = true;
   }
 
+  isOrphan(): boolean {
+    return this.orphaned;
+  }
+
+  contents(): Uint8Array {
+    return this.load().slice(0, this.length);
+  }
+
   flush(): void {
     if (this.orphaned || !this.dirty || !this.data) return;
     this.fs.writeFile(this.path, this.data.slice(0, this.length));

@@ -21,7 +21,18 @@ export class WasiMemory {
   }
 
   string(ptr: number, len: number): string {
-    return decoder.decode(this.bytes(ptr, len));
+    return decoder.decode(this.bytes(ptr, len).slice());
+  }
+
+  cString(ptr: number): string {
+    const bytes = new Uint8Array(this.buffer());
+    let end = ptr;
+    while (end < bytes.length && bytes[end] !== 0) end++;
+    return decoder.decode(bytes.slice(ptr, end));
+  }
+
+  size(): number {
+    return this.buffer().byteLength;
   }
 
   iovecs(ptr: number, count: number): Array<[number, number]> {

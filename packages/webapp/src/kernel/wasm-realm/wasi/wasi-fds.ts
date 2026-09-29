@@ -21,6 +21,14 @@ export interface WasiKernel {
 type Device = 'null' | 'zero' | 'urandom';
 
 const O_NONBLOCK = 0o4000;
+const O_WRONLY = 0o1;
+const O_RDWR = 0o2;
+const O_APPEND = 0o2000;
+
+export type WasiForkFd =
+  | { fd: number; type: 'kernel'; nonblock: boolean; append: boolean }
+  | { fd: number; type: 'dir'; path: string; preopen?: string }
+  | { fd: number; type: 'device'; device: 'null' | 'zero' | 'urandom' };
 
 const DEVICES: Readonly<Record<string, Device>> = {
   '/dev/null': 'null',
@@ -135,27 +143,131 @@ export class WasiFds {
     return this.table.values();
   }
 
-  private install(e: WasiEntry): number {
-    const fd = this.kernel.call({ op: 'fd-reserve' }) as number;
+  private install(e: WasiEntry, min = 3): number {
+    const fd = this.kernel.call({ op: 'fd-reserve', ...(min > 3 ? { min } : {}) }) as number;
     this.table.set(fd, e);
     return fd;
+  }
+
+  readonly cloexec = new Set<number>();
+
+  implicitCloexec = false;
+
+  dup(fd: number, min: number, cloexec: boolean): number {
+    const e = this.get(fd);
+    let at: number;
+    if (e.type === 'kernel') {
+      at = this.kernel.call({ op: 'fd-dup', fd, min: Math.max(3, min) }) as number;
+      this.table.set(at, { ...e });
+    } else {
+      if (e.type === 'file') e.file.refs++;
+      at = this.install(e.type === 'file' ? e : { ...e }, min);
+    }
+    if (cloexec) this.cloexec.add(at);
+    return at;
+  }
+
+  pipe(): [number, number] {
+    const [r, w] = this.kernel.sys.pipe();
+    this.table.set(r, { type: 'kernel', kind: 'stream', nonblock: false, append: false });
+    this.table.set(w, { type: 'kernel', kind: 'stream', nonblock: false, append: false });
+    return [r, w];
+  }
+
+  chdir(path: string): void {
+    const dot = this.table.get(3);
+    if (dot?.type === 'dir' && dot.preopen === '.') dot.path = path;
+  }
+
+  promoteFiles(): void {
+    const promoted = new Map<LocalFile, number>();
+    for (const [fd, e] of [...this.table]) {
+      if (e.type !== 'file') continue;
+      const first = promoted.get(e.file);
+      if (first !== undefined) {
+        this.kernel.call({ op: 'fd-promote', fd, share: first });
+      } else {
+        const f = e.file;
+        this.kernel.call({
+          op: 'fd-promote',
+          fd,
+          path: f.path,
+          flags: (f.writable ? (f.readable ? O_RDWR : O_WRONLY) : 0) | (f.append ? O_APPEND : 0),
+          position: f.offset,
+          contents: f.buffer.contents(),
+          ...(f.buffer.isOrphan() ? { orphan: true } : {}),
+        });
+        promoted.set(f, fd);
+      }
+      this.table.set(fd, { type: 'kernel', kind: 'file', nonblock: false, append: e.file.append });
+    }
+    for (const file of promoted.keys()) {
+      if (--file.buffer.opens <= 0) this.buffers.delete(file.path);
+    }
+  }
+
+  snapshot(): WasiForkFd[] {
+    const out: WasiForkFd[] = [];
+    for (const [fd, e] of this.table) {
+      if (e.type === 'kernel')
+        out.push({ fd, type: 'kernel', nonblock: e.nonblock, append: e.append });
+      else if (e.type === 'dir')
+        out.push({ fd, type: 'dir', path: e.path, ...(e.preopen ? { preopen: e.preopen } : {}) });
+      else if (e.type === 'device') out.push({ fd, type: 'device', device: e.device });
+    }
+    return out;
+  }
+
+  restore(fds: readonly WasiForkFd[], cloexec: readonly number[]): void {
+    this.table.clear();
+    for (const f of fds) {
+      if (f.type === 'kernel')
+        this.table.set(f.fd, { type: 'kernel', nonblock: f.nonblock, append: f.append });
+      else if (f.type === 'dir')
+        this.table.set(f.fd, {
+          type: 'dir',
+          path: f.path,
+          ...(f.preopen ? { preopen: f.preopen } : {}),
+        });
+      else this.table.set(f.fd, { type: 'device', device: f.device });
+    }
+    for (const fd of cloexec) this.cloexec.add(fd);
+  }
+
+  inheritable(): Map<number, number> {
+    const out = new Map<number, number>();
+    for (const [fd, e] of this.table) {
+      if (e.type !== 'kernel' || this.cloexec.has(fd)) continue;
+      if (this.implicitCloexec && fd > 2) continue;
+      out.set(fd, fd);
+    }
+    return out;
   }
 
   close(fd: number): void {
     const e = this.get(fd);
     this.table.delete(fd);
+    this.cloexec.delete(fd);
     this.kernel.sys.close(fd);
     this.release(e);
   }
 
-  renumber(from: number, to: number): void {
+  renumber(from: number, to: number, keep = false): void {
     const e = this.get(from);
-    const old = this.get(to);
+
+    const old = keep ? this.table.get(to) : this.get(to);
     if (from === to) return;
-    this.kernel.call({ op: 'fd-renumber', from, to });
-    this.table.delete(from);
-    this.table.set(to, e);
-    this.release(old);
+    this.kernel.call({ op: 'fd-renumber', from, to, ...(keep ? { keep } : {}) });
+    this.cloexec.delete(to);
+    if (keep) {
+      if (e.type === 'file') e.file.refs++;
+      this.table.set(to, e.type === 'file' ? e : { ...e });
+    } else {
+      this.table.delete(from);
+      this.table.set(to, e);
+      if (this.cloexec.delete(from)) this.cloexec.add(to);
+    }
+    if (old) this.release(old);
   }
 
   private release(e: WasiEntry): void {

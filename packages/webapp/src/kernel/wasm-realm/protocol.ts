@@ -1,4 +1,6 @@
 import type { KernelFdKind } from './fd-table.js';
+import type { ImportedMemory } from './wasi/wasi-module.js';
+import type { WasiForkState } from './wasi/wasix-fork.js';
 
 export const WASM_PROCESS_INIT = 'wasm-process-init';
 export const WASM_PROCESS_EXIT = 'wasm-process-exit';
@@ -10,6 +12,8 @@ export interface WasmProgram {
   glue: string;
 
   module: WebAssembly.Module;
+
+  memory?: ImportedMemory;
 }
 
 export interface ForkState {
@@ -25,6 +29,8 @@ export interface ForkState {
   streams?: ForkStream[];
 
   cwd?: string;
+
+  wasi?: WasiForkState;
 }
 
 export interface KernelStreamEntry {
@@ -61,6 +67,8 @@ export interface WasmProcessInitMsg {
   cwd: string;
 
   sab: SharedArrayBuffer;
+
+  ppid?: number;
 
   fork?: ForkState;
 

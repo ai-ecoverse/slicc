@@ -23,6 +23,10 @@ import {
   type SockAddr,
 } from '../../../kernel/wasm-realm/socket.js';
 import type { KernelTty } from '../../../kernel/wasm-realm/tty.js';
+import {
+  type ImportedMemory,
+  importedMemory,
+} from '../../../kernel/wasm-realm/wasi/wasi-module.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
 import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
@@ -52,6 +56,8 @@ function withSecretFunction(argv0: string, env: Record<string, string>): Record<
 }
 
 const modules = new Map<string, Promise<WebAssembly.Module>>();
+
+const memories = new Map<string, ImportedMemory | undefined>();
 
 const SIGNAL_NAME = new Map(
   Object.entries(SIGNAL_BY_NAME).map(([name, sig]) => [sig, name as keyof typeof SIGNAL_BY_NAME])
@@ -155,6 +161,24 @@ async function loadModule(ctx: CommandContext, path: string): Promise<WebAssembl
   );
 }
 
+function cacheWasi(key: string, bytes: Uint8Array): Promise<WebAssembly.Module> {
+  memories.set(key, importedMemory(bytes));
+  return cache(key, compileWasmModule(bytes));
+}
+
+async function loadWasi(
+  ctx: CommandContext,
+  path: string
+): Promise<{ module: WebAssembly.Module; memory?: ImportedMemory }> {
+  const key = cacheKey(path, await ctx.fs.stat(path));
+  const cached = modules.get(key);
+  const module = await (cached && memories.has(key)
+    ? cached
+    : cacheWasi(key, await ctx.fs.readFileBuffer(path)));
+  const memory = memories.get(key);
+  return { module, ...(memory ? { memory } : {}) };
+}
+
 export async function isModuleFile(ctx: CommandContext, path: string): Promise<boolean> {
   let key: string;
   try {
@@ -172,7 +196,7 @@ export async function isModuleFile(ctx: CommandContext, path: string): Promise<b
     return false;
   }
   if (!isWasmBytes(bytes)) return false;
-  void cache(key, compileWasmModule(bytes)).catch(() => undefined);
+  void cacheWasi(key, bytes).catch(() => undefined);
   return true;
 }
 
@@ -275,9 +299,13 @@ export class WasmSession {
     const wasi = isWasiTarget(req);
     let glue = '';
     let module: WebAssembly.Module;
+    let memory: ImportedMemory | undefined;
     try {
-      if (!wasi) glue = await this.ctx.fs.readFile(req.glue);
-      module = await loadModule(this.ctx, req.module);
+      if (wasi) ({ module, memory } = await loadWasi(this.ctx, req.module));
+      else {
+        glue = await this.ctx.fs.readFile(req.glue);
+        module = await loadModule(this.ctx, req.module);
+      }
       req.signal?.throwIfAborted();
     } catch (e) {
       await req.fds.closeAll();
@@ -287,7 +315,9 @@ export class WasmSession {
     return this.start({
       ...req,
       env,
-      program: wasi ? { abi: 'wasi', glue, module } : { glue, module },
+      program: wasi
+        ? { abi: 'wasi', glue, module, ...(memory ? { memory } : {}) }
+        : { glue, module },
     });
   }
 
@@ -311,6 +341,7 @@ export class WasmSession {
       jobs: this.jobs,
       net: this.net,
       ...(req.fork ? { fork: req.fork } : {}),
+      ...(req.ppid !== undefined ? { ppid: req.ppid } : {}),
     });
     this.live.add(handle);
     this.wasmByPid.set(pid, handle);
