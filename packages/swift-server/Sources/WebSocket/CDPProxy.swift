@@ -650,7 +650,7 @@ actor CDPProxy {
         // Fail closed: any missing piece (sessionId, URL, hostname) → no unmask.
         guard let sid = obj["sessionId"] as? String,
             let url = urlForSession(sid),
-            let host = URL(string: url)?.host,
+            case let host = secretScopeHostname(url),
             !host.isEmpty
         else {
             return nil

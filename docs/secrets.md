@@ -31,7 +31,7 @@ Each secret needs two lines: `NAME=value` and `NAME_DOMAINS=domain1,domain2`. A 
 
 **Note:** The bare `github.com` is required for `git push https://github.com/...` because `*.github.com` does not match the bare host (see `packages/shared-ts/src/secret-masking.ts`).
 
-**How a domain list matches a request.** Every float (node-server, the extension service worker, swift-server) matches against the request URL's **hostname**. The port and any `user:password@` are ignored, the name is lowercased, and an internationalized name is compared in punycode (`xn--…`), so write IDN patterns in punycode. `secretScopeHostname()` in `@slicc/shared-ts` derives it for the TypeScript floats; swift-server uses `URLComponents.host`, which agrees. So `upstream.test` covers `http://upstream.test:65209/…`.
+**How a domain list matches a request.** Every float (node-server, the extension service worker, swift-server) matches against the request URL's **hostname**. The port and any `user:password@` are ignored, the name is lowercased, and an internationalized name is compared in punycode (`xn--…`), so write IDN patterns in punycode. `secretScopeHostname()` in `@slicc/shared-ts` derives it for the TypeScript floats, and swift-server's `secretScopeHostname(_:)` (`SecretMasking.swift`) derives the same string from `URLComponents.encodedHost` (not `.host`, which is Unicode; not `URL.host`, which drops IPv6 brackets). Shared vectors in `cross-impl-vectors.test.ts` / `CrossImplementationTests.swift` pin the two against each other. So `upstream.test` covers `http://upstream.test:65209/…`.
 
 A pattern is either an exact hostname, or `*.example.com`, which matches any subdomain but not `example.com` itself. Credentials embedded in the URL are scoped the same way.
 

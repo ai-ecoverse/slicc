@@ -447,7 +447,7 @@ func registerAPIRoutes(
             guard let targetURL = URL(string: urlCreds.url) else {
                 return try proxyErrorResponse(status: .badRequest, message: "Malformed X-Target-URL")
             }
-            let targetHostname = targetURL.host ?? ""
+            let targetHostname = secretScopeHostname(urlCreds.url)
 
             do {
                 var rawBody = try await collectBody(from: request)
