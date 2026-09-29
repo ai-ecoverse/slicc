@@ -14,6 +14,7 @@ import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../../../src/shell/ipk/wasm-programs.js';
 import {
+  installedCommands,
   isModuleFile,
   isWasiTarget,
   SECRET_FUNCTION,
@@ -47,6 +48,10 @@ function ctx(files: Record<string, string>, exec?: CommandContext['exec']): Comm
         return files[p];
       },
       readFileBuffer: async (p: string) => bytes(files[p] ?? ''),
+      writeFile: async (p: string, content: string) => {
+        files[p] = content;
+      },
+      mkdir: async () => {},
       stat: async (p: string) => {
         if (!has(p)) throw new Error(`ENOENT: ${p}`);
         return { isFile: p in files, size: (files[p] ?? '').length, mtime: new Date(0) };
@@ -349,6 +354,97 @@ describe('WasmSession', () => {
       MODE: 'mine',
       A: '1',
     });
+  });
+
+  it('an installed Python interpreter starts with the installed Python packages on its path (.pth)', async () => {
+    fakeProcesses();
+    const py = '/shared/lib/node_modules/@ai-ecoverse/py-cpython';
+    const lib = (name: string, python: object) => ({
+      [`/shared/lib/node_modules/@ai-ecoverse/${name}/package.json`]: JSON.stringify({
+        name: `@ai-ecoverse/${name}`,
+        slicc: { python },
+      }),
+    });
+    const files: Record<string, string> = {
+      ...installed,
+      [`${py}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/py-cpython',
+        slicc: {
+          abi: 'wasi',
+          commands: { python3: { wasm: 'bin/python.wasm' } },
+          python: { version: '3.14', abi: 'cp314', platform: 'wasix_wasm32' },
+        },
+      }),
+      [`${py}/bin/python.wasm`]: 'W',
+      ...lib('py-numpy', {
+        sitePackages: 'lib/python3.14/site-packages',
+        requires: { abi: 'cp314', platform: 'wasix_wasm32' },
+      }),
+      ...lib('py-old', {
+        sitePackages: 'lib/python3.12/site-packages',
+        requires: { abi: 'cp312' },
+      }),
+    };
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    const target = await session.resolve('python3', 'python3', '/w');
+    let stderr = '';
+    const fds = new FdTable();
+    fds.install(bytesSource(new Uint8Array(0)));
+    fds.install(sinkFile(() => {}));
+    fds.install(sinkFile((b) => void (stderr += text(b))));
+    await session.launch({ ...target!, args: [], env: { HOME: '/home/u' }, cwd: '/w', fds });
+    const pth = files['/home/u/.local/lib/python3.14/site-packages/_slicc_packages.pth'];
+    expect(pth).toContain(
+      'site.addsitedir("/shared/lib/node_modules/@ai-ecoverse/py-numpy/lib/python3.14/site-packages")'
+    );
+    expect(pth).not.toContain('py-old');
+    expect(stderr).toBe(
+      'python3: not for cp314-wasix_wasm32, left off the path: @ai-ecoverse/py-old\n'
+    );
+
+    delete files['/home/u/.local/lib/python3.14/site-packages/_slicc_packages.pth'];
+    await parentSpawner(session);
+    expect(Object.keys(files).some((f) => f.endsWith('.pth'))).toBe(false);
+  });
+
+  it('scans the Python packages once per installed set, again after an install', async () => {
+    fakeProcesses();
+    const py = '/shared/lib/node_modules/@ai-ecoverse/py-cpython';
+    const files: Record<string, string> = {
+      [`${py}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/py-cpython',
+        slicc: {
+          abi: 'wasi',
+          commands: { python3: { wasm: 'bin/python.wasm' } },
+          python: { version: '3.14', abi: 'cp314', platform: 'wasix_wasm32' },
+        },
+      }),
+      [`${py}/bin/python.wasm`]: 'W',
+    };
+    const c = ctx(files);
+    const readdir = vi.spyOn(c.fs, 'readdir');
+
+    let catalog = await installedCommands(c);
+    const session = new WasmSession(
+      c,
+      undefined,
+      () => {},
+      undefined,
+      async () => catalog
+    );
+    const target = await session.resolve('python3', 'python3', '/w');
+    const start = () =>
+      session.launch({ ...target!, args: [], env: { HOME: '/home/u' }, cwd: '/w', fds: stdio() });
+    readdir.mockClear();
+    await start();
+    const scans = readdir.mock.calls.length;
+    expect(scans).toBeGreaterThan(0);
+    await start();
+    await start();
+    expect(readdir.mock.calls.length).toBe(scans);
+    catalog = new Map(catalog);
+    await start();
+    expect(readdir.mock.calls.length).toBe(2 * scans);
   });
 
   it("keeps the realm's git system config over a package's GIT_CONFIG_NOSYSTEM default", async () => {
