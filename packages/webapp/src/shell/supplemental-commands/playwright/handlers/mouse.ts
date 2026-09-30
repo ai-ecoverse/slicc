@@ -125,15 +125,60 @@ export const mousewheelHandler: PlaywrightHandler = async ({
     return { stdout: '', stderr: 'dx and dy must be numbers\n', exitCode: 1 };
   }
   const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
+  let stderr = '';
   await onTab(tab.targetId, async ({ sessionId, transport }) => {
+    const visibility = (await transport.send(
+      'Runtime.evaluate',
+      { expression: 'document.visibilityState', returnByValue: true },
+      sessionId
+    )) as { result?: { value?: unknown } };
+    if (visibility.result?.value === 'hidden') {
+      const scrolled = (await transport.send(
+        'Runtime.evaluate',
+        { expression: pageScrollScript(pos.x, pos.y, dx, dy), returnByValue: true },
+        sessionId
+      )) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
+      if (scrolled.exceptionDetails) {
+        throw new Error(
+          scrolled.exceptionDetails.exception?.description ??
+            scrolled.exceptionDetails.text ??
+            'Page scroll failed'
+        );
+      }
+      stderr = 'note: the tab is in the background, so the wheel was applied as a page scroll\n';
+      return;
+    }
     await transport.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseWheel', deltaX: dx, deltaY: dy, x: pos.x, y: pos.y, modifiers: 0 },
       sessionId
     );
   });
-  return { stdout: `Mouse wheel scrolled (dx=${dx}, dy=${dy})\n`, stderr: '', exitCode: 0 };
+  return { stdout: `Mouse wheel scrolled (dx=${dx}, dy=${dy})\n`, stderr, exitCode: 0 };
 };
+
+function pageScrollScript(x: number, y: number, dx: number, dy: number): string {
+  return `(() => {
+  const dx = ${JSON.stringify(dx)}, dy = ${JSON.stringify(dy)};
+  const canScroll = (el) => {
+    const style = getComputedStyle(el);
+    const y = /(auto|scroll|overlay)/.test(style.overflowY) &&
+      (dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight : dy < 0 && el.scrollTop > 0);
+    const x = /(auto|scroll|overlay)/.test(style.overflowX) &&
+      (dx > 0 ? el.scrollLeft + el.clientWidth < el.scrollWidth : dx < 0 && el.scrollLeft > 0);
+    return y || x;
+  };
+  let el = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
+  while (el && el !== document.body && el !== document.documentElement && !canScroll(el)) {
+    el = el.parentElement;
+  }
+  const target = el && el !== document.body && el !== document.documentElement
+    ? el
+    : (document.scrollingElement || document.documentElement);
+  target.scrollBy({ left: dx, top: dy, behavior: 'instant' });
+  return true;
+})()`;
+}
 
 export const dropHandler: PlaywrightHandler = async ({
   browser,
