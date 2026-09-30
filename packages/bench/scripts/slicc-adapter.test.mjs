@@ -13,6 +13,7 @@ import {
   exportTranscriptCommand,
   FINAL_INSTRUCTION,
   FLAGS_PROBE,
+  lastTurnProviderError,
   leaderHealth,
   NO_DEFAULT_SKILLS_MISSING,
   PROMPT_ALL_SETTLED,
@@ -2084,5 +2085,36 @@ describe('a prompt that returns while the agent still works', () => {
       capture: { pollMs: 5 },
     });
     expect(result).toMatchObject({ exitCode: 0, finalText: '' });
+  });
+});
+
+describe('lastTurnProviderError', () => {
+  const run = (...messages) => ({ transcript: { conversations: [{ messages }] } });
+  it('names the error a run died on, and ignores recovered errors and other conversations', () => {
+    const dead = {
+      role: 'assistant',
+      stopReason: 'error',
+      errorMessage: 'Internal server error: Bedrock',
+    };
+    expect(lastTurnProviderError(run({ role: 'user' }, dead))).toBe(
+      'Internal server error: Bedrock'
+    );
+    // An error the agent recovered from is not the end of the run.
+    expect(lastTurnProviderError(run(dead, { role: 'assistant', stopReason: 'stop' }))).toBeNull();
+    // Only the cone's conversation counts; a scoop that died does not end the run.
+    expect(
+      lastTurnProviderError({
+        transcript: {
+          conversations: [
+            { messages: [{ role: 'assistant', stopReason: 'stop' }] },
+            { messages: [dead] },
+          ],
+        },
+      })
+    ).toBeNull();
+    expect(lastTurnProviderError({})).toBeNull();
+    expect(lastTurnProviderError(run({ role: 'assistant', stopReason: 'error' }))).toBe(
+      'provider error'
+    );
   });
 });
