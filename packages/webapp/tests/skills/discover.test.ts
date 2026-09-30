@@ -44,6 +44,27 @@ describe('discoverSkills', () => {
     expect(skills[0].description).toBe('A skill with a frontmatter description.');
   });
 
+  it('parses literal and folded YAML block-scalar descriptions', async () => {
+    await fs.mkdir(SKILLS_DIR, { recursive: true });
+    await fs.mkdir(`${SKILLS_DIR}/literal-desc`);
+    await fs.mkdir(`${SKILLS_DIR}/folded-desc`);
+    await fs.writeFile(
+      `${SKILLS_DIR}/literal-desc/SKILL.md`,
+      '---\nname: literal-desc\ndescription: |\n  Line one\n  Line two\n---\n# Body\n'
+    );
+    await fs.writeFile(
+      `${SKILLS_DIR}/folded-desc/SKILL.md`,
+      '---\nname: folded-desc\ndescription: >\n  Folded one\n  Folded two\n---\n# Body\n'
+    );
+
+    const skills = await discoverSkills(fs);
+    const byName = Object.fromEntries(skills.map((s) => [s.name, s.description]));
+    expect(byName['literal-desc']).toBe('Line one\nLine two');
+    expect(byName['folded-desc']).toBe('Folded one Folded two');
+    expect(byName['literal-desc']).not.toBe('|');
+    expect(byName['folded-desc']).not.toBe('>');
+  });
+
   it('parses frontmatter even with CRLF line endings, BOM, and leading blank lines', async () => {
     await fs.mkdir(SKILLS_DIR, { recursive: true });
     await fs.mkdir(`${SKILLS_DIR}/windows-skill`);

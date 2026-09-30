@@ -506,6 +506,7 @@ Hover cards for links, GitHub references and times, plus composer answer control
 ## Skills
 
 - Path: `packages/webapp/src/skills/`. Precedence: native `/workspace/skills/` → `.agents/skills/*/SKILL.md` → `.claude/skills/*/SKILL.md` → marketplace (`.claude-plugin/marketplace.json`) → agent plugins (`plugin` command, `shell/plugins/`).
+- **Frontmatter parsing** (`skills/frontmatter.ts`) understands YAML block scalars for string fields (`description: |` / `description: >`, with optional chomping). Discovery, scoop skill loading, and the agent-plugins loader share this parser so descriptions reach the agent prompt as prose rather than a bare `|` / `>` (#3690).
 - **Never monkeypatch a method on a get/set-asymmetric Proxy.** The sudo-fs Proxy advertises `MONKEYPATCH_UNSAFE_FS` (a `Symbol.for` marker); `getCompatibilitySkillCandidates` skips hooks and cache for it (always re-discovers). Reassigning a gated method creates an `override↔wrapper` async recursion that OOMs the kernel worker.
 
 ## Sprinkles & Dips
