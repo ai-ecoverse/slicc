@@ -11,7 +11,7 @@
 import type { CommandContext, IFileSystem } from 'just-bash';
 import { textAsStdin } from '../../just-bash-compat.js';
 import type { RunWasmOptions } from '../wasm/run.js';
-import { build, exeName, type ToolRunner, toolEnv } from './go-build.js';
+import { build, exeName, type ToolRunner } from './go-build.js';
 import { findModule, GoError, type GoFs, type GoPlan, GoPlanner, normalize } from './go-plan.js';
 import { type GoToolchain, scanGo, stdArchives } from './go-toolchain.js';
 
@@ -412,7 +412,6 @@ async function goEnv(
     GOMOD: module ? `${module.dir === '/' ? '' : module.dir}/go.mod` : '/dev/null',
     GOFLAGS: ctx.env.get('GOFLAGS') ?? '',
   };
-  if (toolchain) Object.assign(env, { ...toolEnv({ toolchain, goos, goarch }), ...env });
   const names = vars.filter((v) => !v.startsWith('-'));
   if (names.length > 0) {
     return {
