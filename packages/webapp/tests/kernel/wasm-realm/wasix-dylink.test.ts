@@ -23,6 +23,7 @@ const FIXTURES = new URL('../../fixtures/wasm-wasi/dylink/', import.meta.url).pa
 let worker: { file: string; dispose(): void };
 let fs: VfsAdapter;
 let program: WasmProgram;
+let weakmain: WasmProgram;
 let nextPid = 46000;
 
 beforeAll(async () => {
@@ -35,19 +36,24 @@ beforeAll(async () => {
   // liba also where a bare name is looked for (libb needs it by name).
   await vfs.writeFile('/usr/lib/liba.so', readFileSync(`${FIXTURES}liba.so`));
   fs = new VfsAdapter(vfs);
-  const bytes = readFileSync(`${FIXTURES}dlmain.wasm`);
+  program = load('dlmain.wasm');
+  weakmain = load('weakmain.wasm');
+}, 120_000);
+
+afterAll(() => worker?.dispose());
+
+function load(name: string): WasmProgram {
+  const bytes = readFileSync(`${FIXTURES}${name}`);
   const memory = importedMemory(bytes);
-  program = {
+  return {
     abi: 'wasi',
     glue: '',
     module: new WebAssembly.Module(bytes),
     ...(memory ? { memory } : {}),
   };
-}, 120_000);
+}
 
-afterAll(() => worker?.dispose());
-
-async function run(args: string[]) {
+async function run(args: string[], main = program) {
   let stdout = '';
   let stderr = '';
   const dec = new TextDecoder();
@@ -63,8 +69,8 @@ async function run(args: string[]) {
   );
   const code = await spawnWasmProcess({
     pid: nextPid++,
-    program,
-    argv0: 'dlmain',
+    program: main,
+    argv0: main === program ? 'dlmain' : 'weakmain',
     args,
     env: { HOME: '/home' },
     cwd: '/workspace',
@@ -101,5 +107,32 @@ describe('WASIX dynamic linking', () => {
     const r = await run(['/nowhere']);
     expect(r.code).toBe(1);
     expect(r.stdout).toMatch(/^dlopen: .*libb\.so/);
+  });
+
+  it('env imports a PIE main module leaves undefined: weak ones are null, thread_local destructors run', async () => {
+    const r = await run([], weakmain);
+    expect(r.stderr).toBe('');
+    const lines = r.stdout.split('\n');
+    expect(lines[0]).toBe('weak_missing is absent');
+    for (const line of [
+      'ctor main',
+      'main_tl is main',
+      'ctor thread',
+      'thread_tl is thread',
+      'dtor thread',
+      'joined',
+    ]) {
+      expect(lines, line).toContain(line);
+    }
+    // The thread's destructor runs as the thread ends, before the join returns.
+    expect(lines.indexOf('dtor thread')).toBeLessThan(lines.indexOf('joined'));
+    expect(r.code).toBe(0);
+  });
+
+  it('an undefined function is an error when it is called, not when the program loads', async () => {
+    const r = await run(['call-missing'], weakmain);
+    expect(r.stdout).toBe('weak_missing is absent\n');
+    expect(r.stderr).toContain('unresolved symbol strong_missing');
+    expect(r.code).toBe(134);
   });
 });

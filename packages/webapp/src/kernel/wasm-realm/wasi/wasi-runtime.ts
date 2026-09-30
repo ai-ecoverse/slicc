@@ -60,7 +60,8 @@ export function unsupportedImport(
   for (const imp of imports) {
     if (imp.module === PREVIEW1 || imp.module === WASIX) continue;
     if (pie && (imp.module === 'GOT.mem' || imp.module === 'GOT.func')) continue;
-    if (pie && imp.module === 'env' && imp.kind !== 'function' && imp.kind !== 'memory') continue;
+    // Its undefined symbols too: env functions resolve against side modules (or trap if called).
+    if (pie && imp.module === 'env' && imp.kind !== 'memory') continue;
     if (imp.kind === 'memory' && memory?.module === imp.module && memory.name === imp.name)
       continue;
     // wasm32-wasip1-threads: threads on the memory the kernel recorded.
@@ -224,7 +225,7 @@ async function instantiate(
   }
   const hostImports = linkImports(module, preview1, wasix, memory, threads);
   const imports: WebAssembly.Imports = sync
-    ? merge(hostImports, sync.linker.mainImports())
+    ? merge(hostImports, sync.linker.mainImports(module))
     : hostImports;
   const instance = await WebAssembly.instantiate(module, imports);
   stats?.phase('instantiate');
@@ -234,6 +235,8 @@ async function instantiate(
     sync.linker.bindMain(instance, !thread);
     // A thread starts with what the process linked so far.
     if (thread) sync.catchUp();
+    // Then the main module's GOT: slots and addresses, 0 for what nobody defines.
+    sync.linker.bindMainGot();
   }
   return { instance, driver };
 }
