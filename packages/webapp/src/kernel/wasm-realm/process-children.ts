@@ -7,6 +7,14 @@ import type { SocketKernel } from './process-sockets.js';
 import type { ForkState, ForkStream } from './protocol.js';
 import { wasiErrno } from './wasi-errno.js';
 
+const POLLIN = 0x001;
+const POLLOUT = 0x004;
+const POLLERR = 0x008;
+const POLLHUP = 0x010;
+const POLLNVAL = 0x020;
+
+const SELECT_SLICE_MS = 20;
+
 const WUNTRACED = 2;
 const WCONTINUED = 8;
 
@@ -51,7 +59,7 @@ export interface ProcessKernel {
     read: number[],
     write: number[],
     timeoutMs: number
-  ): { read: number[]; write: number[] } | number | null;
+  ): { read: number[]; write: number[] } | number;
 
   net?: SocketKernel;
 }
@@ -95,6 +103,44 @@ function drain(Fs: ProcessFs, stream: ProcessStream): Uint8Array {
     offset += chunk.length;
   }
   return out;
+}
+
+function kernelSelect(
+  Fs: ProcessFs,
+  transport: SyncSabTransport,
+  read: number[],
+  write: number[],
+  timeoutMs: number
+): { read: number[]; write: number[] } | number {
+  const kernel = (fd: number) => Fs.getStream(fd)?.sliccKernelFd as number;
+  const kr = read.map(kernel);
+  const kw = write.map(kernel);
+  const r = transport.call({ op: 'fd-select', read: kr, write: kw, timeoutMs }, Infinity, 'select');
+  if (!r.ok) return -wasiErrno(r.errno);
+  const got = (r.kind === 'json' ? r.json : { read: [], write: [] }) as {
+    read: number[];
+    write: number[];
+  };
+  return {
+    read: read.filter((_, i) => got.read.includes(kr[i] as number)),
+    write: write.filter((_, i) => got.write.includes(kw[i] as number)),
+  };
+}
+
+function ownReady(
+  Fs: ProcessFs,
+  read: number[],
+  write: number[]
+): { read: number[]; write: number[] } {
+  const flags = (fd: number): number => {
+    const stream = Fs.getStream(fd);
+    if (!stream) return POLLNVAL;
+    return stream.stream_ops.poll ? stream.stream_ops.poll(stream) : POLLIN | POLLOUT;
+  };
+  return {
+    read: read.filter((fd) => flags(fd) & (POLLIN | POLLHUP | POLLERR | POLLNVAL)),
+    write: write.filter((fd) => flags(fd) & (POLLOUT | POLLERR | POLLNVAL)),
+  };
 }
 
 export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
@@ -188,23 +234,23 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
     },
     select(read, write, timeoutMs) {
       const kernel = (fd: number) => Fs.getStream(fd)?.sliccKernelFd;
-      const kr = read.map(kernel);
-      const kw = write.map(kernel);
-      if ([...kr, ...kw].some((k) => k === undefined)) return null;
-      const r = transport.call(
-        { op: 'fd-select', read: kr as number[], write: kw as number[], timeoutMs },
-        Infinity,
-        'select'
-      );
-      if (!r.ok) return -wasiErrno(r.errno);
-      const got = (r.kind === 'json' ? r.json : { read: [], write: [] }) as {
-        read: number[];
-        write: number[];
-      };
-      return {
-        read: read.filter((_, i) => got.read.includes(kr[i] as number)),
-        write: write.filter((_, i) => got.write.includes(kw[i] as number)),
-      };
+      const own = (fd: number) => kernel(fd) === undefined;
+      if (![...read, ...write].some(own))
+        return kernelSelect(Fs, transport, read, write, timeoutMs);
+      const deadline = timeoutMs < 0 ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
+      const kernelRead = read.filter((fd) => !own(fd));
+      const kernelWrite = write.filter((fd) => !own(fd));
+      for (;;) {
+        const local = ownReady(Fs, read.filter(own), write.filter(own));
+        const pending = local.read.length > 0 || local.write.length > 0;
+        const slice = pending ? 0 : Math.min(SELECT_SLICE_MS, Math.max(0, deadline - Date.now()));
+        const got = kernelSelect(Fs, transport, kernelRead, kernelWrite, slice);
+        if (typeof got === 'number') return got;
+        const ready = { read: [...local.read, ...got.read], write: [...local.write, ...got.write] };
+        if (ready.read.length > 0 || ready.write.length > 0 || Date.now() >= deadline) {
+          return ready;
+        }
+      }
     },
     execWait(pid) {
       const r = transport.call({ op: 'proc-exec', pid }, Infinity, `exec ${pid}`);

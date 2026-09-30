@@ -172,6 +172,62 @@ describe('createProcessKernel', () => {
     expect(order).toEqual(['flush', 'promote 5', 'promote 6', 'promote 6']);
   });
 
+  it("waits on the program's own pipe in kernel slices, so a signal delivered between them wakes it (libuv's self-pipe)", () => {
+    let readable = false;
+    const own = {
+      fd: 9,
+      stream_ops: { poll: () => (readable ? 0x001 : 0) },
+    } as unknown as ProcessStream;
+    const kernelFd = { fd: 3, stream_ops: {}, sliccKernelFd: 13 } as unknown as ProcessStream;
+    const streams: Record<number, ProcessStream> = { 9: own, 3: kernelFd };
+    const slices: number[] = [];
+    const answers: SyncFsResult[] = [];
+    const { t, calls } = transport((req) => {
+      if (req.op !== 'fd-select') return void0;
+      slices.push((req as unknown as { timeoutMs: number }).timeoutMs);
+
+      if (slices.length === 3) readable = true;
+      return answers.shift() ?? json({ read: [], write: [] });
+    });
+    const Fs = {
+      getStream: (fd: number) => streams[fd] ?? null,
+      cwd: () => '/',
+    } as unknown as ProcessFs;
+    const k = createProcessKernel({
+      transport: t,
+      Fs,
+      env: {},
+      beforeSpawn: vi.fn(),
+      afterChild: vi.fn(),
+      describeFork: vi.fn((): ForkStream[] => []),
+    });
+
+    expect(k.select([9, 3], [], -1)).toEqual({ read: [9], write: [] });
+    expect(slices.slice(0, 3)).toEqual([20, 20, 20]);
+    expect((calls[0] as unknown as { read: number[] }).read).toEqual([13]);
+
+    expect(k.select([9], [], -1)).toEqual({ read: [9], write: [] });
+    expect(slices.at(-1)).toBe(0);
+
+    readable = false;
+    expect(k.select([9], [], 0)).toEqual({ read: [], write: [] });
+
+    answers.push({ ok: false, errno: 'EINTR', message: 'EINTR' });
+    expect(k.select([9], [], -1)).toBe(-27);
+
+    const out = { fd: 8, stream_ops: { poll: () => 0x004 } } as unknown as ProcessStream;
+    streams[8] = out;
+    answers.push(json({ read: [], write: [13] }));
+    expect(k.select([], [8, 3], -1)).toEqual({ read: [], write: [8, 3] });
+
+    expect(k.select([7], [], -1)).toEqual({ read: [7], write: [] });
+
+    const before = slices.length;
+    answers.push(json({ read: [13], write: [] }));
+    expect(k.select([3], [], 1000)).toEqual({ read: [3], write: [] });
+    expect(slices.slice(before)).toEqual([1000]);
+  });
+
   it('returns a negative WASI errno when the kernel refuses', () => {
     const { k } = kernel(() => ({ ok: false, errno: 'ENOENT', message: 'ENOENT' }));
     expect(k.spawn('nope', ['nope'], null, null, [0, 1, 2])).toBe(-44);
@@ -291,11 +347,12 @@ describe('createProcessKernel', () => {
     expect(plain.k.wait(-1, false)).toBe(-27);
   });
 
-  it('select(): kernel fds go to the kernel and map back; others fall back (null)', () => {
+  it('select(): kernel fds go to the kernel and map back; a file of the program is ready', () => {
     const { k, calls } = kernel(() => json({ read: [1], write: [] }));
     expect(k.select([0, 1], [2], 100)).toEqual({ read: [1], write: [] });
     expect(calls).toEqual([{ op: 'fd-select', read: [0, 1], write: [2], timeoutMs: 100 }]);
-    expect(k.select([5], [], 0)).toBeNull();
+
+    expect(k.select([5], [], 0)).toEqual({ read: [5], write: [] });
     const refused = kernel(() => ({ ok: false, errno: 'EINTR', message: 'EINTR' }));
     expect(refused.k.select([0], [], -1)).toBe(-27);
   });
