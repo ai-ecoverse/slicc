@@ -2123,7 +2123,7 @@ When Anthropic ships a new Claude model that isn't in the pinned pi-ai:
    (e.g. a `local-llm` model called `claude-sonnet-6`) from inheriting real
    Anthropic pricing. Reported cost (layer 2/3) still wins over the fallback
    either way. OpenRouter (Free) additionally forces `$0` cost on its filtered
-catalog (`getFreeCatalog`) so picker totals stay free even if a seed entry
+   catalog (`getFreeCatalog`) so picker totals stay free even if a seed entry
    lacks pricing metadata.
 
 ## Thinking effort pipeline
