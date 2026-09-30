@@ -24,17 +24,24 @@ Use `playwright-cli` (also aliased as `playwright` and `puppeteer`) via the bash
 # 1. Open a page — note the targetId in the output
 playwright-cli open https://example.com
 # Output: Opened https://example.com in new tab [targetId: E9A3F...]
+playwright-cli tab-list   # every open tab with its targetId
 
-# 2. Take a snapshot to see the page structure and get element refs
-playwright-cli snapshot --tab=E9A3F
+# 2. See what is on screen: URL, scroll position, and the snapshot lines in view,
+#    with live refs (* marks elements that appeared since your last look).
+#    page-state is a helper command shipped with this skill; every other
+#    command here is `playwright-cli <verb>`.
+page-state --tab=E9A3F
+page-state --tab=E9A3F --scroll=down   # next screen; works on background tabs
 
 # 3. Interact using refs from the snapshot (e.g. e5, e12)
 playwright-cli click --tab=E9A3F e5
 playwright-cli fill --tab=E9A3F e12 "hello world"
 
-# 4. Re-snapshot after interactions (refs change)
-playwright-cli snapshot --tab=E9A3F
+# 4. Look again after interactions (refs change)
+page-state --tab=E9A3F
 ```
+
+`page-state` ships with this skill and only runs `playwright-cli eval` and `snapshot --boxes`, so its refs are the tab's current snapshot refs. Use a full `snapshot` (or `find`) when you need the whole page at once.
 
 ## Tab IDs
 
@@ -140,7 +147,7 @@ playwright-cli keyup --tab=<id> <key>    # Release held key (no paired keyDown)
 playwright-cli mousemove --tab=<id> <x> <y>    # Move mouse to coordinates (negative coords ok, e.g. -10 20)
 playwright-cli mousedown --tab=<id> [button]   # Press mouse button (left/right/middle, default: left)
 playwright-cli mouseup --tab=<id> [button]     # Release mouse button
-playwright-cli mousewheel --tab=<id> <dx> <dy> # Scroll mouse wheel (negative deltas ok, e.g. 0 -300)
+playwright-cli mousewheel --tab=<id> <dx> <dy> # Scroll mouse wheel (negative deltas ok, e.g. 0 -300); needs a foreground tab — on a background tab it hangs until the 30 s CDP timeout, so scroll with `page-state --scroll=down` or `eval 'scrollBy(0, innerHeight)'`
 ```
 
 ### Navigation
@@ -237,7 +244,7 @@ playwright-cli pdf --tab=<id> [--filename=path]  # Save page as PDF (not availab
 
 The browser displays things to the human; `open --view` is what lets _you_ see them. **But viewing screenshots is a last resort for the cone — every image you load eats a large chunk of the context window** (a single 1280×800 PNG can run 1500+ tokens, full-page screenshots much more). Reach for cheaper signals first:
 
-1. **`playwright-cli snapshot --tab=<id>`** — text accessibility tree. Use this first; it answers "what's on the page" for almost all verification tasks at a tiny fraction of the token cost. On a big page, `find --tab=<id> <text>` greps the snapshot and returns just the matching lines with context, and `snapshot --depth=<n>` caps the tree — both much cheaper than the full tree.
+1. **`page-state --tab=<id>`** — the part of the accessibility tree that is on screen, plus the scroll position, with live refs. Use it first after every navigation or interaction. For the whole page, **`playwright-cli snapshot --tab=<id>`** is the text accessibility tree; it answers "what's on the page" for almost all verification tasks at a tiny fraction of the token cost. On a big page, `find --tab=<id> <text>` greps the snapshot and returns just the matching lines with context, and `snapshot --depth=<n>` caps the tree — both much cheaper than the full tree.
 2. **`eval` against the DOM** — when you need a specific value (`document.title`, an attribute, computed style), `eval` it. Don't screenshot for facts you can extract.
 3. **Delegate visual inspection to a scoop.** If the cone genuinely needs vision (layout regression, render fidelity, "does this look right"), spawn a scoop to take and view the screenshot — the scoop's context absorbs the tokens, and you receive its summary back. The cone's window stays clean for orchestration.
 4. **`open --view` in the cone** — only when the cone itself must see pixels for its current decision and steps 1–3 won't do.
