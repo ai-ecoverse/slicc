@@ -25,13 +25,28 @@ import { resolveFloatTopology } from '../float-topology.js';
 import { McpTimeoutError } from '../mcp/client.js';
 import type { FetchLike } from '../mcp/oauth.js';
 import { resolveMcpRedirectUri } from '../mcp/redirect-uri.js';
-import type { McpAppDef, McpFetchLike, McpServerEntry, McpToolDef } from '../mcp/types.js';
+import type {
+  McpAppDef,
+  McpExposureMode,
+  McpFetchLike,
+  McpServerEntry,
+  McpToolDef,
+} from '../mcp/types.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
 /** Boolean flags accepted by `mcp auth`. */
 const MCP_AUTH_BOOL_FLAGS = ['--silent', '-s', '--interactive', '-i'] as const;
+
+/** Valid exposure modes (used by `mcp add --exposure` and `mcp exposure`). */
+const EXPOSURE_MODES: ReadonlySet<string> = new Set([
+  'codemode',
+  'codemode-deferred',
+  'deferred',
+  'direct',
+  'hidden',
+]);
 
 const log = createLogger('mcp-command');
 
@@ -58,6 +73,23 @@ export interface McpCommandDeps {
    * in the same shell session.
    */
   scriptCatalog?: ScriptCatalog;
+  /**
+   * Shared MCP connection manager. When present, subcommands route
+   * through the live connection instead of creating disposable
+   * `McpClient` instances. Absent in tests / legacy callers.
+   */
+  connectionManager?: import('../mcp/connection-manager.js').McpConnectionManager;
+}
+
+const VALID_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+
+function isValidServerName(name: string): boolean {
+  return VALID_NAME_RE.test(name);
+}
+
+function isTimeoutLikeError(e: unknown): boolean {
+  if (!(e instanceof DOMException)) return false;
+  return e.name === 'TimeoutError' || e.name === 'AbortError';
 }
 
 const ALIASES_DIR = '/workspace/.mcp/aliases';
@@ -80,6 +112,17 @@ function flagError(message: string): ExecResult {
   return err(`mcp: ${message}`);
 }
 
+interface ImportedMcpServerDef {
+  url?: string;
+  command?: string;
+  args?: string[];
+  headers?: Record<string, string>;
+}
+
+interface ImportedMcpConfig {
+  mcpServers?: Record<string, ImportedMcpServerDef>;
+}
+
 function helpText(): string {
   return `usage: mcp <command> [args]
 
@@ -95,12 +138,19 @@ Commands:
                              when a token has expired; \`refresh\` only
                              reloads the tool catalog and does not touch
                              OAuth.
+  exposure <name> <mode>     Set exposure mode for a server or tool.
+  import <file>              Import servers from a Pi/Claude/Cursor config.
 
 Examples:
   mcp add https://mcp.example.com/sse weather
   mcp list
+  mcp list --json
   mcp invoke weather get-forecast --lat 51.5 --lon -0.12
+  mcp invoke weather get-forecast --json
   mcp search forecast
+  mcp exposure weather direct
+  mcp exposure weather codemode --tool 'delete_*'
+  mcp import claude_desktop_config.json
   mcp auth weather
   mcp delete weather
 `;
@@ -131,6 +181,10 @@ export function createMcpCommand(deps: McpCommandDeps = {}): Command {
           return await cmdRefresh(rest, deps);
         case 'auth':
           return await cmdAuth(rest, deps);
+        case 'exposure':
+          return await cmdExposure(rest, deps);
+        case 'import':
+          return await cmdImport(rest, deps);
         default:
           return err(`mcp: unknown subcommand "${sub}" (try \`mcp --help\`)`);
       }
@@ -138,6 +192,7 @@ export function createMcpCommand(deps: McpCommandDeps = {}): Command {
       const msg = e instanceof Error ? e.message : String(e);
       log.error('mcp subcommand failed', { sub, error: msg });
       if (e instanceof McpTimeoutError) return err(`mcp ${sub}: ${msg}`, 124);
+      if (isTimeoutLikeError(e)) return err(`mcp ${sub}: ${msg}`, 124);
       return err(`mcp ${sub}: ${msg}`);
     }
   });
@@ -147,7 +202,7 @@ export function createMcpCommand(deps: McpCommandDeps = {}): Command {
 
 async function cmdAdd(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
   if (isHelpRequest(args)) {
-    return ok(`usage: mcp add <url> <name>
+    return ok(`usage: mcp add <url> <name> [--exposure <mode>]
 
 Probes <url> with an unauthenticated MCP \`initialize\`. If the server
 returns 401, runs OAuth discovery → dynamic client registration → PKCE
@@ -156,18 +211,30 @@ authorization-code flow, stores the access token, and retries.
 On success, the server is persisted to /workspace/.mcp/servers.json and
 an alias shim is written to /workspace/.mcp/aliases/<name>.jsh so the
 short name resolves on the PATH.
+
+Options:
+  --exposure <mode>   Set the default exposure mode for all tools on this
+                      server. Modes: codemode (default), codemode-deferred,
+                      deferred, direct, hidden.
 `);
   }
-  const parsed = parseKnownFlags(args, {});
+  const parsed = parseKnownFlags(args, { value: ['--exposure'] });
   if ('error' in parsed) return flagError(parsed.error);
   if (parsed.positionals.length < 2) {
     return err('mcp add: expected <url> <name>');
   }
   const [url, name] = parsed.positionals;
+  const exposureRaw = parsed.values.get('--exposure');
+  if (exposureRaw && !EXPOSURE_MODES.has(exposureRaw)) {
+    return err(
+      `mcp add: invalid exposure mode "${exposureRaw}" (valid: ${[...EXPOSURE_MODES].join(', ')})`
+    );
+  }
+  const exposure = exposureRaw as McpExposureMode | undefined;
   if (!/^https?:\/\//i.test(url)) {
     return err(`mcp add: invalid URL "${url}" (must start with http:// or https://)`);
   }
-  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(name)) {
+  if (!isValidServerName(name)) {
     return err(
       `mcp add: invalid name "${name}" (letters, digits, _ and - only; must start with a letter)`
     );
@@ -216,6 +283,7 @@ short name resolves on the PATH.
     addedAt: now,
     lastRefreshedAt: now,
     ...(authBlock ? { auth: authBlock } : {}),
+    ...(exposure ? { exposure } : {}),
   };
   await setServer(name, entry, deps.fs);
 
@@ -231,11 +299,17 @@ short name resolves on the PATH.
     registerMcpProvider({ name, serverUrl: url, auth: authBlock });
   }
 
+  // Step 9: put the connection live so tools appear on the next turn
+  if (deps.connectionManager) {
+    await deps.connectionManager.connect(name, entry);
+  }
+
   const lines = [
     `Added MCP server "${name}" → ${url}`,
     `  tools: ${tools.length}, apps: ${apps.length} (${sprinkles} sprinkle${sprinkles === 1 ? '' : 's'})`,
     `  alias: ${ALIASES_DIR}/${name}.jsh`,
     authBlock ? `  auth:  oauth (provider mcp:${name})` : '  auth:  none',
+    exposure ? `  exposure: ${exposure}` : '  exposure: codemode (default)',
   ];
   return ok(lines.join('\n') + '\n');
 }
@@ -297,24 +371,57 @@ async function runOAuthForAdd(
 
 async function cmdList(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
   if (isHelpRequest(args)) {
-    return ok('usage: mcp list\n');
+    return ok(`usage: mcp list [--json]
+
+Lists configured MCP servers with connection state, exposure mode,
+transport type, and tool counts.
+
+Options:
+  --json   Output as JSON instead of a table.
+`);
   }
-  const parsed = parseKnownFlags(args, {});
+  const parsed = parseKnownFlags(args, { bool: ['--json'] });
   if ('error' in parsed) return flagError(parsed.error);
+  const jsonOutput = parsed.bools.has('--json');
   const { ensureAllMcpProvidersRegistered } = await import('../mcp/provider.js');
   await ensureAllMcpProvidersRegistered();
   const { listServers } = await import('../mcp/store.js');
   const servers = await listServers(deps.fs);
   const names = Object.keys(servers).sort();
   if (names.length === 0) {
+    if (jsonOutput) return ok('[]\n');
     return ok('No MCP servers configured. Use `mcp add <url> <name>`.\n');
   }
-  const rows = [['NAME', 'URL', 'AUTH', 'TOOLS', 'APPS', 'ADDED']];
+
+  if (jsonOutput) {
+    const entries = names.map((n) => {
+      const e = servers[n];
+      return {
+        name: n,
+        url: e.url,
+        state: deps.connectionManager?.has(n) ? 'connected' : 'disconnected',
+        exposure: e.exposure ?? 'codemode',
+        transport: e.transport ?? 'unknown',
+        auth: !!e.auth,
+        tools: e.tools?.length ?? 0,
+        apps: e.apps?.length ?? 0,
+        addedAt: e.addedAt ?? null,
+      };
+    });
+    return ok(JSON.stringify(entries, null, 2) + '\n');
+  }
+
+  const rows = [
+    ['NAME', 'URL', 'STATE', 'EXPOSURE', 'TRANSPORT', 'AUTH', 'TOOLS', 'APPS', 'ADDED'],
+  ];
   for (const n of names) {
     const e = servers[n];
     rows.push([
       n,
       e.url,
+      deps.connectionManager?.has(n) ? 'connected' : '-',
+      e.exposure ?? 'codemode',
+      e.transport ?? '-',
       e.auth ? 'yes' : 'no',
       String(e.tools?.length ?? 0),
       String(e.apps?.length ?? 0),
@@ -427,6 +534,11 @@ async function cmdDelete(args: string[], deps: McpCommandDeps): Promise<ExecResu
   const { deleteServer } = await import('../mcp/store.js');
   const removedServer = await deleteServer(name, deps.fs);
 
+  // Disconnect the live connection so tools-changed fires
+  if (deps.connectionManager) {
+    await deps.connectionManager.disconnect(name);
+  }
+
   // Best-effort filesystem cleanup. The store ENOENT path already
   // tolerates a missing file, but the alias + sprinkles paths are
   // independent so we swallow ENOENT individually.
@@ -522,19 +634,31 @@ async function cmdInvoke(args: string[], deps: McpCommandDeps): Promise<ExecResu
     return ok(formatToolHelp(name, tool));
   }
 
-  const coerced = coerceArgsBySchema(filteredArgs, tool.inputSchema);
+  const { jsonFlag, remaining: afterJson } = extractJsonFlag(filteredArgs);
+  const coerced = coerceArgsBySchema(afterJson, tool.inputSchema);
   if (!coerced.ok) return err(`mcp invoke: ${coerced.error}`);
 
-  const { McpClient } = await import('../mcp/client.js');
-  const client = new McpClient({
-    url: entry.url,
-    fetchImpl: deps.fetchImpl,
-    headers: entry.headers,
-    getAuthHeader: entry.auth ? () => getMcpBearerHeader(name) : undefined,
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-  });
-  await client.initialize();
-  const result = await client.toolsCall(toolName, coerced.value);
+  let result: unknown;
+  if (deps.connectionManager) {
+    const { connection } = await deps.connectionManager.connect(name, entry);
+    const signal = timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : undefined;
+    result = await connection.callTool(toolName, coerced.value, { signal });
+  } else {
+    const { McpClient } = await import('../mcp/client.js');
+    const client = new McpClient({
+      url: entry.url,
+      fetchImpl: deps.fetchImpl,
+      headers: entry.headers,
+      getAuthHeader: entry.auth ? () => getMcpBearerHeader(name) : undefined,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    });
+    await client.initialize();
+    result = await client.toolsCall(toolName, coerced.value);
+  }
+
+  if (jsonFlag) {
+    return ok(JSON.stringify(result, null, 2) + '\n');
+  }
   const rendered = renderToolResult(result);
   if (warnings.length > 0) {
     rendered.stderr = warnings.map((w) => `${w}\n`).join('') + rendered.stderr;
@@ -590,6 +714,19 @@ export function extractTimeoutFlag(args: string[]): TimeoutExtraction {
   return { timeoutMs, remaining, warnings };
 }
 
+function extractJsonFlag(args: string[]): { jsonFlag: boolean; remaining: string[] } {
+  const remaining: string[] = [];
+  let jsonFlag = false;
+  for (const a of args) {
+    if (a === '--json') {
+      jsonFlag = true;
+    } else {
+      remaining.push(a);
+    }
+  }
+  return { jsonFlag, remaining };
+}
+
 function parseTimeoutSeconds(
   raw: string
 ): { ok: true; value: number } | { ok: false; error: string } {
@@ -610,7 +747,7 @@ function parseTimeoutSeconds(
 }
 
 function invokeHelpText(): string {
-  return `usage: mcp invoke <name> [tool] [--timeout <seconds>] [--flag value …]
+  return `usage: mcp invoke <name> [tool] [--timeout <seconds>] [--json] [--flag value …]
 
   mcp invoke <name>                   List tools on <name>.
   mcp invoke <name> <tool> --help     Show flags for <tool>.
@@ -622,6 +759,8 @@ Slicc-level options (consumed before tool args):
                         on stderr and fall back to the default.
                         A timeout exits with code 124 (matching GNU
                         timeout(1)) so scripts can branch on it.
+  --json                Print the raw CallToolResult as JSON instead of
+                        the rendered text output.
 
 Arguments are coerced according to the tool's JSON Schema:
   string/integer/number/boolean. Bare \`--flag\` (no value or "--" next)
@@ -1037,28 +1176,39 @@ OAuth tokens — for OAuth token refresh use \`mcp auth <name>\`.
   const entry = await getServer(name, deps.fs);
   if (!entry) return err(`mcp refresh: unknown server "${name}"`);
 
-  const { McpClient, McpAuthRequiredError } = await import('../mcp/client.js');
-  const client = new McpClient({
-    url: entry.url,
-    fetchImpl: deps.fetchImpl,
-    headers: entry.headers,
-    getAuthHeader: entry.auth ? () => getMcpBearerHeader(name) : undefined,
-  });
-  try {
-    await client.initialize();
-  } catch (e) {
-    if (e instanceof McpAuthRequiredError) {
-      return err(
-        `mcp refresh: server "${name}" returned 401 — token may have expired. Run \`mcp auth ${name}\` to re-authenticate.`
-      );
+  let tools: McpToolDef[];
+  let apps: McpAppDef[];
+  let protocolVersion = entry.protocolVersion;
+
+  if (deps.connectionManager) {
+    const connection = await deps.connectionManager.reconnect(name, entry);
+    tools = await connection.listTools();
+    apps = (await connection.listApps?.()) ?? [];
+  } else {
+    const { McpClient, McpAuthRequiredError } = await import('../mcp/client.js');
+    const client = new McpClient({
+      url: entry.url,
+      fetchImpl: deps.fetchImpl,
+      headers: entry.headers,
+      getAuthHeader: entry.auth ? () => getMcpBearerHeader(name) : undefined,
+    });
+    try {
+      await client.initialize();
+    } catch (e) {
+      if (e instanceof McpAuthRequiredError) {
+        return err(
+          `mcp refresh: server "${name}" returned 401 — token may have expired. Run \`mcp auth ${name}\` to re-authenticate.`
+        );
+      }
+      throw e;
     }
-    throw e;
+    tools = await client.toolsList();
+    apps = await client.appsList();
+    protocolVersion = client.getNegotiatedProtocolVersion();
   }
-  const tools = await client.toolsList();
-  const apps = await client.appsList();
   const merged: McpServerEntry = {
     ...entry,
-    protocolVersion: client.getNegotiatedProtocolVersion(),
+    protocolVersion,
     tools,
     apps,
     lastRefreshedAt: new Date().toISOString(),
@@ -1181,6 +1331,159 @@ async function runInteractiveAuth(
     return err(`mcp auth: interactive login for "${name}" did not complete`);
   }
   return ok(`Re-authenticated "${name}" via interactive login (provider ${cfg.id})\n`);
+}
+
+// ── exposure ───────────────────────────────────────────────────────
+
+async function cmdExposure(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
+  if (isHelpRequest(args) || args.length === 0) {
+    return args.length === 0
+      ? err('mcp exposure: expected <name> <mode>')
+      : ok(`usage: mcp exposure <name> <mode> [--tool <glob>]
+
+Set the exposure mode for an MCP server or individual tools.
+
+Modes: codemode (default), codemode-deferred, deferred, direct, hidden.
+
+Without --tool, sets the server-level default exposure.
+With --tool, sets a per-tool override using a glob pattern.
+
+Examples:
+  mcp exposure weather direct               Set all weather tools to direct
+  mcp exposure weather hidden --tool 'delete_*'  Hide delete tools
+  mcp exposure weather codemode --tool '*'   Reset all tool overrides
+`);
+  }
+  const parsed = parseKnownFlags(args, { value: ['--tool'] });
+  if ('error' in parsed) return flagError(parsed.error);
+  if (parsed.positionals.length < 2) {
+    return err('mcp exposure: expected <name> <mode>');
+  }
+  const [name, modeRaw] = parsed.positionals;
+  if (!EXPOSURE_MODES.has(modeRaw)) {
+    return err(
+      `mcp exposure: invalid mode "${modeRaw}" (valid: ${[...EXPOSURE_MODES].join(', ')})`
+    );
+  }
+  const mode = modeRaw as McpExposureMode;
+  const toolGlob = parsed.values.get('--tool');
+
+  const { getServer, setServer } = await import('../mcp/store.js');
+  const entry = await getServer(name, deps.fs);
+  if (!entry) {
+    return err(`mcp exposure: unknown server "${name}"`);
+  }
+
+  if (toolGlob) {
+    if (toolGlob === '*') {
+      entry.toolExposure = { '*': mode };
+    } else {
+      const overrides = entry.toolExposure ?? {};
+      overrides[toolGlob] = mode;
+      entry.toolExposure = overrides;
+    }
+    await setServer(name, entry, deps.fs);
+    if (deps.connectionManager) deps.connectionManager.notifyToolsChanged(name);
+    return ok(`Set tool exposure for "${toolGlob}" on "${name}" → ${mode}\n`);
+  }
+
+  entry.exposure = mode;
+  await setServer(name, entry, deps.fs);
+  if (deps.connectionManager) deps.connectionManager.notifyToolsChanged(name);
+  return ok(`Set server exposure for "${name}" → ${mode}\n`);
+}
+
+// ── import ─────────────────────────────────────────────────────────
+
+async function cmdImport(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
+  if (isHelpRequest(args) || args.length === 0) {
+    return args.length === 0
+      ? err('mcp import: expected <file>')
+      : ok(`usage: mcp import <file>
+
+Import MCP servers from a Pi, Claude Desktop, or Cursor configuration
+file. Reads a JSON object with an \`mcpServers\` key containing server
+definitions.
+
+Only \`url\`-based servers are imported. Servers with \`command\` (stdio
+transport) are skipped with a warning, since there is no process spawning
+in the browser.
+
+Examples:
+  mcp import claude_desktop_config.json
+  mcp import ~/.config/cursor/mcp.json
+`);
+  }
+  const parsed = parseKnownFlags(args, {});
+  if ('error' in parsed) return flagError(parsed.error);
+  const filePath = parsed.positionals[0];
+  if (!filePath) return err('mcp import: expected <file>');
+
+  const fs = await openGlobalFs(deps.fs);
+  let raw: string;
+  try {
+    raw = (await fs.readFile(filePath, { encoding: 'utf-8' })) as string;
+  } catch {
+    return err(`mcp import: cannot read "${filePath}"`);
+  }
+
+  let config: ImportedMcpConfig;
+  try {
+    config = JSON.parse(raw) as ImportedMcpConfig;
+  } catch {
+    return err(`mcp import: "${filePath}" is not valid JSON`);
+  }
+
+  const mcpServers = config.mcpServers ?? {};
+  const names = Object.keys(mcpServers);
+  if (names.length === 0) {
+    return err(`mcp import: no mcpServers found in "${filePath}"`);
+  }
+
+  const { getServer, setServer } = await import('../mcp/store.js');
+  const results: string[] = [];
+  let imported = 0;
+  let skipped = 0;
+
+  for (const name of names) {
+    if (!isValidServerName(name)) {
+      results.push(`  skip: "${name}" (invalid name)`);
+      skipped++;
+      continue;
+    }
+    const serverDef = mcpServers[name];
+    if (serverDef.command) {
+      results.push(`  skip: "${name}" (stdio transport — not supported in browser)`);
+      skipped++;
+      continue;
+    }
+    const url = serverDef.url as string | undefined;
+    if (!url || !/^https?:\/\//i.test(url)) {
+      results.push(`  skip: "${name}" (no valid URL)`);
+      skipped++;
+      continue;
+    }
+    const existing = await getServer(name, deps.fs);
+    if (existing) {
+      results.push(`  skip: "${name}" (already exists)`);
+      skipped++;
+      continue;
+    }
+    const entry: McpServerEntry = {
+      url,
+      addedAt: new Date().toISOString(),
+      ...(serverDef.headers ? { headers: serverDef.headers as Record<string, string> } : {}),
+    };
+    await setServer(name, entry, deps.fs);
+    await writeAliasShim(name, deps);
+    results.push(`  added: "${name}" → ${url}`);
+    imported++;
+  }
+
+  return ok(
+    [`Imported from "${filePath}": ${imported} added, ${skipped} skipped`, ...results].join('\n') +
+      '\n'
+  );
 }
 
 // ── helpers ─────────────────────────────────────────────────────────

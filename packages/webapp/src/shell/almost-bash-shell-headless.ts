@@ -185,6 +185,8 @@ export interface HeadlessShellOptions {
    * terminal (no tool context) never emits progress and can leave it unset.
    */
   scrubProgressLabel?: (text: string) => Promise<string>;
+  /** Shared MCP connection manager. When supplied, `mcp` subcommands route through live connections. */
+  mcpConnectionManager?: SupplementalCommandsConfig['mcpConnectionManager'];
   /** Named just-bash preset. Defaults to normal; this does not set an OPFS storage quota. */
   executionLimitProfile?: NonNullable<
     ConstructorParameters<typeof Bash>[0]
@@ -700,6 +702,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         githubDomains: githubOAuthDomains,
       },
       gitIdentity: () => this.gitCommands.identity(),
+      mcpConnectionManager: options.mcpConnectionManager,
     });
   }
 
