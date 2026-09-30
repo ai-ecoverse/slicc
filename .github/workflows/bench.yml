@@ -99,6 +99,7 @@ jobs:
       SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shards || '1' }}
       DEADLINE: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '45' }}
       RESUME_RUN: ${{ inputs.resume-run || '' }}
+      PIN_WEBAPP: ${{ github.event_name == 'workflow_dispatch' && inputs.pin-webapp || '' }}
     steps:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -116,13 +117,17 @@ jobs:
           fi
 
 
-          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt 420 ]; then
-            echo "::error::deadline-minutes must be 10 to 420, not '$DEADLINE'"; exit 1
+          case "$PIN_WEBAPP" in ''|true|false) PIN_MINUTES=0 ;; *) PIN_MINUTES=40 ;; esac
+
+
+          MAX_DEADLINE=$((420 - PIN_MINUTES))
+          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt "$MAX_DEADLINE" ]; then
+            echo "::error::deadline-minutes must be 10 to $MAX_DEADLINE, not '$DEADLINE'"; exit 1
           fi
 
 
           echo "run-minutes=$((DEADLINE + 20))" >> "$GITHUB_OUTPUT"
-          echo "job-minutes=$((DEADLINE + 45))" >> "$GITHUB_OUTPUT"
+          echo "job-minutes=$((DEADLINE + 45 + PIN_MINUTES))" >> "$GITHUB_OUTPUT"
           version="$(npm view sliccy@latest version)"
           echo "slicc-version=$version" >> "$GITHUB_OUTPUT"
           echo "shards=$(jq -cn --argjson n "$SHARDS" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
@@ -225,6 +230,8 @@ jobs:
 
       - name: Build a pinned commit
         id: pin-commit
+
+        timeout-minutes: 40
         if: github.event_name == 'workflow_dispatch' && inputs.pin-webapp != '' && inputs.pin-webapp != 'false' && inputs.pin-webapp != 'true'
         env:
           INPUT_PIN_WEBAPP: ${{ inputs.pin-webapp }}

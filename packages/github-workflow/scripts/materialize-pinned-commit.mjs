@@ -6,6 +6,14 @@ import { join } from 'node:path';
 import { fail, input, isMain, setOutput } from './gh-io.mjs';
 import { planPinnedCommitBuild } from './lib.mjs';
 
+export const NPM_CI_MINUTES = 12;
+export const NPM_CI_ATTEMPTS = 2;
+export const BUILD_MINUTES = 8;
+
+export function bounded(cmd, minutes) {
+  return ['timeout', '--kill-after=30s', `${minutes}m`, ...cmd];
+}
+
 export function materializePinnedCommit(options) {
   const plan = planPinnedCommitBuild({ ref: options.ref, dest: options.dest });
   if (!plan) return null;
@@ -15,9 +23,23 @@ export function materializePinnedCommit(options) {
   exec(plan.fetch[0], plan.fetch.slice(1), { cwd: repo, stdio: 'inherit', env });
   exec(plan.worktree[0], plan.worktree.slice(1), { cwd: repo, stdio: 'inherit', env });
   const buildEnv = { ...env, HUSKY: '0' };
-  for (const cmd of [plan.npmCi, plan.buildWebapp, plan.buildServer]) {
-    exec(cmd[0], cmd.slice(1), { cwd: options.dest, stdio: 'inherit', env: buildEnv });
+  const run = (cmd, minutes) => {
+    const argv = bounded(cmd, minutes);
+    exec(argv[0], argv.slice(1), { cwd: options.dest, stdio: 'inherit', env: buildEnv });
+  };
+  for (let attempt = 1; ; attempt++) {
+    try {
+      run(plan.npmCi, NPM_CI_MINUTES);
+      break;
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      if (attempt >= NPM_CI_ATTEMPTS) {
+        throw new Error(`pin-webapp: npm ci failed ${attempt} times; last: ${why}`);
+      }
+      console.log(`[pin-webapp] npm ci attempt ${attempt} failed (${why}); retrying`);
+    }
   }
+  for (const cmd of [plan.buildWebapp, plan.buildServer]) run(cmd, BUILD_MINUTES);
   const index = join(plan.webapp, 'index.html');
   if (!existsSync(plan.nodeServer) || !existsSync(index)) {
     throw new Error(
