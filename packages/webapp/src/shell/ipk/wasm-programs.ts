@@ -31,6 +31,8 @@ export interface WasmCommand {
   pkg: string;
 
   env?: Readonly<Record<string, string>>;
+
+  script?: string;
 }
 
 export interface ProgramFs {
@@ -58,6 +60,7 @@ async function readText(fs: ProgramFs, path: string): Promise<string> {
 }
 
 interface CommandEntry {
+  script?: unknown;
   abi?: unknown;
   glue?: unknown;
   wasm?: unknown;
@@ -129,6 +132,20 @@ export function commandsFromManifest(pkgDir: string, pkg: PackageJson): WasmComm
   const out: WasmCommand[] = [];
   for (const [command, raw] of Object.entries(commands as Record<string, CommandEntry>)) {
     if (!validCommandName(command) || !raw || typeof raw !== 'object') continue;
+    const script = insidePackage(pkgDir, raw.script);
+    if (script) {
+      const env = { ...packageEnv, ...manifestEnv(pkgDir, raw.env) };
+      out.push({
+        name: command,
+        glue: script,
+        wasm: script,
+        argv0: command,
+        pkg: name,
+        script,
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+      });
+      continue;
+    }
     const abi = abiOf(raw.abi, packageAbi);
     const wasm = insidePackage(pkgDir, raw.wasm);
     const glue = abi === 'wasi' ? wasm : insidePackage(pkgDir, raw.glue);

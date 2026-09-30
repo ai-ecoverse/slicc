@@ -466,6 +466,8 @@ export class WasmSession {
     if (name !== undefined) {
       const commands = await this.commands();
       const command = commands.get(name);
+
+      if (command?.script) return undefined;
       if (command) {
         return {
           glue: command.glue,
@@ -526,15 +528,22 @@ export class WasmSession {
     };
   }
 
-  private async interpreted(
-    req: ChildSpawnRequest
+  private async scriptCommand(file: string): Promise<WasmCommand | undefined> {
+    const name = REGISTRY_PATH.exec(file)?.[1] ?? (file.includes('/') ? undefined : file);
+    if (name === undefined) return undefined;
+    const command = (await this.commands()).get(name);
+    return command?.script ? command : undefined;
+  }
+
+  async interpreted(
+    req: Pick<ChildSpawnRequest, 'file' | 'argv' | 'cwd'>
   ): Promise<{ target: WasmTarget; file: string; args: string[] } | undefined> {
-    if (!req.file.includes('/') || REGISTRY_PATH.test(req.file)) return undefined;
+    const command = await this.scriptCommand(req.file);
+    if (!command && (!req.file.includes('/') || REGISTRY_PATH.test(req.file))) return undefined;
+    const script = command?.script ?? this.ctx.fs.resolvePath(req.cwd, req.file);
     let head: Uint8Array;
     try {
-      head = (
-        await this.ctx.fs.readFileBuffer(this.ctx.fs.resolvePath(req.cwd, req.file))
-      ).subarray(0, SHEBANG_MAX);
+      head = (await this.ctx.fs.readFileBuffer(script)).subarray(0, SHEBANG_MAX);
     } catch {
       return undefined;
     }
@@ -542,14 +551,17 @@ export class WasmSession {
     const line = new TextDecoder().decode(head).slice(2).split('\n')[0].trim();
     const [interp, ...rest] = line.split(/[ \t]+/);
     if (!interp) return undefined;
-    const target = await this.resolve(interp, interp, req.cwd);
-    if (!target) return undefined;
+    const found = await this.resolve(interp, interp, req.cwd);
+    if (!found) return undefined;
+    const target = command?.env
+      ? { ...found, defaults: { ...found.defaults, ...command.env } }
+      : found;
 
     const arg = rest.join(' ');
     return {
       target,
       file: interp,
-      args: [...(arg ? [arg] : []), req.file, ...req.argv.slice(1)],
+      args: [...(arg ? [arg] : []), command ? script : req.file, ...req.argv.slice(1)],
     };
   }
 

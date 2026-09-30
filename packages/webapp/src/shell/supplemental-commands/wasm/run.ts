@@ -256,6 +256,22 @@ async function resolveInstalled(
   if (await ctx.fs.exists(ctx.fs.resolvePath(ctx.cwd, call.program))) return call;
   const command = (await session.commands()).get(call.program);
   if (!command) return call;
+  if (command.script) {
+    const run = await session.interpreted({
+      file: call.program,
+      argv: [call.program, ...call.args],
+      cwd: ctx.cwd,
+    });
+    if (!run) return call;
+    return {
+      ...call,
+      argv0: run.target.argv0,
+      module: run.target.module,
+      program: run.target.glue,
+      args: run.args,
+      defaults: run.target.defaults,
+    };
+  }
   return {
     ...call,
     argv0: call.argv0 ?? command.argv0,

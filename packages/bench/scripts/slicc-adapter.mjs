@@ -171,8 +171,11 @@ export function stageSkillsCommand(condition) {
     `mkdir -p ${SKILLS_DIR}`,
   ];
   if (condition.builtin) steps.push(`cp -r ${SKILLS_STASH}/. ${SKILLS_DIR}/`);
+
   for (const extra of condition.extras)
-    steps.push(`cp -r ${EXTRA_SKILLS_ROOT}/${extra}/. ${SKILLS_DIR}/`);
+    steps.push(
+      `for s in ${EXTRA_SKILLS_ROOT}/${extra}/*; do [ -e "$s" ] || continue; n=$(basename "$s"); rm -rf "${SKILLS_DIR}/$n" && cp -r "$s" "${SKILLS_DIR}/$n" || exit 1; done`
+    );
   steps.push(`ls ${SKILLS_DIR} | wc -l`);
   return steps.join(' && ');
 }

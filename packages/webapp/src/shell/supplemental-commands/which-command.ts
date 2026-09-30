@@ -53,7 +53,8 @@ interface ScriptCandidates {
 }
 
 function wasmLine(wasm: WasmCommand, note?: string): string {
-  return `${wasm.glue} (wasm, ${wasm.pkg}${note ? `, ${note}` : ''})`;
+  const kind = wasm.script ? 'script' : 'wasm';
+  return `${wasm.glue} (${kind}, ${wasm.pkg}${note ? `, ${note}` : ''})`;
 }
 
 function builtinLines(name: string, { jshPath, collision, wasm, wf }: ScriptCandidates): string[] {
