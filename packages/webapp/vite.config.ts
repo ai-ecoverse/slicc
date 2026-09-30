@@ -95,6 +95,13 @@ function stubPiNodeInternalsPlugin() {
           return resolve(Dirname, 'src/stubs/pi-mcp-stdio-stub.ts');
         }
       }
+      // pi-codemode's wasm.js uses node:fs/promises + node:module to read
+      // quickjs.wasm from disk. Replace with a browser fetch+compile shim.
+      if (normalizedImporter?.includes('@earendil-works/pi-codemode')) {
+        if (source.endsWith('/wasm.js') || source.endsWith('/wasm.ts')) {
+          return resolve(Dirname, 'src/stubs/pi-codemode-wasm-stub.ts');
+        }
+      }
       return undefined;
     },
   };
@@ -441,6 +448,7 @@ const MODULE_ALIASES: Record<string, string> = {
   // Alias to empty stubs so the bundled JS never tries to fetch them.
   'node:zlib': resolve(Dirname, 'src/shims/empty.ts'),
   'node:module': resolve(Dirname, 'src/shims/empty.ts'),
+  'node:worker_threads': resolve(Dirname, 'src/shims/worker-threads.ts'),
   // @smithy/node-http-handler imports named exports from Node builtins
   // (without node: prefix). Vite's browser-external can't provide named
   // exports, so alias to stubs with the required exports.
@@ -529,6 +537,7 @@ export default defineConfig(({ mode }) => ({
     __BIOME_WASM_WEB_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/wasm-web')),
     __BIOME_JS_API_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/js-api')),
     __FFMPEG_CORE_VERSION__: JSON.stringify(wasmDepVersion('@ffmpeg/core')),
+    __QUICKJS_WASI_VERSION__: JSON.stringify(wasmDepVersion('quickjs-wasi')),
     // v86 is a devDependency purely for this pin and the live canary — nothing
     // from it is bundled (see v86-wasm.ts).
     __V86_VERSION__: JSON.stringify(wasmDepVersion('v86')),

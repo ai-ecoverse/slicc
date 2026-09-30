@@ -239,33 +239,36 @@ async function buildMcpAgentTools(
   scoop: RegisteredScoop
 ): Promise<import('@earendil-works/pi-agent-core').AgentTool[]> {
   try {
+    if (scoop.parentJid !== null) return [];
+
     const { listServers } = await import('../../shell/mcp/store.js');
     const servers = await listServers(fs as Parameters<typeof listServers>[0]);
     const entries = Object.entries(servers);
     if (entries.length === 0) return [];
 
-    const directEntries = entries.filter(([, entry]) => {
+    const relevantEntries = entries.filter(([, entry]) => {
       const exposure = entry.exposure ?? 'codemode';
-      return exposure === 'direct' || hasDirectToolOverrides(entry);
+      return (
+        exposure === 'direct' ||
+        exposure === 'codemode' ||
+        exposure === 'codemode-deferred' ||
+        hasExposureOverrides(entry)
+      );
     });
-    if (directEntries.length === 0) return [];
-
-    if (scoop.parentJid !== null) {
-      return [];
-    }
+    if (relevantEntries.length === 0) return [];
 
     const { toAgentTools } = await import('../../shell/mcp/agent-tools.js');
 
     const manager = await getOrCreateConnectionManager();
     const allTools: import('@earendil-works/pi-agent-core').AgentTool[] = [];
 
-    for (const [name, entry] of directEntries) {
+    for (const [name, entry] of relevantEntries) {
       try {
         const { connection } = await manager.connect(name, entry);
         const tools = entry.tools ?? (await connection.listTools());
         const piTools = (tools as import('@earendil-works/pi-mcp').Tool[]) ?? [];
 
-        const agentTools = toAgentTools({
+        const directTools = toAgentTools({
           serverName: name,
           tools: piTools,
           connection,
@@ -280,7 +283,10 @@ async function buildMcpAgentTools(
             }
           },
         });
-        allTools.push(...agentTools);
+        allTools.push(...directTools);
+
+        const codemodeTool = await buildCodemodeTool(name, piTools, connection, entry);
+        if (codemodeTool) allTools.push(codemodeTool);
       } catch (err) {
         log.warn('failed to load MCP tools for agent', {
           server: name,
@@ -298,9 +304,35 @@ async function buildMcpAgentTools(
   }
 }
 
-function hasDirectToolOverrides(entry: import('../../shell/mcp/types.js').McpServerEntry): boolean {
+async function buildCodemodeTool(
+  serverName: string,
+  tools: import('@earendil-works/pi-mcp').Tool[],
+  connection: import('../../shell/mcp/connection-manager.js').McpConnection,
+  entry: import('../../shell/mcp/types.js').McpServerEntry
+): Promise<import('@earendil-works/pi-agent-core').AgentTool | null> {
+  try {
+    const { createCodemodeAgentTool } = await import('../../shell/mcp/codemode-tool.js');
+    return createCodemodeAgentTool({
+      serverName,
+      tools,
+      connection,
+      exposure: entry.exposure,
+      toolExposure: entry.toolExposure,
+    });
+  } catch (err) {
+    log.debug('codemode tool unavailable for server', {
+      server: serverName,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+function hasExposureOverrides(entry: import('../../shell/mcp/types.js').McpServerEntry): boolean {
   if (!entry.toolExposure) return false;
-  return Object.values(entry.toolExposure).some((mode) => mode === 'direct');
+  return Object.values(entry.toolExposure).some(
+    (mode) => mode === 'direct' || mode === 'codemode' || mode === 'codemode-deferred'
+  );
 }
 
 type McpConnectionManagerType =
