@@ -66,6 +66,24 @@ describe('mcpAgentToolName', () => {
       names.get('read-file')
     );
   });
+
+  it('reserves original names before assigning collision suffixes', () => {
+    const initial = mcpAgentToolNames('my-server', ['read-file', 'read_file']);
+    const third = `read_file_${initial.get('read-file')!.slice(-8)}`;
+    const wireNames = ['read-file', 'read_file', third];
+    const names = mcpAgentToolNames('my-server', wireNames);
+    expect(new Set(names.values()).size).toBe(3);
+    expect(names.get(third)).toBe(mcpAgentToolName('my-server', third));
+    expect(mcpAgentToolNames('my-server', [...wireNames].reverse()).get('read-file')).toBe(
+      names.get('read-file')
+    );
+  });
+
+  it('rejects duplicate wire tool names', () => {
+    expect(() => mcpAgentToolNames('my-server', ['read-file', 'read-file'])).toThrow(
+      'duplicate tool names'
+    );
+  });
 });
 
 // ── resolveToolExposure ──────────────────────────────────────────────

@@ -73,17 +73,30 @@ describe('toAgentTools', () => {
 
   it('keeps colliding model names routed to their original wire tools', async () => {
     const connection = makeConnection();
-    const tools = toAgentTools({
+    const firstPair = toAgentTools({
       serverName: 'test-server',
       tools: [makeTool({ name: 'read-file' }), makeTool({ name: 'read_file' })],
       connection,
       exposure: 'direct',
     });
-    expect(tools[0].name).not.toBe(tools[1].name);
+    const thirdName = `read_file_${firstPair[0].name.slice(-8)}`;
+    const tools = toAgentTools({
+      serverName: 'test-server',
+      tools: [
+        makeTool({ name: 'read-file' }),
+        makeTool({ name: 'read_file' }),
+        makeTool({ name: thirdName }),
+      ],
+      connection,
+      exposure: 'direct',
+    });
+    expect(new Set(tools.map((tool) => tool.name)).size).toBe(3);
     await tools[0].execute('call-1', {});
     await tools[1].execute('call-2', {});
+    await tools[2].execute('call-3', {});
     expect(connection.callTool).toHaveBeenNthCalledWith(1, 'read-file', {}, { signal: undefined });
     expect(connection.callTool).toHaveBeenNthCalledWith(2, 'read_file', {}, { signal: undefined });
+    expect(connection.callTool).toHaveBeenNthCalledWith(3, thirdName, {}, { signal: undefined });
   });
 
   it('passes through inputSchema as parameters', () => {

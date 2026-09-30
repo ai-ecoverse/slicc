@@ -426,26 +426,36 @@ export function mcpAgentToolName(serverName: string, toolName: string): string {
 
 /** Give every colliding tool a stable suffix, independent of tools/list order. */
 export function mcpAgentToolNames(serverName: string, toolNames: string[]): Map<string, string> {
+  if (new Set(toolNames).size !== toolNames.length) {
+    throw new Error(`MCP server "${serverName}" returned duplicate tool names`);
+  }
   const bases = toolNames.map((name) => mcpAgentToolName(serverName, name));
   const counts = new Map<string, number>();
   for (const base of bases) counts.set(base, (counts.get(base) ?? 0) + 1);
-  return new Map(
-    toolNames.map((name, index) => {
-      const base = bases[index];
-      return [
-        name,
-        (counts.get(base) ?? 0) > 1
-          ? `${base.slice(0, MAX_TOOL_NAME_LEN - 9)}_${toolNameHash(serverName, name)}`
-          : base,
-      ];
-    })
-  );
+  const reserved = new Set(bases);
+  const used = new Set<string>();
+  const result = new Map<string, string>();
+  for (const name of [...toolNames].sort()) {
+    const base = mcpAgentToolName(serverName, name);
+    let candidate = base;
+    if ((counts.get(base) ?? 0) > 1) {
+      let attempt = 0;
+      do {
+        candidate = `${base.slice(0, MAX_TOOL_NAME_LEN - 9)}_${toolNameHash(serverName, name, attempt)}`;
+        attempt++;
+      } while (reserved.has(candidate) || used.has(candidate));
+    }
+    used.add(candidate);
+    result.set(name, candidate);
+  }
+  return result;
 }
 
-function toolNameHash(serverName: string, toolName: string): string {
+function toolNameHash(serverName: string, toolName: string, attempt = 0): string {
   // A small deterministic hash keeps the browser bundle free of node:crypto.
   let hash = 0x811c9dc5;
-  for (const char of `${serverName}\0${toolName}`) {
+  const input = `${serverName}\0${toolName}${attempt ? `\0${attempt}` : ''}`;
+  for (const char of input) {
     hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
