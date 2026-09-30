@@ -358,6 +358,22 @@ describe('WasmSession', () => {
     });
   });
 
+  it('sets LOGNAME to USER unless the caller set one (not the runtime’s web_user)', async () => {
+    fakeProcesses();
+    const session = new WasmSession(ctx(installed), undefined, () => {});
+    const target = await session.resolve('tac', 'tac', '/w');
+    const envOf = async (env: Record<string, string>) => {
+      await session.launch({ ...target!, args: [], env, cwd: '/w', fds: stdio() });
+      return spawn.mock.calls.at(-1)![0].env;
+    };
+    expect(await envOf({ USER: 'user' })).toEqual({ USER: 'user', LOGNAME: 'user' });
+    expect(await envOf({ USER: 'scoop', LOGNAME: 'other' })).toEqual({
+      USER: 'scoop',
+      LOGNAME: 'other',
+    });
+    expect(await envOf({ A: '1' })).toEqual({ A: '1' });
+  });
+
   it('an installed Python interpreter starts with the installed Python packages on its path (.pth)', async () => {
     fakeProcesses();
     const py = '/shared/lib/node_modules/@ai-ecoverse/py-cpython';
