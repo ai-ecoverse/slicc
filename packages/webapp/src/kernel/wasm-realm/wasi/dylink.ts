@@ -1,13 +1,14 @@
 /**
  * `dylink.ts` — the `dylink.0` custom section of a position-independent
  * wasm module (#3530 phase 5g): what a PIE main module or a side module
- * (`.so`) asks of the loader — memory and table space, and the libraries it
- * needs loaded first. The layout is LLVM's (tool-conventions
+ * (`.so`) asks of the loader — memory and table space, the libraries it
+ * needs loaded first, and where to look for them (its runtime path). The layout is LLVM's (tool-conventions
  * DynamicLinking.md): subsections of a kind byte and a LEB128 length.
  */
 
 const MEM_INFO = 1;
 const NEEDED = 2;
+const RUNTIME_PATH = 5;
 
 export interface DylinkInfo {
   /** Bytes of static data (and TLS) the module needs at its `__memory_base`. */
@@ -19,6 +20,11 @@ export interface DylinkInfo {
   tableAlign: number;
   /** Libraries to load (and initialize) before it, by name. */
   needed: string[];
+  /**
+   * Directories to find those in (`wasm-ld --rpath`, ELF's `DT_RUNPATH`), as
+   * written: `$ORIGIN` / `${ORIGIN}` stand for the module's own directory.
+   */
+  runtimePath: string[];
 }
 
 /** The module's `dylink.0`, or undefined for a module that is not position-independent. */
@@ -49,6 +55,7 @@ export function dylinkInfo(module: WebAssembly.Module): DylinkInfo | undefined {
     tableSize: 0,
     tableAlign: 0,
     needed: [],
+    runtimePath: [],
   };
   while (at < bytes.length) {
     const kind = bytes[at++];
@@ -61,6 +68,8 @@ export function dylinkInfo(module: WebAssembly.Module): DylinkInfo | undefined {
       info.tableAlign = uleb();
     } else if (kind === NEEDED) {
       for (let n = uleb(); n > 0; n--) info.needed.push(string());
+    } else if (kind === RUNTIME_PATH) {
+      for (let n = uleb(); n > 0; n--) info.runtimePath.push(string());
     }
     at = end;
   }
