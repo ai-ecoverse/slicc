@@ -14,6 +14,7 @@ import {
   resolveUnder,
 } from '../../../../src/kernel/wasm-realm/wasi/wasi-files.js';
 import { unsupportedImport } from '../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js';
+import { WasiThreads } from '../../../../src/kernel/wasm-realm/wasi/wasi-threads.js';
 import { FakeFs, FakeKernel } from './fakes.js';
 
 describe('wasiErrnoOf', () => {
@@ -220,5 +221,25 @@ describe('WasiFds shared by threads (5d)', () => {
     b.setCloexec(fd, true);
     expect(a.inheritable().has(fd)).toBe(false);
     expect(a.inheritable().has(1)).toBe(true);
+  });
+});
+
+describe('WasiThreads.spawn', () => {
+  it("hands the new thread the process's memory, ids and compiled side modules", () => {
+    const posted: Array<{ type: string; thread?: Record<string, unknown> }> = [];
+    const memory = new WebAssembly.Memory({ initial: 1, maximum: 2, shared: true });
+    const threads = new WasiThreads({ postMessage: (m) => posted.push(m as never) }, memory, 4, 1);
+    const plain = threads.spawn(7);
+    const lib = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    threads.modules = () => ({ '/lib/libm.so': lib });
+    const linked = threads.spawn(8);
+    expect([plain, linked]).toEqual([2, 3]);
+    expect(posted[0]?.thread).not.toHaveProperty('modules');
+    expect(posted[1]?.thread).toMatchObject({
+      tid: 3,
+      arg: 8,
+      memory,
+      modules: { '/lib/libm.so': lib },
+    });
   });
 });

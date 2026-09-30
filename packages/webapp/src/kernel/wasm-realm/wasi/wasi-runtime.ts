@@ -26,6 +26,7 @@ import {
   type WasmProcessInitMsg,
   type WasmThreadInitMsg,
 } from '../protocol.js';
+import { dylinkInfo } from './dylink.js';
 import { cachingBridge } from './wasi-files.js';
 import { WasiExit, type WasiFunction, WasiHost } from './wasi-host.js';
 import type { ImportedMemory } from './wasi-module.js';
@@ -33,6 +34,7 @@ import { WasiStats } from './wasi-stats.js';
 import { MAIN_TID, ThreadExit, threadCap, WasiThreads } from './wasi-threads.js';
 import { AsyncifyDriver } from './wasix-fork.js';
 import { WasixHost } from './wasix-host.js';
+import { type LinkerHost, type LinkRecord, WasixLinker } from './wasix-linker.js';
 
 /** A program that trapped (abort, `unreachable`, a stack overflow) ends as SIGABRT would. */
 const TRAPPED = 134;
@@ -52,8 +54,12 @@ export function unsupportedImport(
 ): string | undefined {
   const imports = WebAssembly.Module.imports(module);
   const wasix = imports.some((i) => i.module === WASIX);
+  // A position-independent main module (5g): the linker lays it out.
+  const pie = dylinkInfo(module) !== undefined;
   for (const imp of imports) {
     if (imp.module === PREVIEW1 || imp.module === WASIX) continue;
+    if (pie && (imp.module === 'GOT.mem' || imp.module === 'GOT.func')) continue;
+    if (pie && imp.module === 'env' && imp.kind !== 'function' && imp.kind !== 'memory') continue;
     if (imp.kind === 'memory' && memory?.module === imp.module && memory.name === imp.name)
       continue;
     // wasm32-wasip1-threads: threads on the memory the kernel recorded.
@@ -168,6 +174,7 @@ async function instantiate(
   module: WebAssembly.Module,
   memory: WebAssembly.Memory | undefined,
   threads: WasiThreads | undefined,
+  thread = false,
   stats?: WasiStats
 ): Promise<{ instance: WebAssembly.Instance; driver: AsyncifyDriver }> {
   const driver = new AsyncifyDriver(host.mem);
@@ -175,21 +182,139 @@ async function instantiate(
     ? new WasixHost(host, driver, module)
     : undefined;
   if (wasixHost) wasixHost.threads = threads;
-  const instance = await WebAssembly.instantiate(
-    module,
-    linkImports(
-      module,
-      traced(stats, 'wasi', { ...host.imports(), ...wasixHost?.preview1() }),
-      wasixHost && traced(stats, 'wasix', wasixHost.imports()),
-      memory,
-      threads
-    )
-  );
+  let preview1: Record<string, WasiFunction> = traced(stats, 'wasi', {
+    ...host.imports(),
+    ...wasixHost?.preview1(),
+  });
+  let wasix = wasixHost && traced(stats, 'wasix', wasixHost.imports());
+  // A position-independent main module (5g): the linker lays memory out and loads its libraries.
+  const info = dylinkInfo(module);
+  const sync: LinkSync | undefined =
+    info && memory
+      ? new LinkSync(
+          new WasixLinker(
+            memory,
+            info,
+            linkerHost(host, (): WebAssembly.Imports => imports),
+            thread
+          ),
+          (req) => host.o.kernel.call(req),
+          threads?.ids
+        )
+      : undefined;
+  if (sync) {
+    ({ preview1, wasix } = sync.guard(preview1, wasix));
+    if (wasixHost) wasixHost.linker = sync.linker;
+    // A thread replays with the modules its spawner compiled, and hands on what it compiles.
+    if (threads) {
+      sync.linker.cache = threads.received;
+      threads.modules = () => sync.linker.compiled();
+    }
+  }
+  const hostImports = linkImports(module, preview1, wasix, memory, threads);
+  const imports: WebAssembly.Imports = sync
+    ? merge(hostImports, sync.linker.mainImports())
+    : hostImports;
+  const instance = await WebAssembly.instantiate(module, imports);
   stats?.phase('instantiate');
   const exports = instance.exports as { memory?: WebAssembly.Memory };
   host.mem.bind(memory ?? (exports.memory as WebAssembly.Memory));
+  if (sync) {
+    sync.linker.bindMain(instance, !thread);
+    // A thread starts with what the process linked so far.
+    if (thread) sync.catchUp();
+  }
   return { instance, driver };
 }
+
+/** What the linker reads and links side modules against: the VFS, and the main module's own host imports. */
+function linkerHost(host: WasiHost, imports: () => WebAssembly.Imports): LinkerHost {
+  return {
+    read: (path) => {
+      try {
+        return host.o.fs.readFile(path) as Uint8Array<ArrayBuffer>;
+      } catch {
+        return undefined;
+      }
+    },
+    hostImports: () => {
+      const { env: _env, 'GOT.mem': _mem, 'GOT.func': _func, ...rest } = imports();
+      return rest;
+    },
+  };
+}
+
+/** `extra`'s namespaces merged over `base`'s. */
+function merge(
+  base: WebAssembly.Imports,
+  extra: Record<string, Record<string, WebAssembly.ImportValue>>
+): WebAssembly.Imports {
+  const out: WebAssembly.Imports = { ...base };
+  for (const [ns, values] of Object.entries(extra)) out[ns] = { ...base[ns], ...values };
+  return out;
+}
+
+/**
+ * A PIE process's links, the same in each of its workers: this worker's
+ * loads and slots go to the kernel's log (`dl-log`), and, once the process
+ * has threads, the others' are replayed before each call (a shared
+ * generation word says when there are new ones).
+ */
+class LinkSync {
+  private count = 0;
+  private gen = 0;
+
+  constructor(
+    readonly linker: WasixLinker,
+    private readonly call: (req: WasmSyscall) => unknown,
+    private readonly ids: Int32Array | undefined
+  ) {
+    linker.publisher = (record) => this.publish(record);
+  }
+
+  private publish(record: LinkRecord): void {
+    const since = this.call({ op: 'dl-log', append: record, from: this.count }) as LinkRecord[];
+    // Anything another thread linked meanwhile comes first; the last is this one.
+    for (const r of since.slice(0, -1)) this.linker.replay(r);
+    this.count += since.length;
+    if (this.ids) this.gen = Atomics.add(this.ids, DL_GEN, 1) + 1;
+  }
+
+  /** Replay what the other workers linked since this one last looked. */
+  catchUp(): void {
+    const since = this.call({ op: 'dl-log', from: this.count }) as LinkRecord[];
+    for (const r of since) this.linker.replay(r);
+    this.count += since.length;
+    if (this.ids) this.gen = Atomics.load(this.ids, DL_GEN);
+  }
+
+  /** The import tables, each call first catching up when another thread linked something. */
+  guard(
+    preview1: Record<string, WasiFunction>,
+    wasix: Record<string, WasiFunction> | undefined
+  ): { preview1: Record<string, WasiFunction>; wasix: Record<string, WasiFunction> | undefined } {
+    const ids = this.ids;
+    if (!ids) return { preview1, wasix };
+    const wrap = (table: Record<string, WasiFunction>) =>
+      Object.fromEntries(
+        Object.entries(table).map(([name, fn]) => [
+          name,
+          ((...args: never[]) => {
+            if (Atomics.load(ids, DL_GEN) !== this.gen) this.catchUp();
+            // Again on the way out: a call that waited (a join's futex) may
+            // come back to a pointer another thread just resolved.
+            const result = fn(...args);
+            if (Atomics.load(ids, DL_GEN) !== this.gen) this.catchUp();
+            return result;
+          }) as WasiFunction,
+        ])
+      );
+    return { preview1: wrap(preview1), wasix: wasix && wrap(wasix) };
+  }
+}
+
+/** `ids[DL_GEN]`: bumped whenever a worker of the process links something. */
+const DL_GEN = 3;
 
 export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike): Promise<number> {
   const { transport, sys, call: kernelCall, say } = kernelOf(init, port);
@@ -230,7 +355,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
       if (!host.fds.isShared) host.fds.share(threads.ids, false);
     };
   }
-  const { instance, driver } = await instantiate(host, module, memory, threads, stats);
+  const { instance, driver } = await instantiate(host, module, memory, threads, false, stats);
   const exports = instance.exports as { _start: () => void };
   driver.bind(instance.exports);
   try {
@@ -267,6 +392,7 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
   const { transport, sys, call, say } = kernelOf(init, port);
   const { thread } = init;
   const threads = new WasiThreads(port, thread.memory, threadCap(init.env), thread.tid, thread.ids);
+  threads.received = thread.modules;
   const host = new WasiHost({
     args: [init.argv0, ...init.args],
     env: init.env,
@@ -279,7 +405,7 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
   });
   // Fork and setjmp need the program's own stack for Asyncify: a thread gets
   // ENOSYS for them (its driver is never bound).
-  const { instance } = await instantiate(host, init.program.module, thread.memory, threads);
+  const { instance } = await instantiate(host, init.program.module, thread.memory, threads, true);
   const start = instance.exports.wasi_thread_start as (tid: number, arg: number) => void;
   try {
     start(thread.tid, thread.arg);

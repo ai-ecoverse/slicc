@@ -28,6 +28,7 @@ import { WasiError } from './wasi-files.js';
 import { WasiExit, type WasiFunction, type WasiHost, wrap } from './wasi-host.js';
 import { MAIN_TID, ThreadExit, type WasiThreads } from './wasi-threads.js';
 import type { AsyncifyDriver } from './wasix-fork.js';
+import { DlError, type WasixLinker } from './wasix-linker.js';
 import { type SpawnFdOp, WasixProcess } from './wasix-process.js';
 
 const FDFLAGSEXT_CLOEXEC = 1;
@@ -51,6 +52,8 @@ export class WasixHost {
   private readonly process: WasixProcess;
   /** The process's threads (a module with a shared memory can have them). */
   threads: WasiThreads | undefined;
+  /** The dynamic linker of a position-independent (PIE) program (5g). */
+  linker: WasixLinker | undefined;
 
   constructor(
     private readonly host: WasiHost,
@@ -140,6 +143,7 @@ export class WasixHost {
       ...this.fdImports(),
       ...this.processImports(),
       ...this.threadImports(),
+      ...this.dlImports(),
     });
   }
 
@@ -321,6 +325,72 @@ export class WasixHost {
         });
         mem.view().setUint32(out, pid, true);
       },
+    };
+  }
+
+  /**
+   * dlopen / dlsym (5g): the linker of a PIE program. A failure writes its
+   * message into the caller's buffer (NUL-terminated, dlerror's) and answers
+   * an errno the libc only tests for non-zero.
+   */
+  private dlImports(): Record<string, WasiFunction> {
+    const { mem, host } = this;
+    const failed = (message: string, buf: number, len: number): number => {
+      if (len > 0) {
+        const bytes = new TextEncoder().encode(message).subarray(0, len - 1);
+        mem.bytes(buf, bytes.length).set(bytes);
+        mem.view().setUint8(buf + bytes.length, 0);
+      }
+      return E.NOEXEC;
+    };
+    const linked = <T>(
+      buf: number,
+      len: number,
+      op: (l: WasixLinker) => T,
+      out: (v: T) => void
+    ): number => {
+      if (!this.linker) return failed('not a dynamically-linked program', buf, len);
+      try {
+        out(op(this.linker));
+        return E.SUCCESS;
+      } catch (e) {
+        if (e instanceof DlError) return failed(e.message, buf, len);
+        throw e;
+      }
+    };
+    return {
+      // path (null: the main module, handle 0), flags, err buf, LD_LIBRARY_PATH → handle
+      dlopen: (
+        p: number,
+        pl: number,
+        _flags: number,
+        buf: number,
+        len: number,
+        lp: number,
+        ll: number,
+        out: number
+      ) => {
+        if (p === 0) {
+          mem.view().setUint32(out, 0, true);
+          return E.SUCCESS;
+        }
+        return linked(
+          buf,
+          len,
+          (l) => l.open(this.str(p, pl), host.cwd, lp === 0 ? [] : this.str(lp, ll).split(':')),
+          (h) => void mem.view().setUint32(out, h, true)
+        );
+      },
+      // handle (0: everything), symbol, err buf → a table slot or an address
+      dlsym: (handle: number, s: number, sl: number, buf: number, len: number, out: number) =>
+        linked(
+          buf,
+          len,
+          (l) => l.symbol(handle, this.str(s, sl)),
+          (v) => void mem.view().setUint32(out, v, true)
+        ),
+      dl_invalid_handle: (handle: number) =>
+        handle !== 0 && this.linker && !this.linker.invalid(handle) ? E.SUCCESS : E.NOEXEC,
     };
   }
 

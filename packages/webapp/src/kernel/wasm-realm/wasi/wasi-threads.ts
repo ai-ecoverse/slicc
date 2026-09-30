@@ -36,6 +36,10 @@ export class WasiThreads {
   readonly ids: Int32Array;
   /** Before a spawn: what the spawning thread must do first (the main thread shares its table). */
   beforeSpawn: (() => void) | undefined;
+  /** The side modules the process compiled (5g), handed to a new thread so it need not recompile them. */
+  modules: (() => Record<string, WebAssembly.Module>) | undefined;
+  /** What this thread was handed at its start (`modules` of its spawner). */
+  received: Readonly<Record<string, WebAssembly.Module>> | undefined;
 
   constructor(
     private readonly port: SabPostLike,
@@ -57,9 +61,16 @@ export class WasiThreads {
     }
     this.beforeSpawn?.();
     const tid = Atomics.add(this.ids, LAST_TID, 1) + 1;
+    const modules = this.modules?.();
     this.port.postMessage({
       type: WASM_THREAD_SPAWN,
-      thread: { tid, arg, memory: this.memory, ids: this.ids.buffer as SharedArrayBuffer },
+      thread: {
+        tid,
+        arg,
+        memory: this.memory,
+        ids: this.ids.buffer as SharedArrayBuffer,
+        ...(modules ? { modules } : {}),
+      },
     });
     return tid;
   }

@@ -37,6 +37,7 @@ import { KernelSocket, LoopbackNet } from './socket.js';
 import { SOCKET_OPS, type SocketSyscall, socketSyscall } from './socket-syscalls.js';
 import type { KernelTty, Termios } from './tty.js';
 import { type VfsFileFs, VfsNodes, vfsFile } from './vfs-file.js';
+import type { LinkRecord } from './wasi/wasix-linker.js';
 
 /** The syscalls of a wasm-realm process (the request bodies on the SAB wire). */
 export type WasmSyscall =
@@ -95,6 +96,8 @@ export type WasmSyscall =
   | { op: 'fd-cloexec'; fd: number; on: boolean }
   /** The whole table, lowest fd first (a threaded WASI process's workers share it). */
   | { op: 'fd-list' }
+  /** The process's dynamic-link records (5g): `append` one, answer those from `from` on. */
+  | { op: 'dl-log'; append?: LinkRecord; from: number }
   /**
    * WASI fd_renumber: `to` becomes `from`'s description (what was at `to`
    * closes), `from` closes — unless `keep` (WASIX's, which is dup2).
@@ -243,6 +246,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-setfl',
   'fd-cloexec',
   'fd-list',
+  'dl-log',
   'fd-renumber',
   'fd-promote',
   'fd-open-tty',
@@ -794,6 +798,9 @@ export class WasmProcess {
           throw new KernelError('ESRCH');
         }
         return { ok: true, kind: 'void' };
+      case 'dl-log':
+        if (req.append) this.dlLog.push(req.append);
+        return { ok: true, kind: 'json', json: this.dlLog.slice(req.from) };
       case 'sig-mask':
         this.caught = req.caught;
         this.ignored = req.ignored;
@@ -802,6 +809,9 @@ export class WasmProcess {
         return { ok: true, kind: 'bytes', bytes: this.children.captured(req.pid, req.slot) };
     }
   }
+
+  /** What a WASIX process linked (libraries loaded, table slots handed out), for its threads to replay. */
+  private readonly dlLog: LinkRecord[] = [];
 
   /** The process is gone (exit, crash, SIGKILL): release its descriptors once. */
   async exit(): Promise<void> {
