@@ -6,7 +6,7 @@
  *   3. Windows   → PowerShell
  *   4. Linux+GUI → `zenity` / `kdialog`
  *   5. headless  → editable TTY
- *   6. no channel → fail closed (deny) + log
+ *   6. no channel → fail closed (`unavailable`) + log
  *
  * The environment probe is injectable so tests can force any branch without
  * touching the real platform / spawning `which`.

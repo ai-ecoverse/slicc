@@ -4,12 +4,19 @@
  * When there's no GUI but the node-server has a controlling terminal, the
  * approval gesture is a keystroke on stdin: `[a]llow once / [d]eny / [A]lways`.
  * Choosing "Always" then reads an editable pattern line (blank keeps the
- * suggested default). Fail closed: a closed stream, EOF, or any error denies.
+ * suggested default). Fail closed: an explicit `d` / other keystroke is a bare
+ * deny; a closed stream, EOF mid-prompt, or any thrown error is `unavailable`
+ * (the request never reached an answering human).
  */
 
 import type { Interface as ReadlineInterface } from 'readline';
 import { createInterface } from 'readline';
-import type { SudoApproveRequest, SudoBackend, SudoDecision } from './types.js';
+import {
+  type SudoApproveRequest,
+  type SudoBackend,
+  type SudoDecision,
+  unavailableDecision,
+} from './types.js';
 
 /** Seam for tests: build a question-asking interface over arbitrary streams. */
 export interface TtyDeps {
@@ -49,7 +56,7 @@ export function createTtyBackend(deps: TtyDeps = {}): SudoBackend {
         }
         return { decision: 'deny' };
       } catch {
-        return { decision: 'deny' };
+        return unavailableDecision();
       } finally {
         try {
           (rl as { close?: () => void }).close?.();

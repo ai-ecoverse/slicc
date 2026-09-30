@@ -8,14 +8,21 @@
  * (the agent's browser `node` shim can't reach this process) and returns the
  * human's decision. Loopback-only, like the other local node-server endpoints.
  *
- * Fail closed: an invalid body → 400; a backend that throws → `deny` (200).
- * Requests never auto-resolve to allow.
+ * Fail closed: an invalid body → 400; a backend that throws →
+ * `{ decision: 'deny', reason: 'unavailable' }` (200). A bare `deny` is reserved
+ * for a genuine human refusal. Requests never auto-resolve to allow.
  */
 
 import express, { type Express } from 'express';
 import { requireLoopback } from '../cloud-status.js';
 import { selectSudoBackend } from './select.js';
-import type { SudoApproveRequest, SudoBackend, SudoDecision, SudoKind } from './types.js';
+import {
+  type SudoApproveRequest,
+  type SudoBackend,
+  type SudoDecision,
+  type SudoKind,
+  unavailableDecision,
+} from './types.js';
 
 // Must list EVERY `SudoKind`. An omission is not a safe default: the endpoint
 // 400s, the browser-side broker reads that as a denial, and the gate fails
@@ -85,8 +92,8 @@ export function registerSudoApproveEndpoint(app: Express, options: SudoEndpointO
     try {
       decision = await backend.prompt(request);
     } catch (err) {
-      warn(`sudo-approve backend "${backend.name}" threw — denying: ${String(err)}`);
-      decision = { decision: 'deny' };
+      warn(`sudo-approve backend "${backend.name}" threw — denying as unavailable: ${String(err)}`);
+      decision = unavailableDecision();
     }
     res.json(decision);
   });

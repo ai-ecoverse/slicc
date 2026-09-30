@@ -6,14 +6,21 @@
  * {@link SudoDecision}. They are deliberately injectable via {@link ExecFn} so
  * tests can assert the argv and parsing without spawning a real dialog.
  *
- * Fail-closed contract: a dismissed dialog, a non-zero exit, an unparsable
- * result, or a thrown error all resolve to `deny`. An `always` result with an
- * empty pattern falls back to the suggested default.
+ * Fail-closed contract: a dismissed dialog or Deny button is a bare `deny`
+ * (a human refused). A spawn/exec plumbing failure, or no native channel, is
+ * `{ decision: 'deny', reason: 'unavailable' }` so callers never treat infra
+ * failures as owner refusal. An `always` result with an empty pattern falls
+ * back to the suggested default.
  */
 
 import { execFile as nodeExecFile } from 'child_process';
 import { promisify } from 'util';
-import type { SudoApproveRequest, SudoBackend, SudoDecision } from './types.js';
+import {
+  type SudoApproveRequest,
+  type SudoBackend,
+  type SudoDecision,
+  unavailableDecision,
+} from './types.js';
 
 /** Minimal exec seam: run a binary with args, resolve its stdout. */
 export type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }>;
@@ -41,6 +48,30 @@ function fallbackPattern(req: SudoApproveRequest): string {
   return req.suggestedPattern?.trim() || req.detail.trim();
 }
 
+/**
+ * Classify an exec failure from a real dialog binary.
+ *
+ * Node's `execFile` sets a **numeric** `code` when the process ran and exited
+ * non-zero (Deny / dismiss / Always-via-extra-button). A **string** errno
+ * (`ENOENT`, `EACCES`, …) or a generic `Error` without a numeric code means
+ * the binary never ran — plumbing, not a refusal.
+ */
+function denyFromDialogFailure(err: unknown): SudoDecision {
+  const code = (err as { code?: unknown })?.code;
+  if (typeof code === 'number') return { decision: 'deny' };
+  return unavailableDecision();
+}
+
+/**
+ * True when the dialog binary did not produce a real exit code.
+ * Matches {@link denyFromDialogFailure}: only a numeric `code` means the
+ * dialog ran (Deny / Always / dismiss). String errno or a code-less Error
+ * is plumbing — never a refusal.
+ */
+function isSpawnFailure(err: unknown): boolean {
+  return typeof (err as { code?: unknown })?.code !== 'number';
+}
+
 /** macOS: single `osascript display dialog` with 3 buttons + a text field. */
 export function createOsascriptBackend(exec: ExecFn = defaultExec): SudoBackend {
   return {
@@ -61,8 +92,10 @@ export function createOsascriptBackend(exec: ExecFn = defaultExec): SudoBackend 
           return { decision: 'always', pattern: text.length > 0 ? text : suggested };
         }
         return { decision: 'deny' };
-      } catch {
-        return { decision: 'deny' };
+      } catch (err) {
+        // User cancel (Escape) exits non-zero with a numeric code; spawn failure
+        // is ENOENT / generic Error → unavailable.
+        return denyFromDialogFailure(err);
       }
     },
   };
@@ -94,9 +127,11 @@ export function createPowerShellBackend(exec: ExecFn = defaultExec): SudoBackend
             pattern: pattern && pattern.length > 0 ? pattern : suggested,
           };
         }
+        // MessageBox "No" prints DENY — a genuine refusal.
         return { decision: 'deny' };
-      } catch {
-        return { decision: 'deny' };
+      } catch (err) {
+        // PowerShell MessageBox never throws on No; a throw is spawn/plumbing.
+        return denyFromDialogFailure(err);
       }
     },
   };
@@ -123,7 +158,8 @@ export function createZenityBackend(exec: ExecFn = defaultExec): SudoBackend {
         always = stdout.trim() === 'Always';
         allowed = true;
       } catch (err) {
-        // Non-zero exit: either Deny (no stdout) or the extra "Always" button.
+        // Spawn failure never reached a human; numeric exit is Deny / Always.
+        if (isSpawnFailure(err)) return unavailableDecision();
         always = stdoutOf(err).trim() === 'Always';
         allowed = always;
       }
@@ -156,6 +192,7 @@ export function createKdialogBackend(exec: ExecFn = defaultExec): SudoBackend {
         await exec('kdialog', ['--warningyesnocancel', text, '--title', 'SLICC sudo']);
         code = 0; // Yes
       } catch (err) {
+        if (isSpawnFailure(err)) return unavailableDecision();
         code = exitCodeOf(err);
       }
       if (code === 0) return { decision: 'allow' };
@@ -170,12 +207,15 @@ export function createKdialogBackend(exec: ExecFn = defaultExec): SudoBackend {
   };
 }
 
-/** A backend that always denies — used when no native channel exists. */
+/**
+ * A backend used when no native channel exists (headless, no DISPLAY/TTY).
+ * Returns `unavailable` — nobody was prompted — not a bare refuse.
+ */
 export function createDenyBackend(name = 'none'): SudoBackend {
   return {
     name,
     async prompt(): Promise<SudoDecision> {
-      return { decision: 'deny' };
+      return unavailableDecision();
     },
   };
 }
