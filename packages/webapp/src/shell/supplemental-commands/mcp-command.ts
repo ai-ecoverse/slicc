@@ -81,6 +81,17 @@ export interface McpCommandDeps {
   connectionManager?: import('../mcp/connection-manager.js').McpConnectionManager;
 }
 
+const VALID_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+
+function isValidServerName(name: string): boolean {
+  return VALID_NAME_RE.test(name);
+}
+
+function isTimeoutLikeError(e: unknown): boolean {
+  if (!(e instanceof DOMException)) return false;
+  return e.name === 'TimeoutError' || e.name === 'AbortError';
+}
+
 const ALIASES_DIR = '/workspace/.mcp/aliases';
 
 interface ExecResult {
@@ -181,6 +192,7 @@ export function createMcpCommand(deps: McpCommandDeps = {}): Command {
       const msg = e instanceof Error ? e.message : String(e);
       log.error('mcp subcommand failed', { sub, error: msg });
       if (e instanceof McpTimeoutError) return err(`mcp ${sub}: ${msg}`, 124);
+      if (isTimeoutLikeError(e)) return err(`mcp ${sub}: ${msg}`, 124);
       return err(`mcp ${sub}: ${msg}`);
     }
   });
@@ -222,7 +234,7 @@ Options:
   if (!/^https?:\/\//i.test(url)) {
     return err(`mcp add: invalid URL "${url}" (must start with http:// or https://)`);
   }
-  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(name)) {
+  if (!isValidServerName(name)) {
     return err(
       `mcp add: invalid name "${name}" (letters, digits, _ and - only; must start with a letter)`
     );
@@ -1363,15 +1375,21 @@ Examples:
   }
 
   if (toolGlob) {
-    const overrides = entry.toolExposure ?? {};
-    overrides[toolGlob] = mode;
-    entry.toolExposure = overrides;
+    if (toolGlob === '*') {
+      entry.toolExposure = { '*': mode };
+    } else {
+      const overrides = entry.toolExposure ?? {};
+      overrides[toolGlob] = mode;
+      entry.toolExposure = overrides;
+    }
     await setServer(name, entry, deps.fs);
+    if (deps.connectionManager) deps.connectionManager.notifyToolsChanged(name);
     return ok(`Set tool exposure for "${toolGlob}" on "${name}" → ${mode}\n`);
   }
 
   entry.exposure = mode;
   await setServer(name, entry, deps.fs);
+  if (deps.connectionManager) deps.connectionManager.notifyToolsChanged(name);
   return ok(`Set server exposure for "${name}" → ${mode}\n`);
 }
 
@@ -1428,6 +1446,11 @@ Examples:
   let skipped = 0;
 
   for (const name of names) {
+    if (!isValidServerName(name)) {
+      results.push(`  skip: "${name}" (invalid name)`);
+      skipped++;
+      continue;
+    }
     const serverDef = mcpServers[name];
     if (serverDef.command) {
       results.push(`  skip: "${name}" (stdio transport — not supported in browser)`);

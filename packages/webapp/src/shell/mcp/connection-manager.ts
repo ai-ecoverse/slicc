@@ -146,6 +146,10 @@ export class McpConnectionManager {
     return connection;
   }
 
+  notifyToolsChanged(serverName: string): void {
+    this.emitToolsChanged(serverName);
+  }
+
   async disconnectAll(): Promise<void> {
     const names = [...this.connections.keys()];
     await Promise.all(names.map((n) => this.disconnect(n)));

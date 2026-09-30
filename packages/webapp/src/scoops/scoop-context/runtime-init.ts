@@ -73,6 +73,8 @@ export interface RuntimeInitDeps {
   spawnBashJob: (command: string) => BashJobProcess | null;
   /** Pre-compaction transcript snapshot; omitted for units that persist none. */
   onBeforeCompaction?: CompactionConfig['onBeforeCompaction'];
+  /** Shared MCP connection manager (from `getOrCreateConnectionManager`). */
+  mcpConnectionManager?: import('../../shell/mcp/connection-manager.js').McpConnectionManager;
 }
 
 export type ScoopRuntime =
@@ -110,6 +112,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
     processOwner: deps.processOwner,
     getTurnPid: deps.getTurnPid,
     lickTarget: deps.getLickTarget(),
+    mcpConnectionManager: deps.mcpConnectionManager,
   });
   deps.onShellReady(shell);
 

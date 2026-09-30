@@ -63,6 +63,8 @@ export interface ShellAndSkillsDeps {
   lickTarget: string | undefined;
   /** `$TMPDIR` for this unit (`tmpDirFor`, `work-unit/descriptor.ts`). */
   tmpDir: string;
+  /** Shared MCP connection manager (from `getOrCreateConnectionManager`). */
+  mcpConnectionManager?: import('../../shell/mcp/connection-manager.js').McpConnectionManager;
 }
 
 export interface ShellAndSkills {
@@ -239,6 +241,7 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
     processManager: deps.processManager ?? undefined,
     processOwner: deps.processOwner,
     getCurrentShellPid: deps.getTurnPid,
+    mcpConnectionManager: deps.mcpConnectionManager,
   });
 
   log.info('AlmostBashShell initialized', { folder: scoop.folder });

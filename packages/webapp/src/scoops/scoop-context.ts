@@ -171,6 +171,9 @@ export class ScoopContext {
   private skillsFs: VirtualFS | null = null;
   private sudoManager: SudoManager | null = null;
   private capabilityBroker: CapabilityBroker | null = null;
+  private mcpConnectionManager:
+    | import('../shell/mcp/connection-manager.js').McpConnectionManager
+    | undefined;
 
   private structuredOutputValue: unknown;
   /** Raw API effort override (e.g. `'max'`) bypassing pi-ai's ThinkingLevel. */
@@ -360,6 +363,11 @@ export class ScoopContext {
     try {
       if (!this.fs) throw new Error('Filesystem not provided');
 
+      if (!this.mcpConnectionManager) {
+        const { getOrCreateConnectionManager } = await import('./scoop-context/tools.js');
+        this.mcpConnectionManager = await getOrCreateConnectionManager();
+      }
+
       const runtime = await buildScoopRuntime({
         scoop: this.scoop,
         unit: this.unit,
@@ -386,6 +394,7 @@ export class ScoopContext {
           this.structuredOutputValue = value;
           this.structuredOutputCaptured = true;
         },
+        mcpConnectionManager: this.mcpConnectionManager,
         spawnBashJob: (command) => this.bashJobs.spawn(command),
         // Roots always snapshot into `/sessions`. Scoops snapshot into
         // `/scoops/<folder>/sessions/` only while `memory-v2` is on — the

@@ -2541,3 +2541,109 @@ describe('mcp invoke --json', () => {
     expect(r.stdout).toContain('import');
   });
 });
+
+// ── mcp import — name validation ────────────────────────────────
+
+describe('mcp import — name validation', () => {
+  beforeEach(async () => {
+    await wipeGlobalFs();
+    _testOnly_resetStoreCache();
+  });
+  afterEach(async () => {
+    await wipeGlobalFs();
+  });
+
+  it('rejects names with path-traversal characters', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    const configContent = JSON.stringify({
+      mcpServers: {
+        '../evil': { url: 'https://evil.test/mcp' },
+        'good-server': { url: 'https://good.test/mcp' },
+      },
+    });
+    await fs.mkdir('/tmp', { recursive: true });
+    await fs.writeFile('/tmp/config.json', configContent);
+    const r = await runCmd(['import', '/tmp/config.json'], { fs });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('1 added');
+    expect(r.stdout).toContain('1 skipped');
+    expect(r.stdout).toContain('invalid name');
+    const stored = await readServersFile(fs);
+    expect(stored.servers['../evil']).toBeUndefined();
+    expect(stored.servers['good-server']).toBeDefined();
+  });
+});
+
+// ── mcp exposure — wildcard reset ───────────────────────────────
+
+describe('mcp exposure — wildcard reset', () => {
+  beforeEach(async () => {
+    await wipeGlobalFs();
+    _testOnly_resetStoreCache();
+  });
+  afterEach(async () => {
+    await wipeGlobalFs();
+  });
+
+  it('--tool "*" clears more-specific overrides', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await setServer(
+      'demo',
+      { url: 'https://demo.test/mcp', toolExposure: { 'delete_*': 'hidden', 'get-*': 'direct' } },
+      fs
+    );
+    const r = await runCmd(['exposure', 'demo', 'codemode', '--tool', '*'], { fs });
+    expect(r.exitCode).toBe(0);
+    const stored = await readServersFile(fs);
+    expect(stored.servers.demo.toolExposure).toEqual({ '*': 'codemode' });
+  });
+});
+
+// ── timeout exit 124 through AbortSignal ─────────────────────────
+
+describe('mcp invoke — timeout exit 124 via AbortSignal', () => {
+  beforeEach(async () => {
+    await wipeGlobalFs();
+    _testOnly_resetStoreCache();
+    _testOnly_resetMcpProviderState();
+  });
+  afterEach(async () => {
+    _testOnly_resetMcpProviderState();
+    await wipeGlobalFs();
+  });
+
+  it('maps DOMException TimeoutError to exit 124', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await setServer(
+      'slow',
+      { url: 'https://slow.test/mcp', tools: [{ name: 'hang', description: 'hangs' }] },
+      fs
+    );
+    const mockManager = {
+      has: () => true,
+      get: () => undefined,
+      connect: async () => ({
+        connection: {
+          serverName: 'slow',
+          serverUrl: 'https://slow.test/mcp',
+          listTools: async () => [],
+          callTool: async () => {
+            throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+          },
+          close: async () => {},
+        },
+        transport: 'pi' as const,
+      }),
+      disconnect: async () => {},
+      reconnect: async () => ({}) as never,
+      disconnectAll: async () => {},
+      onToolsChanged: () => () => {},
+      notifyToolsChanged: () => {},
+    };
+    const r = await runCmd(['invoke', 'slow', 'hang'], {
+      fs,
+      connectionManager: mockManager as never,
+    });
+    expect(r.exitCode).toBe(124);
+  });
+});
