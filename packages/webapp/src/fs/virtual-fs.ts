@@ -2025,17 +2025,21 @@ export class VirtualFS {
       }
     }
 
+    let newStat: Stats | undefined;
     if (oldStat) {
       try {
-        const newStat = await this.lstat(normalizedNew);
+        newStat = await this.lstat(normalizedNew);
         if (sameFileIdentity(oldStat, newStat)) return;
       } catch {}
     }
+
+    const replacesLink = newStat?.type === 'symlink' && entryType !== 'directory';
     try {
       await this.withWriteLock(async () => {
         await this.dropSidecarConsistency();
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
+        if (replacesLink) await this.lfs.unlink(normalizedNew);
         await this.lfs.rename(normalizedOld, normalizedNew);
         await this.writeOpfsMetadataSidecarUnlocked();
       });
