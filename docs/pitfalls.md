@@ -544,12 +544,12 @@ private checkWrite(path: string): void {
 
 All paths in VirtualFS must follow these rules:
 
-| Rule                   | Example             | Violation                                                                                                                                                   |
-| ---------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Absolute**           | `/foo/bar`, `/`     | `foo/bar` (relative), `./foo`                                                                                                                               |
-| **Forward-slash only** | `/path/to/file`     | `\path\to\file` (backslash)                                                                                                                                 |
-| **Normalized**         | `/a/b/c`            | `/a//b/c` (double slash), `/a/b/./c` (dot-slash)                                                                                                            |
-| **Symlinks supported** | `/link` → `/target` | Use `symlink()`, `readlink()`, `lstat()`, `realpath()`; max 10 hops (ELOOP). A target on a `/mnt` mount is `EXDEV` — never a silent empty directory (#3311) |
+| Rule                   | Example             | Violation                                                                                                                                                                              |
+| ---------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Absolute**           | `/foo/bar`, `/`     | `foo/bar` (relative), `./foo`                                                                                                                                                          |
+| **Forward-slash only** | `/path/to/file`     | `\path\to\file` (backslash)                                                                                                                                                            |
+| **Normalized**         | `/a/b/c`            | `/a//b/c` (double slash), `/a/b/./c` (dot-slash)                                                                                                                                       |
+| **Symlinks supported** | `/link` → `/target` | Use `symlink()`, `readlink()`, `lstat()`, `realpath()`; max 10 hops (ELOOP). A target on a mount resolves onto it (the walk stops at the boundary; never the empty placeholder, #3311) |
 
 **Normalization**: Use `normalizePath(path)` from `packages/webapp/src/fs/path-utils.ts` before any VFS operation.
 

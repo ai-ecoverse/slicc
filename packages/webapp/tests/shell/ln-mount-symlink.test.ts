@@ -1,6 +1,7 @@
 /**
- * Shell-level #3311: `ln -s <mount> <vfs-path>` must fail loudly instead of
- * exiting 0 with an empty directory. Same-layer `/tmp` links still work.
+ * Shell-level: `ln -s <mount> <vfs-path>` makes a link that reaches the mount
+ * (#3311 once left an empty placeholder directory behind it; a symlink's
+ * target may be on any filesystem, so refusing it with EXDEV was wrong too).
  */
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -40,19 +41,20 @@ describe('ln -s across a mount boundary (#3311)', () => {
     expect(await fs.readFile('/tmp/lntest/link')).toBe('hello\n');
   });
 
-  it('fails with EXDEV and creates neither a link nor an empty directory', async () => {
-    const result = await shell.executeCommand('ln -s /mnt/kb /shared/wiki');
-
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toMatch(/EXDEV|mount boundary/);
-    expect(await fs.exists('/shared/wiki')).toBe(false);
+  it('links onto the mount: ls, cat and writes go through to it', async () => {
+    const linked = await shell.executeCommand('ln -s /mnt/kb /shared/wiki');
+    expect(linked).toMatchObject({ exitCode: 0, stderr: '' });
+    expect((await fs.lstat('/shared/wiki')).type).toBe('symlink');
+    expect((await shell.executeCommand('ls /shared/wiki')).stdout).toBe('index.md\n');
+    expect((await shell.executeCommand('cat /shared/wiki/index.md')).stdout).toBe('# kb');
+    expect((await shell.executeCommand('echo new > /shared/wiki/new.md')).exitCode).toBe(0);
+    expect(await fs.readFile('/mnt/kb/new.md')).toBe('new\n');
   });
 
-  it('fails the same way when the link would live under /tmp', async () => {
-    const result = await shell.executeCommand('ln -s /mnt/kb /tmp/kblink');
-
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toMatch(/EXDEV|mount boundary/);
-    expect(await fs.exists('/tmp/kblink')).toBe(false);
+  it('a link under /tmp, and a relative one, reach it too', async () => {
+    expect((await shell.executeCommand('ln -s /mnt/kb /tmp/kblink')).exitCode).toBe(0);
+    expect((await shell.executeCommand('cat /tmp/kblink/index.md')).stdout).toBe('# kb');
+    expect((await shell.executeCommand('cd /shared && ln -s ../mnt/kb rel')).exitCode).toBe(0);
+    expect((await shell.executeCommand('cat /shared/rel/index.md')).stdout).toBe('# kb');
   });
 });
