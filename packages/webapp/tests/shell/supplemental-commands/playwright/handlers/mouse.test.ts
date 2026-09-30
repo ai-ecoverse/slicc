@@ -170,6 +170,55 @@ describe('mousewheel handler', () => {
       'session-1'
     );
   });
+
+  it('scrolls a background tab from the page instead of dispatching a wheel event', async () => {
+    // A hidden tab draws no frames, so Chrome never acknowledges a wheel event and the
+    // dispatch would hang until the 30 s CDP timeout.
+    const calls: TransportCall[] = [];
+    const transport = createMockTransport((method, params) => {
+      calls.push({ method, params: params ?? {} });
+      if (method === 'Runtime.evaluate' && params?.['expression'] === 'document.visibilityState') {
+        return { result: { value: 'hidden' } };
+      }
+      return { result: { value: true } };
+    });
+    const { browser } = createMockBrowser({ transport });
+    const state = createPlaywrightState();
+    state.lastMousePosition.set(TAB, { x: 40, y: 50 });
+    const r = await mousewheelHandler(
+      createHandlerCtx({ browser, state, positional: ['0', '600'], flags: { tab: TAB } })
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe('Mouse wheel scrolled (dx=0, dy=600)\n');
+    expect(r.stderr).toContain('background');
+    expect(calls.some((c) => c.method === 'Input.dispatchMouseEvent')).toBe(false);
+    const scroll = calls.find(
+      (c) => c.method === 'Runtime.evaluate' && String(c.params['expression']).includes('scrollBy')
+    );
+    expect(String(scroll?.params['expression'])).toContain('elementFromPoint(40, 50)');
+    expect(String(scroll?.params['expression'])).toContain('dy = 600');
+  });
+
+  it('fails instead of reporting a scroll when the page-side scroll throws', async () => {
+    const transport = createMockTransport((method, params) => {
+      if (method !== 'Runtime.evaluate') return {};
+      if (params?.['expression'] === 'document.visibilityState') {
+        return { result: { value: 'hidden' } };
+      }
+      return {
+        exceptionDetails: {
+          text: 'Uncaught',
+          exception: { description: 'EvalError: blocked by CSP' },
+        },
+      };
+    });
+    const { browser } = createMockBrowser({ transport });
+    await expect(
+      mousewheelHandler(
+        createHandlerCtx({ browser, positional: ['0', '600'], flags: { tab: TAB } })
+      )
+    ).rejects.toThrow('blocked by CSP');
+  });
 });
 
 describe('drop handler', () => {
