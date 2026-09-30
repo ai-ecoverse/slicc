@@ -326,6 +326,35 @@ describe('WASIX: exec generations', () => {
   });
 });
 
+describe('WasixHost: interval timers', () => {
+  const MS = 1_000_000n; // WASI timestamps are ns
+  const alarms = (t: ReturnType<typeof setup>) =>
+    t.kernel.calls.filter((c) => c.op === 'proc-alarm');
+
+  it('proc_raise_interval (every wasix-libc): it_interval in ns, repeating; 0 cancels', () => {
+    const t = setup();
+    expect(t.x.proc_raise_interval(14, 250n * MS, 1)).toBe(E.SUCCESS);
+    expect(t.x.proc_raise_interval(14, 0n, 1)).toBe(E.SUCCESS);
+    expect(alarms(t)).toEqual([
+      { op: 'proc-alarm', sig: 14, ms: 250, repeat: true },
+      { op: 'proc-alarm', sig: 14, ms: 0, repeat: true },
+    ]);
+  });
+
+  it('proc_raise_interval2 (patched libc): cancel, a one-shot alarm(), first then every', () => {
+    const t = setup();
+    expect(t.x.proc_raise_interval2(14, 0n, 0n, 0)).toBe(E.SUCCESS);
+    expect(t.x.proc_raise_interval2(14, 5000n * MS, 0n, 0)).toBe(E.SUCCESS);
+    expect(t.x.proc_raise_interval2(14, 100n * MS, 20n * MS, 1)).toBe(E.SUCCESS);
+    expect(t.x.proc_raise_interval2(99, 1n, 0n, 0)).toBe(E.INVAL);
+    expect(alarms(t)).toEqual([
+      { op: 'proc-alarm', sig: 14, ms: 0, firstMs: 0, repeat: false },
+      { op: 'proc-alarm', sig: 14, ms: 0, firstMs: 5000, repeat: false },
+      { op: 'proc-alarm', sig: 14, ms: 20, firstMs: 100, repeat: true },
+    ]);
+  });
+});
+
 describe('importedMemory', () => {
   it('reads a memory import (limits, shared) from the import section, else undefined', () => {
     const enc = new TextEncoder();

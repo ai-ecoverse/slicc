@@ -26,10 +26,12 @@
 import { E, FDFLAGS, WASI_SIGNAL_TO_POSIX, wasiErrnoOf } from './wasi-abi.js';
 import { WasiError } from './wasi-files.js';
 import { WasiExit, type WasiFunction, type WasiHost, wrap } from './wasi-host.js';
+import type { WasiSignals } from './wasi-signals.js';
 import { MAIN_TID, ThreadExit, type WasiThreads } from './wasi-threads.js';
 import type { AsyncifyDriver } from './wasix-fork.js';
 import { DlError, type WasixLinker } from './wasix-linker.js';
 import { type SpawnFdOp, WasixProcess } from './wasix-process.js';
+import { wasixSocketImports } from './wasix-sockets.js';
 
 const FDFLAGSEXT_CLOEXEC = 1;
 const SPAWN_OP_SIZE = 56;
@@ -46,6 +48,7 @@ export const COMPAT: Readonly<Record<string, readonly string[]>> = {
   spawn: ['proc_spawn2', 'proc_spawn3'],
   open: ['path_open2'],
   dup: ['fd_dup', 'fd_dup2'],
+  alarm: ['proc_raise_interval', 'proc_raise_interval2'],
 };
 
 export class WasixHost {
@@ -54,6 +57,8 @@ export class WasixHost {
   threads: WasiThreads | undefined;
   /** The dynamic linker of a position-independent (PIE) program (5g). */
   linker: WasixLinker | undefined;
+  /** The main thread's signal delivery (a thread's signals are the main thread's). */
+  signals: WasiSignals | undefined;
 
   constructor(
     private readonly host: WasiHost,
@@ -64,6 +69,8 @@ export class WasixHost {
     // A libc without fd_fdflags_set cannot mark fds close-on-exec, and takes them all to be.
     if (module && !WebAssembly.Module.imports(module).some((i) => i.name === 'fd_fdflags_set')) {
       host.fds.implicitCloexec = true;
+      // The same libc turns an interrupted poll_oneoff into ENOTSUP.
+      host.interruptWakes = true;
     }
   }
 
@@ -144,6 +151,7 @@ export class WasixHost {
       ...this.processImports(),
       ...this.threadImports(),
       ...this.dlImports(),
+      ...wasixSocketImports(this.host, this.host.imports()),
     });
   }
 
@@ -173,8 +181,31 @@ export class WasixHost {
       // No dispositions to hand down: the kernel keeps them.
       proc_signals_sizes_get: (out: number) => void mem.view().setUint32(out, 0, true),
       proc_signals_get: () => E.SUCCESS,
-      callback_signal: () => undefined,
-      proc_raise_interval: () => E.NOTSUP,
+      // The export that runs a signal's handler (wasix-libc's first sigaction names it).
+      callback_signal: (name: number, len: number) =>
+        void this.signals?.register(this.str(name, len)),
+      // setitimer: the kernel raises `sig` every `interval` (a WASI timestamp: ns, as
+      // wasix-libc computes it; 0 cancels). That libc passes it_interval, never
+      // it_value: a one-shot alarm() arrives as 0.
+      proc_raise_interval: (sig: number, interval: bigint, repeat: number) =>
+        void host.o.kernel.call({
+          op: 'proc-alarm',
+          sig: posixSignal(sig),
+          ms: nsToMs(interval),
+          repeat: repeat !== 0,
+        }),
+      // Our patched libc's: it_value too — the first after `initial` (0: cancel),
+      // then every `interval` if `repeat`.
+      proc_raise_interval2: (sig: number, initial: bigint, interval: bigint, repeat: number) => {
+        const ms = nsToMs(interval);
+        host.o.kernel.call({
+          op: 'proc-alarm',
+          sig: posixSignal(sig),
+          ms,
+          firstMs: nsToMs(initial),
+          repeat: repeat !== 0 && ms > 0,
+        });
+      },
       proc_id: (out: number) => void mem.view().setUint32(out, host.o.pid, true),
       proc_parent: (pid: number, out: number) => {
         if (pid !== 0 && pid !== host.o.pid) throw new WasiError('ESRCH');
@@ -255,6 +286,7 @@ export class WasixHost {
         // Signal 0 only asks whether the process exists.
         const posix = sig === 0 ? 0 : WASI_SIGNAL_TO_POSIX[sig];
         if (posix === undefined) throw new WasiError('EINVAL');
+        if (pid === this.host.o.pid && posix !== 0 && this.host.onRaise?.(posix)) return;
         this.host.o.kernel.call({ op: 'proc-kill', pid, sig: posix });
       },
       // The first generations never return: a failed exec ends the process
@@ -412,6 +444,8 @@ export class WasixHost {
         if (!(this.threads?.known(tid) ?? tid === MAIN_TID)) throw new WasiError('ESRCH');
         const posix = WASI_SIGNAL_TO_POSIX[sig];
         if (posix === undefined) throw new WasiError('EINVAL');
+        // abort() is pthread_kill(self, SIGABRT): during a default action, that action's.
+        if (host.onRaise?.(posix)) return;
         host.o.kernel.call({ op: 'proc-kill', pid: host.o.pid, sig: posix });
       },
       // start_ptr → wasi_thread_start(tid, start_ptr) in a new worker; EAGAIN past the cap.
@@ -500,4 +534,16 @@ export class WasixHost {
 /** Whether a module speaks WASIX (it imports `wasix_32v1`). */
 export function isWasix(module: WebAssembly.Module): boolean {
   return WebAssembly.Module.imports(module).some((i) => i.module === 'wasix_32v1');
+}
+
+/** A WASI signal's POSIX number (EINVAL for none). */
+function posixSignal(sig: number): number {
+  const posix = WASI_SIGNAL_TO_POSIX[sig];
+  if (posix === undefined) throw new WasiError('EINVAL');
+  return posix;
+}
+
+/** A WASI duration (ns) in whole milliseconds, rounded up: a nonzero one never becomes 0 (a cancel). */
+function nsToMs(ns: bigint): number {
+  return Math.ceil(Number(ns) / 1e6);
 }

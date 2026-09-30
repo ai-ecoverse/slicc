@@ -30,6 +30,8 @@ fn main() {
             opened.seek(SeekFrom::Start(0)).unwrap();
             opened.read_to_string(&mut text).unwrap();
             print!("{text}");
+            // fstat of a threaded process's file (a kernel description).
+            println!("len {}", opened.metadata().unwrap().len());
         }
         // Threads write to stdout (fd 1) in turn.
         Some("stdout") => {

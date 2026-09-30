@@ -90,7 +90,7 @@ export interface KernelFile {
   /** ftruncate(2) (a VFS file). */
   resize?(size: number): Promise<void>;
   /** A VFS file's path (where it is now) and size, buffered writes included. */
-  stat?(): Promise<{ path: string; size: number }>;
+  stat?(): Promise<{ path: string; size: number; orphan?: true }>;
   /** A terminal: its termios and window size (isatty, tcgetattr, TIOCGWINSZ). */
   tty?: KernelTty;
   /**
@@ -98,6 +98,8 @@ export interface KernelFile {
    * directory or device): the kernel only keeps its number taken, so the
    * program's fds and the kernel's stay one numbering.
    */
+  /** fstat(2) of a VFS file description: its size now, and the path it stands for. */
+  stat?(): Promise<{ size: number; path: string; orphan?: true }>;
   held?: true;
   /**
    * What a held number stands for in its worker (a WASI directory or

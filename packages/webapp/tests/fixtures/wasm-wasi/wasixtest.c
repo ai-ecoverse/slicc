@@ -6,6 +6,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <spawn.h>
@@ -34,6 +39,9 @@ static void *opener(void *p) {
   (void)p;
   return (void *)(long)open("tfile.txt", O_RDONLY);
 }
+
+static volatile sig_atomic_t got;
+static void on_signal(int sig) { got = sig; }
 
 static jmp_buf env;
 static int depth(int n) {
@@ -111,6 +119,67 @@ int main(int argc, char **argv) {
     int status;
     waitpid(pid, &status, 0);
     report("subprocess", status);
+    return 0;
+  }
+  if (!strcmp(cmd, "handler")) {
+    /* sigaction handlers run (5f): kill(self), an interval timer, and an uncaught SIGTERM. */
+    struct sigaction sa = {0};
+    sa.sa_handler = on_signal;
+    sigaction(SIGUSR1, &sa, NULL);
+    kill(getpid(), SIGUSR1);
+    printf("handled %d\n", (int)got);
+    sigaction(SIGALRM, &sa, NULL);
+    got = 0;
+    /* wasix-libc's setitimer passes it_interval only: a periodic timer. */
+    struct itimerval it = {{0, 50000}, {0, 50000}};
+    setitimer(ITIMER_REAL, &it, NULL);
+    for (int i = 0; i < 100 && !got; i++) usleep(20000);
+    struct itimerval off = {{0, 0}, {0, 0}};
+    setitimer(ITIMER_REAL, &off, NULL);
+    printf("alarm %d\n", (int)got);
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+      /* A handler for another signal registers the callback; SIGTERM has none. */
+      sigaction(SIGUSR2, &sa, NULL);
+      kill(getpid(), SIGTERM);
+      for (;;) usleep(20000);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    report("uncaught", status);
+    return 0;
+  }
+  if (!strcmp(cmd, "socket")) {
+    /* Sockets it opens itself (5f): listen, connect, accept, send, recv, getaddrinfo. */
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET;
+    inet_aton("127.0.0.1", &a.sin_addr);
+    if (bind(s, (struct sockaddr *)&a, sizeof a) || listen(s, 1)) return perror("bind/listen"), 1;
+    socklen_t len = sizeof a;
+    getsockname(s, (struct sockaddr *)&a, &len);
+    int c = socket(AF_INET, SOCK_STREAM, 0);
+    if (connect(c, (struct sockaddr *)&a, sizeof a)) return perror("connect"), 1;
+    struct sockaddr_in peer;
+    len = sizeof peer;
+    int d = accept(s, (struct sockaddr *)&peer, &len);
+    if (d < 0) return perror("accept"), 1;
+    send(c, "ping", 4, 0);
+    char b[8];
+    ssize_t n = recv(d, b, sizeof b, 0);
+    printf("got %.*s on port>0 %d from %s\n", (int)n, b, ntohs(a.sin_port) > 0,
+           inet_ntoa(peer.sin_addr));
+    struct addrinfo hints = {0}, *ai;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    int r = getaddrinfo("localhost", "80", &hints, &ai);
+    printf("localhost %s\n", r ? "unresolved" : inet_ntoa(((struct sockaddr_in *)ai->ai_addr)->sin_addr));
+    r = getaddrinfo("example.com", "80", &hints, &ai);
+    printf("example.com %s\n", r ? "unresolved" : "resolved");
+    close(d);
+    close(c);
+    close(s);
     return 0;
   }
   if (!strcmp(cmd, "threads")) {

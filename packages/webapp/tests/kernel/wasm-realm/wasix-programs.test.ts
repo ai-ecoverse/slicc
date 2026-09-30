@@ -66,7 +66,7 @@ interface Run {
 function run(
   name: string,
   args: string[],
-  opts: { stdin?: string; env?: Record<string, string> } = {}
+  opts: { stdin?: string; env?: Record<string, string>; signalAfter?: [number, number] } = {}
 ): Promise<Run> {
   let stdout = '';
   let stderr = '';
@@ -140,12 +140,12 @@ function run(
     2,
     sinkFile((b) => void (stderr += dec.decode(b, { stream: true })))
   );
-  return start(name, [name, ...args], fds, '/workspace').exited.then((code) => ({
-    code,
-    stdout,
-    stderr,
-    procs,
-  }));
+  const first = start(name, [name, ...args], fds, '/workspace');
+  if (opts.signalAfter) {
+    const [ms, sig] = opts.signalAfter;
+    setTimeout(() => live.get(first.pid)?.(sig), ms);
+  }
+  return first.exited.then((code) => ({ code, stdout, stderr, procs }));
 }
 
 /** Copy a host tree into the VFS (a webc volume, as a package would install it). */
@@ -212,6 +212,20 @@ describe('WASIX (wasixtest, C/wasix-libc)', () => {
     const r = await run('wasixtest', ['subprocess']);
     expect(r.stderr).toBe('');
     expect(r.stdout).toBe('errpipe EOF 1\nHI\nsubprocess: exit 0\n');
+  });
+
+  it('sigaction handlers run: kill(self), an interval timer; an uncaught SIGTERM still ends it signaled', async () => {
+    const r = await run('wasixtest', ['handler']);
+    expect(r.stderr.replace(/Program recieved termination signal: .*\n/, '')).toBe('');
+    expect(r.stdout).toBe('handled 10\nalarm 14\nuncaught: signal 15\n');
+  });
+
+  it('sockets it opens itself: listen, connect, accept, send, recv, getaddrinfo (loopback only)', async () => {
+    const r = await run('wasixtest', ['socket']);
+    expect(r).toMatchObject({ code: 0, stderr: '' });
+    expect(r.stdout).toBe(
+      'got ping on port>0 1 from 127.0.0.1\nlocalhost 127.0.0.1\nexample.com unresolved\n'
+    );
   });
 
   it('pthreads (thread_spawn_v2): one descriptor table, then a fork of the threaded process', async () => {
@@ -299,5 +313,46 @@ describe.skipIf(!PYTHON || !COREUTILS)('WASIX python (wasmer/python, stdlib on t
       'import threading; out = []; ts = [threading.Thread(target=out.append, args=(i,)) for i in range(3)]; [t.start() for t in ts]; [t.join() for t in ts]; print(sorted(out))',
     ]);
     expect(threaded).toMatchObject({ code: 0, stdout: '[0, 1, 2]\n', stderr: '' });
+    // Sockets it opens itself: http.server on loopback in a thread, urllib fetching from it.
+    const http = await run('python', [
+      '-c',
+      [
+        'import http.server, threading, urllib.request, socket',
+        "srv = http.server.HTTPServer(('127.0.0.1', 0), http.server.SimpleHTTPRequestHandler)",
+        'threading.Thread(target=srv.handle_request).start()',
+        "print(urllib.request.urlopen(f'http://127.0.0.1:{srv.server_port}/fruit.txt').read().split())",
+        "print(socket.getaddrinfo('localhost', 80, socket.AF_INET)[0][4])",
+      ].join('; '),
+    ]);
+    expect(http.stdout).toBe("[b'pear', b'apple', b'fig']\n('127.0.0.1', 80)\n");
+    expect(http.code).toBe(0);
+    // signal.signal handlers run: os.kill, setitimer, and a ^C from outside is KeyboardInterrupt.
+    const handled = await run('python', [
+      '-c',
+      [
+        'import os, signal, time',
+        "signal.signal(signal.SIGUSR1, lambda s, f: print('usr1', s))",
+        'os.kill(os.getpid(), signal.SIGUSR1)',
+        'hits = []',
+        'signal.signal(signal.SIGALRM, lambda s, f: hits.append(s))',
+        // This wasix-libc passes the interval only (a periodic timer) and has no
+        // working getitimer / old value: the timer runs until the process ends.
+        'signal.setitimer(signal.ITIMER_REAL, 0.05, 0.05)',
+        'time.sleep(0.3)',
+        // The old libc's sleep ends at the signal (see pollOneoff's interruptWakes).
+        "print('alarm', hits[0])",
+      ].join('; '),
+    ]);
+    expect(handled.stderr).toBe('');
+    expect(handled).toMatchObject({ code: 0, stdout: 'usr1 10\nalarm 14\n' });
+    const interrupted = await run(
+      'python',
+      [
+        '-c',
+        "import time\ntry:\n  time.sleep(30)\nexcept KeyboardInterrupt:\n  print('interrupted')",
+      ],
+      { signalAfter: [1500, 2] }
+    );
+    expect(interrupted).toMatchObject({ code: 0, stdout: 'interrupted\n' });
   }, 120_000);
 });

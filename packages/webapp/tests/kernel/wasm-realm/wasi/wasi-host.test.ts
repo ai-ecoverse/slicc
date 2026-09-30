@@ -492,13 +492,17 @@ describe('WasiHost: devices and /dev/fd', () => {
 });
 
 describe('WasiHost: clocks, randomness, poll, exit', () => {
-  it('clocks: realtime from the epoch, monotonic from the start; 1 µs resolution', () => {
+  it('clocks: realtime from the epoch, monotonic from the time origin (never under 1 s); 1 µs resolution', () => {
     const { call, g } = setup();
     const out = g.alloc(8);
     call('clock_time_get', CLOCK.REALTIME, 0n, out);
     expect(Number(g.u64(out) / 1_000_000n)).toBeGreaterThan(Date.now() - 1000);
     call('clock_time_get', CLOCK.MONOTONIC, 0n, out);
-    expect(g.u64(out)).toBeLessThan(10_000_000_000n);
+    const first = g.u64(out);
+    // A deadline in the first second breaks wasix-libc's absolute sleeps (Wasmer's Python).
+    expect(first).toBeGreaterThan(1_000_000_000n);
+    call('clock_time_get', CLOCK.MONOTONIC, 0n, out);
+    expect(g.u64(out)).toBeGreaterThanOrEqual(first);
     call('clock_res_get', CLOCK.MONOTONIC, out);
     expect(g.u64(out)).toBe(1000n);
     const buf = g.alloc(70000);

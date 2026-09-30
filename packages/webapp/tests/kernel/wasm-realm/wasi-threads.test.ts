@@ -89,7 +89,7 @@ describe('WASI threads (wasm32-wasip1-threads)', () => {
   it('one descriptor table: a file opened in one thread is written and read in another', async () => {
     const r = await run(['files']);
     expect(r).toMatchObject({ code: 0, stderr: '' });
-    expect(r.stdout).toBe('from a thread\nfrom main\n');
+    expect(r.stdout).toBe('from a thread\nfrom main\nlen 24\n');
     expect(new TextDecoder().decode(await fs.readFileBuffer('/workspace/shared.txt'))).toBe(
       'from a thread\nfrom main\n'
     );
