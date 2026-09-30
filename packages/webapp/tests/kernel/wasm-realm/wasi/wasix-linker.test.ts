@@ -23,7 +23,7 @@ function setup(files: Record<string, Uint8Array>, shared?: WebAssembly.Memory) {
   const records: LinkRecord[] = [];
   const linker = new WasixLinker(
     memory,
-    { memorySize: 1024, memoryAlign: 4, tableSize: 0, tableAlign: 0, needed: [] },
+    { memorySize: 1024, memoryAlign: 4, tableSize: 0, tableAlign: 0, needed: [], runtimePath: [] },
     {
       read: (path) => files[path] as Uint8Array<ArrayBuffer> | undefined,
       hostImports: () => ({}),
@@ -52,6 +52,12 @@ describe('dylink.0', () => {
     expect(b?.needed).toEqual(['liba.so']);
     expect(b?.memorySize).toBeGreaterThan(0);
     expect(dylinkInfo(new WebAssembly.Module(bytes('liba.so')))?.needed).toEqual([]);
+    // `wasm-ld --rpath`: where to look for what it needs, as written.
+    expect(dylinkInfo(new WebAssembly.Module(bytes('librun.so')))?.runtimePath).toEqual([
+      '/no/such/dir',
+      '$ORIGIN/../deps',
+    ]);
+    expect(b?.runtimePath).toEqual([]);
     // A module that is not position-independent has none.
     expect(
       dylinkInfo(new WebAssembly.Module(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0])))
@@ -78,6 +84,32 @@ describe('WasixLinker', () => {
     // The same function, the same slot.
     expect(linker.symbol(0, 'a_bump')).toBe(linker.symbol(handle, 'a_bump'));
     expect(linker.open('/l/libb.so', '/', [])).toBe(handle);
+  });
+
+  it('finds what a library needs in its runtime path, $ORIGIN as its own directory', () => {
+    // A package's layout: the extension in one directory, its library in a
+    // sibling one, and nothing in the library directories.
+    const { linker, records } = setup({
+      '/pkg/ext/librun.so': bytes('librun.so'),
+      '/pkg/deps/liba.so': bytes('liba.so'),
+    });
+    const handle = linker.open('/pkg/ext/librun.so', '/', []);
+    expect(
+      records.filter((r) => r.kind === 'load').map((r) => (r as { path: string }).path)
+    ).toEqual(['/pkg/deps/liba.so', '/pkg/ext/librun.so']);
+    const run = linker.table.get(linker.symbol(handle, 'run_bump')) as (n: number) => number;
+    expect(run(2)).toBe(43); // liba constructed: 40 + 2, plus one
+    // LD_LIBRARY_PATH comes first, as for ELF's DT_RUNPATH.
+    const first = setup({
+      '/pkg/ext/librun.so': bytes('librun.so'),
+      '/pkg/deps/liba.so': bytes('liba.so'),
+      '/ld/liba.so': bytes('liba.so'),
+    });
+    first.linker.open('/pkg/ext/librun.so', '/', ['/ld']);
+    expect(first.records.some((r) => r.kind === 'load' && r.path === '/ld/liba.so')).toBe(true);
+    // Without it, and nothing beside or in the library directories: not found.
+    const none = setup({ '/pkg/ext/librun.so': bytes('librun.so') });
+    expect(() => none.linker.open('/pkg/ext/librun.so', '/', [])).toThrow(/liba\.so: not found/);
   });
 
   it('reports what went wrong: no file, no wasm, no dylink.0, a needed library missing, an unknown symbol', () => {

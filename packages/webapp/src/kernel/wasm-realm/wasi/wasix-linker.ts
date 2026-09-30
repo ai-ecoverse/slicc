@@ -28,6 +28,11 @@ export const STACK_SIZE = 8 * 1024 * 1024;
 /** Where a library named without a slash is looked for. */
 const LIBRARY_DIRS = ['/lib', '/usr/lib', '/usr/local/lib'];
 
+/** A runtime-path entry with `$ORIGIN` / `${ORIGIN}` as the module's directory. */
+function expandOrigin(entry: string, dir: string): string {
+  return entry.replace(/\$(?:ORIGIN\b|\{ORIGIN\})/g, dir);
+}
+
 /** A change to the linked set, which every instance (thread) of the process must make too. */
 export type LinkRecord =
   | { kind: 'load'; handle: number; path: string; memoryBase: number; tableBase: number }
@@ -244,10 +249,13 @@ export class WasixLinker {
     }
     const info = dylinkInfo(module);
     if (!info) throw new DlError(`${path}: not a side module (no dylink.0)`);
-    // What it needs is loaded (and initialized) first, looked for beside it too.
+    // What it needs is loaded (and initialized) first, looked for beside it,
+    // then where a program's are, then in its runtime path: after
+    // LD_LIBRARY_PATH, as ELF's DT_RUNPATH is.
     const dir = path.slice(0, path.lastIndexOf('/')) || '/';
+    const search = [dir, ...ldPath, ...info.runtimePath.map((p) => expandOrigin(p, dir))];
     const needed = info.needed.map(
-      (n) => this.load(this.locate(n, cwd, [dir, ...ldPath]), cwd, ldPath).handle
+      (n) => this.load(this.locate(n, cwd, search), cwd, ldPath).handle
     );
     const memoryBase = this.allocate(info.memorySize, 2 ** info.memoryAlign);
     const tableBase = this.table.length;
