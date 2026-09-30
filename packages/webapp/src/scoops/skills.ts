@@ -13,6 +13,7 @@ import { getPreset } from '../base/dock-tree-spec.js';
 import { createLogger } from '../base/logger.js';
 import { noBundledSkillSeed } from '../core/feature-flags.js';
 import type { VirtualFS } from '../fs/index.js';
+import { parseSkillFrontmatter } from '../skills/frontmatter.js';
 import type { SkillDiscoverySource } from '../skills/index.js';
 import { discoverSkills } from '../skills/index.js';
 
@@ -148,46 +149,10 @@ function dedupeSkillsByName<T extends Skill>(skills: T[]): T[] {
 }
 
 /**
- * Parse YAML frontmatter from a skill file
+ * Parse YAML frontmatter from a skill file (including `|` / `>` block scalars).
  */
 function parseFrontmatter(content: string): { metadata: Partial<SkillMetadata>; body: string } {
-  const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-
-  if (!frontmatterMatch) {
-    return { metadata: {}, body: content };
-  }
-
-  const [, yamlStr, body] = frontmatterMatch;
-  const metadata: Partial<SkillMetadata> = {};
-
-  // Simple YAML parsing for our expected keys
-  for (const line of yamlStr.split('\n')) {
-    const match = line.match(/^(\w[\w-]*):\s*(.*)$/);
-    if (!match) continue;
-
-    const [, key, value] = match;
-    const trimmedValue = value.trim();
-
-    switch (key) {
-      case 'name':
-        metadata.name = trimmedValue;
-        break;
-      case 'description':
-        metadata.description = trimmedValue;
-        break;
-      case 'allowed-tools':
-        metadata.allowedTools = trimmedValue.split(',').map((t) => t.trim());
-        break;
-      case 'layout':
-        metadata.layout = trimmedValue;
-        break;
-      case 'theme':
-        metadata.theme = trimmedValue;
-        break;
-    }
-  }
-
-  return { metadata, body };
+  return parseSkillFrontmatter(content);
 }
 
 /**
