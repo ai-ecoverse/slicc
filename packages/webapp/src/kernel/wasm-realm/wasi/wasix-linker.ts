@@ -43,6 +43,7 @@ export interface LinkerHost {
 interface Linked {
   handle: number;
   path: string;
+  module: WebAssembly.Module;
   info: DylinkInfo;
   instance: WebAssembly.Instance;
   memoryBase: number;
@@ -151,13 +152,24 @@ export class WasixLinker {
     return !this.modules.has(handle);
   }
 
+  /**
+   * A thread's modules its spawner compiled already, by path: its replay
+   * links them as they are, not re-read and recompiled (numpy's are MBs).
+   */
+  cache: Readonly<Record<string, WebAssembly.Module>> | undefined;
+
+  /** The side modules compiled so far, by path, for a new thread (`cache`). */
+  compiled(): Record<string, WebAssembly.Module> {
+    const out: Record<string, WebAssembly.Module> = {};
+    for (const [path, linked] of this.byPath) out[path] = linked.module;
+    return out;
+  }
+
   /** Make a record another instance of the process made (a thread replays the process's). */
   replay(record: LinkRecord): void {
     if (record.kind === 'load') {
       if (this.modules.has(record.handle)) return;
-      const bytes = this.host.read(record.path);
-      if (!bytes) throw new DlError(`${record.path}: gone`);
-      this.instantiate(record.path, new WebAssembly.Module(bytes), record, false);
+      this.instantiate(record.path, this.moduleAt(record.path), record, false);
       this.nextHandle = Math.max(this.nextHandle, record.handle + 1);
       return;
     }
@@ -169,6 +181,15 @@ export class WasixLinker {
     growTable(this.table, record.index + 1);
     this.table.set(record.index, value);
     this.slots.set(value, record.index);
+  }
+
+  /** The module a replayed load links: handed over compiled, else read and compiled here. */
+  private moduleAt(path: string): WebAssembly.Module {
+    const cached = this.cache?.[path];
+    if (cached) return cached;
+    const bytes = this.host.read(path);
+    if (!bytes) throw new DlError(`${path}: gone`);
+    return new WebAssembly.Module(bytes);
   }
 
   private module(handle: number): Linked {
@@ -244,6 +265,7 @@ export class WasixLinker {
     const linked: Linked = {
       handle: at.handle,
       path,
+      module,
       info,
       instance: undefined as never,
       memoryBase: at.memoryBase,

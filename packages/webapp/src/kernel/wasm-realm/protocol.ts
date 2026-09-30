@@ -137,6 +137,8 @@ export interface WasmThread {
    * running besides the main one, the descriptor table's generation.
    */
   ids: SharedArrayBuffer;
+  /** The side modules the process has compiled, by path (a WASIX dynamically linked program). */
+  modules?: Record<string, WebAssembly.Module>;
 }
 
 export interface WasmThreadSpawnMsg {

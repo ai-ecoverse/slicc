@@ -205,6 +205,11 @@ async function instantiate(
   if (sync) {
     ({ preview1, wasix } = sync.guard(preview1, wasix));
     if (wasixHost) wasixHost.linker = sync.linker;
+    // A thread replays with the modules its spawner compiled, and hands on what it compiles.
+    if (threads) {
+      sync.linker.cache = threads.received;
+      threads.modules = () => sync.linker.compiled();
+    }
   }
   const hostImports = linkImports(module, preview1, wasix, memory, threads);
   const imports: WebAssembly.Imports = sync
@@ -387,6 +392,7 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
   const { transport, sys, call, say } = kernelOf(init, port);
   const { thread } = init;
   const threads = new WasiThreads(port, thread.memory, threadCap(init.env), thread.tid, thread.ids);
+  threads.received = thread.modules;
   const host = new WasiHost({
     args: [init.argv0, ...init.args],
     env: init.env,

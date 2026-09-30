@@ -111,4 +111,20 @@ describe('WasixLinker', () => {
     expect(typeof second.linker.table.get(slot)).toBe('function');
     expect(second.linker.invalid(handle)).toBe(false);
   });
+
+  it('a thread links the modules the process compiled: no VFS read, no recompile', () => {
+    const files = { '/l/libb.so': bytes('libb.so'), '/l/liba.so': bytes('liba.so') };
+    const first = setup(files);
+    const handle = first.linker.open('/l/libb.so', '/', []);
+    const slot = first.linker.symbol(handle, 'b_twice');
+    const compiled = first.linker.compiled();
+    expect(Object.keys(compiled).sort()).toEqual(['/l/liba.so', '/l/libb.so']);
+    expect(compiled['/l/libb.so']).toBeInstanceOf(WebAssembly.Module);
+    // The files are gone for the thread: it links what it was handed.
+    const second = setup({}, first.memory);
+    second.linker.cache = compiled;
+    for (const r of first.records) second.linker.replay(r);
+    expect(typeof second.linker.table.get(slot)).toBe('function');
+    expect(second.linker.invalid(handle)).toBe(false);
+  });
 });
