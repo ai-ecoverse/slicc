@@ -58,6 +58,7 @@ async function readAndResolveLink(
  */
 async function resolveRealpathComponent(
   lfs: SymlinkLfs,
+  findMount: (path: string) => boolean,
   resolved: string,
   part: string,
   isTail: boolean,
@@ -78,6 +79,8 @@ async function resolveRealpathComponent(
       throw new FsError('ELOOP', 'too many symbolic links encountered', originalPath);
     }
     next = await readAndResolveLink(lfs, next, originalPath);
+    // Onto a mount: nothing to lstat locally (only the empty placeholder is there).
+    if (findMount(next)) return { resolved: next, hops };
   }
 }
 
@@ -93,7 +96,9 @@ async function resolveRealpathComponent(
  * error is raised. This bounded loop mirrors the POSIX realpath contract.
  *
  * `findMount` reports whether a path is under an active mount; mount paths are
- * already canonical (mount backends do not support symlinks).
+ * already canonical (mount backends do not support symlinks). A link whose
+ * target is on a mount resolves onto it: the walk stops there, and the rest of
+ * the path is the mount's.
  */
 export async function realpath(
   lfs: SymlinkLfs,
@@ -109,6 +114,7 @@ export async function realpath(
   for (let i = 0; i < parts.length; i++) {
     const result = await resolveRealpathComponent(
       lfs,
+      findMount,
       resolved,
       parts[i],
       i === parts.length - 1,
@@ -117,6 +123,12 @@ export async function realpath(
     );
     resolved = result.resolved;
     hops = result.hops;
+    // A link that led onto a mount: the rest is the mount's (its paths are
+    // canonical, and the local placeholder under it is empty).
+    if (findMount(resolved)) {
+      const rest = parts.slice(i + 1);
+      return rest.length > 0 ? `${resolved}/${rest.join('/')}` : resolved;
+    }
   }
   return resolved;
 }
