@@ -222,7 +222,12 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
         if (!writable) throw new KernelError('EBADF');
         return node.truncate(size);
       }),
-    stat: () => serial(async () => ({ path: node.path, size: await node.size() })),
+    stat: () =>
+      serial(async () => ({
+        path: node.path,
+        size: await node.size(),
+        ...(node.orphaned ? { orphan: true as const } : {}),
+      })),
     flush: () => serial(() => node.flush()),
 
     close: () =>

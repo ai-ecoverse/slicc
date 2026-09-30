@@ -374,6 +374,11 @@ describe('VFS files of one process (a threaded WASI process opens them all here)
     await p.syscall({ op: 'fd-write', fd: scratch, body: bytes('!') });
     const r = await p.syscall({ op: 'fd-pread', fd: scratch, offset: 0, max: 10 });
     expect(r.ok && r.kind === 'bytes' && text(r.bytes)).toBe('!ept');
+    expect(json(await p.syscall({ op: 'fd-vfs-stat', fd: scratch }))).toEqual({
+      path: '/tmp/scratch',
+      size: 4,
+      orphan: true,
+    });
 
     const a = json(
       await p.syscall({ op: 'fd-open-vfs', path: '/a', flags: O_RDWR, position: 1 })

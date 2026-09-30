@@ -71,6 +71,7 @@ export type WasmSyscall =
   | { op: 'fd-cloexec'; fd: number; on: boolean }
   | { op: 'fd-list' }
   | { op: 'dl-log'; append?: LinkRecord; from: number }
+  | { op: 'proc-alarm'; sig: number; ms: number; firstMs?: number; repeat: boolean }
   | { op: 'fd-renumber'; from: number; to: number; keep?: boolean }
   | {
       op: 'fd-promote';
@@ -206,6 +207,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-cloexec',
   'fd-list',
   'dl-log',
+  'proc-alarm',
   'fd-renumber',
   'fd-promote',
   'fd-open-tty',
@@ -250,6 +252,10 @@ export interface WasmProcessOptions {
   onPending?: (sig: number) => void;
 
   hasPending?: () => boolean;
+
+  pendingBits?: () => number;
+
+  raise?: (sig: number) => void;
 
   jobs?: JobTable;
 
@@ -308,6 +314,9 @@ export class WasmProcess {
       const action = defaultAction(sig);
       return action === 'stop' ? this.stop(sig) : action;
     }
+    const action = defaultAction(sig);
+    const waiting = ((this.options.pendingBits?.() ?? 0) & bit) !== 0;
+    if (waiting && action === 'terminate') return action;
     this.options.onPending?.(sig);
     const blocked = this.interrupt;
     this.interrupt = new AbortController();
@@ -703,6 +712,9 @@ export class WasmProcess {
       case 'dl-log':
         if (req.append) this.dlLog.push(req.append);
         return { ok: true, kind: 'json', json: this.dlLog.slice(req.from) };
+      case 'proc-alarm':
+        this.setAlarm(req.sig, req.firstMs ?? req.ms, req.repeat ? req.ms : 0);
+        return { ok: true, kind: 'void' };
       case 'sig-mask':
         this.caught = req.caught;
         this.ignored = req.ignored;
@@ -714,9 +726,32 @@ export class WasmProcess {
 
   private readonly dlLog: LinkRecord[] = [];
 
+  private alarm: ReturnType<typeof setTimeout> | undefined;
+  private alarmEvery: ReturnType<typeof setInterval> | undefined;
+
+  private setAlarm(sig: number, first: number, every: number): void {
+    if (!isSignal(sig)) throw new KernelError('EINVAL');
+    this.clearAlarm();
+    if (first <= 0) return;
+    const fire = () => this.options.raise?.(sig);
+    this.alarm = setTimeout(() => {
+      this.alarm = undefined;
+      fire();
+      if (every > 0) this.alarmEvery = setInterval(fire, every);
+    }, first);
+  }
+
+  private clearAlarm(): void {
+    clearTimeout(this.alarm);
+    clearInterval(this.alarmEvery);
+    this.alarm = undefined;
+    this.alarmEvery = undefined;
+  }
+
   async exit(): Promise<void> {
     if (this.exited) return;
     this.exited = true;
+    this.clearAlarm();
     await this.fds.closeAll();
   }
 }

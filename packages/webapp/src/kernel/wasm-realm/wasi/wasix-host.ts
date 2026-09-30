@@ -1,10 +1,12 @@
 import { E, FDFLAGS, WASI_SIGNAL_TO_POSIX, wasiErrnoOf } from './wasi-abi.js';
 import { WasiError } from './wasi-files.js';
 import { WasiExit, type WasiFunction, type WasiHost, wrap } from './wasi-host.js';
+import type { WasiSignals } from './wasi-signals.js';
 import { MAIN_TID, ThreadExit, type WasiThreads } from './wasi-threads.js';
 import type { AsyncifyDriver } from './wasix-fork.js';
 import { DlError, type WasixLinker } from './wasix-linker.js';
 import { type SpawnFdOp, WasixProcess } from './wasix-process.js';
+import { wasixSocketImports } from './wasix-sockets.js';
 
 const FDFLAGSEXT_CLOEXEC = 1;
 const SPAWN_OP_SIZE = 56;
@@ -20,6 +22,7 @@ export const COMPAT: Readonly<Record<string, readonly string[]>> = {
   spawn: ['proc_spawn2', 'proc_spawn3'],
   open: ['path_open2'],
   dup: ['fd_dup', 'fd_dup2'],
+  alarm: ['proc_raise_interval', 'proc_raise_interval2'],
 };
 
 export class WasixHost {
@@ -28,6 +31,8 @@ export class WasixHost {
   threads: WasiThreads | undefined;
 
   linker: WasixLinker | undefined;
+
+  signals: WasiSignals | undefined;
 
   constructor(
     private readonly host: WasiHost,
@@ -38,6 +43,8 @@ export class WasixHost {
 
     if (module && !WebAssembly.Module.imports(module).some((i) => i.name === 'fd_fdflags_set')) {
       host.fds.implicitCloexec = true;
+
+      host.interruptWakes = true;
     }
   }
 
@@ -112,6 +119,7 @@ export class WasixHost {
       ...this.processImports(),
       ...this.threadImports(),
       ...this.dlImports(),
+      ...wasixSocketImports(this.host, this.host.imports()),
     });
   }
 
@@ -135,8 +143,28 @@ export class WasixHost {
 
       proc_signals_sizes_get: (out: number) => void mem.view().setUint32(out, 0, true),
       proc_signals_get: () => E.SUCCESS,
-      callback_signal: () => undefined,
-      proc_raise_interval: () => E.NOTSUP,
+
+      callback_signal: (name: number, len: number) =>
+        void this.signals?.register(this.str(name, len)),
+
+      proc_raise_interval: (sig: number, interval: bigint, repeat: number) =>
+        void host.o.kernel.call({
+          op: 'proc-alarm',
+          sig: posixSignal(sig),
+          ms: nsToMs(interval),
+          repeat: repeat !== 0,
+        }),
+
+      proc_raise_interval2: (sig: number, initial: bigint, interval: bigint, repeat: number) => {
+        const ms = nsToMs(interval);
+        host.o.kernel.call({
+          op: 'proc-alarm',
+          sig: posixSignal(sig),
+          ms,
+          firstMs: nsToMs(initial),
+          repeat: repeat !== 0 && ms > 0,
+        });
+      },
       proc_id: (out: number) => void mem.view().setUint32(out, host.o.pid, true),
       proc_parent: (pid: number, out: number) => {
         if (pid !== 0 && pid !== host.o.pid) throw new WasiError('ESRCH');
@@ -216,6 +244,7 @@ export class WasixHost {
       proc_signal: (pid: number, sig: number) => {
         const posix = sig === 0 ? 0 : WASI_SIGNAL_TO_POSIX[sig];
         if (posix === undefined) throw new WasiError('EINVAL');
+        if (pid === this.host.o.pid && posix !== 0 && this.host.onRaise?.(posix)) return;
         this.host.o.kernel.call({ op: 'proc-kill', pid, sig: posix });
       },
 
@@ -366,6 +395,8 @@ export class WasixHost {
         if (!(this.threads?.known(tid) ?? tid === MAIN_TID)) throw new WasiError('ESRCH');
         const posix = WASI_SIGNAL_TO_POSIX[sig];
         if (posix === undefined) throw new WasiError('EINVAL');
+
+        if (host.onRaise?.(posix)) return;
         host.o.kernel.call({ op: 'proc-kill', pid: host.o.pid, sig: posix });
       },
 
@@ -449,4 +480,14 @@ export class WasixHost {
 
 export function isWasix(module: WebAssembly.Module): boolean {
   return WebAssembly.Module.imports(module).some((i) => i.module === 'wasix_32v1');
+}
+
+function posixSignal(sig: number): number {
+  const posix = WASI_SIGNAL_TO_POSIX[sig];
+  if (posix === undefined) throw new WasiError('EINVAL');
+  return posix;
+}
+
+function nsToMs(ns: bigint): number {
+  return Math.ceil(Number(ns) / 1e6);
 }

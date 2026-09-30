@@ -55,6 +55,8 @@ export type WasiFunction = (...args: never[]) => number | undefined;
 
 const NS_PER_MS = 1_000_000n;
 
+const MONOTONIC_BASE = BigInt(Math.round(performance.timeOrigin)) * NS_PER_MS;
+
 const MAX_READ = 1024 * 1024;
 const SIGPIPE_EXIT = 141;
 
@@ -110,6 +112,10 @@ export class WasiHost {
   private readonly listening: number[];
   private readonly startCwd: string;
 
+  interruptWakes = false;
+
+  onRaise: ((sig: number) => boolean) | undefined;
+
   constructor(readonly o: WasiHostOptions) {
     this.startCwd = o.cwd;
     this.fds = new WasiFds(o.kernel, o.fs);
@@ -131,7 +137,13 @@ export class WasiHost {
       ...this.pathImports(),
       poll_oneoff: (inPtr: number, outPtr: number, n: number, nevents: number) =>
         pollOneoff(
-          { mem: this.mem, fds: this.fds, kernel: this.o.kernel, now: (id) => this.now(id) },
+          {
+            mem: this.mem,
+            fds: this.fds,
+            kernel: this.o.kernel,
+            now: (id) => this.now(id),
+            interruptWakes: this.interruptWakes,
+          },
           inPtr,
           outPtr,
           n,
@@ -144,6 +156,10 @@ export class WasiHost {
 
   now(id: number): bigint {
     if (id === CLOCK.REALTIME) return BigInt(Date.now()) * NS_PER_MS;
+
+    if (id === CLOCK.MONOTONIC) {
+      return MONOTONIC_BASE + BigInt(Math.round(performance.now() * 1e6));
+    }
     return BigInt(Math.round((performance.now() - this.started) * 1e6)) + 1n;
   }
 
@@ -177,6 +193,7 @@ export class WasiHost {
       proc_raise: (sig: number) => {
         const posix = WASI_SIGNAL_TO_POSIX[sig];
         if (posix === undefined) throw new WasiError('EINVAL');
+        if (this.onRaise?.(posix)) return;
         this.o.kernel.call({ op: 'proc-kill', pid: this.o.pid, sig: posix });
       },
     };
@@ -428,8 +445,12 @@ export class WasiHost {
     };
   }
 
-  private kernelStat(fd: number): { path?: string; size: number } {
-    return this.o.kernel.call({ op: 'fd-vfs-stat', fd }) as { path?: string; size: number };
+  private kernelStat(fd: number): { path?: string; size: number; orphan?: true } {
+    return this.o.kernel.call({ op: 'fd-vfs-stat', fd }) as {
+      path?: string;
+      size: number;
+      orphan?: true;
+    };
   }
 
   private write(fd: number, data: Uint8Array): number {
@@ -520,17 +541,20 @@ export class WasiHost {
     const kind = e.type === 'kernel' ? this.fds.kind(fd, e) : undefined;
     if (kind === 'file') {
       const vfs = this.kernelStat(fd);
-      if (vfs.path) return this.statOrphanable(vfs.path, vfs.size);
+      if (vfs.path) return this.statOrphanable(vfs.path, vfs.size, vfs.orphan);
     }
     const filetype = kind ? kernelFiletype(kind).filetype : FILETYPE.CHARACTER_DEVICE;
     return { filetype, size: 0n, ino: BigInt(fd + 1), mtimeNs: 0n };
   }
 
-  private statOrphanable(path: string, size: number): Filestat {
+  private statOrphanable(path: string, size: number, orphan = false): Filestat {
     let s: SyncFsBridgeStat | undefined;
-    try {
-      s = this.o.fs.stat(path);
-    } catch {}
+
+    if (!orphan) {
+      try {
+        s = this.o.fs.stat(path);
+      } catch {}
+    }
     return {
       ...filestatOf(path, s ?? { isFile: true, isDirectory: false, size: 0 }),
       size: BigInt(size),

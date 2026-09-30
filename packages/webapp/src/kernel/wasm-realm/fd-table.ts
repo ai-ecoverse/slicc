@@ -66,10 +66,11 @@ export interface KernelFile {
 
   resize?(size: number): Promise<void>;
 
-  stat?(): Promise<{ path: string; size: number }>;
+  stat?(): Promise<{ path: string; size: number; orphan?: true }>;
 
   tty?: KernelTty;
 
+  stat?(): Promise<{ size: number; path: string; orphan?: true }>;
   held?: true;
 
   heldMeta?: HeldMeta;
