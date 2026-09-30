@@ -1429,7 +1429,13 @@ export class VirtualFS {
   /** Whether `normalized` is a symlink (chain) that ends on a mount, by the sync surface. */
   private linksOntoMountSync(normalized: string): boolean {
     const sync = this.lfsSync;
-    if (normalized === '/' || typeof sync.readlinkSync !== 'function') return false;
+    if (
+      this.mountPoints.size === 0 ||
+      normalized === '/' ||
+      typeof sync.readlinkSync !== 'function'
+    ) {
+      return false;
+    }
     let current = normalized;
     try {
       for (let hops = 0; hops <= MAX_SYMLINK_DEPTH; hops++) {
@@ -3057,7 +3063,8 @@ export class VirtualFS {
     try {
       return await op(normalized);
     } catch (err) {
-      if ((err as { code?: string }).code !== 'ENOENT') throw err;
+      // No mounts (the common case): nothing to retry on.
+      if (this.mountPoints.size === 0 || (err as { code?: string }).code !== 'ENOENT') throw err;
       const via = await this.parentOnMount(normalized);
       if (!via) throw err;
       return op(via);
