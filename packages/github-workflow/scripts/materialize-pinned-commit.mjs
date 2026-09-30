@@ -16,6 +16,17 @@ import { fail, input, isMain, setOutput } from './gh-io.mjs';
 import { planPinnedCommitBuild } from './lib.mjs';
 
 /**
+ * `npm ci` normally takes a few minutes here, but it sometimes never exits after patch-package
+ * has applied every patch, holding the shard for its whole job limit (Benchmark runs
+ * 36627096386 and 36663826241). Kill it after this long and start over; `npm ci` removes
+ * `node_modules` first, so each attempt is clean.
+ */
+export const NPM_CI_TIMEOUT_MS = 15 * 60_000;
+export const NPM_CI_ATTEMPTS = 3;
+/** The webapp and node-server builds get one bounded attempt each. */
+export const BUILD_TIMEOUT_MS = 20 * 60_000;
+
+/**
  * @param {{
  *   ref: string;
  *   dest: string;
@@ -34,9 +45,27 @@ export function materializePinnedCommit(options) {
   exec(plan.fetch[0], plan.fetch.slice(1), { cwd: repo, stdio: 'inherit', env });
   exec(plan.worktree[0], plan.worktree.slice(1), { cwd: repo, stdio: 'inherit', env });
   const buildEnv = { ...env, HUSKY: '0' };
-  for (const cmd of [plan.npmCi, plan.buildWebapp, plan.buildServer]) {
-    exec(cmd[0], cmd.slice(1), { cwd: options.dest, stdio: 'inherit', env: buildEnv });
+  const run = (cmd, timeout) =>
+    exec(cmd[0], cmd.slice(1), {
+      cwd: options.dest,
+      stdio: 'inherit',
+      env: buildEnv,
+      timeout,
+      killSignal: 'SIGKILL',
+    });
+  for (let attempt = 1; ; attempt++) {
+    try {
+      run(plan.npmCi, NPM_CI_TIMEOUT_MS);
+      break;
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      if (attempt >= NPM_CI_ATTEMPTS) {
+        throw new Error(`pin-webapp: npm ci failed ${attempt} times; last: ${why}`);
+      }
+      console.log(`[pin-webapp] npm ci attempt ${attempt} failed (${why}); retrying`);
+    }
   }
+  for (const cmd of [plan.buildWebapp, plan.buildServer]) run(cmd, BUILD_TIMEOUT_MS);
   const index = join(plan.webapp, 'index.html');
   if (!existsSync(plan.nodeServer) || !existsSync(index)) {
     throw new Error(

@@ -285,6 +285,8 @@ jobs:
       # the npm package instead.
       - name: Build a pinned commit
         id: pin-commit
+        # Backstop for the script's own limits (npm ci 3 × 15 min, builds 2 × 20 min).
+        timeout-minutes: 90
         if: github.event_name == 'workflow_dispatch' && inputs.pin-webapp != '' && inputs.pin-webapp != 'false' && inputs.pin-webapp != 'true'
         env:
           INPUT_PIN_WEBAPP: ${{ inputs.pin-webapp }}
