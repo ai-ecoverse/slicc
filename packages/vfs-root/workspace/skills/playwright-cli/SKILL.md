@@ -18,6 +18,28 @@ Use `playwright-cli` (also aliased as `playwright` and `puppeteer`) via the bash
 
 `playwright-cli <command> --help` prints that command's usage and does nothing else — safe to run before any action.
 
+## Working a web task
+
+These rules decide more outcomes than any command below. They matter most on tasks that span many pages or items.
+
+1. **Cheapest reader first.** For a public page or JSON API, `curl -sL` it. Use `playwright-cli` when the page needs JavaScript, a login or clicks. On a 403, a captcha or a login wall, don't retry the same URL: find another source or report the block.
+2. **Start the clock and a ledger.** Run `date` when you begin. For more than a handful of items, append one line per finding to `$TMPDIR/ledger.jsonl` as you go (the values plus the source URL), and build the answer from the ledger, not from memory.
+3. **Time the first items before you crawl the rest.** If the whole list would take more than about 15 minutes:
+   - narrow it with the site's own search, filters, sort or API;
+   - or fetch in parallel from one `node` script (`Promise.all` over `playwright-cli` calls on separate tabs; locking is per tab).
+
+   Give every fetch in a loop a `timeout 60`, and never `sleep` for minutes.
+
+4. **Check that each step landed.** After a click, fill or navigation, confirm that the URL, text or count changed as expected before the next step; never assume. If you've been on the same URL for 3 steps without progress, or hit the same failure twice, change approach.
+5. **Deliver by about 40 minutes.** Stop exploring and answer from the ledger, naming what is missing. A partial answer that states its gaps beats a complete one that never arrives.
+6. **Before you answer**, re-read the request and check:
+   - the item count;
+   - every filter;
+   - the exact format asked for (fields, columns, order);
+   - no duplicates.
+
+   Every value must be copied verbatim from something you fetched in this session, never filled in from memory. State coverage plainly: what you covered, what you did not, and why.
+
 ## Quick Start
 
 ```bash
@@ -34,6 +56,9 @@ playwright-cli fill --tab=E9A3F e12 "hello world"
 
 # 4. Re-snapshot after interactions (refs change)
 playwright-cli snapshot --tab=E9A3F
+
+# 5. Close the tabs you opened (every tab command takes --tab=)
+playwright-cli tab-close --tab=E9A3F
 ```
 
 ## Tab IDs

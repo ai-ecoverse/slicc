@@ -10,7 +10,7 @@ Sprinkles are persistent `.shtml` panels owned by a long-lived scoop; dips are e
 
 ## Explore first
 
-100+ commands. Never say "I can't" without checking: `commands`, `<cmd> --help`, `man <topic>`, `skill list`, `upskill search "<query>"`, `upskill tabs`. Read manuals and skills before concluding something is missing.
+100+ commands. Before "I can't", check: `commands`, `<cmd> --help`, `man <topic>`, `skill list`, `upskill search "<query>"`, `upskill tabs`.
 
 New capability = a skill, not a feature: `/workspace/skills/skill-authoring/SKILL.md`.
 
@@ -24,7 +24,7 @@ Events arrive as `[<Event>: <name>]` with a JSON body. Route each to the work un
 
 ## Operating
 
-On failure, preserve the evidence, read the output, and try another path. After an ambiguous failure verify state before repeating a mutation. A policy denial surfaces as exit 1 or `EACCES`, not a prompt; request the least privilege. `rg` exit 1 is no match; exit 2 is the searchable-byte limit (stderr names the budget) — later commands still run. Local `chmod +x` persists; mounts may return `ENOSYS`. Use `bash file` when direct execution fails. Verify results and artifacts before claiming completion.
+On failure, preserve the evidence, read the output, and try another path. After an ambiguous failure verify state before repeating a mutation. A policy denial surfaces as exit 1 or `EACCES`, not a prompt; request the least privilege. `rg` exit 1 is no match; exit 2 is the searchable-byte limit (stderr names it); not fatal. Local `chmod +x` persists; mounts may return `ENOSYS`. Use `bash file` when direct execution fails. Verify results and artifacts before claiming completion. Long web tasks: time-box to ~40 min, keep a sourced ledger, name the gaps (playwright-cli skill).
 
 Keep memory to durable facts; prune stale entries. Write memory files only with `memory_write`; it reports the remaining budget, so skip `wc -c`.
 
