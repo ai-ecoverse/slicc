@@ -147,6 +147,10 @@ export function pollOneoff(
   }
   const after = performance.now();
   // A deadline within half a millisecond counts: select's timer rounds.
+  // Interrupted (the older libc, which turns EINTR into ENOTSUP), every clock
+  // fires, whatever its deadline: a recv with a timeout then sees a timeout,
+  // not EINTR. That is the point — either way the call returns, and the
+  // handler runs after it.
   for (const s of subs) {
     if (s.type === EVENTTYPE.CLOCK && (interrupted || s.deadline <= after + 0.5)) {
       events.push({ userdata: s.userdata, error: E.SUCCESS, type: s.type });
