@@ -140,6 +140,7 @@ jobs:
       SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shards || '1' }}
       DEADLINE: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '45' }}
       RESUME_RUN: ${{ inputs.resume-run || '' }}
+      PIN_WEBAPP: ${{ github.event_name == 'workflow_dispatch' && inputs.pin-webapp || '' }}
     steps:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -157,15 +158,19 @@ jobs:
           if [ -n "$RESUME_RUN" ] && ! [[ "$RESUME_RUN" =~ ^[0-9]+$ ]]; then
             echo "::error::resume-run must be a run id, not '$RESUME_RUN'"; exit 1
           fi
-          # A shard job lasts up to the deadline plus 45 minutes, and gcp-bench-8core VMs are deleted
-          # after 8 hours: 420 keeps a job inside its VM's lifetime.
-          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt 420 ]; then
-            echo "::error::deadline-minutes must be 10 to 420, not '$DEADLINE'"; exit 1
+          # Building a pinned commit gets its own budget (materialize-pinned-commit.mjs: npm ci
+          # 2 × 12 min, builds 2 × 8 min) on top of the job's setup time.
+          case "$PIN_WEBAPP" in ''|true|false) PIN_MINUTES=0 ;; *) PIN_MINUTES=40 ;; esac
+          # A shard job lasts up to the deadline plus 45 minutes (plus the pin budget), and
+          # gcp-bench-8core VMs are deleted after 8 hours: this keeps a job inside its VM's lifetime.
+          MAX_DEADLINE=$((420 - PIN_MINUTES))
+          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt "$MAX_DEADLINE" ]; then
+            echo "::error::deadline-minutes must be 10 to $MAX_DEADLINE, not '$DEADLINE'"; exit 1
           fi
           # Expressions can't add: the run step gets the deadline plus 20 minutes for the runs in
-          # flight, the job 25 more for setup, diagnostics and the upload.
+          # flight, the job 25 more for setup, diagnostics and the upload, plus the pin budget.
           echo "run-minutes=$((DEADLINE + 20))" >> "$GITHUB_OUTPUT"
-          echo "job-minutes=$((DEADLINE + 45))" >> "$GITHUB_OUTPUT"
+          echo "job-minutes=$((DEADLINE + 45 + PIN_MINUTES))" >> "$GITHUB_OUTPUT"
           version="$(npm view sliccy@latest version)"
           echo "slicc-version=$version" >> "$GITHUB_OUTPUT"
           echo "shards=$(jq -cn --argjson n "$SHARDS" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
@@ -285,8 +290,8 @@ jobs:
       # the npm package instead.
       - name: Build a pinned commit
         id: pin-commit
-        # Backstop for the script's own limits (npm ci 3 × 15 min, builds 2 × 20 min).
-        timeout-minutes: 90
+        # Backstop for the script's own limits; the plan adds these 40 minutes to the job limit.
+        timeout-minutes: 40
         if: github.event_name == 'workflow_dispatch' && inputs.pin-webapp != '' && inputs.pin-webapp != 'false' && inputs.pin-webapp != 'true'
         env:
           INPUT_PIN_WEBAPP: ${{ inputs.pin-webapp }}
