@@ -30,6 +30,7 @@ import {
   skillsFlagCommand,
   skillsMismatch,
   spendDelta,
+  stagedCleanupPaths,
   stageSkills,
   stageSkillsCommand,
   startCapture,
@@ -903,7 +904,7 @@ describe('runTask', () => {
     const dir = mkdtempSync(join(tmpdir(), 'bench-task-'));
     const file = join(dir, 'a.txt');
     writeFileSync(file, 'hello');
-    const { leader, calls } = leaderFor();
+    const { leader, calls } = leaderFor({ commands: [[/^d=/, ok('new\n')]] });
     const task = {
       id: 't',
       task: 'Read it.',
@@ -945,7 +946,7 @@ describe('runTask', () => {
       'rm -rf',
       'rm -rf',
     ]);
-    // The staged file's directory existed (the probe printed nothing), so only the file goes.
+    // The staged file's directory existed and the file was new, so only the file goes.
     expect(calls.at(-2).command).toBe("rm -rf '/workspace/in/a.txt'");
     expect(result).toMatchObject({
       runId: 'r1',
@@ -1248,7 +1249,7 @@ describe('runTask', () => {
     writeFileSync(file, 'hello');
     // /workspace/eval does not exist yet; /workspace/notes does.
     const { leader, calls } = leaderFor({
-      commands: [[/^d=/, ok('/workspace/eval\n\n')]],
+      commands: [[/^d=/, ok('dir /workspace/eval\nnew\n')]],
     });
     await runTask({
       leader,
@@ -1271,10 +1272,53 @@ describe('runTask', () => {
     expect(commands.at(-1)).toBe('rm -rf /tmp/bench/r9');
   });
 
-  it('never plans to remove a top-level directory, and keeps the outermost of nested paths', async () => {
-    const { leader } = fakeLeader({ commands: [[/^d=/, ok('/workspace\n/tmp/x\n/tmp/x/y\n')]] });
-    const files = ['/workspace/a', '/tmp/x/y/b', '/tmp/x/y/z/c'].map((to) => ({ from: '', to }));
-    expect(await planStagedCleanup(leader, files)).toEqual(['/tmp/x']);
+  it('plans per file: a created directory, a new file, nothing for an overwritten file', async () => {
+    const { leader } = fakeLeader({
+      commands: [[/^d=/, ok('dir /tmp/x\ndir /workspace\nnew\nexisting\n')]],
+    });
+    const files = ['/tmp/x/y/b', '/workspace/a', '/fixture.txt', '/workspace/old.txt'].map(
+      (to) => ({ from: '', to })
+    );
+    // A protected directory is never planned; a root-level new file is (#3702 review).
+    expect(await planStagedCleanup(leader, files)).toEqual(['/tmp/x', null, '/fixture.txt', null]);
+    expect(stagedCleanupPaths(['/tmp/x', '/tmp/x/y', null, '/fixture.txt', '/tmp/x'])).toEqual([
+      '/tmp/x',
+      '/fixture.txt',
+    ]);
+  });
+
+  it('removes only what was staged when staging fails part-way (#3702 review)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bench-task-'));
+    const file = join(dir, 'a.txt');
+    writeFileSync(file, 'hello');
+    const { leader, calls } = leaderFor({
+      commands: [
+        [/^d=/, ok('dir /workspace/eval\nnew\n')],
+        [/base64 -d > '\/workspace\/notes\/n\.txt'/, fail('disk full')],
+      ],
+    });
+    await expect(
+      runTask({
+        leader,
+        task: {
+          id: 't',
+          task: 'x',
+          slicc: {
+            files: [
+              { from: file, to: '/workspace/eval/cart/cart.js' },
+              { from: file, to: '/workspace/notes/n.txt' },
+            ],
+          },
+        },
+        runId: 'r8',
+        model: 'm',
+      })
+    ).rejects.toThrow('disk full');
+    const commands = calls.filter((c) => c.kind === 'exec').map((c) => c.command);
+    expect(commands).toContain("rm -rf '/workspace/eval'");
+    expect(commands.some((c) => c.includes('rm -rf') && c.includes('/workspace/notes/n.txt'))).toBe(
+      false
+    );
   });
 
   it('refuses an unsafe run id before touching the leader', async () => {
