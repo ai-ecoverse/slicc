@@ -220,6 +220,13 @@ describe('createProcessKernel', () => {
     // A signal interrupting a slice is EINTR for the caller (libuv polls again).
     answers.push({ ok: false, errno: 'EINTR', message: 'EINTR' });
     expect(k.select([9], [], -1)).toBe(-27);
+    // Write sets: the program's pipe by its poll (POLLOUT), a kernel fd by the kernel.
+    const out = { fd: 8, stream_ops: { poll: () => 0x004 } } as unknown as ProcessStream;
+    streams[8] = out;
+    answers.push(json({ read: [], write: [13] }));
+    expect(k.select([], [8, 3], -1)).toEqual({ read: [], write: [8, 3] });
+    // A closed descriptor is ready (POLLNVAL), as poll reports it.
+    expect(k.select([7], [], -1)).toEqual({ read: [7], write: [] });
     // Kernel descriptors only: one kernel select, as before.
     const before = slices.length;
     answers.push(json({ read: [13], write: [] }));
