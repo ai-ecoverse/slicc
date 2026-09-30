@@ -15,6 +15,7 @@ import {
   type WasmProcessInitMsg,
   type WasmThreadInitMsg,
 } from '../protocol.js';
+import { dylinkInfo } from './dylink.js';
 import { cachingBridge } from './wasi-files.js';
 import { WasiExit, type WasiFunction, WasiHost } from './wasi-host.js';
 import type { ImportedMemory } from './wasi-module.js';
@@ -22,6 +23,7 @@ import { WasiStats } from './wasi-stats.js';
 import { MAIN_TID, ThreadExit, threadCap, WasiThreads } from './wasi-threads.js';
 import { AsyncifyDriver } from './wasix-fork.js';
 import { WasixHost } from './wasix-host.js';
+import { type LinkerHost, type LinkRecord, WasixLinker } from './wasix-linker.js';
 
 const TRAPPED = 134;
 
@@ -34,8 +36,12 @@ export function unsupportedImport(
 ): string | undefined {
   const imports = WebAssembly.Module.imports(module);
   const wasix = imports.some((i) => i.module === WASIX);
+
+  const pie = dylinkInfo(module) !== undefined;
   for (const imp of imports) {
     if (imp.module === PREVIEW1 || imp.module === WASIX) continue;
+    if (pie && (imp.module === 'GOT.mem' || imp.module === 'GOT.func')) continue;
+    if (pie && imp.module === 'env' && imp.kind !== 'function' && imp.kind !== 'memory') continue;
     if (imp.kind === 'memory' && memory?.module === imp.module && memory.name === imp.name)
       continue;
 
@@ -135,6 +141,7 @@ async function instantiate(
   module: WebAssembly.Module,
   memory: WebAssembly.Memory | undefined,
   threads: WasiThreads | undefined,
+  thread = false,
   stats?: WasiStats
 ): Promise<{ instance: WebAssembly.Instance; driver: AsyncifyDriver }> {
   const driver = new AsyncifyDriver(host.mem);
@@ -142,21 +149,127 @@ async function instantiate(
     ? new WasixHost(host, driver, module)
     : undefined;
   if (wasixHost) wasixHost.threads = threads;
-  const instance = await WebAssembly.instantiate(
-    module,
-    linkImports(
-      module,
-      traced(stats, 'wasi', { ...host.imports(), ...wasixHost?.preview1() }),
-      wasixHost && traced(stats, 'wasix', wasixHost.imports()),
-      memory,
-      threads
-    )
-  );
+  let preview1: Record<string, WasiFunction> = traced(stats, 'wasi', {
+    ...host.imports(),
+    ...wasixHost?.preview1(),
+  });
+  let wasix = wasixHost && traced(stats, 'wasix', wasixHost.imports());
+
+  const info = dylinkInfo(module);
+  const sync: LinkSync | undefined =
+    info && memory
+      ? new LinkSync(
+          new WasixLinker(
+            memory,
+            info,
+            linkerHost(host, (): WebAssembly.Imports => imports),
+            thread
+          ),
+          (req) => host.o.kernel.call(req),
+          threads?.ids
+        )
+      : undefined;
+  if (sync) {
+    ({ preview1, wasix } = sync.guard(preview1, wasix));
+    if (wasixHost) wasixHost.linker = sync.linker;
+
+    if (threads) {
+      sync.linker.cache = threads.received;
+      threads.modules = () => sync.linker.compiled();
+    }
+  }
+  const hostImports = linkImports(module, preview1, wasix, memory, threads);
+  const imports: WebAssembly.Imports = sync
+    ? merge(hostImports, sync.linker.mainImports())
+    : hostImports;
+  const instance = await WebAssembly.instantiate(module, imports);
   stats?.phase('instantiate');
   const exports = instance.exports as { memory?: WebAssembly.Memory };
   host.mem.bind(memory ?? (exports.memory as WebAssembly.Memory));
+  if (sync) {
+    sync.linker.bindMain(instance, !thread);
+
+    if (thread) sync.catchUp();
+  }
   return { instance, driver };
 }
+
+function linkerHost(host: WasiHost, imports: () => WebAssembly.Imports): LinkerHost {
+  return {
+    read: (path) => {
+      try {
+        return host.o.fs.readFile(path) as Uint8Array<ArrayBuffer>;
+      } catch {
+        return undefined;
+      }
+    },
+    hostImports: () => {
+      const { env: _env, 'GOT.mem': _mem, 'GOT.func': _func, ...rest } = imports();
+      return rest;
+    },
+  };
+}
+
+function merge(
+  base: WebAssembly.Imports,
+  extra: Record<string, Record<string, WebAssembly.ImportValue>>
+): WebAssembly.Imports {
+  const out: WebAssembly.Imports = { ...base };
+  for (const [ns, values] of Object.entries(extra)) out[ns] = { ...base[ns], ...values };
+  return out;
+}
+
+class LinkSync {
+  private count = 0;
+  private gen = 0;
+
+  constructor(
+    readonly linker: WasixLinker,
+    private readonly call: (req: WasmSyscall) => unknown,
+    private readonly ids: Int32Array | undefined
+  ) {
+    linker.publisher = (record) => this.publish(record);
+  }
+
+  private publish(record: LinkRecord): void {
+    const since = this.call({ op: 'dl-log', append: record, from: this.count }) as LinkRecord[];
+
+    for (const r of since.slice(0, -1)) this.linker.replay(r);
+    this.count += since.length;
+    if (this.ids) this.gen = Atomics.add(this.ids, DL_GEN, 1) + 1;
+  }
+
+  catchUp(): void {
+    const since = this.call({ op: 'dl-log', from: this.count }) as LinkRecord[];
+    for (const r of since) this.linker.replay(r);
+    this.count += since.length;
+    if (this.ids) this.gen = Atomics.load(this.ids, DL_GEN);
+  }
+
+  guard(
+    preview1: Record<string, WasiFunction>,
+    wasix: Record<string, WasiFunction> | undefined
+  ): { preview1: Record<string, WasiFunction>; wasix: Record<string, WasiFunction> | undefined } {
+    const ids = this.ids;
+    if (!ids) return { preview1, wasix };
+    const wrap = (table: Record<string, WasiFunction>) =>
+      Object.fromEntries(
+        Object.entries(table).map(([name, fn]) => [
+          name,
+          ((...args: never[]) => {
+            if (Atomics.load(ids, DL_GEN) !== this.gen) this.catchUp();
+
+            const result = fn(...args);
+            if (Atomics.load(ids, DL_GEN) !== this.gen) this.catchUp();
+            return result;
+          }) as WasiFunction,
+        ])
+      );
+    return { preview1: wrap(preview1), wasix: wasix && wrap(wasix) };
+  }
+}
+
+const DL_GEN = 3;
 
 export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike): Promise<number> {
   const { transport, sys, call: kernelCall, say } = kernelOf(init, port);
@@ -196,7 +309,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
       if (!host.fds.isShared) host.fds.share(threads.ids, false);
     };
   }
-  const { instance, driver } = await instantiate(host, module, memory, threads, stats);
+  const { instance, driver } = await instantiate(host, module, memory, threads, false, stats);
   const exports = instance.exports as { _start: () => void };
   driver.bind(instance.exports);
   try {
@@ -224,6 +337,7 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
   const { transport, sys, call, say } = kernelOf(init, port);
   const { thread } = init;
   const threads = new WasiThreads(port, thread.memory, threadCap(init.env), thread.tid, thread.ids);
+  threads.received = thread.modules;
   const host = new WasiHost({
     args: [init.argv0, ...init.args],
     env: init.env,
@@ -235,7 +349,7 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
     shared: threads.ids,
   });
 
-  const { instance } = await instantiate(host, init.program.module, thread.memory, threads);
+  const { instance } = await instantiate(host, init.program.module, thread.memory, threads, true);
   const start = instance.exports.wasi_thread_start as (tid: number, arg: number) => void;
   try {
     start(thread.tid, thread.arg);

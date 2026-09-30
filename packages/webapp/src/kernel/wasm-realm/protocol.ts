@@ -90,6 +90,8 @@ export interface WasmThread {
   memory: WebAssembly.Memory;
 
   ids: SharedArrayBuffer;
+
+  modules?: Record<string, WebAssembly.Module>;
 }
 
 export interface WasmThreadSpawnMsg {

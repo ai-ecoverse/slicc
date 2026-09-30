@@ -25,6 +25,7 @@ import { KernelSocket, LoopbackNet } from './socket.js';
 import { SOCKET_OPS, type SocketSyscall, socketSyscall } from './socket-syscalls.js';
 import type { KernelTty, Termios } from './tty.js';
 import { type VfsFileFs, VfsNodes, vfsFile } from './vfs-file.js';
+import type { LinkRecord } from './wasi/wasix-linker.js';
 
 export type WasmSyscall =
   | {
@@ -69,6 +70,7 @@ export type WasmSyscall =
   | { op: 'fd-setfl'; fd: number; flags: number }
   | { op: 'fd-cloexec'; fd: number; on: boolean }
   | { op: 'fd-list' }
+  | { op: 'dl-log'; append?: LinkRecord; from: number }
   | { op: 'fd-renumber'; from: number; to: number; keep?: boolean }
   | {
       op: 'fd-promote';
@@ -203,6 +205,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-setfl',
   'fd-cloexec',
   'fd-list',
+  'dl-log',
   'fd-renumber',
   'fd-promote',
   'fd-open-tty',
@@ -697,6 +700,9 @@ export class WasmProcess {
           throw new KernelError('ESRCH');
         }
         return { ok: true, kind: 'void' };
+      case 'dl-log':
+        if (req.append) this.dlLog.push(req.append);
+        return { ok: true, kind: 'json', json: this.dlLog.slice(req.from) };
       case 'sig-mask':
         this.caught = req.caught;
         this.ignored = req.ignored;
@@ -705,6 +711,8 @@ export class WasmProcess {
         return { ok: true, kind: 'bytes', bytes: this.children.captured(req.pid, req.slot) };
     }
   }
+
+  private readonly dlLog: LinkRecord[] = [];
 
   async exit(): Promise<void> {
     if (this.exited) return;

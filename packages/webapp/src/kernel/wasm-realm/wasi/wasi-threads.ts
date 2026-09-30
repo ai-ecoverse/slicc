@@ -22,6 +22,10 @@ export class WasiThreads {
 
   beforeSpawn: (() => void) | undefined;
 
+  modules: (() => Record<string, WebAssembly.Module>) | undefined;
+
+  received: Readonly<Record<string, WebAssembly.Module>> | undefined;
+
   constructor(
     private readonly port: SabPostLike,
     private readonly memory: WebAssembly.Memory,
@@ -41,9 +45,16 @@ export class WasiThreads {
     }
     this.beforeSpawn?.();
     const tid = Atomics.add(this.ids, LAST_TID, 1) + 1;
+    const modules = this.modules?.();
     this.port.postMessage({
       type: WASM_THREAD_SPAWN,
-      thread: { tid, arg, memory: this.memory, ids: this.ids.buffer as SharedArrayBuffer },
+      thread: {
+        tid,
+        arg,
+        memory: this.memory,
+        ids: this.ids.buffer as SharedArrayBuffer,
+        ...(modules ? { modules } : {}),
+      },
     });
     return tid;
   }
