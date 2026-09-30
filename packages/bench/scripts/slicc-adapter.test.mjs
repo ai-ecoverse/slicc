@@ -21,6 +21,7 @@ import {
   parseSkillNames,
   parseSkillsCondition,
   parseTabList,
+  planStagedCleanup,
   quote,
   readShots,
   restoreSkills,
@@ -881,11 +882,13 @@ describe('runTask', () => {
   function leaderFor({
     prompt = ok('FINAL ANSWER: done\n'),
     model = ok('bedrock-camp:global.anthropic.claude-sonnet-5\n'),
+    commands: extra = [],
   } = {}) {
     let costCalls = 0;
     return fakeLeader({
       verbs: { 'new-session': ok('new session (erase)'), model, prompt },
       commands: [
+        ...extra,
         [/^cost --json --all$/, () => COST(++costCalls === 1 ? 0.1 : 0.35)],
         [/^playwright-cli tab-list$/, ok('[T1] https://example.com/ "Example"')],
         ...leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT))).commands,
@@ -914,9 +917,10 @@ describe('runTask', () => {
       capture: { pollMs: 5 },
     });
 
-    expect(calls.slice(0, 9).map(label)).toEqual([
+    expect(calls.slice(0, 10).map(label)).toEqual([
       'uptime; meminfo',
       'rm -rf',
+      "d='/workspace/in'; t=;",
       'mkdir -p',
       'playwright-cli tab-list',
       'playwright-cli tab-close',
@@ -925,7 +929,7 @@ describe('runTask', () => {
       'slicc thinking',
       'cost --json',
     ]);
-    expect(calls[2].opts.stdin).toBe(Buffer.from('hello').toString('base64'));
+    expect(calls[3].opts.stdin).toBe(Buffer.from('hello').toString('base64'));
     const prompt = calls.find((c) => c.kind === 'cli' && c.args[0] === 'prompt');
     expect(prompt.args).toEqual(['prompt', '--allsettled', PROMPT_ALL_SETTLED, '-']);
     expect(prompt.opts).toMatchObject({
@@ -934,12 +938,15 @@ describe('runTask', () => {
       interrupt: true,
     });
     expect(prompt.opts.signal).toBeInstanceOf(AbortSignal);
-    expect(calls.slice(-4).map(label)).toEqual([
+    expect(calls.slice(-5).map(label)).toEqual([
       'playwright-cli tab-list',
       'playwright-cli tab-close',
       'slicc new-session --erase',
       'rm -rf',
+      'rm -rf',
     ]);
+    // The staged file's directory existed (the probe printed nothing), so only the file goes.
+    expect(calls.at(-2).command).toBe("rm -rf '/workspace/in/a.txt'");
     expect(result).toMatchObject({
       runId: 'r1',
       model: 'claude-sonnet-5',
@@ -1233,6 +1240,41 @@ describe('runTask', () => {
     expect(calls.some((c) => c.kind === 'cli' && c.args[0] === 'prompt')).toBe(false);
     expect(calls.filter((c) => c.kind === 'cli' && c.args[0] === 'new-session')).toHaveLength(2);
     expect(calls.at(-1).command).toBe('rm -rf /tmp/bench/r3');
+  });
+
+  it('removes staged fixtures and what the agent added beside them (#3696)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bench-task-'));
+    const file = join(dir, 'a.txt');
+    writeFileSync(file, 'hello');
+    // /workspace/eval does not exist yet; /workspace/notes does.
+    const { leader, calls } = leaderFor({
+      commands: [[/^d=/, ok('/workspace/eval\n\n')]],
+    });
+    await runTask({
+      leader,
+      task: {
+        id: 't',
+        task: 'x',
+        slicc: {
+          files: [
+            { from: file, to: '/workspace/eval/cart/cart.js' },
+            { from: file, to: '/workspace/notes/n.txt' },
+          ],
+        },
+      },
+      runId: 'r9',
+      model: 'm',
+      capture: { pollMs: 5 },
+    });
+    const commands = calls.filter((c) => c.kind === 'exec').map((c) => c.command);
+    expect(commands.at(-2)).toBe("rm -rf '/workspace/eval' '/workspace/notes/n.txt'");
+    expect(commands.at(-1)).toBe('rm -rf /tmp/bench/r9');
+  });
+
+  it('never plans to remove a top-level directory, and keeps the outermost of nested paths', async () => {
+    const { leader } = fakeLeader({ commands: [[/^d=/, ok('/workspace\n/tmp/x\n/tmp/x/y\n')]] });
+    const files = ['/workspace/a', '/tmp/x/y/b', '/tmp/x/y/z/c'].map((to) => ({ from: '', to }));
+    expect(await planStagedCleanup(leader, files)).toEqual(['/tmp/x']);
   });
 
   it('refuses an unsafe run id before touching the leader', async () => {

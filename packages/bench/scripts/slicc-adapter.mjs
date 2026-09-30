@@ -69,6 +69,27 @@ function failure(what, r) {
   return err;
 }
 
+/**
+ * What to remove after a run so a task's fixtures don't leak into the next run on a reused
+ * leader (#3696): for each staged file, the highest directory that doesn't exist yet (staging
+ * creates it, and anything the agent adds inside goes with it), or the file itself when its
+ * directory already exists. Read from the leader before staging.
+ */
+export async function planStagedCleanup(leader, files) {
+  if (!files.length) return [];
+  const probe = files
+    .map(
+      (f) =>
+        `d=${quote(dirname(f.to))}; t=; while [ ! -d "$d" ]; do t="$d"; d=$(dirname "$d"); done; echo "$t"`
+    )
+    .join('; ');
+  const lines = (await must(leader, probe)).stdout.split('\n');
+  const paths = files.map((f, i) => lines[i]?.trim() || f.to);
+  // Keep the outermost of nested paths; never a top-level directory such as /workspace.
+  const unique = [...new Set(paths)].filter((p) => p.split('/').filter(Boolean).length >= 2);
+  return unique.filter((p) => !unique.some((q) => q !== p && p.startsWith(`${q}/`)));
+}
+
 async function must(leader, command, options) {
   const r = await leader.exec(command, options);
   if (r.status !== 0) throw failure(`leader: \`${command.slice(0, 120)}\``, r);
@@ -1151,8 +1172,10 @@ export async function runTask({
   const timeout = task.slicc?.timeoutSeconds ?? timeoutSeconds;
   const t0 = now();
   const health = { before: await leaderHealth(leader, now) };
+  let staged = [];
   try {
     await must(leader, `rm -rf ${dir} && mkdir -p ${dir}`);
+    staged = await planStagedCleanup(leader, task.slicc?.files ?? []);
     for (const f of task.slicc?.files ?? []) {
       await must(leader, `mkdir -p ${quote(dirname(f.to))} && base64 -d > ${quote(f.to)}`, {
         stdin: Buffer.from(readFile(f.from)).toString('base64'),
@@ -1259,6 +1282,7 @@ export async function runTask({
   } finally {
     await closeTabs(leader).catch(() => {});
     await leader.cli(['new-session', '--erase']).catch(() => {});
+    if (staged.length) await leader.exec(`rm -rf ${staged.map(quote).join(' ')}`).catch(() => {});
     await leader.exec(`rm -rf ${dir}`).catch(() => {});
   }
 }
