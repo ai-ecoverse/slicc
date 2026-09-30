@@ -335,9 +335,30 @@ function decode(content: string | ArrayBuffer): string {
   return typeof content === 'string' ? content : new TextDecoder().decode(content);
 }
 
+function toBytes(content: string | ArrayBuffer): Uint8Array {
+  return typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
+}
+
 function toBlob(content: string | ArrayBuffer, mime: string): Blob {
-  const data = typeof content === 'string' ? new TextEncoder().encode(content) : content;
-  return new Blob([data], { type: mime });
+  // Always pass a view: some Blob implementations (and TypeScript's BlobPart)
+  // reject a bare ArrayBuffer while accepting the same bytes as a Uint8Array.
+  return new Blob([toBytes(content)], { type: mime });
+}
+
+/**
+ * Last-resort object URL when `URL.createObjectURL` rejects the Blob.
+ *
+ * Vitest's jsdom shim still digs for jsdom's old `Symbol(impl)._buffer`, which
+ * jsdom 30.1 no longer exposes — so createObjectURL throws even though the
+ * Blob itself is fine. A data URL keeps image/audio/video/PDF previews
+ * openable in that harness (and any other environment where the Blob realm
+ * and URL.createObjectURL disagree).
+ */
+function toDataUrl(content: string | ArrayBuffer, mime: string): string {
+  const bytes = toBytes(content);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+  return `data:${mime};base64,${btoa(binary)}`;
 }
 
 /**
@@ -678,9 +699,14 @@ export class SliccQuickLook extends HTMLElement {
   }
 
   #objectUrl(content: string | ArrayBuffer, mime: string): string {
-    const url = URL.createObjectURL(toBlob(content, mime));
-    this.#blobUrls.push(url);
-    return url;
+    try {
+      const url = URL.createObjectURL(toBlob(content, mime));
+      this.#blobUrls.push(url);
+      return url;
+    } catch {
+      // No revoke needed — data URLs are not registered with the URL store.
+      return toDataUrl(content, mime);
+    }
   }
 }
 

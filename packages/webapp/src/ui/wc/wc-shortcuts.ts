@@ -2399,8 +2399,17 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
    * Focus LEAVING is the other half, and the one that has no event of its own
    * when it lands nowhere: blurring the composer for the transcript fires a
    * `focusout` and no `focusin` at all.
+   *
+   * A frame is special: some DOM implementations (jsdom 30.1+) emit the
+   * leaving `focusout` but never the arriving `focusin` on the frame itself.
+   * By then `activeElement` is already the frame, so suspend here — same
+   * inline contract as {@link onFocusIn} — or the badge outlives the focus
+   * until the deferred settle.
    */
-  const onFocusOut = (): void => settler.schedule();
+  const onFocusOut = (): void => {
+    if (mode.on() && isFrameTarget(deepActiveElement(doc))) settler.suspend();
+    settler.schedule();
+  };
   const onFullscreenChange = (): void => syncKeyboardLock(doc);
   /** A document that just got the keyboard back has a mode to show again. */
   const onWindowFocus = (): void => settler.schedule();
