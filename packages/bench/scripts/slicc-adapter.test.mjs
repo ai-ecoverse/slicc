@@ -2089,31 +2089,30 @@ describe('a prompt that returns while the agent still works', () => {
 });
 
 describe('lastTurnProviderError', () => {
-  const run = (...messages) => ({ transcript: { conversations: [{ messages }] } });
-  it('names the error a run died on, and ignores recovered errors and other conversations', () => {
-    const dead = {
-      role: 'assistant',
-      stopReason: 'error',
-      errorMessage: 'Internal server error: Bedrock',
-    };
-    expect(lastTurnProviderError(run({ role: 'user' }, dead))).toBe(
+  const cone = (...messages) => ({ kind: 'cone', messages });
+  const scoop = (...messages) => ({ kind: 'scoop', messages });
+  const run = (...conversations) => ({ transcript: { conversations } });
+  const dead = {
+    role: 'assistant',
+    stopReason: 'error',
+    errorMessage: 'Internal server error: Bedrock',
+  };
+  const done = { role: 'assistant', stopReason: 'stop' };
+  it('names the error the cone died on, and ignores recovered errors and scoops', () => {
+    expect(lastTurnProviderError(run(cone({ role: 'user' }, dead)))).toBe(
       'Internal server error: Bedrock'
     );
     // An error the agent recovered from is not the end of the run.
-    expect(lastTurnProviderError(run(dead, { role: 'assistant', stopReason: 'stop' }))).toBeNull();
-    // Only the cone's conversation counts; a scoop that died does not end the run.
-    expect(
-      lastTurnProviderError({
-        transcript: {
-          conversations: [
-            { messages: [{ role: 'assistant', stopReason: 'stop' }] },
-            { messages: [dead] },
-          ],
-        },
-      })
-    ).toBeNull();
+    expect(lastTurnProviderError(run(cone(dead, done)))).toBeNull();
+    // A scoop that died does not end the run, wherever it is listed.
+    expect(lastTurnProviderError(run(scoop(dead), cone(done)))).toBeNull();
+    expect(lastTurnProviderError(run(cone(done), scoop(dead)))).toBeNull();
+    // The cone is found by kind even when a scoop is listed first (#3704 review).
+    expect(lastTurnProviderError(run(scoop(done), cone(dead)))).toBe(
+      'Internal server error: Bedrock'
+    );
     expect(lastTurnProviderError({})).toBeNull();
-    expect(lastTurnProviderError(run({ role: 'assistant', stopReason: 'error' }))).toBe(
+    expect(lastTurnProviderError(run(cone({ role: 'assistant', stopReason: 'error' })))).toBe(
       'provider error'
     );
   });

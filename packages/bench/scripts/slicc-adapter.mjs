@@ -129,8 +129,9 @@ export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
  * which were then judged at about 0.2).
  */
 export function lastTurnProviderError(result) {
-  const cone = result?.transcript?.conversations?.[0]?.messages ?? [];
-  const last = cone.filter((m) => m.role === 'assistant').at(-1);
+  // The cone's conversation, selected by kind as in lastConeAssistantText: a scoop can be listed first.
+  const cone = (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
+  const last = (cone?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
   if (last?.stopReason !== 'error') return null;
   return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
 }
