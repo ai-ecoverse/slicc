@@ -36,4 +36,20 @@ done
   --export=__wasm_signal --export=__tls_size --export=__tls_align --export=__tls_base \
   --export=__wasm_call_ctors --export-if-defined=__wasm_apply_data_relocs \
   "--allow-undefined-file=$OUT/tags.txt" --experimental-pic -pie -o "$HERE/dlmain.wasm"
-ls -la "$HERE"/*.so "$HERE"/dlmain.wasm
+# A PIE main with what CPython's imports from env beyond the bases: a weak
+# undefined function, a strong one called only on request, and C++
+# thread_local destructors (libc++abi's weak __cxa_thread_atexit_impl,
+# _ZTH5errno). Undefined symbols stay imports (--unresolved-symbols=import-dynamic).
+"$TOOLCHAIN/install/bin/clang++" "${CFLAGS[@]}" -fwasm-exceptions -c "$HERE/weakmain.cpp" -o "$OUT/weakmain.o"
+"$LD" "-L$SYSROOT/lib" "-L$SYSROOT/lib/wasm32-wasi" --export-all \
+  "$OUT/weakmain.o" "$SYSROOT/lib/wasm32-wasi/crt1.o" -lc++ -lc++abi -lunwind -lc -lresolv -lrt -lm -lpthread \
+  -lwasi-emulated-process-clocks -lwasi-emulated-mman \
+  "$SYSROOT/lib/wasm32-wasi/libclang_rt.builtins-wasm32.a" \
+  --import-memory --shared-memory --max-memory=4294967296 "$FEATURES" \
+  --export=__wasm_signal --export=__tls_size --export=__tls_align --export=__tls_base \
+  --export=__wasm_call_ctors --export-if-defined=__wasm_apply_data_relocs \
+  "--allow-undefined-file=$OUT/tags.txt" --unresolved-symbols=import-dynamic \
+  --experimental-pic -pie -o "$OUT/weakmain.wasm"
+"$TOOLCHAIN/install/bin/llvm-strip" --strip-all --keep-section=dylink.0 \
+  -o "$HERE/weakmain.wasm" "$OUT/weakmain.wasm"
+ls -la "$HERE"/*.so "$HERE"/dlmain.wasm "$HERE"/weakmain.wasm

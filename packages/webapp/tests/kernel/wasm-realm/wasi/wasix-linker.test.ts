@@ -127,4 +127,25 @@ describe('WasixLinker', () => {
     expect(typeof second.linker.table.get(slot)).toBe('function');
     expect(second.linker.invalid(handle)).toBe(false);
   });
+
+  it("the main module's undefined symbols: GOT entries 0 (weak null), a function that traps only when called", () => {
+    const { linker } = setup({});
+    const imports = linker.mainImports(new WebAssembly.Module(bytes('weakmain.wasm')));
+    const gotFunc = imports['GOT.func'] as Record<string, WebAssembly.Global>;
+    expect(Object.keys(gotFunc).sort()).toEqual([
+      '_ZTH5errno',
+      '__cxa_thread_atexit_impl',
+      'weak_missing',
+    ]);
+    linker.bindMainGot();
+    expect(gotFunc.weak_missing?.value).toBe(0);
+    expect(gotFunc.__cxa_thread_atexit_impl?.value).toBe(0);
+    const missing = imports.env?.strong_missing as () => number;
+    expect(() => missing()).toThrow(WebAssembly.RuntimeError);
+    expect(() => missing()).toThrow('unresolved symbol strong_missing');
+    // The layout the linker made stays: the stack bounds are its own.
+    expect(
+      (imports['GOT.mem'] as Record<string, WebAssembly.Global>).__stack_low?.value
+    ).toBeGreaterThan(0);
+  });
 });
