@@ -9,7 +9,10 @@
  * from where its parent stopped.
  *
  * The content is loaded on first use and written back when the last
- * reference closes (or on a flush), like the live mount does per worker.
+ * reference closes (or on a flush), like the live mount does per worker —
+ * and, while writes keep coming, shortly after them ({@link WRITEBACK_MS}):
+ * another process reads the path, not this buffer, so a long-running
+ * program's redirected output (`job > log &`) shows up as it runs.
  * An unlinked-while-open file (mkstemp) carries its live bytes across the
  * handoff and is never written back — the path is gone.
  *
@@ -53,6 +56,14 @@ export interface VfsFileOptions {
   truncate?: boolean;
 }
 
+/** How soon a written node writes itself back, at the least. */
+export const WRITEBACK_MS = 250;
+/**
+ * A write-back rewrites the whole file: the next waits this many times as
+ * long as the last took, so a large file costs at most a tenth of the time.
+ */
+const WRITEBACK_COST_FACTOR = 10;
+
 /** Whether `path` is `root` or beneath it. */
 function within(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`);
@@ -69,6 +80,10 @@ export class VfsNode {
   private length = 0;
   private dirty = false;
   private queue: Promise<unknown> = Promise.resolve();
+  /** The write-back scheduled after a write, if any. */
+  private writeBack: ReturnType<typeof setTimeout> | undefined;
+  /** How long the last write-back took (ms). */
+  private writeBackCost = 0;
   /** Descriptions on it. */
   opens = 0;
 
@@ -119,7 +134,7 @@ export class VfsNode {
     if (at > this.length) buf.fill(0, this.length, at);
     buf.set(bytes, at);
     this.length = Math.max(this.length, at + bytes.length);
-    this.dirty = true;
+    this.markDirty();
     return bytes.length;
   }
 
@@ -128,7 +143,18 @@ export class VfsNode {
     const buf = this.ensure(size);
     if (size > this.length) buf.fill(0, this.length, size);
     this.length = size;
+    this.markDirty();
+  }
+
+  /** Written: write back soon, once — later writes ride along. */
+  private markDirty(): void {
     this.dirty = true;
+    if (this.writeBack !== undefined || this.orphaned) return;
+    const delay = Math.max(WRITEBACK_MS, this.writeBackCost * WRITEBACK_COST_FACTOR);
+    this.writeBack = setTimeout(() => {
+      this.writeBack = undefined;
+      this.serial(() => this.flush()).catch(() => undefined);
+    }, delay);
   }
 
   private ensure(need: number): Uint8Array {
@@ -143,7 +169,9 @@ export class VfsNode {
   async flush(): Promise<void> {
     if (!this.dirty || !this.data || this.orphaned) return;
     this.dirty = false;
+    const started = performance.now();
     await this.fs.writeFile(this.path, this.data.slice(0, this.length));
+    this.writeBackCost = performance.now() - started;
   }
 }
 
