@@ -56,6 +56,11 @@ function withDefaults(
   return { ...rest, ...env };
 }
 
+function withLogname(env: Record<string, string>): Record<string, string> {
+  if (env.USER === undefined || 'LOGNAME' in env) return env;
+  return { ...env, LOGNAME: env.USER };
+}
+
 function withSecretFunction(argv0: string, env: Record<string, string>): Record<string, string> {
   if (!/^(ba)?sh$/.test(baseName(argv0)) || SECRET_FUNCTION_ENV in env) return env;
   return { ...env, [SECRET_FUNCTION_ENV]: SECRET_FUNCTION };
@@ -319,7 +324,7 @@ export class WasmSession {
       await req.fds.closeAll();
       throw e;
     }
-    const env = withSecretFunction(req.argv0, withDefaults(req.defaults, req.env));
+    const env = withSecretFunction(req.argv0, withLogname(withDefaults(req.defaults, req.env)));
     if (wasi) await this.pythonPackages(req, env);
     return this.start({
       ...req,
