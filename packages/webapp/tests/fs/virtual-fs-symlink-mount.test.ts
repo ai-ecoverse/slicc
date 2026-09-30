@@ -89,6 +89,19 @@ describe('VirtualFS.symlink onto a mount', () => {
     expect(await vfs.realpath('/tmp-chain')).toBe('/mnt/kb');
   });
 
+  it('a link to a directory inside the mount (not its root) reads what is beneath', async () => {
+    await mountKb(vfs);
+    await vfs.mkdir('/mnt/kb/pkg');
+    await vfs.writeFile('/mnt/kb/pkg/package.json', '{}');
+    await vfs.mkdir('/shared/node_modules/@scope', { recursive: true });
+    await vfs.symlink('/mnt/kb/pkg', '/shared/node_modules/@scope/pkg');
+    expect(await vfs.readFile('/shared/node_modules/@scope/pkg/package.json')).toBe('{}');
+    expect((await vfs.stat('/shared/node_modules/@scope/pkg')).type).toBe('directory');
+    expect(await vfs.realpath('/shared/node_modules/@scope/pkg/package.json')).toBe(
+      '/mnt/kb/pkg/package.json'
+    );
+  });
+
   it('the sync fast paths leave a link onto a mount to the async path (they cannot see the mount)', async () => {
     await mountKb(vfs);
     await vfs.symlink('/mnt/kb', '/shared/wiki');
