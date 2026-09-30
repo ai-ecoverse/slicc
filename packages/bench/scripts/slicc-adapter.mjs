@@ -119,6 +119,9 @@ async function mustCli(leader, args, options) {
 /** Levels `slicc thinking` accepts. `default` is a bench spec, not a wire level. */
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
+/** A run id names a directory and goes into shell commands: plain characters only. */
+export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
 /**
  * A bench model spec. `alias@level` names a thinking variant; a plain alias,
  * and an explicit `@default`, leave the leader's level alone. `spec` is what
@@ -1181,7 +1184,7 @@ export async function runTask({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   condition = null,
 }) {
-  if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error(`bad run id ${runId}`);
+  if (!RUN_ID_PATTERN.test(runId)) throw new Error(`bad run id ${runId}`);
   const dir = `/tmp/bench/${runId}`;
   const timeout = task.slicc?.timeoutSeconds ?? timeoutSeconds;
   const t0 = now();
