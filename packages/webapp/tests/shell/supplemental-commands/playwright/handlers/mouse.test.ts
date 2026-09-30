@@ -205,11 +205,18 @@ describe('mousewheel handler', () => {
       if (params?.['expression'] === 'document.visibilityState') {
         return { result: { value: 'hidden' } };
       }
-      return { exceptionDetails: { text: 'Uncaught', exception: { description: 'EvalError: blocked by CSP' } } };
+      return {
+        exceptionDetails: {
+          text: 'Uncaught',
+          exception: { description: 'EvalError: blocked by CSP' },
+        },
+      };
     });
     const { browser } = createMockBrowser({ transport });
     await expect(
-      mousewheelHandler(createHandlerCtx({ browser, positional: ['0', '600'], flags: { tab: TAB } }))
+      mousewheelHandler(
+        createHandlerCtx({ browser, positional: ['0', '600'], flags: { tab: TAB } })
+      )
     ).rejects.toThrow('blocked by CSP');
   });
 });
