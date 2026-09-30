@@ -1,6 +1,6 @@
 {
   "name": "sliccy",
-  "version": "6.226.0",
+  "version": "6.226.1",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
@@ -117,7 +117,7 @@
   "dependencies": {
     "e2b": "2.46.1",
     "express": "5.2.1",
-    "pyodide": "314.0.6",
+    "pyodide": "314.0.7",
     "werift": "0.24.4",
     "ws": "8.21.3"
   },
