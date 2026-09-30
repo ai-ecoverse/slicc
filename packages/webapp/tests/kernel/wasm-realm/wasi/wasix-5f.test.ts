@@ -113,6 +113,21 @@ describe('the kernel: alarms and a repeated signal', () => {
     expect(raised.length).toBe(n);
   });
 
+  it('proc-alarm with firstMs: a one-shot fires once; a repeating one first after firstMs, then every ms', async () => {
+    const raised: number[] = [];
+    const p = new WasmProcess(3302, new FdTable(), { raise: (sig) => void raised.push(sig) });
+    await p.syscall({ op: 'proc-alarm', sig: SIG.ALRM, ms: 0, firstMs: 10, repeat: false });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(raised).toEqual([SIG.ALRM]);
+    raised.length = 0;
+    await p.syscall({ op: 'proc-alarm', sig: SIG.ALRM, ms: 5, firstMs: 40, repeat: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(raised).toEqual([]); // not before the first
+    await new Promise((r) => setTimeout(r, 50));
+    expect(raised.length).toBeGreaterThanOrEqual(2);
+    await p.exit();
+  });
+
   it('a terminating signal that arrives while the same one still waits for the program ends it', async () => {
     let pending = 0;
     const p = new WasmProcess(3301, new FdTable(), {

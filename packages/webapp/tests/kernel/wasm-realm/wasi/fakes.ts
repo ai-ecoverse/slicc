@@ -221,6 +221,8 @@ export class FakeKernel implements WasiKernel {
         const e = this.get(req.fd);
         return { path: e.path, size: e.data?.length ?? 0 };
       }
+      case 'proc-alarm':
+        return undefined;
       case 'fd-path-flush':
       case 'fd-path-unlinking':
       case 'fd-path-unlinked':

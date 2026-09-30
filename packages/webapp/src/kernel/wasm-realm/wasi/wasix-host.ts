@@ -48,6 +48,7 @@ export const COMPAT: Readonly<Record<string, readonly string[]>> = {
   spawn: ['proc_spawn2', 'proc_spawn3'],
   open: ['path_open2'],
   dup: ['fd_dup', 'fd_dup2'],
+  alarm: ['proc_raise_interval', 'proc_raise_interval2'],
 };
 
 export class WasixHost {
@@ -183,13 +184,27 @@ export class WasixHost {
       // The export that runs a signal's handler (wasix-libc's first sigaction names it).
       callback_signal: (name: number, len: number) =>
         void this.signals?.register(this.str(name, len)),
-      // setitimer: the kernel raises `sig` every `interval` (a WASI timestamp: ns; 0 cancels).
-      // wasix-libc passes it_interval, never it_value: a one-shot alarm() arrives as 0.
-      proc_raise_interval: (sig: number, interval: bigint, repeat: number) => {
-        const posix = WASI_SIGNAL_TO_POSIX[sig];
-        if (posix === undefined) throw new WasiError('EINVAL');
-        const ms = Math.ceil(Number(interval) / 1e6);
-        host.o.kernel.call({ op: 'proc-alarm', sig: posix, ms, repeat: repeat !== 0 });
+      // setitimer: the kernel raises `sig` every `interval` (a WASI timestamp: ns, as
+      // wasix-libc computes it; 0 cancels). That libc passes it_interval, never
+      // it_value: a one-shot alarm() arrives as 0.
+      proc_raise_interval: (sig: number, interval: bigint, repeat: number) =>
+        void host.o.kernel.call({
+          op: 'proc-alarm',
+          sig: posixSignal(sig),
+          ms: nsToMs(interval),
+          repeat: repeat !== 0,
+        }),
+      // Our patched libc's: it_value too — the first after `initial` (0: cancel),
+      // then every `interval` if `repeat`.
+      proc_raise_interval2: (sig: number, initial: bigint, interval: bigint, repeat: number) => {
+        const ms = nsToMs(interval);
+        host.o.kernel.call({
+          op: 'proc-alarm',
+          sig: posixSignal(sig),
+          ms,
+          firstMs: nsToMs(initial),
+          repeat: repeat !== 0 && ms > 0,
+        });
       },
       proc_id: (out: number) => void mem.view().setUint32(out, host.o.pid, true),
       proc_parent: (pid: number, out: number) => {
@@ -519,4 +534,16 @@ export class WasixHost {
 /** Whether a module speaks WASIX (it imports `wasix_32v1`). */
 export function isWasix(module: WebAssembly.Module): boolean {
   return WebAssembly.Module.imports(module).some((i) => i.module === 'wasix_32v1');
+}
+
+/** A WASI signal's POSIX number (EINVAL for none). */
+function posixSignal(sig: number): number {
+  const posix = WASI_SIGNAL_TO_POSIX[sig];
+  if (posix === undefined) throw new WasiError('EINVAL');
+  return posix;
+}
+
+/** A WASI duration (ns) in whole milliseconds, rounded up: a nonzero one never becomes 0 (a cancel). */
+function nsToMs(ns: bigint): number {
+  return Math.ceil(Number(ns) / 1e6);
 }

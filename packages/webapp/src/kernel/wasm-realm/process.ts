@@ -98,8 +98,11 @@ export type WasmSyscall =
   | { op: 'fd-list' }
   /** The process's dynamic-link records (5g): `append` one, answer those from `from` on. */
   | { op: 'dl-log'; append?: LinkRecord; from: number }
-  /** setitimer(2) / alarm(2): raise `sig` in `ms` (0: cancel), again every `ms` if `repeat`. */
-  | { op: 'proc-alarm'; sig: number; ms: number; repeat: boolean }
+  /**
+   * setitimer(2) / alarm(2): raise `sig` in `firstMs` (default `ms`; 0:
+   * cancel), then every `ms` if `repeat`.
+   */
+  | { op: 'proc-alarm'; sig: number; ms: number; firstMs?: number; repeat: boolean }
   /**
    * WASI fd_renumber: `to` becomes `from`'s description (what was at `to`
    * closes), `from` closes — unless `keep` (WASIX's, which is dup2).
@@ -817,7 +820,7 @@ export class WasmProcess {
         if (req.append) this.dlLog.push(req.append);
         return { ok: true, kind: 'json', json: this.dlLog.slice(req.from) };
       case 'proc-alarm':
-        this.setAlarm(req.sig, req.ms, req.repeat);
+        this.setAlarm(req.sig, req.firstMs ?? req.ms, req.repeat ? req.ms : 0);
         return { ok: true, kind: 'void' };
       case 'sig-mask':
         this.caught = req.caught;
@@ -833,22 +836,32 @@ export class WasmProcess {
 
   /** The process is gone (exit, crash, SIGKILL): release its descriptors once. */
   private alarm: ReturnType<typeof setTimeout> | undefined;
+  private alarmEvery: ReturnType<typeof setInterval> | undefined;
 
-  private setAlarm(sig: number, ms: number, repeat: boolean): void {
+  /** Raise `sig` in `first` ms (0: cancel), then every `every` ms (0: once). */
+  private setAlarm(sig: number, first: number, every: number): void {
     if (!isSignal(sig)) throw new KernelError('EINVAL');
-    clearTimeout(this.alarm);
-    clearInterval(this.alarm);
-    this.alarm = undefined;
-    if (ms <= 0) return;
+    this.clearAlarm();
+    if (first <= 0) return;
     const fire = () => this.options.raise?.(sig);
-    this.alarm = repeat ? setInterval(fire, ms) : setTimeout(fire, ms);
+    this.alarm = setTimeout(() => {
+      this.alarm = undefined;
+      fire();
+      if (every > 0) this.alarmEvery = setInterval(fire, every);
+    }, first);
+  }
+
+  private clearAlarm(): void {
+    clearTimeout(this.alarm);
+    clearInterval(this.alarmEvery);
+    this.alarm = undefined;
+    this.alarmEvery = undefined;
   }
 
   async exit(): Promise<void> {
     if (this.exited) return;
     this.exited = true;
-    clearTimeout(this.alarm);
-    clearInterval(this.alarm);
+    this.clearAlarm();
     await this.fds.closeAll();
   }
 }
