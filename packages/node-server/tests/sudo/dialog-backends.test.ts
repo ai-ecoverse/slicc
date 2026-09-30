@@ -130,6 +130,13 @@ describe('zenity backend', () => {
     ).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
+  it('reports a code-less zenity throw as unavailable (same as osascript)', async () => {
+    expect(await createZenityBackend(execThrowing(new Error('broken pipe'))).prompt(REQ)).toEqual({
+      decision: 'deny',
+      reason: 'unavailable',
+    });
+  });
+
   it('handles the Always extra-button then the entry dialog', async () => {
     const exec = vi
       .fn<ExecFn>()

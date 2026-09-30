@@ -62,9 +62,14 @@ function denyFromDialogFailure(err: unknown): SudoDecision {
   return unavailableDecision();
 }
 
-/** True when `execFile` could not spawn the dialog binary at all. */
+/**
+ * True when the dialog binary did not produce a real exit code.
+ * Matches {@link denyFromDialogFailure}: only a numeric `code` means the
+ * dialog ran (Deny / Always / dismiss). String errno or a code-less Error
+ * is plumbing — never a refusal.
+ */
 function isSpawnFailure(err: unknown): boolean {
-  return typeof (err as { code?: unknown })?.code === 'string';
+  return typeof (err as { code?: unknown })?.code !== 'number';
 }
 
 /** macOS: single `osascript display dialog` with 3 buttons + a text field. */
