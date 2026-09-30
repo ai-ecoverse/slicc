@@ -42,6 +42,31 @@ Use the playwright-cli shell command via bash to navigate pages.
       expect(skills[0].path).toBe('/skills/browser/SKILL.md');
     });
 
+    it('loads literal and folded block-scalar descriptions into the prompt list', async () => {
+      await vfs.mkdir('/skills/block-lit', { recursive: true });
+      await vfs.mkdir('/skills/block-fold', { recursive: true });
+      await vfs.writeFile(
+        '/skills/block-lit/SKILL.md',
+        '---\nname: block-lit\ndescription: |\n  First line\n  Second line\n---\n# Lit\n'
+      );
+      await vfs.writeFile(
+        '/skills/block-fold/SKILL.md',
+        '---\nname: block-fold\ndescription: >\n  Folded A\n  Folded B\n---\n# Fold\n'
+      );
+
+      const skills = await loadSkills(vfs, '/skills');
+      const byName = Object.fromEntries(
+        skills.map((s) => [s.metadata.name, s.metadata.description])
+      );
+      expect(byName['block-lit']).toBe('First line\nSecond line');
+      expect(byName['block-fold']).toBe('Folded A Folded B');
+
+      const prompt = formatSkillsForPrompt(skills);
+      expect(prompt).toContain('First line');
+      expect(prompt).not.toMatch(/\*\*block-lit\*\*: \|/);
+      expect(prompt).not.toMatch(/\*\*block-fold\*\*: >/);
+    });
+
     it('loads a standalone .md skill file', async () => {
       await vfs.mkdir('/skills2', { recursive: true });
       await vfs.writeFile(

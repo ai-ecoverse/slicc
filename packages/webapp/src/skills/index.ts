@@ -12,5 +12,12 @@ export {
   WORKSPACE_SKILLS_PATH,
 } from './constants.js';
 export { discoverSkills, getSkillInfo, readSkillInstructions } from './discover.js';
+export {
+  extractSkillDescription,
+  parseSkillFrontmatter,
+  parseSkillFrontmatterFields,
+  type SkillFrontmatter,
+  splitSkillDocument,
+} from './frontmatter.js';
 export { installSkillFromDrop } from './install-from-drop.js';
 export type { DiscoveredSkill } from './types.js';

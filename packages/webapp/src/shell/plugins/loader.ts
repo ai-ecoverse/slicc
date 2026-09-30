@@ -1,5 +1,6 @@
 import { isLoopbackHostname } from '@slicc/shared-ts';
 import type { VirtualFS } from '../../fs/index.js';
+import { parseSkillFrontmatter } from '../../skills/frontmatter.js';
 import {
   type LoadedPlugin,
   PLUGIN_MANIFEST_SCHEMA_ID,
@@ -215,9 +216,9 @@ async function discoverPluginSkills(
 
     try {
       const content = await fs.readTextFile(skillFilePath);
-      const frontmatter = parseSkillFrontmatter(content);
+      const { metadata } = parseSkillFrontmatter(content);
 
-      if (!frontmatter.name || !frontmatter.description) {
+      if (!metadata.name || !metadata.description) {
         diagnostics.push(
           warn('skills', `skill "${entry.name}" skipped: SKILL.md missing name/description`)
         );
@@ -227,7 +228,7 @@ async function discoverPluginSkills(
         name: entry.name,
         path: skillPath,
         skillFilePath,
-        description: frontmatter.description,
+        description: metadata.description,
       });
     } catch (e) {
       diagnostics.push(
@@ -236,50 +237,6 @@ async function discoverPluginSkills(
     }
   }
   return skills;
-}
-
-function parseSkillFrontmatter(content: string): { name?: string; description?: string } {
-  const normalized = content
-    .replace(/^\uFEFF/, '')
-    .replace(/\r\n?/g, '\n')
-    .trimStart();
-  const fm = normalized.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!fm) return {};
-  const out: { name?: string; description?: string } = {};
-  const lines = fm[1].split('\n');
-  for (let i = 0; i < lines.length; i += 1) {
-    const m = lines[i].match(/^(name|description):\s*(.*)$/);
-    if (!m) continue;
-    const rawValue = m[2].trim();
-
-    const block = rawValue.match(/^([>|])[+-]?$/);
-    const value = block
-      ? collectBlockScalar(lines, i + 1, block[1] === '>' ? ' ' : '\n')
-      : unquoteScalar(rawValue);
-    if (m[1] === 'name') out.name = value;
-    else out.description = value;
-  }
-  return out;
-}
-
-function unquoteScalar(value: string): string {
-  const q = value[0];
-  if ((q === '"' || q === "'") && value.length >= 2 && value.endsWith(q)) {
-    const inner = value.slice(1, -1);
-    return q === '"' ? inner.replace(/\\(["\\])/g, '$1') : inner.replace(/''/g, "'");
-  }
-  return value;
-}
-
-function collectBlockScalar(lines: string[], start: number, separator: string): string {
-  const collected: string[] = [];
-  for (let i = start; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (line.trim() === '') continue;
-    if (!/^\s/.test(line)) break;
-    collected.push(line.trim());
-  }
-  return collected.join(separator);
 }
 
 async function loadMcpComponent(

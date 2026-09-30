@@ -1,5 +1,6 @@
 import type { VirtualFS } from '../fs/index.js';
 import { discoverSkillCandidates, resolveSkillNameCollisions } from './catalog.js';
+import { extractSkillDescription } from './frontmatter.js';
 import type { DiscoveredSkill } from './types.js';
 
 export async function discoverSkills(
@@ -16,7 +17,7 @@ export async function discoverSkills(
     if (candidate.skillFilePath) {
       try {
         const content = await fs.readTextFile(candidate.skillFilePath);
-        description = extractDescription(content) ?? '';
+        description = extractSkillDescription(content) ?? '';
       } catch {}
     }
 
@@ -66,18 +67,4 @@ export async function readSkillInstructions(
   } catch {
     return null;
   }
-}
-
-function extractDescription(content: string): string | null {
-  const normalized = content
-    .replace(/^\uFEFF/, '')
-    .replace(/\r\n?/g, '\n')
-    .trimStart();
-  const fm = normalized.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!fm) return null;
-  for (const line of fm[1].split('\n')) {
-    const m = line.match(/^description:\s*(.*)$/);
-    if (m) return m[1].trim();
-  }
-  return null;
 }
