@@ -214,10 +214,11 @@ export function stageSkillsCommand(condition) {
   if (condition.builtin) steps.push(`cp -r ${SKILLS_STASH}/. ${SKILLS_DIR}/`);
   // One skill at a time into a fresh directory: `cp -r <mount>/. <existing dir>` fails on a
   // node-server mount whose stat has no identity, because just-bash cannot rule out that the two
-  // are the same file (#3695). An extra skill replaces a built-in one of the same name.
+  // are the same file (#3695). An extra skill replaces a built-in one of the same name. just-bash
+  // has no nullglob, so an empty set leaves the pattern literal: skip it, as `cp -r <empty>/.` did.
   for (const extra of condition.extras)
     steps.push(
-      `for s in ${EXTRA_SKILLS_ROOT}/${extra}/*; do n=$(basename "$s"); rm -rf "${SKILLS_DIR}/$n" && cp -r "$s" "${SKILLS_DIR}/$n" || exit 1; done`
+      `for s in ${EXTRA_SKILLS_ROOT}/${extra}/*; do [ -e "$s" ] || continue; n=$(basename "$s"); rm -rf "${SKILLS_DIR}/$n" && cp -r "$s" "${SKILLS_DIR}/$n" || exit 1; done`
     );
   steps.push(`ls ${SKILLS_DIR} | wc -l`);
   return steps.join(' && ');

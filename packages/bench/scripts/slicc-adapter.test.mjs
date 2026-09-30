@@ -277,6 +277,11 @@ describe('skills conditions', () => {
       'strava',
     ]);
     expect(await fs.readFile('/workspace/skills/playwright-cli/SKILL.md')).toBe('extra pw');
+    // An empty extra set stages nothing and still succeeds (no nullglob in just-bash).
+    await bash.exec('mkdir -p /workspace/bench-skills/empty');
+    const empty = await bash.exec(stageSkillsCommand(parseSkillsCondition('builtin+empty')));
+    expect(empty.stderr).toBe('');
+    expect(empty.exitCode).toBe(0);
   });
 
   it('stashes once, then rebuilds /workspace/skills for the condition', () => {
