@@ -145,11 +145,18 @@ export const mousewheelHandler: PlaywrightHandler = async ({
       sessionId
     )) as { result?: { value?: unknown } };
     if (visibility.result?.value === 'hidden') {
-      await transport.send(
+      const scrolled = (await transport.send(
         'Runtime.evaluate',
         { expression: pageScrollScript(pos.x, pos.y, dx, dy), returnByValue: true },
         sessionId
-      );
+      )) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
+      if (scrolled.exceptionDetails) {
+        throw new Error(
+          scrolled.exceptionDetails.exception?.description ??
+            scrolled.exceptionDetails.text ??
+            'Page scroll failed'
+        );
+      }
       stderr = 'note: the tab is in the background, so the wheel was applied as a page scroll\n';
       return;
     }
@@ -164,7 +171,9 @@ export const mousewheelHandler: PlaywrightHandler = async ({
 
 /**
  * Scroll the way a wheel at (x, y) would: the innermost scrollable element under the point
- * that can move in the requested direction, else the document.
+ * that can move in the requested direction, else the document. A point with no element under
+ * it (off the viewport, or content that has since moved) scrolls the document too, where a
+ * real wheel would hit-test against the rendered layout.
  */
 function pageScrollScript(x: number, y: number, dx: number, dy: number): string {
   return `(() => {

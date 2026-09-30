@@ -198,6 +198,20 @@ describe('mousewheel handler', () => {
     expect(String(scroll?.params['expression'])).toContain('elementFromPoint(40, 50)');
     expect(String(scroll?.params['expression'])).toContain('dy = 600');
   });
+
+  it('fails instead of reporting a scroll when the page-side scroll throws', async () => {
+    const transport = createMockTransport((method, params) => {
+      if (method !== 'Runtime.evaluate') return {};
+      if (params?.['expression'] === 'document.visibilityState') {
+        return { result: { value: 'hidden' } };
+      }
+      return { exceptionDetails: { text: 'Uncaught', exception: { description: 'EvalError: blocked by CSP' } } };
+    });
+    const { browser } = createMockBrowser({ transport });
+    await expect(
+      mousewheelHandler(createHandlerCtx({ browser, positional: ['0', '600'], flags: { tab: TAB } }))
+    ).rejects.toThrow('blocked by CSP');
+  });
 });
 
 describe('drop handler', () => {
