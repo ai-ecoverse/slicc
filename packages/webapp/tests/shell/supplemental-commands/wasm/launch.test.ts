@@ -594,6 +594,50 @@ describe('WasmSession', () => {
     expect(exec).toHaveBeenCalledWith('/r/perl-script', expect.objectContaining({ args: [] }));
   });
 
+  it("runs a package's script command (a compiler driver) with its interpreter and env defaults", async () => {
+    fakeProcesses();
+    const BASH = '/shared/lib/node_modules/@ai-ecoverse/wasm-bash';
+    const CLANG = '/shared/lib/node_modules/@ai-ecoverse/wasm-clang';
+    const files = {
+      ...installed,
+      [`${BASH}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-bash',
+        slicc: { commands: { bash: { glue: 'bin/bash', wasm: 'bin/bash.wasm' } } },
+      }),
+      [`${BASH}/bin/bash`]: 'BASH',
+      [`${BASH}/bin/bash.wasm`]: 'W',
+      [`${CLANG}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-clang',
+        slicc: {
+          env: { SYSROOT: '${package}/sysroot' },
+          commands: { cc: { script: 'bin/cc' } },
+        },
+      }),
+      [`${CLANG}/bin/cc`]: '#!/bin/sh\nexec clang "$@"\n',
+    };
+    const gate = vi.fn(async () => null);
+    const session = new WasmSession(ctx(files), undefined, () => {}, gate);
+    // No wasm program of its own.
+    expect(await session.resolve('cc', 'cc', '/w')).toBeUndefined();
+    const spawner = await parentSpawner(session);
+    // What a $PATH search (make's `$(CC)`) hands the spawner.
+    await spawner(
+      { file: '/usr/bin/cc', argv: ['cc', '-c', 'x.c'], env: { A: '1' }, cwd: '/d' },
+      stdio()
+    );
+    const opts = spawn.mock.calls.at(-1)![0];
+    expect(opts.program.glue).toBe('BASH');
+    expect(opts.argv0).toBe('sh');
+    expect(opts.args).toEqual([`${CLANG}/bin/cc`, '-c', 'x.c']);
+    // The command's defaults reach the interpreter; the caller's env wins.
+    expect(opts.env).toMatchObject({ A: '1', SYSROOT: `${CLANG}/sysroot` });
+    expect(gate).toHaveBeenLastCalledWith('sh', [`${CLANG}/bin/cc`, '-c', 'x.c'], { A: '1' });
+    // `wasm cc …` (and the shell's `cc`) resolves the same way.
+    const run = await session.interpreted({ file: 'cc', argv: ['cc', 'y.c'], cwd: '/w' });
+    expect(run?.args).toEqual([`${CLANG}/bin/cc`, 'y.c']);
+    expect(run?.target.defaults).toMatchObject({ SYSROOT: `${CLANG}/sysroot` });
+  });
+
   it('refuses a shell child without an exec (ENOSYS)', async () => {
     fakeProcesses();
     const session = new WasmSession(ctx(installed), undefined, () => {});

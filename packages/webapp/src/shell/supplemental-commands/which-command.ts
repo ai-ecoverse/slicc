@@ -66,7 +66,8 @@ interface ScriptCandidates {
 }
 
 function wasmLine(wasm: WasmCommand, note?: string): string {
-  return `${wasm.glue} (wasm, ${wasm.pkg}${note ? `, ${note}` : ''})`;
+  const kind = wasm.script ? 'script' : 'wasm';
+  return `${wasm.glue} (${kind}, ${wasm.pkg}${note ? `, ${note}` : ''})`;
 }
 
 /** A static built-in's lines: its path, then every script it shadows. */
