@@ -27,6 +27,8 @@ export interface McpServerAuthRecord {
   auth: McpAuthEntry;
 }
 
+export type McpExposureMode = 'codemode' | 'codemode-deferred' | 'deferred' | 'direct' | 'hidden';
+
 export interface McpServerEntry {
   url: string;
   protocolVersion?: string;
@@ -38,7 +40,17 @@ export interface McpServerEntry {
   auth?: McpAuthEntry;
 
   pluginOrigin?: string;
+
+  exposure?: McpExposureMode;
+
+  toolExposure?: Record<string, McpExposureMode>;
+
+  transport?: 'pi' | 'slicc';
 }
+
+export type McpToolArgs = { [key: string]: unknown };
+
+export type McpStructuredContent = { [key: string]: unknown };
 
 export interface McpServersFile {
   version: number;

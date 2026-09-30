@@ -58,6 +58,18 @@ function stubPiNodeInternalsPlugin() {
           return resolve(Dirname, 'src/stubs/pi-config-stub.ts');
         }
       }
+
+      if (normalizedImporter?.includes('@earendil-works/pi-mcp')) {
+        if (source.endsWith('/transports/stdio.js') || source.endsWith('/transports/stdio.ts')) {
+          return resolve(Dirname, 'src/stubs/pi-mcp-stdio-stub.ts');
+        }
+      }
+
+      if (normalizedImporter?.includes('@earendil-works/pi-codemode')) {
+        if (source.endsWith('/wasm.js') || source.endsWith('/wasm.ts')) {
+          return resolve(Dirname, 'src/stubs/pi-codemode-wasm-stub.ts');
+        }
+      }
       return undefined;
     },
   };
@@ -292,6 +304,7 @@ const MODULE_ALIASES: Record<string, string> = {
 
   'node:zlib': resolve(Dirname, 'src/shims/empty.ts'),
   'node:module': resolve(Dirname, 'src/shims/empty.ts'),
+  'node:worker_threads': resolve(Dirname, 'src/shims/worker-threads.ts'),
 
   stream: resolve(Dirname, 'src/shims/stream.ts'),
   http: resolve(Dirname, 'src/shims/http.ts'),
@@ -355,6 +368,7 @@ export default defineConfig(({ mode }) => ({
     __BIOME_WASM_WEB_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/wasm-web')),
     __BIOME_JS_API_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/js-api')),
     __FFMPEG_CORE_VERSION__: JSON.stringify(wasmDepVersion('@ffmpeg/core')),
+    __QUICKJS_WASI_VERSION__: JSON.stringify(wasmDepVersion('quickjs-wasi')),
 
     __V86_VERSION__: JSON.stringify(wasmDepVersion('v86')),
 

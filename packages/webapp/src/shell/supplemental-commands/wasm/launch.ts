@@ -554,7 +554,13 @@ export class WasmSession {
       const run = direct
         ? { target: direct, file: req.file, args: req.argv.slice(1) }
         : await this.interpreted(req);
-      if (!run) return this.runShellChild(req, fds, ppid);
+      if (!run) {
+        if (!(await this.shellRuns(req))) {
+          void fds.closeAll().catch(() => undefined);
+          throw new SpawnError('ENOENT');
+        }
+        return this.runShellChild(req, fds, ppid);
+      }
 
       const denial = await this.gate?.(commandName(run.file), run.args, req.env);
       if (denial) return this.deniedChild(req, fds, ppid, denial);
@@ -568,6 +574,21 @@ export class WasmSession {
       });
       return childHandle(handle);
     };
+  }
+
+  private async shellRuns(req: ChildSpawnRequest): Promise<boolean> {
+    const name =
+      REGISTRY_PATH.exec(req.file)?.[1] ?? (req.file.includes('/') ? undefined : req.file);
+    if (name === undefined) return this.ctx.fs.exists(this.ctx.fs.resolvePath(req.cwd, req.file));
+    const registered = this.ctx.getRegisteredCommands?.();
+    if (!registered || registered.includes(name) || !this.ctx.exec) return true;
+    const found = await this.ctx.exec('command', {
+      args: ['-v', name],
+      cwd: req.cwd,
+      env: req.env,
+      replaceEnv: true,
+    });
+    return found.exitCode === 0;
   }
 
   private deniedChild(

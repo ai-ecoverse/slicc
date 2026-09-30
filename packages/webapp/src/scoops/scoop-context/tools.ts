@@ -1,6 +1,12 @@
+import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { BlindReadLog } from '../../base/blind-reads.js';
 import { providerLabel } from '../../base/provider-labels.js';
-import { adaptTools, createLogger, type ToolAdapterGateConfig } from '../../core/index.js';
+import {
+  adaptTools,
+  createLogger,
+  type ToolAdapterGateConfig,
+  type ToolAdapterSecretsConfig,
+} from '../../core/index.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
@@ -156,7 +162,7 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
 
   const secretsConfig = { scrubToolResult: getToolResultScrubber() };
   const gateConfig = buildGuestToolGate(deps);
-  return deps.processManager
+  const adapted = deps.processManager
     ? adaptTools(
         legacyTools,
         {
@@ -168,4 +174,202 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
         gateConfig
       )
     : adaptTools(legacyTools, undefined, secretsConfig, gateConfig);
+
+  const mcpTools = await buildMcpAgentTools(deps.fs, scoop);
+  const gatedMcpTools = wrapMcpToolsWithGateAndScrub(mcpTools, gateConfig, secretsConfig);
+  return [...adapted, ...gatedMcpTools];
+}
+
+async function buildMcpAgentTools(
+  fs: VirtualFS,
+  scoop: RegisteredScoop
+): Promise<import('@earendil-works/pi-agent-core').AgentTool[]> {
+  try {
+    if (scoop.parentJid !== null) return [];
+
+    const { listServers } = await import('../../shell/mcp/store.js');
+    const servers = await listServers(fs as Parameters<typeof listServers>[0]);
+    const entries = Object.entries(servers);
+    if (entries.length === 0) return [];
+
+    const relevantEntries = entries.filter(([, entry]) => {
+      const exposure = entry.exposure ?? 'codemode';
+      return (
+        exposure === 'direct' ||
+        exposure === 'codemode' ||
+        exposure === 'codemode-deferred' ||
+        hasExposureOverrides(entry)
+      );
+    });
+    if (relevantEntries.length === 0) return [];
+
+    const { toAgentTools } = await import('../../shell/mcp/agent-tools.js');
+
+    const manager = await getOrCreateConnectionManager();
+    const allTools: import('@earendil-works/pi-agent-core').AgentTool[] = [];
+
+    for (const [name, entry] of relevantEntries) {
+      try {
+        const { connection, transport } = await manager.connect(name, entry);
+        if (transport !== entry.transport) {
+          entry.transport = transport;
+          import('../../shell/mcp/store.js')
+            .then(({ setServer }) => setServer(name, entry, fs))
+            .catch(() => {});
+        }
+        const tools = entry.tools ?? (await connection.listTools());
+        const piTools = (tools as import('@earendil-works/pi-mcp').Tool[]) ?? [];
+
+        const directTools = toAgentTools({
+          serverName: name,
+          tools: piTools,
+          connection,
+          exposure: entry.exposure,
+          toolExposure: entry.toolExposure,
+          writeOverflow: async (id, text) => {
+            try {
+              await fs.mkdir('/tmp/mcp', { recursive: true });
+              await fs.writeFile(`/tmp/mcp/${id}.txt`, text);
+            } catch {}
+          },
+        });
+        allTools.push(...directTools);
+
+        const codemodeTool = await buildCodemodeTool(name, piTools, connection, entry);
+        if (codemodeTool) allTools.push(codemodeTool);
+      } catch (err) {
+        log.warn('failed to load MCP tools for agent', {
+          server: name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return allTools;
+  } catch (err) {
+    log.debug('MCP agent tools unavailable', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
+
+async function buildCodemodeTool(
+  serverName: string,
+  tools: import('@earendil-works/pi-mcp').Tool[],
+  connection: import('../../shell/mcp/connection-manager.js').McpConnection,
+  entry: import('../../shell/mcp/types.js').McpServerEntry
+): Promise<import('@earendil-works/pi-agent-core').AgentTool | null> {
+  try {
+    const { createCodemodeAgentTool } = await import('../../shell/mcp/codemode-tool.js');
+    return createCodemodeAgentTool({
+      serverName,
+      tools,
+      connection,
+      exposure: entry.exposure,
+      toolExposure: entry.toolExposure,
+    });
+  } catch (err) {
+    log.debug('codemode tool unavailable for server', {
+      server: serverName,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+async function checkMcpToolGate(
+  toolName: string,
+  params: unknown,
+  gateConfig: ToolAdapterGateConfig,
+  signal?: AbortSignal
+): Promise<AgentToolResult | null> {
+  const gate = gateConfig.currentGate();
+  if (!gate) return null;
+  if (signal?.aborted) {
+    return {
+      content: [{ type: 'text', text: `${toolName}: not approved (guest-caused turn).` }],
+      details: undefined,
+    };
+  }
+  let allowed: boolean;
+  try {
+    allowed = await gate.approve(toolName, params);
+  } catch {
+    allowed = false;
+  }
+  if (!allowed || signal?.aborted) {
+    return {
+      content: [{ type: 'text', text: `${toolName}: not approved (guest-caused turn).` }],
+      details: undefined,
+    };
+  }
+  return null;
+}
+
+async function scrubMcpToolResult(
+  result: AgentToolResult,
+  scrub: ToolAdapterSecretsConfig['scrubToolResult']
+): Promise<void> {
+  if (!scrub) return;
+  for (let i = 0; i < result.content.length; i++) {
+    const block = result.content[i];
+    if (block.type === 'text' && 'text' in block && typeof block.text === 'string') {
+      try {
+        const scrubbed = await scrub(block.text);
+        if (scrubbed !== block.text) result.content[i] = { type: 'text', text: scrubbed };
+      } catch {}
+    }
+  }
+}
+
+function wrapMcpToolsWithGateAndScrub(
+  tools: AgentTool[],
+  gateConfig: ToolAdapterGateConfig,
+  secretsConfig: ToolAdapterSecretsConfig
+): AgentTool[] {
+  return tools.map((tool) => ({
+    ...tool,
+    async execute(
+      toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal,
+      onUpdate?: (partialResult: AgentToolResult) => void
+    ): Promise<AgentToolResult> {
+      const denied = await checkMcpToolGate(tool.name, params, gateConfig, signal);
+      if (denied) return denied;
+      const result = await tool.execute(toolCallId, params, signal, onUpdate);
+      await scrubMcpToolResult(result, secretsConfig.scrubToolResult);
+      return result;
+    },
+  }));
+}
+
+function hasExposureOverrides(entry: import('../../shell/mcp/types.js').McpServerEntry): boolean {
+  if (!entry.toolExposure) return false;
+  return Object.values(entry.toolExposure).some(
+    (mode) => mode === 'direct' || mode === 'codemode' || mode === 'codemode-deferred'
+  );
+}
+
+type McpConnectionManagerType =
+  import('../../shell/mcp/connection-manager.js').McpConnectionManager;
+let sharedManager: McpConnectionManagerType | null = null;
+
+async function getOrCreateConnectionManager(): Promise<McpConnectionManagerType> {
+  if (sharedManager) return sharedManager;
+  const { McpConnectionManager } = await import('../../shell/mcp/connection-manager.js');
+  sharedManager = new McpConnectionManager({
+    getAuthHeader: async (serverName) => {
+      try {
+        const { getOAuthAccountInfo } = await import('../../providers/account-store.js');
+        const info = getOAuthAccountInfo(`mcp:${serverName}`);
+        if (!info) return null;
+        return `Bearer ${info.token}`;
+      } catch {
+        return null;
+      }
+    },
+  });
+  return sharedManager;
 }

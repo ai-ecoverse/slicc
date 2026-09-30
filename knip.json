@@ -41,6 +41,7 @@
         "src/shims/https.ts!",
         "src/shims/http2.ts!",
         "src/cdp/extension-bridge-transport.ts!",
+        "src/kernel/codemode-worker.ts!",
         "providers/*.ts!",
         "tests/**/*.test.ts"
       ],
@@ -67,7 +68,8 @@
         "@biomejs/wasm-web",
         "@biomejs/js-api",
         "@ffmpeg/core",
-        "@ffmpeg/core-mt"
+        "@ffmpeg/core-mt",
+        "quickjs-wasi"
       ]
     },
     "packages/chrome-extension": {
