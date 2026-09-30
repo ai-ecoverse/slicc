@@ -43,6 +43,12 @@ export interface McpServerAuthRecord {
   auth: McpAuthEntry;
 }
 
+/**
+ * How an MCP server's tools are surfaced to the model. Matches Pi's
+ * vocabulary (`pi-coding-agent/docs/mcp.md`).
+ */
+export type McpExposureMode = 'codemode' | 'codemode-deferred' | 'deferred' | 'direct' | 'hidden';
+
 /** Full persisted entry for one server in `servers.json`. */
 export interface McpServerEntry {
   url: string;
@@ -60,7 +66,29 @@ export interface McpServerEntry {
    * happens to share the `<plugin>:<server>` name shape is safe.
    */
   pluginOrigin?: string;
+  /**
+   * How the server's tools are exposed to the model. Defaults to
+   * `'codemode'`. `'direct'` declares them as native agent tools.
+   */
+  exposure?: McpExposureMode;
+  /**
+   * Per-tool exposure overrides, keyed by glob patterns matched against
+   * the tool name. More specific patterns win; ties break by last entry.
+   */
+  toolExposure?: Record<string, McpExposureMode>;
+  /**
+   * Transport backend selected after the first successful probe.
+   * `'pi'` = `pi-mcp` StreamableHttpTransport; `'slicc'` = legacy SLICC
+   * client (2026-07-28 + `apps/list`). Additive; `version: 1` stays.
+   */
+  transport?: 'pi' | 'slicc';
 }
+
+/** Bag type for MCP tool arguments (JSON object). */
+export type McpToolArgs = { [key: string]: unknown };
+
+/** Bag type for MCP structured content (JSON object). */
+export type McpStructuredContent = { [key: string]: unknown };
 
 /** On-disk shape for `/workspace/.mcp/servers.json`. */
 export interface McpServersFile {
