@@ -125,6 +125,10 @@ export class McpConnectionManager {
     return connection;
   }
 
+  notifyToolsChanged(serverName: string): void {
+    this.emitToolsChanged(serverName);
+  }
+
   async disconnectAll(): Promise<void> {
     const names = [...this.connections.keys()];
     await Promise.all(names.map((n) => this.disconnect(n)));
@@ -256,7 +260,24 @@ export class McpConnectionManager {
       },
       async callTool(name, args, options) {
         if (options?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-        const result = await client.toolsCall(name, args);
+        const callPromise = client.toolsCall(name, args);
+        const signal = options?.signal;
+        const result = signal
+          ? await Promise.race([
+              callPromise,
+              new Promise<never>((_, reject) => {
+                if (signal.aborted) {
+                  reject(new DOMException('Aborted', 'AbortError'));
+                  return;
+                }
+                signal.addEventListener(
+                  'abort',
+                  () => reject(new DOMException('Aborted', 'AbortError')),
+                  { once: true }
+                );
+              }),
+            ])
+          : await callPromise;
         return normalizeCallToolResult(result);
       },
       async listApps() {

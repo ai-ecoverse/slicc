@@ -1,4 +1,5 @@
 import type { Command, SecureFetch } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
 import type { JshProcessConfig } from '../jsh-executor.js';
@@ -51,7 +52,6 @@ import { createKillCommand } from './kill-command.js';
 import { createLayoutCommand } from './layout-command.js';
 import { createLocalLlmCommand } from './local-llm-command.js';
 import { createManCommand } from './man-command.js';
-import { createMcpCommand } from './mcp-command.js';
 import { createMeminfoCommand } from './meminfo-command.js';
 import { createMemoryCommand } from './memory-command.js';
 import { createMktempCommand } from './mktemp-command.js';
@@ -165,6 +165,23 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   terminal?: TerminalPort;
 
   gateNativeCommand?: NativeGate;
+
+  mcpConnectionManager?: import('../mcp/connection-manager.js').McpConnectionManager;
+}
+
+function lazyMcpCommand(options: SupplementalCommandsConfig): Command {
+  let real: Command | undefined;
+  return defineCommand('mcp', async (args, ctx) => {
+    if (!real) {
+      const { createMcpCommand } = await import('./mcp-command.js');
+      real = createMcpCommand({
+        fs: options.fs,
+        scriptCatalog: options.scriptCatalog,
+        connectionManager: options.mcpConnectionManager,
+      });
+    }
+    return real.execute(args, ctx);
+  });
 }
 
 function secretCommandDeps(options: SupplementalCommandsConfig): SecretCommandDeps {
@@ -258,7 +275,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWebhookCommand(options.webhook),
     createWebsocatCommand(),
     createCrontaskCommand(options.crontask),
-    createMcpCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
+    lazyMcpCommand(options),
     createPluginCommand({ fs: options.fs, fetch: options.fetch }),
     createFsWatchCommand(),
     createSprinkleCommand(),

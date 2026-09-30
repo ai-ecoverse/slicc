@@ -112,6 +112,9 @@ export class ScoopContext {
   private skillsFs: VirtualFS | null = null;
   private sudoManager: SudoManager | null = null;
   private capabilityBroker: CapabilityBroker | null = null;
+  private mcpConnectionManager:
+    | import('../shell/mcp/connection-manager.js').McpConnectionManager
+    | undefined;
 
   private structuredOutputValue: unknown;
 
@@ -268,6 +271,11 @@ export class ScoopContext {
     try {
       if (!this.fs) throw new Error('Filesystem not provided');
 
+      if (!this.mcpConnectionManager) {
+        const { getOrCreateConnectionManager } = await import('./scoop-context/tools.js');
+        this.mcpConnectionManager = await getOrCreateConnectionManager();
+      }
+
       const runtime = await buildScoopRuntime({
         scoop: this.scoop,
         unit: this.unit,
@@ -294,6 +302,7 @@ export class ScoopContext {
           this.structuredOutputValue = value;
           this.structuredOutputCaptured = true;
         },
+        mcpConnectionManager: this.mcpConnectionManager,
         spawnBashJob: (command) => this.bashJobs.spawn(command),
 
         onBeforeCompaction: (messages, trigger) =>

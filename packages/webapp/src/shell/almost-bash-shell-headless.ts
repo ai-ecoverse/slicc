@@ -114,6 +114,8 @@ export interface HeadlessShellOptions {
 
   scrubProgressLabel?: (text: string) => Promise<string>;
 
+  mcpConnectionManager?: SupplementalCommandsConfig['mcpConnectionManager'];
+
   executionLimitProfile?: NonNullable<
     ConstructorParameters<typeof Bash>[0]
   >['executionLimitProfile'];
@@ -404,6 +406,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         githubDomains: githubOAuthDomains,
       },
       gitIdentity: () => this.gitCommands.identity(),
+      mcpConnectionManager: options.mcpConnectionManager,
     });
   }
 

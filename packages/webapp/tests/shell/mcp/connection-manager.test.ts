@@ -186,6 +186,44 @@ describe('McpConnectionManager', () => {
 
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it('slicc-transport callTool aborts mid-flight when signal fires', async () => {
+    const entry = makeEntry({ transport: 'slicc' });
+    let resolveToolsCall!: (v: unknown) => void;
+    const hangingPromise = new Promise((resolve) => {
+      resolveToolsCall = resolve;
+    });
+
+    vi.doMock('../../../src/shell/mcp/client.js', () => ({
+      McpClient: class MockMcpClient {
+        async initialize() {}
+        async toolsList() {
+          return [{ name: 'slow-tool', description: 'hangs' }];
+        }
+        async toolsCall() {
+          return hangingPromise;
+        }
+        async appsList() {
+          return [];
+        }
+        getNegotiatedProtocolVersion() {
+          return '2026-07-28';
+        }
+      },
+      wrapProxiedFetchAsMcpFetch: (fn: unknown) => fn,
+    }));
+
+    const { connection } = await manager.connect('slow', entry);
+    const controller = new AbortController();
+
+    const callPromise = connection.callTool('slow-tool', {}, { signal: controller.signal });
+    controller.abort();
+
+    await expect(callPromise).rejects.toThrow(DOMException);
+    await expect(callPromise).rejects.toMatchObject({ name: 'AbortError' });
+
+    resolveToolsCall({ content: [] });
+  });
 });
 
 describe('deduplicateToolNames', () => {

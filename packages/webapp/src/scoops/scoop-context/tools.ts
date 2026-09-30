@@ -356,7 +356,7 @@ type McpConnectionManagerType =
   import('../../shell/mcp/connection-manager.js').McpConnectionManager;
 let sharedManager: McpConnectionManagerType | null = null;
 
-async function getOrCreateConnectionManager(): Promise<McpConnectionManagerType> {
+export async function getOrCreateConnectionManager(): Promise<McpConnectionManagerType> {
   if (sharedManager) return sharedManager;
   const { McpConnectionManager } = await import('../../shell/mcp/connection-manager.js');
   sharedManager = new McpConnectionManager({
