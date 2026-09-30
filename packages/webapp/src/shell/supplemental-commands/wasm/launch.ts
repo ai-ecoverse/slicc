@@ -698,7 +698,13 @@ export class WasmSession {
       const run = direct
         ? { target: direct, file: req.file, args: req.argv.slice(1) }
         : await this.interpreted(req);
-      if (!run) return this.runShellChild(req, fds, ppid);
+      if (!run) {
+        if (!(await this.shellRuns(req))) {
+          void fds.closeAll().catch(() => undefined);
+          throw new SpawnError('ENOENT');
+        }
+        return this.runShellChild(req, fds, ppid);
+      }
       // The program that runs is what the policy sees: a script's interpreter.
       const denial = await this.gate?.(commandName(run.file), run.args, req.env);
       if (denial) return this.deniedChild(req, fds, ppid, denial);
@@ -712,6 +718,31 @@ export class WasmSession {
       });
       return childHandle(handle);
     };
+  }
+
+  /**
+   * Whether the shell has something to run for a child no wasm program runs:
+   * a file, or a name (bare, or its `/usr/bin/<name>` path) the shell knows —
+   * a registered command, else whatever `command -v` finds (a builtin such as
+   * `test` or `kill`, which Linux also ships as programs; a `.jsh` script).
+   * A miss fails the spawn with ENOENT, as execve does, so a libc `$PATH`
+   * search tries its next directory and a program sees its `FileNotFoundError`
+   * rather than a child the shell reports as "command not found" (127).
+   * Without the shell's catalog (unit tests), everything goes to the shell.
+   */
+  private async shellRuns(req: ChildSpawnRequest): Promise<boolean> {
+    const name =
+      REGISTRY_PATH.exec(req.file)?.[1] ?? (req.file.includes('/') ? undefined : req.file);
+    if (name === undefined) return this.ctx.fs.exists(this.ctx.fs.resolvePath(req.cwd, req.file));
+    const registered = this.ctx.getRegisteredCommands?.();
+    if (!registered || registered.includes(name) || !this.ctx.exec) return true;
+    const found = await this.ctx.exec('command', {
+      args: ['-v', name],
+      cwd: req.cwd,
+      env: req.env,
+      replaceEnv: true,
+    });
+    return found.exitCode === 0;
   }
 
   /** A program the shell's policy refused: a child that reports the denial and exits. */

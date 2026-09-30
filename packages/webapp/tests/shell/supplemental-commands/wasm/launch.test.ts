@@ -587,6 +587,63 @@ describe('WasmSession', () => {
     ).rejects.toMatchObject({ code: 'ENOSYS' });
   });
 
+  it('fails the spawn with ENOENT for a program nothing runs, as execve does', async () => {
+    fakeProcesses();
+    // The shell's `command -v`: its builtins, nothing else it does not register.
+    const exec = vi.fn(async (cmd: string, opts: { args?: string[] }) =>
+      cmd === 'command'
+        ? { stdout: '', stderr: '', exitCode: opts.args?.[1] === 'test' ? 0 : 1 }
+        : { stdout: '', stderr: '', exitCode: 0 }
+    );
+    const { pm, config } = processConfig();
+    const shell = {
+      ...ctx(installed, exec as unknown as CommandContext['exec']),
+      getRegisteredCommands: () => ['sed'],
+    } as CommandContext;
+    const session = new WasmSession(shell, config, () => {});
+    const spawner = await parentSpawner(session);
+    const records = pm.spawn.mock.calls.length;
+
+    // Not registered and unknown to `command -v`: by name and by its $PATH path.
+    for (const file of ['fc-list', '/usr/bin/fc-list']) {
+      const fds = stdio();
+      await expect(
+        spawner({ file, argv: ['fc-list'], env: { PATH: '/usr/bin' }, cwd: '/d' }, fds)
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      await vi.waitFor(() => expect(fds.has(0)).toBe(false)); // released
+    }
+    expect(exec).toHaveBeenCalledWith('command', {
+      args: ['-v', 'fc-list'],
+      cwd: '/d',
+      env: { PATH: '/usr/bin' },
+      replaceEnv: true,
+    });
+    // A path to no file (a $PATH directory without it).
+    await expect(
+      spawner({ file: '/usr/local/bin/sed', argv: ['sed'], env: {}, cwd: '/d' }, stdio())
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    // No process record for any of them.
+    expect(pm.spawn).toHaveBeenCalledTimes(records);
+
+    // A registered command runs without asking; a builtin `command -v` knows runs too.
+    exec.mockClear();
+    const sed = await spawner({ file: '/usr/bin/sed', argv: ['sed'], env: {}, cwd: '/d' }, stdio());
+    expect(await sed.exited).toBe(0);
+    expect(exec.mock.calls.map((c) => c[0])).toEqual(['/usr/bin/sed']);
+    const test = await spawner(
+      { file: 'test', argv: ['test', '-e', 'x'], env: {}, cwd: '/d' },
+      stdio()
+    );
+    expect(await test.exited).toBe(0);
+    expect(exec).toHaveBeenLastCalledWith('test', expect.objectContaining({ args: ['-e', 'x'] }));
+    // A script by path that exists runs through the shell.
+    const script = await spawner(
+      { file: '/w/script.sh', argv: ['script.sh'], env: {}, cwd: '/d' },
+      stdio()
+    );
+    expect(await script.exited).toBe(0);
+  });
+
   it('ends the whole tree on killAll, and never starts a canceled program', async () => {
     fakeProcesses();
     const session = new WasmSession(ctx(installed), undefined, () => {});
