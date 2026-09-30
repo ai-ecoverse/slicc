@@ -25,6 +25,12 @@ done
 "$LD" "$FEATURES" --export=__wasm_call_ctors --export-if-defined=__wasm_apply_data_relocs \
   --experimental-pic --unresolved-symbols=import-dynamic -shared --shared-memory \
   "-L$HERE" -la -o "$HERE/libb.so" "$OUT/libb.o"
+
+
+"$CC" "${CFLAGS[@]}" -fvisibility=default -c "$HERE/librun.c" -o "$OUT/librun.o"
+"$LD" "$FEATURES" --export=__wasm_call_ctors --export-if-defined=__wasm_apply_data_relocs \
+  --experimental-pic --unresolved-symbols=import-dynamic -shared --shared-memory \
+  "-L$HERE" -la --rpath=/no/such/dir '--rpath=$ORIGIN/../deps' -o "$HERE/librun.so" "$OUT/librun.o"
 "$CC" "${CFLAGS[@]}" -c "$HERE/dlmain.c" -o "$OUT/dlmain.o"
 
 

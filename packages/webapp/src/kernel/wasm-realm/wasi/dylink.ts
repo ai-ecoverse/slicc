@@ -1,5 +1,6 @@
 const MEM_INFO = 1;
 const NEEDED = 2;
+const RUNTIME_PATH = 5;
 
 export interface DylinkInfo {
   memorySize: number;
@@ -10,6 +11,8 @@ export interface DylinkInfo {
   tableAlign: number;
 
   needed: string[];
+
+  runtimePath: string[];
 }
 
 export function dylinkInfo(module: WebAssembly.Module): DylinkInfo | undefined {
@@ -39,6 +42,7 @@ export function dylinkInfo(module: WebAssembly.Module): DylinkInfo | undefined {
     tableSize: 0,
     tableAlign: 0,
     needed: [],
+    runtimePath: [],
   };
   while (at < bytes.length) {
     const kind = bytes[at++];
@@ -51,6 +55,8 @@ export function dylinkInfo(module: WebAssembly.Module): DylinkInfo | undefined {
       info.tableAlign = uleb();
     } else if (kind === NEEDED) {
       for (let n = uleb(); n > 0; n--) info.needed.push(string());
+    } else if (kind === RUNTIME_PATH) {
+      for (let n = uleb(); n > 0; n--) info.runtimePath.push(string());
     }
     at = end;
   }

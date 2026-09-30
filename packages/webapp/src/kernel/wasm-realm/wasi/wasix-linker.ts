@@ -8,6 +8,10 @@ export const STACK_SIZE = 8 * 1024 * 1024;
 
 const LIBRARY_DIRS = ['/lib', '/usr/lib', '/usr/local/lib'];
 
+function expandOrigin(entry: string, dir: string): string {
+  return entry.replace(/\$(?:ORIGIN\b|\{ORIGIN\})/g, dir);
+}
+
 export type LinkRecord =
   | { kind: 'load'; handle: number; path: string; memoryBase: number; tableBase: number }
   | { kind: 'slot'; index: number; handle: number; name: string };
@@ -206,8 +210,9 @@ export class WasixLinker {
     if (!info) throw new DlError(`${path}: not a side module (no dylink.0)`);
 
     const dir = path.slice(0, path.lastIndexOf('/')) || '/';
+    const search = [dir, ...ldPath, ...info.runtimePath.map((p) => expandOrigin(p, dir))];
     const needed = info.needed.map(
-      (n) => this.load(this.locate(n, cwd, [dir, ...ldPath]), cwd, ldPath).handle
+      (n) => this.load(this.locate(n, cwd, search), cwd, ldPath).handle
     );
     const memoryBase = this.allocate(info.memorySize, 2 ** info.memoryAlign);
     const tableBase = this.table.length;
