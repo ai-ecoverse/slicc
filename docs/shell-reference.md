@@ -2355,6 +2355,16 @@ worker, whose uncaught errors reload the page.
 
 ### Globals API
 
+Only the Node-standard surface is global: `process`, `console`, `require`,
+`module` / `exports`, `fetch`, `Buffer`, `__dirname` / `__filename` and the web
+globals (timers, `URL`, `TextEncoder`, …). The capability bridges below
+(`exec`, `browser`, `agent`, `skill`, `http`, `cli`, `color`, `time`, `fmt`,
+`pool`, `usb`, `hid`, …) were bare globals once. Since the globals hard-cut they
+are modules: `require('sliccy:<name>')`, or `import … from 'sliccy:<name>'`.
+The in-VFS companion,
+`packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`,
+lists them all.
+
 #### process
 
 ```typescript
@@ -2466,11 +2476,14 @@ fs.fetchToFile(url, path): Promise<number> // Download and save, returns byte co
 
 Node programs get Node's calling conventions on the same object. A trailing callback runs as `cb(err, result)` (errors carry `err.code`, such as `ENOENT`), so `fs.readdir(dir, cb)` and `util.promisify(fs.stat)` work. A `stat` / `lstat` callback gets a `Stats` with methods (`isDirectory()`), and `fs.exists(path, cb)` gets a boolean. `fs.promises` is Node's too: its `stat` resolves to a `Stats`, and `readFile(path)` with no encoding resolves to a `Buffer` (pass `'utf8'` / `{ encoding: 'utf8' }` for text). Without a callback, the promise API above is unchanged — including `fs.readFile(path)` returning decoded text for `.jsh` back-compat.
 
-#### exec (shell command bridge)
+#### `sliccy:exec` (shell command bridge)
 
 Run any shell command through just-bash and get the result. Works in both CLI and extension mode.
+`exec` is not a global: load it with `require('sliccy:exec')`.
 
 ```typescript
+const exec = require('sliccy:exec');
+
 exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>
 exec.spawn(argv: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }>
 exec.start(commandOrArgv: string | string[], opts?: {
@@ -2522,12 +2535,12 @@ the target page (no shell bridge), so `child_process` is unavailable there.
 
 #### require / module / exports
 
-Scripts can import npm packages via `require('package-name')`. This fetches from esm.sh CDN and caches for the session. Version pinning is supported: `require('lodash@4')`.
+Scripts import npm packages with `require('package-name')`. Bare specifiers resolve from the `node_modules` that `ipk install` (or `npm install`) wrote to the VFS, then from the global tree at `/shared/lib/node_modules`. There is no CDN fallback: install a package before requiring it. `require('sliccy:<name>')` loads a capability bridge, and `require('fs')`, `path`, `child_process` and the other served builtins resolve to the realm's shims.
 
 ```typescript
+// after: ipk install lodash marked
 const _ = require('lodash');
 const { marked } = require('marked');
-const chalk = require('chalk@5');
 module.exports: {}        // Available for ES module pattern
 exports: module.exports   // Alias
 ```
@@ -2536,7 +2549,7 @@ exports: module.exports   // Alias
 
 > Companion file for in-VFS agents: `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`. Keep both in sync when the API changes.
 
-The following globals were added in PR #786 and are available in the jsh realm in both standalone and extension floats. They were extracted from cross-skill duplication analysis (see the workspace spec at `analyze-skills`); skills SHOULD prefer them over hand-rolled equivalents. Test availability with `node -e "console.log(typeof process.argv.parseFlags, typeof browser, typeof http, typeof skill)"`.
+The following capabilities were added in PR #786 and are available in the jsh realm in both standalone and extension floats, originally as bare globals. Since the globals hard-cut, load each one as a module: `require('sliccy:browser')`, `require('sliccy:cli')`, and so on. `process.argv.parseFlags()` is still a method on `process.argv`. They were extracted from cross-skill duplication analysis (see the workspace spec at `analyze-skills`); skills SHOULD prefer them over hand-rolled equivalents. Test availability with `node -e "console.log(typeof process.argv.parseFlags, typeof require('sliccy:browser').findTab, typeof require('sliccy:http').client)"`.
 
 #### `process.argv.parseFlags()`
 
@@ -2560,11 +2573,13 @@ for (let i = 1; i < args.length; i++) {
 const { positional, flags, subcommand } = process.argv.parseFlags();
 ```
 
-#### `browser` global
+#### `sliccy:browser`
 
 Replaces the `exec('playwright-cli tab-list')` shell-out + regex parse used in ~12 skills.
 
 ```typescript
+const browser = require('sliccy:browser');
+
 browser.findTab(opts: { domain?: string; urlMatch?: RegExp | string }): Promise<TabHandle | null>
 browser.ensureTab(url: string): Promise<TabHandle>            // open if missing
 browser.eval(tab, fn: Function | string): Promise<unknown>    // sync expression
@@ -3165,33 +3180,34 @@ For large-scale processing (1000+ files), batch operations and `.jsh` scripts ar
 
 ---
 
-## CDN-backed require()
+## require() and npm packages
 
-`node -e`, `.jsh`, and `.bsh` scripts can import npm packages at runtime via `require()`:
+`node -e`, `node <file>` and `.jsh` scripts load npm packages with a synchronous `require()`:
 
 ```js
+// after: ipk install lodash marked
 const _ = require('lodash');
 const { marked } = require('marked');
-const chalk = require('chalk@5');
 ```
 
-Packages are fetched from [esm.sh](https://esm.sh) and cached for the session. Version pinning via `@version` syntax is supported.
+Bare specifiers resolve from the `node_modules` that `ipk install` (or `npm install`) wrote to the VFS, then from the global tree at `/shared/lib/node_modules`. The host builds the module graph before the script runs. There is no CDN download path: a package that isn't installed throws `Cannot find module 'x' (run: ipk install x)` at once. `.bsh` scripts run inside the page and have no `require`; bundle their dependencies first with `ipx esbuild --bundle`.
 
-**Note:** require() is synchronous. Modules referenced with string literals are automatically pre-fetched before script execution. For dynamic specifiers, use `await import('https://esm.sh/' + name)` directly.
+`require('sliccy:<name>')` loads a SLICC capability bridge (`exec`, `browser`, `agent`, `skill`, `http`, …); see [Globals API](#globals-api).
 
 ### Node Built-in Modules
 
-Some Node.js built-in modules are available via `require()`:
+The realm serves these built-ins itself (`packages/webapp/src/kernel/realm/node-builtins.ts`):
 
-| Module                                           | Status                                                                                                                     |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `fs`                                             | ✅ VFS bridge (readFile, writeFile, readDir, exists, stat, mkdir, rm)                                                      |
-| `process`                                        | ✅ Shim (argv, env, cwd, exit, stdout, stderr)                                                                             |
-| `buffer`                                         | ✅ Browser polyfill                                                                                                        |
-| `path`                                           | ✅ Via esm.sh (browser polyfill)                                                                                           |
-| `url`, `querystring`, `util`, `events`, `assert` | ✅ Via esm.sh                                                                                                              |
-| `child_process`                                  | ✅ Realm shim over the `exec.start` bridge (`exec`/`execFile`/`spawn`); sync forms over the sync-XHR bridge; `fork` throws |
-| `http`, `https`, `crypto`, `net`, etc.           | ❌ Not available in browser                                                                                                |
+| Module                                                                                      | Status                                                                                                                     |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `fs`, `fs/promises`                                                                         | ✅ VFS bridge (readFile, writeFile, readFileBinary, writeFileBinary, readDir, exists, stat, mkdir, rm, …)                  |
+| `process`                                                                                   | ✅ Shim (argv, env, cwd, exit, stdout, stderr, stdin)                                                                      |
+| `child_process`                                                                             | ✅ Realm shim over the `exec.start` bridge (`exec`/`execFile`/`spawn`); sync forms over the sync-XHR bridge; `fork` throws |
+| `path`, `url`, `util`, `events`, `stream`, `buffer`, `os`, `tty`, `assert`, `assert/strict` | ✅ Shims                                                                                                                   |
+| `crypto`                                                                                    | ✅ Shim; Web Crypto is also on `globalThis.crypto`                                                                         |
+| `readline`, `readline/promises`                                                             | ✅ Over the buffered stdin                                                                                                 |
+| `module`, `vm`                                                                              | ✅ Shims                                                                                                                   |
+| every other built-in (`http`, `https`, `net`, `tls`, `dns`, `zlib`, `worker_threads`, …)    | ❌ Throws `Node built-in 'x' is not available in the browser environment`; for `http`/`https`, use `fetch()`               |
 
 The `node:` prefix is supported: `require('node:path')` works the same as `require('path')`.
 
