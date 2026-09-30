@@ -53,12 +53,44 @@ export interface SudoApproveRequest {
 export interface SudoDecision {
   decision: 'allow' | 'deny' | 'always';
   pattern?: string;
+  /**
+   * Why a `deny` was reached when nobody actually refused. Absent for a real
+   * gesture (Deny button, TTY `d`, dialog dismiss). Enforcement layers and
+   * biscotto review use it to tell a guest "unanswered", not "refused".
+   *
+   * Node-server only stamps `unavailable` (no approval surface, a dialog
+   * binary that could not be spawned, a backend that threw). Timeout reasons
+   * live in the webapp broker layer. Mirror of webapp `SudoDecision.reason`.
+   *
+   * Deliberately a field rather than a fourth `decision` value: every consumer
+   * branches on `decision === 'deny'`, so a new variant would fail OPEN.
+   */
+  reason?: SudoUnansweredReason;
+}
+
+/**
+ * Why a `deny` carries no human's refusal. See {@link SudoDecision.reason}.
+ * Every value means "unanswered"; only the absence of a reason means "refused".
+ * Node-server emits only `unavailable`; the timeout values are listed so the
+ * wire shape matches the webapp consumer.
+ */
+export type SudoUnansweredReason = 'user-timeout' | 'cone-timeout' | 'unavailable';
+
+/**
+ * The fail-closed decision for a request that never reached an approver.
+ * Use this instead of a bare `{ decision: 'deny' }` on any plumbing path: a
+ * bare deny is indistinguishable from a human pressing "Deny".
+ */
+export function unavailableDecision(): SudoDecision {
+  return { decision: 'deny', reason: 'unavailable' };
 }
 
 /**
  * A native approval channel. `name` is for logging/selection; `prompt` raises
  * the actual gesture. Implementations MUST fail closed (resolve `deny`) on any
- * error, dismissal, or timeout — never throw to the endpoint.
+ * error, dismissal, or timeout — never throw to the endpoint. Plumbing
+ * failures MUST carry {@link unavailableDecision}'s `reason`; only a genuine
+ * human refusal is a bare deny.
  */
 export interface SudoBackend {
   readonly name: string;

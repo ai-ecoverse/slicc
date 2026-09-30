@@ -72,15 +72,21 @@ describe('osascript backend', () => {
     expect(await backend.prompt(REQ)).toEqual({ decision: 'always', pattern: 'git push*' });
   });
 
-  it('denies on Deny button and on cancel (throw)', async () => {
+  it('denies on Deny button; cancel (numeric exit) is a refusal; spawn is unavailable', async () => {
     expect(await createOsascriptBackend(execReturning('button returned:Deny')).prompt(REQ)).toEqual(
       {
         decision: 'deny',
       }
     );
-    expect(await createOsascriptBackend(execThrowing(new Error('-128'))).prompt(REQ)).toEqual({
+    // Real osascript user-cancel exits with a numeric code (AppleEvent -128).
+    expect(await createOsascriptBackend(execThrowing({ code: 1 })).prompt(REQ)).toEqual({
       decision: 'deny',
     });
+    expect(
+      await createOsascriptBackend(
+        execThrowing(Object.assign(new Error('spawn'), { code: 'ENOENT' }))
+      ).prompt(REQ)
+    ).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 });
 
@@ -97,9 +103,10 @@ describe('powershell backend', () => {
     });
   });
 
-  it('denies on throw', async () => {
+  it('reports spawn/plumbing throws as unavailable, not a refusal', async () => {
     expect(await createPowerShellBackend(execThrowing(new Error('x'))).prompt(REQ)).toEqual({
       decision: 'deny',
+      reason: 'unavailable',
     });
   });
 });
@@ -109,16 +116,24 @@ describe('zenity backend', () => {
     expect(await createZenityBackend(execReturning('')).prompt(REQ)).toEqual({ decision: 'allow' });
   });
 
-  it('denies when cancelled (non-zero, empty stdout)', async () => {
-    expect(await createZenityBackend(execThrowing({ stdout: '' })).prompt(REQ)).toEqual({
+  it('denies when cancelled (non-zero numeric exit, empty stdout)', async () => {
+    expect(await createZenityBackend(execThrowing({ code: 1, stdout: '' })).prompt(REQ)).toEqual({
       decision: 'deny',
     });
+  });
+
+  it('reports a missing zenity binary as unavailable', async () => {
+    expect(
+      await createZenityBackend(
+        execThrowing(Object.assign(new Error('spawn'), { code: 'ENOENT' }))
+      ).prompt(REQ)
+    ).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('handles the Always extra-button then the entry dialog', async () => {
     const exec = vi
       .fn<ExecFn>()
-      .mockRejectedValueOnce({ stdout: 'Always\n' })
+      .mockRejectedValueOnce({ code: 1, stdout: 'Always\n' })
       .mockResolvedValueOnce({ stdout: 'git push*custom\n' });
     expect(await createZenityBackend(exec).prompt(REQ)).toEqual({
       decision: 'always',
@@ -138,6 +153,14 @@ describe('kdialog backend', () => {
     expect(await createKdialogBackend(execThrowing({ code: 1 })).prompt(REQ)).toEqual({
       decision: 'deny',
     });
+  });
+
+  it('reports a missing kdialog binary as unavailable', async () => {
+    expect(
+      await createKdialogBackend(
+        execThrowing(Object.assign(new Error('spawn'), { code: 'ENOENT' }))
+      ).prompt(REQ)
+    ).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('prompts for pattern on exit 2 (Always)', async () => {
@@ -164,7 +187,10 @@ describe('kdialog backend', () => {
 });
 
 describe('deny backend', () => {
-  it('always denies', async () => {
-    expect(await createDenyBackend().prompt(REQ)).toEqual({ decision: 'deny' });
+  it('denies as unavailable — no human was ever prompted', async () => {
+    expect(await createDenyBackend().prompt(REQ)).toEqual({
+      decision: 'deny',
+      reason: 'unavailable',
+    });
   });
 });

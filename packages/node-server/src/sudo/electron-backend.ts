@@ -8,11 +8,17 @@
  * implementation runs `window.prompt` inside a transient offscreen
  * `BrowserWindow`. Both seams are injectable so tests never touch Electron.
  *
- * Fail closed: a thrown dialog call, a cancelled prompt, or an unknown button
- * resolves to `deny` / falls back to the suggested pattern.
+ * Fail closed: a cancelled prompt or Deny button is a bare `deny`; a thrown
+ * `showMessageBox` (no display / Electron gone) is `unavailable`. A cancelled
+ * Always-pattern prompt falls back to the suggested pattern.
  */
 
-import type { SudoApproveRequest, SudoBackend, SudoDecision } from './types.js';
+import {
+  type SudoApproveRequest,
+  type SudoBackend,
+  type SudoDecision,
+  unavailableDecision,
+} from './types.js';
 
 /** Result shape of `dialog.showMessageBox`. */
 interface MessageBoxResult {
@@ -78,7 +84,8 @@ export function createElectronBackend(deps: ElectronBackendDeps = {}): SudoBacke
         });
         response = result.response;
       } catch {
-        return { decision: 'deny' };
+        // Dialog never appeared — plumbing, not a refusal.
+        return unavailableDecision();
       }
 
       if (response === 1) return { decision: 'allow' };

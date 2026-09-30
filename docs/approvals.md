@@ -432,7 +432,10 @@ Brokers (`packages/webapp/src/sudo/`):
   `POST /api/sudo-approve` (`packages/node-server/src/sudo/`), which selects
   an OS-native backend (Electron / osascript / PowerShell / zenity / TTY).
   `sudo/capability-gesture-broker.ts` wraps this as `createSudoBroker`'s raw
-  gesture leg.
+  gesture leg. Plumbing failures (backend threw, dialog binary missing, no
+  native channel on a headless float) return
+  `{ decision: 'deny', reason: 'unavailable' }`; only a genuine Deny /
+  dismiss is a bare `deny` (#3660, mirroring #3626).
 - **Native macOS (swift-server)** — when Sliccstart launches the bundled
   `slicc-server`, the same `restRequestApproval` POSTs `POST /api/sudo-approve`
   to `packages/swift-server/Sources/Server/SudoApprove.swift`, which raises the
@@ -441,7 +444,8 @@ Brokers (`packages/webapp/src/sudo/`):
   dialog, or unparsable output.
 
 All brokers **fail closed**: any transport error, malformed response, or missing
-gesture resolves to `deny`.
+gesture resolves to `deny`. A plumbing `deny` carries `reason: 'unavailable'`
+so a biscotto guest sees `unanswered`, not a false "host refused".
 
 #### Approval timeout
 
