@@ -441,10 +441,19 @@ export function runConfig(harness, model, condition) {
   };
 }
 
+/**
+ * The adapter's run id: record-path segments, minus the `+` those keep for skills conditions
+ * such as `builtin+ecoverse` (#3694), so it matches `RUN_ID_PATTERN`.
+ */
+export function runIdFor(taskId, model, skills, repeat, now = Date.now()) {
+  const seg = (v) => safe(v).replaceAll('+', '-');
+  return `${seg(taskId).slice(0, 40)}-${seg(model)}-${seg(skills)}-r${repeat}-${now.toString(36)}`;
+}
+
 async function runOne(r, ctx) {
   const { leader, opts, judge } = ctx;
   const config = runConfig(opts.harness, r.model, r.condition);
-  const runId = `${safe(r.task.id).slice(0, 40)}-${safe(r.model)}-${safe(config.skills)}-r${r.repeat}-${Date.now().toString(36)}`;
+  const runId = runIdFor(r.task.id, r.model, config.skills, r.repeat);
   const record = {
     benchmark: r.set.benchmark,
     task_id: r.task.id,
