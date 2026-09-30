@@ -2,8 +2,8 @@
  * Convert MCP server tools into native pi-compatible `AgentTool` instances.
  *
  * Each tool is named `mcp__<server>__<tool>` (Pi convention, sanitized to
- * 64 chars of `[A-Za-z0-9_-]`). `toLlmContent` from `pi-mcp` converts the
- * result. Text over 20 KB is truncated in the middle (matching Pi's
+ * 64 chars of `[A-Za-z0-9_]`). MCP content blocks are converted into agent
+ * results. Text over 20 KB is truncated in the middle (matching Pi's
  * behavior) and the full text is written to `/tmp/mcp/<id>.txt` in the VFS.
  */
 
@@ -11,7 +11,7 @@ import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { Tool } from '@earendil-works/pi-mcp';
 import { createLogger } from '../../base/logger.js';
 import type { McpCallToolResult, McpConnection } from './connection-manager.js';
-import { mcpAgentToolName, resolveToolExposure } from './connection-manager.js';
+import { mcpAgentToolNames, resolveToolExposure } from './connection-manager.js';
 import type { McpExposureMode, McpToolArgs } from './types.js';
 
 const log = createLogger('mcp-agent-tools');
@@ -32,12 +32,18 @@ export function toAgentTools(options: ToAgentToolsOptions): AgentTool[] {
   const { serverName, tools, connection, exposure, toolExposure, writeOverflow } = options;
 
   const directTools: AgentTool[] = [];
+  const names = mcpAgentToolNames(
+    serverName,
+    tools
+      .filter((tool) => resolveToolExposure(tool.name, exposure, toolExposure) === 'direct')
+      .map((tool) => tool.name)
+  );
 
   for (const tool of tools) {
     const mode = resolveToolExposure(tool.name, exposure, toolExposure);
     if (mode !== 'direct') continue;
 
-    const agentToolName = mcpAgentToolName(serverName, tool.name);
+    const agentToolName = names.get(tool.name)!;
     const agentTool: AgentTool = {
       name: agentToolName,
       label: `mcp:${serverName}/${tool.name}`,

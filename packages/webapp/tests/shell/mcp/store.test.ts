@@ -126,6 +126,14 @@ describe('mcp store', () => {
     expect(await getServer('demo')).toBeNull();
   });
 
+  it('rejects server names that share a normalized MCP namespace', async () => {
+    await setServer('dev-radius', { url: 'https://a.example' });
+    await expect(setServer('dev_radius', { url: 'https://b.example' })).rejects.toThrow(
+      'conflicts with "dev-radius"'
+    );
+    expect(await getServer('dev_radius')).toBeNull();
+  });
+
   it('tolerates legacy sessionId fields but scrubs them from reads and writes', async () => {
     const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
     await fs.mkdir('/workspace/.mcp', { recursive: true });

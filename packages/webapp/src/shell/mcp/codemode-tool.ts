@@ -1,7 +1,7 @@
 /**
  * The `codemode` agent tool: runs JavaScript in a QuickJS sandbox where the
- * only capabilities are calling registered tools. Scripts see `tools.<name>(args)`
- * for every non-hidden MCP tool plus `bash`, `read_file`, `write_file`.
+ * only capabilities are calling registered tools. Scripts see `tools[name](args)`
+ * for every tool exposed to codemode by that MCP server.
  *
  * The sandbox loads pi-codemode's `CodemodeSandbox`, which spawns a
  * DedicatedWorker per execution (the host-side `node:worker_threads` shim
@@ -83,11 +83,13 @@ export function createCodemodeAgentTool(options: CodemodeToolOptions): AgentTool
   if (codemodeTools.length === 0) return null;
 
   const toolDescriptions = codemodeTools
-    .map((t) => `- \`${t.name}\`: ${t.description ?? '(no description)'}`)
+    .map(
+      (t) => `- \`tools[${JSON.stringify(t.name)}](args)\`: ${t.description ?? '(no description)'}`
+    )
     .join('\n');
 
   const description = `Run JavaScript to orchestrate MCP tool calls from server "${serverName}".
-Scripts run in a QuickJS sandbox with access to the following tools via \`tools.<name>(args)\`:
+Scripts run in a QuickJS sandbox with access to the following tools via \`tools["name"](args)\`:
 ${toolDescriptions}
 
 Top-level \`await\` and \`return\` work. No fetch, no filesystem, no timers — only tool calls.`;

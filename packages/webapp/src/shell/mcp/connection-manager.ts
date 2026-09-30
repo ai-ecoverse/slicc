@@ -111,6 +111,15 @@ export class McpConnectionManager {
       return { connection: existing, transport: entry.transport ?? 'slicc' };
     }
 
+    const namespace = serverName.replace(/[^A-Za-z0-9_]/g, '_');
+    const clash = [...this.connections.keys()].find(
+      (other) => other.replace(/[^A-Za-z0-9_]/g, '_') === namespace
+    );
+    if (clash)
+      throw new Error(
+        `MCP server "${serverName}" conflicts with "${clash}" after name normalization`
+      );
+
     const transport = entry.transport ?? (await this.probeTransport(serverName, entry));
     let connection: McpConnection;
 
@@ -404,13 +413,42 @@ function matchGlob(pattern: string, name: string): number {
 
 // ── Tool name sanitization (Pi convention) ───────────────────────────
 
-const TOOL_NAME_RE = /[^A-Za-z0-9_-]/g;
+const TOOL_NAME_RE = /[^A-Za-z0-9_]/g;
 const MAX_TOOL_NAME_LEN = 64;
 
 export function mcpAgentToolName(serverName: string, toolName: string): string {
   const raw = `mcp__${serverName}__${toolName}`;
   const sanitized = raw.replace(TOOL_NAME_RE, '_');
-  return sanitized.length <= MAX_TOOL_NAME_LEN ? sanitized : sanitized.slice(0, MAX_TOOL_NAME_LEN);
+  return sanitized.length <= MAX_TOOL_NAME_LEN
+    ? sanitized
+    : `${sanitized.slice(0, MAX_TOOL_NAME_LEN - 9)}_${toolNameHash(serverName, toolName)}`;
+}
+
+/** Give every colliding tool a stable suffix, independent of tools/list order. */
+export function mcpAgentToolNames(serverName: string, toolNames: string[]): Map<string, string> {
+  const bases = toolNames.map((name) => mcpAgentToolName(serverName, name));
+  const counts = new Map<string, number>();
+  for (const base of bases) counts.set(base, (counts.get(base) ?? 0) + 1);
+  return new Map(
+    toolNames.map((name, index) => {
+      const base = bases[index];
+      return [
+        name,
+        (counts.get(base) ?? 0) > 1
+          ? `${base.slice(0, MAX_TOOL_NAME_LEN - 9)}_${toolNameHash(serverName, name)}`
+          : base,
+      ];
+    })
+  );
+}
+
+function toolNameHash(serverName: string, toolName: string): string {
+  // A small deterministic hash keeps the browser bundle free of node:crypto.
+  let hash = 0x811c9dc5;
+  for (const char of `${serverName}\0${toolName}`) {
+    hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export function deduplicateToolNames(names: string[]): Map<string, string> {
