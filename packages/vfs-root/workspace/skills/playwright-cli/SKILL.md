@@ -69,24 +69,18 @@ Refs are invalidated after any state-changing command. Always re-snapshot to get
 
 ## Commands
 
-All commands below that operate on a tab require `--tab=<targetId>`.
+Every subcommand prints its flags with `playwright-cli <cmd> --help` and rejects flags it does not support. Tab commands take `--tab=<targetId>`; ref commands take a ref from the latest `snapshot`.
 
-### Core
+- **Tabs:** `open`, `tab-new`, `tab-list`, `tab-select`, `tab-close` (`close`), `goto` (`navigate`), `go-back`, `go-forward`, `reload`, `resize`
+- **Page:** `snapshot`, `find`, `frames`, `eval`, `eval-file`, `screenshot`, `pdf`, `console`
+- **Refs:** `click`, `dblclick`, `fill`, `type`, `select`, `check`, `uncheck`, `hover`, `drag`, `upload`, `drop`
+- **Keys and mouse:** `press`, `keydown`, `keyup`, `mousemove`, `mousedown`, `mouseup`, `mousewheel`
+- **Dialogs:** `dialog-accept`, `dialog-dismiss`
+- **Network:** `requests`, `request`, `request-headers`, `request-body`, `response-headers`, `response-body`, `route`, `route-list`, `unroute`, `network-state-set`, `record`, `stop-recording`, `fetch`
+- **State:** `cookie-list|get|set|delete|clear`, `localstorage-*`, `sessionstorage-*`, `state-save`, `state-load`
+- **Other:** `teleport`, `generate-locator`, `highlight`
 
-```bash
-playwright-cli open [url] [--foreground] [--mobile]               # Open tab (background by default), returns targetId
-playwright-cli tab-new [url] [--foreground] [--mobile]            # Same as open
-playwright-cli tab-close --tab=<id>                               # Close tab (alias: close)
-playwright-cli goto --tab=<id> <url>                              # Navigate tab
-playwright-cli navigate --tab=<id> <url>                          # Alias for goto
-playwright-cli snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path] [--depth=<n>] [--boxes]  # Tab tree or one frame subtree; --depth limits nesting, --boxes adds [box=x,y,w,h] rects
-playwright-cli find --tab=<id> <text>                             # Search the snapshot for text (case-insensitive), returns matching lines + context
-playwright-cli find --tab=<id> --regex=<re>                       # Same, with a regexp (use either text or --regex, not both)
-playwright-cli eval --tab=<id> [--frame=<frameId>] <expression> [--filename=path|--output=path]  # Evaluate JS in a tab/frame, incl. top-level await/return; use `--` before an expression that starts with `-`
-playwright-cli eval-file --tab=<id> [--frame=<frameId>] <vfs-path> [--output=path|--filename=path]  # Evaluate JS from a VFS file in a tab/frame (top-level await/return supported)
-playwright-cli frames --tab=<id>                                  # List frame IDs for --frame (not --tab)
-playwright-cli resize --tab=<id> <width> <height>                 # Resize viewport
-```
+### Foreground and mobile tabs
 
 `--foreground` (or `--fg`) opens the new tab **in the foreground** — it brings the
 new tab to the front and switches the user's visible/active tab to it, instead of
@@ -108,74 +102,13 @@ These two are the ONLY ways to change which tab is in front. There is no
 If a tab didn't come to the front, re-run `tab-select` / `--foreground` — do not
 fall back to `window.focus()`.
 
-### Interaction
-
-```bash
-playwright-cli click --tab=<id> <ref> [--modifiers=Shift,Control,Alt,Meta]  # Click element
-playwright-cli dblclick --tab=<id> <ref> [button] [--modifiers=...]          # Double-click
-playwright-cli fill --tab=<id> <ref> <text> [--submit]           # Clear input + type text (--submit presses Enter); use `--` before text that starts with `-`
-playwright-cli type --tab=<id> <text> [--submit]                 # Type into focused element (--submit presses Enter); use `--` before text that starts with `-`
-playwright-cli hover --tab=<id> <ref>                            # Hover over element
-playwright-cli select --tab=<id> <ref> <value>                   # Select dropdown value
-playwright-cli check --tab=<id> <ref>                            # Check checkbox/radio
-playwright-cli uncheck --tab=<id> <ref>                          # Uncheck checkbox/radio
-playwright-cli drag --tab=<id> <startRef> <endRef>               # Drag and drop
-playwright-cli upload --tab=<id> [ref] <file> [file...]          # Upload VFS files to file input as raw bytes (optional snapshot ref targets hidden inputs)
-playwright-cli drop --tab=<id> <ref> [--path=<vfs-path>] [--data=<mime/type=value>]  # Drop files/data onto element (--path drops raw bytes)
-playwright-cli dialog-accept --tab=<id> [text]                   # Accept JS dialog
-playwright-cli dialog-dismiss --tab=<id>                         # Dismiss JS dialog
-```
-
-### Keyboard
-
-```bash
-playwright-cli press --tab=<id> <key>    # Press key (keyDown + keyUp, e.g. Enter, Tab, Escape)
-playwright-cli keydown --tab=<id> <key>  # Hold key down (no paired keyUp)
-playwright-cli keyup --tab=<id> <key>    # Release held key (no paired keyDown)
-```
-
-### Mouse
-
-```bash
-playwright-cli mousemove --tab=<id> <x> <y>    # Move mouse to coordinates (negative coords ok, e.g. -10 20)
-playwright-cli mousedown --tab=<id> [button]   # Press mouse button (left/right/middle, default: left)
-playwright-cli mouseup --tab=<id> [button]     # Release mouse button
-playwright-cli mousewheel --tab=<id> <dx> <dy> # Scroll mouse wheel (negative deltas ok, e.g. 0 -300)
-```
-
-### Navigation
-
-```bash
-playwright-cli go-back --tab=<id>     # history.back()
-playwright-cli go-forward --tab=<id>  # history.forward()
-playwright-cli reload --tab=<id>      # Reload page
-```
-
 ### Teleport
-
-```bash
-playwright-cli teleport --tab=<id> --start=<regex> --return=<regex> [--timeout=<s>]
-playwright-cli teleport --list                                                    # List available follower runtimes
-playwright-cli teleport --off --tab=<id>                                          # Cancel a teleport on this tab
-playwright-cli open <url> --teleport-start=<regex> --teleport-return=<regex>
-playwright-cli goto --tab=<id> <url> --teleport-start=<regex> --teleport-return=<regex>
-```
 
 Teleport is for leader/follower tray auth handoffs. Scoped to a specific tab — only commands targeting the teleporting tab are blocked; other tabs remain operational.
 
 `--runtime` is optional: without it, teleport picks the most recently active eligible follower (preferring standalone floats). Only followers that can actually serve cookies are eligible — cherry hosts, exec-only CLI followers, and any target advertising `network: false` are excluded, so a teleport fails fast instead of "succeeding" with zero cookies.
 
-### Screenshots
-
-```bash
-playwright-cli screenshot --tab=<id>                             # Save to $TMPDIR/screenshot-<ts>.png
-playwright-cli screenshot --tab=<id> --filename=page.png         # Save to custom path
-playwright-cli screenshot --tab=<id> e5                          # Clip to an element (positional = MAIN-FRAME ref, not a path)
-playwright-cli screenshot --tab=<id> --fullPage                  # Full scrollable page (alias: --full-page)
-playwright-cli screenshot --tab=<id> --max-width=800             # Downscale to a max width (png output only)
-playwright-cli screenshot --tab=<id> --type=jpeg                 # png (default) / jpeg / webp; inferred from --filename extension
-playwright-cli screenshot --tab=<id> --hires                     # Capture in device pixels (honors device pixel ratio)
-```
+### Screenshots, locking and cancellation
 
 Viewport screenshots (default, `--max-width`, `--hires`) honor the tab's current scroll position. `--fullPage` captures from the document origin.
 
@@ -227,12 +160,6 @@ there is no need to reload the tab or open a new one. Two error shapes:
   have landed (keys typed, a click delivered) before the session died. Do NOT
   blindly re-run it: `snapshot` the tab first and continue from what you see.
 
-### Save As
-
-```bash
-playwright-cli pdf --tab=<id> [--filename=path]  # Save page as PDF (not available in extension mode)
-```
-
 ### Viewing pages and screenshots yourself
 
 The browser displays things to the human; `open --view` is what lets _you_ see them. **But viewing screenshots is a last resort for the cone — every image you load eats a large chunk of the context window** (a single 1280×800 PNG can run 1500+ tokens, full-page screenshots much more). Reach for cheaper signals first:
@@ -278,69 +205,6 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 - Open a screenshot then screenshot that tab.
 - Use `eval` to check the active tab — use `tab-list`.
 
-### Tab Management
-
-```bash
-playwright-cli tab-list                  # List tabs with targetIds + (active) marker
-playwright-cli tab-new [url]             # New tab, returns targetId
-playwright-cli tab-close --tab=<id>      # Close specific tab
-playwright-cli tab-select <index>        # Select (bring to front) tab by 1-based index
-```
-
-### Cookies
-
-```bash
-playwright-cli cookie-list --tab=<id> [--domain=<d>] [--path=<p>]   # List cookies (filter by domain/path)
-playwright-cli cookie-get --tab=<id> <name>                          # Get cookie
-playwright-cli cookie-set --tab=<id> <name> <value> [--sameSite=Strict|Lax|None] [other flags]  # Set cookie
-playwright-cli cookie-delete --tab=<id> <name> [--domain= --path=]  # Delete cookie
-playwright-cli cookie-clear --tab=<id>                               # Clear all cookies
-```
-
-### Storage
-
-```bash
-playwright-cli localstorage-list --tab=<id>
-playwright-cli localstorage-get --tab=<id> <key>
-playwright-cli localstorage-set --tab=<id> <key> <value>
-playwright-cli localstorage-delete --tab=<id> <key>
-playwright-cli localstorage-clear --tab=<id>
-# Same pattern for sessionstorage-*
-playwright-cli state-save --tab=<id> [filename|--filename=path]  # Save cookies + localStorage to JSON
-playwright-cli state-load --tab=<id> <filename>                  # Restore from state file
-```
-
-### Network
-
-```bash
-playwright-cli console --tab=<id> [min-level] [--clear]                       # List console messages (debug/log/info/warning/error)
-playwright-cli requests --tab=<id> [--static] [--filter=<regex>] [--clear]    # List network requests
-playwright-cli request --tab=<id> <index> [--filename=path]                   # Full request details
-playwright-cli request-headers --tab=<id> <index>                             # Request headers only
-playwright-cli request-body --tab=<id> <index>                                # Request body only
-playwright-cli response-headers --tab=<id> <index>                            # Response headers only
-playwright-cli response-body --tab=<id> <index> [--filename=path]             # Response body (--filename saves the exact bytes)
-playwright-cli network-state-set --tab=<id> <online|offline>                  # Toggle network state
-playwright-cli route --tab=<id> <pattern> [--status=N] [--body=text] [--content-type=type] [--header=name:value]
-playwright-cli route-list --tab=<id>                                          # List active routes
-playwright-cli unroute --tab=<id> [pattern]                                   # Remove routes (all if no pattern)
-```
-
-### DevTools
-
-```bash
-playwright-cli generate-locator --tab=<id> <ref>              # Generate Playwright locator string for element
-playwright-cli highlight --tab=<id> <ref> [--style=<css>]     # Highlight element with visual overlay
-playwright-cli highlight --tab=<id> --hide [ref]              # Remove highlight (all if no ref)
-```
-
-### HAR Recording
-
-```bash
-playwright-cli record [url] [--filter=<js-expr>]  # Open tab with network recording
-playwright-cli stop-recording <recordingId>        # Stop and save HAR
-```
-
 ## Multi-Agent Tab Behavior
 
 **All agents (cone + scoops) share the same tab namespace.** There is no tab isolation.
@@ -375,6 +239,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 - `open` and `tab-new` open tabs in the **background** by default. Capture the targetId from the output. To open in the **foreground** add `--foreground`/`--fg`; to raise an **already-open** tab use `tab-select <index>`.
 - After `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, `select`, `check`, `uncheck`, `drag`, or `dialog-*`, take a fresh `snapshot --tab=<id>` before using refs again.
 - Unexpected JavaScript dialogs are auto-dismissed on attached pages.
+- `eval` runs in the page's global scope, so a `const` from one call collides with the next: wrap multi-statement code in `{ … }` or an IIFE, or put it in a file for `eval-file`.
 - Use `eval --tab=<id>` for DOM operations not covered by built-in commands; save results with `--filename=path`.
 - The SLICC app tab and Chrome internal UI tabs are automatically excluded from `tab-list`.
 - `fill` clears and types into regular inputs, textareas, and `contenteditable` elements. Use `--submit` to press Enter after. If the text or an `eval` expression starts with `-`, put `--` before it so it is not parsed as a flag.
