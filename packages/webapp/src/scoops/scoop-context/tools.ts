@@ -217,7 +217,7 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
 
   const secretsConfig = { scrubToolResult: getToolResultScrubber() };
   const gateConfig = buildGuestToolGate(deps);
-  return deps.processManager
+  const adapted = deps.processManager
     ? adaptTools(
         legacyTools,
         {
@@ -229,4 +229,98 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
         gateConfig
       )
     : adaptTools(legacyTools, undefined, secretsConfig, gateConfig);
+
+  const mcpTools = await buildMcpAgentTools(deps.fs, scoop);
+  return [...adapted, ...mcpTools];
+}
+
+async function buildMcpAgentTools(
+  fs: VirtualFS,
+  scoop: RegisteredScoop
+): Promise<import('@earendil-works/pi-agent-core').AgentTool[]> {
+  try {
+    const { listServers } = await import('../../shell/mcp/store.js');
+    const servers = await listServers(fs as Parameters<typeof listServers>[0]);
+    const entries = Object.entries(servers);
+    if (entries.length === 0) return [];
+
+    const directEntries = entries.filter(([, entry]) => {
+      const exposure = entry.exposure ?? 'codemode';
+      return exposure === 'direct' || hasDirectToolOverrides(entry);
+    });
+    if (directEntries.length === 0) return [];
+
+    if (scoop.parentJid !== null) {
+      return [];
+    }
+
+    const { toAgentTools } = await import('../../shell/mcp/agent-tools.js');
+
+    const manager = await getOrCreateConnectionManager();
+    const allTools: import('@earendil-works/pi-agent-core').AgentTool[] = [];
+
+    for (const [name, entry] of directEntries) {
+      try {
+        const { connection } = await manager.connect(name, entry);
+        const tools = entry.tools ?? (await connection.listTools());
+        const piTools = (tools as import('@earendil-works/pi-mcp').Tool[]) ?? [];
+
+        const agentTools = toAgentTools({
+          serverName: name,
+          tools: piTools,
+          connection,
+          exposure: entry.exposure,
+          toolExposure: entry.toolExposure,
+          writeOverflow: async (id, text) => {
+            try {
+              await fs.mkdir('/tmp/mcp', { recursive: true });
+              await fs.writeFile(`/tmp/mcp/${id}.txt`, text);
+            } catch {
+              // best-effort
+            }
+          },
+        });
+        allTools.push(...agentTools);
+      } catch (err) {
+        log.warn('failed to load MCP tools for agent', {
+          server: name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return allTools;
+  } catch (err) {
+    log.debug('MCP agent tools unavailable', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
+
+function hasDirectToolOverrides(entry: import('../../shell/mcp/types.js').McpServerEntry): boolean {
+  if (!entry.toolExposure) return false;
+  return Object.values(entry.toolExposure).some((mode) => mode === 'direct');
+}
+
+type McpConnectionManagerType =
+  import('../../shell/mcp/connection-manager.js').McpConnectionManager;
+let sharedManager: McpConnectionManagerType | null = null;
+
+async function getOrCreateConnectionManager(): Promise<McpConnectionManagerType> {
+  if (sharedManager) return sharedManager;
+  const { McpConnectionManager } = await import('../../shell/mcp/connection-manager.js');
+  sharedManager = new McpConnectionManager({
+    getAuthHeader: async (serverName) => {
+      try {
+        const { getOAuthAccountInfo } = await import('../../providers/account-store.js');
+        const info = getOAuthAccountInfo(`mcp:${serverName}`);
+        if (!info) return null;
+        return `Bearer ${info.token}`;
+      } catch {
+        return null;
+      }
+    },
+  });
+  return sharedManager;
 }

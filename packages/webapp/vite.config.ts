@@ -88,6 +88,13 @@ function stubPiNodeInternalsPlugin() {
           return resolve(Dirname, 'src/stubs/pi-config-stub.ts');
         }
       }
+      // pi-mcp's index re-exports StdioTransport, which pulls cross-spawn
+      // and node:child_process. Stub it — SLICC uses StreamableHttpTransport.
+      if (normalizedImporter?.includes('@earendil-works/pi-mcp')) {
+        if (source.endsWith('/transports/stdio.js') || source.endsWith('/transports/stdio.ts')) {
+          return resolve(Dirname, 'src/stubs/pi-mcp-stdio-stub.ts');
+        }
+      }
       return undefined;
     },
   };
