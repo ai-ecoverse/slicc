@@ -243,11 +243,48 @@ describe('skills conditions', () => {
     expect(() => parseSkillsCondition('builtin+../x')).toThrow(/bad skill set name/);
   });
 
+  it('stages an extra set from a mount whose stat has no identity (#3695)', async () => {
+    const { Bash, InMemoryFs } = await import('just-bash');
+    const fs = new InMemoryFs({
+      '/workspace/skills/playwright-cli/SKILL.md': 'builtin pw',
+      '/workspace/skills/other/SKILL.md': 'builtin other',
+      '/workspace/bench-skills/ecoverse/strava/SKILL.md': 'extra strava',
+      '/workspace/bench-skills/ecoverse/playwright-cli/SKILL.md': 'extra pw',
+    });
+    // Like the node-server --mount: no ino/dev/identity under /workspace/bench-skills.
+    const bare = (s) => {
+      const { ino, dev, identity, ...rest } = s;
+      return rest;
+    };
+    const mounted = new Proxy(fs, {
+      get(target, key) {
+        if (key === 'stat' || key === 'lstat')
+          return async (p) => {
+            const st = await target[key](p);
+            return String(p).startsWith('/workspace/bench-skills') ? bare(st) : st;
+          };
+        const v = target[key];
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    const bash = new Bash({ fs: mounted });
+    const staged = await bash.exec(stageSkillsCommand(parseSkillsCondition('builtin+ecoverse')));
+    expect(staged.stderr).toBe('');
+    expect(staged.exitCode).toBe(0);
+    expect((await bash.exec('ls /workspace/skills')).stdout.split(/\s+/).filter(Boolean)).toEqual([
+      'other',
+      'playwright-cli',
+      'strava',
+    ]);
+    expect(await fs.readFile('/workspace/skills/playwright-cli/SKILL.md')).toBe('extra pw');
+  });
+
   it('stashes once, then rebuilds /workspace/skills for the condition', () => {
     const cmd = stageSkillsCommand(parseSkillsCondition('builtin+ecoverse'));
     expect(cmd).toContain('if [ ! -d /workspace/.bench-skills-builtin ]');
     expect(cmd).toContain('cp -r /workspace/.bench-skills-builtin/. /workspace/skills/');
-    expect(cmd).toContain('cp -r /workspace/bench-skills/ecoverse/. /workspace/skills/');
+    expect(cmd).toContain('for s in /workspace/bench-skills/ecoverse/*; do');
+    expect(cmd).not.toContain('/workspace/bench-skills/ecoverse/. ');
     expect(skillsFlagCommand(parseSkillsCondition('none'))).toBe('flags set no-default-skills on');
     expect(skillsFlagCommand(parseSkillsCondition('builtin'))).toBe(
       'flags set no-default-skills off'
