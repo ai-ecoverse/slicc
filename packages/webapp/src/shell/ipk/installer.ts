@@ -18,6 +18,7 @@
 
 import type { SecureFetch } from 'just-bash';
 import { type DirEntry, FsError, type VirtualFS } from '../../fs/index.js';
+import { joinPath } from '../../fs/path-utils.js';
 import {
   allSettledOrThrow,
   createLimiter,
@@ -103,14 +104,6 @@ export function parseInstallSpec(spec: string): ParsedSpec {
   const atIdx = trimmed.indexOf('@');
   if (atIdx === -1) return { name: trimmed, range: '' };
   return { name: trimmed.slice(0, atIdx), range: trimmed.slice(atIdx + 1) };
-}
-
-function joinPath(base: string, ...parts: string[]): string {
-  const segments = [base, ...parts]
-    .join('/')
-    .split('/')
-    .filter((p) => p.length > 0);
-  return `/${segments.join('/')}`;
 }
 
 function packageDirIn(modulesDir: string, pkgName: string): string {

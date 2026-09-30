@@ -6,15 +6,8 @@
  */
 
 import type { DirEntry, VirtualFS } from '../../fs/index.js';
+import { joinPath } from '../../fs/path-utils.js';
 import { GLOBAL_BIN_DELEGATOR_MARKER, GLOBAL_BIN_DIR } from './global-prefix.js';
-
-function joinPath(base: string, ...parts: string[]): string {
-  const segments = [base, ...parts]
-    .join('/')
-    .split('/')
-    .filter((p) => p.length > 0);
-  return `/${segments.join('/')}`;
-}
 
 function buildDelegatorSource(binName: string): string {
   const escaped = JSON.stringify(binName);
