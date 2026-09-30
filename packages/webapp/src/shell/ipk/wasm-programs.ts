@@ -18,6 +18,11 @@
  *
  *   "slicc": { "abi": "wasi", "commands": { "rg": { "wasm": "bin/rg.wasm" } } }
  *
+ * A command can also be a `#!` script of the package, run by its interpreter
+ * as execve(2) would (a compiler driver: `#!/bin/sh`, which is GNU bash):
+ *
+ *   "slicc": { "commands": { "cc": { "script": "bin/cc" } } }
+ *
  * `argv0` selects the program of a multi-call binary (default: the command
  * name). `env` (on `slicc`, and per command, which wins) gives the program
  * environment defaults — the caller's environment still wins. A value that
@@ -62,6 +67,11 @@ export interface WasmCommand {
   pkg: string;
   /** Environment defaults for the program (the manifest's `env`, resolved). */
   env?: Readonly<Record<string, string>>;
+  /**
+   * A script command: the `#!` script its interpreter runs (then `glue` and
+   * `wasm` are this path too — it is no wasm program itself).
+   */
+  script?: string;
 }
 
 /** The filesystem surface the scan needs (a `VirtualFS` or `RestrictedFS`). */
@@ -91,6 +101,7 @@ async function readText(fs: ProgramFs, path: string): Promise<string> {
 }
 
 interface CommandEntry {
+  script?: unknown;
   abi?: unknown;
   glue?: unknown;
   wasm?: unknown;
@@ -176,6 +187,20 @@ export function commandsFromManifest(pkgDir: string, pkg: PackageJson): WasmComm
   const out: WasmCommand[] = [];
   for (const [command, raw] of Object.entries(commands as Record<string, CommandEntry>)) {
     if (!validCommandName(command) || !raw || typeof raw !== 'object') continue;
+    const script = insidePackage(pkgDir, raw.script);
+    if (script) {
+      const env = { ...packageEnv, ...manifestEnv(pkgDir, raw.env) };
+      out.push({
+        name: command,
+        glue: script,
+        wasm: script,
+        argv0: command,
+        pkg: name,
+        script,
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+      });
+      continue;
+    }
     const abi = abiOf(raw.abi, packageAbi);
     const wasm = insidePackage(pkgDir, raw.wasm);
     const glue = abi === 'wasi' ? wasm : insidePackage(pkgDir, raw.glue);

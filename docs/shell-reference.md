@@ -848,6 +848,22 @@ both; a package or command of any other ABI offers nothing.
 }
 ```
 
+A command can also be a `#!` script of the package, which its interpreter runs as
+execve does (`#!/bin/sh` is GNU bash) — a compiler driver such as wasm-clang's `cc`:
+
+```json
+"slicc": {
+  "env": { "WASIXCC_SYSROOT_PREFIX": "/shared/lib/node_modules/@ai-ecoverse/wasix-sysroot" },
+  "commands": { "cc": { "script": "bin/cc" } }
+}
+```
+
+It runs the same from GNU bash, make and a program's `posix_spawn` as from
+just-bash or `wasm cc`; `$0` is the script's path in the package, and the
+command's `env` defaults reach the interpreter. `which cc` shows it as a script.
+Use this rather than npm's `bin` field, which `ipk -g` publishes as a `.jsh`
+delegator that runs JavaScript.
+
 A WASI server gets its socket from `wasm --listen [HOST:]PORT PROGRAM`: a
 non-blocking listening socket on the owner's loopback network (HOST defaults to
 `127.0.0.1`), which `$SLICC_LISTEN_FDS` names — `wasm --listen 8080 ./httpd.wasm &`,

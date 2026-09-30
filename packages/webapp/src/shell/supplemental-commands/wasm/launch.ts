@@ -600,6 +600,8 @@ export class WasmSession {
     if (name !== undefined) {
       const commands = await this.commands();
       const command = commands.get(name);
+      // A script command is no wasm program: its interpreter runs it (`interpreted`).
+      if (command?.script) return undefined;
       if (command) {
         return {
           glue: command.glue,
@@ -670,21 +672,31 @@ export class WasmSession {
     };
   }
 
+  /** The script of the script command `file` names (bare, or its `/usr/bin/<name>` path), if any. */
+  private async scriptCommand(file: string): Promise<WasmCommand | undefined> {
+    const name = REGISTRY_PATH.exec(file)?.[1] ?? (file.includes('/') ? undefined : file);
+    if (name === undefined) return undefined;
+    const command = (await this.commands()).get(name);
+    return command?.script ? command : undefined;
+  }
+
   /**
-   * A script a program runs by path (git's hooks, a `./configure`): `#!interp
-   * [arg]` on its first line names the program that runs it, with the script's
-   * path as its argument, as execve(2) does. Undefined for anything else, or
-   * an interpreter that is no wasm program (the shell runs such a script).
+   * A script a program runs by path (git's hooks, a `./configure`), or a
+   * package's script command (`cc`): `#!interp [arg]` on its first line names
+   * the program that runs it, with the script's path as its argument, as
+   * execve(2) does; a script command's environment defaults go along.
+   * Undefined for anything else, or an interpreter that is no wasm program
+   * (the shell runs such a script).
    */
-  private async interpreted(
-    req: ChildSpawnRequest
+  async interpreted(
+    req: Pick<ChildSpawnRequest, 'file' | 'argv' | 'cwd'>
   ): Promise<{ target: WasmTarget; file: string; args: string[] } | undefined> {
-    if (!req.file.includes('/') || REGISTRY_PATH.test(req.file)) return undefined;
+    const command = await this.scriptCommand(req.file);
+    if (!command && (!req.file.includes('/') || REGISTRY_PATH.test(req.file))) return undefined;
+    const script = command?.script ?? this.ctx.fs.resolvePath(req.cwd, req.file);
     let head: Uint8Array;
     try {
-      head = (
-        await this.ctx.fs.readFileBuffer(this.ctx.fs.resolvePath(req.cwd, req.file))
-      ).subarray(0, SHEBANG_MAX);
+      head = (await this.ctx.fs.readFileBuffer(script)).subarray(0, SHEBANG_MAX);
     } catch {
       return undefined;
     }
@@ -692,14 +704,17 @@ export class WasmSession {
     const line = new TextDecoder().decode(head).slice(2).split('\n')[0].trim();
     const [interp, ...rest] = line.split(/[ \t]+/);
     if (!interp) return undefined;
-    const target = await this.resolve(interp, interp, req.cwd);
-    if (!target) return undefined;
+    const found = await this.resolve(interp, interp, req.cwd);
+    if (!found) return undefined;
+    const target = command?.env
+      ? { ...found, defaults: { ...found.defaults, ...command.env } }
+      : found;
     // Linux passes what follows the interpreter as one argument.
     const arg = rest.join(' ');
     return {
       target,
       file: interp,
-      args: [...(arg ? [arg] : []), req.file, ...req.argv.slice(1)],
+      args: [...(arg ? [arg] : []), command ? script : req.file, ...req.argv.slice(1)],
     };
   }
 

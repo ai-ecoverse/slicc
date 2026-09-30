@@ -101,6 +101,31 @@ describe('commandsFromManifest', () => {
     expect(commands).toEqual([]);
   });
 
+  it('a script command names its #! script, with the package env; no escapes', () => {
+    const commands = commandsFromManifest(dir, {
+      name: 'clang',
+      slicc: {
+        env: { SYSROOT: '${package}/sysroot' },
+        commands: {
+          cc: { script: 'bin/cc', env: { MODE: 'c' } },
+          bad: { script: '../outside' },
+          clang: { glue: 'bin/clang', wasm: 'bin/clang.wasm' },
+        },
+      },
+    });
+    expect(commands.map((c) => c.name)).toEqual(['cc', 'clang']);
+    expect(commands[0]).toEqual({
+      name: 'cc',
+      glue: `${dir}/bin/cc`,
+      wasm: `${dir}/bin/cc`,
+      argv0: 'cc',
+      pkg: 'clang',
+      script: `${dir}/bin/cc`,
+      env: { SYSROOT: `${dir}/sysroot`, MODE: 'c' },
+    });
+    expect(commands[1]?.script).toBeUndefined();
+  });
+
   it('ignores an ABI the realm does not run, for the package or one command', () => {
     const pkg = { slicc: { abi: 'wasix', commands: { x: { glue: 'x', wasm: 'x.wasm' } } } };
     expect(commandsFromManifest(dir, pkg)).toEqual([]);
