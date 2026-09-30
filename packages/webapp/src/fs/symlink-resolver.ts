@@ -42,6 +42,7 @@ async function readAndResolveLink(
 
 async function resolveRealpathComponent(
   lfs: SymlinkLfs,
+  findMount: (path: string) => boolean,
   resolved: string,
   part: string,
   isTail: boolean,
@@ -61,6 +62,8 @@ async function resolveRealpathComponent(
       throw new FsError('ELOOP', 'too many symbolic links encountered', originalPath);
     }
     next = await readAndResolveLink(lfs, next, originalPath);
+
+    if (findMount(next)) return { resolved: next, hops };
   }
 }
 
@@ -78,6 +81,7 @@ export async function realpath(
   for (let i = 0; i < parts.length; i++) {
     const result = await resolveRealpathComponent(
       lfs,
+      findMount,
       resolved,
       parts[i],
       i === parts.length - 1,
@@ -86,6 +90,11 @@ export async function realpath(
     );
     resolved = result.resolved;
     hops = result.hops;
+
+    if (findMount(resolved)) {
+      const rest = parts.slice(i + 1);
+      return rest.length > 0 ? `${resolved}/${rest.join('/')}` : resolved;
+    }
   }
   return resolved;
 }

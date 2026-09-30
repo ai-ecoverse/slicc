@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { E, wasiErrnoOf } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
 import { WasiFds } from '../../../../src/kernel/wasm-realm/wasi/wasi-fds.js';
@@ -9,6 +10,7 @@ import {
   pathInode,
   resolveUnder,
 } from '../../../../src/kernel/wasm-realm/wasi/wasi-files.js';
+import { importedMemory } from '../../../../src/kernel/wasm-realm/wasi/wasi-module.js';
 import { unsupportedImport } from '../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js';
 import { WasiThreads } from '../../../../src/kernel/wasm-realm/wasi/wasi-threads.js';
 import { FakeFs, FakeKernel } from './fakes.js';
@@ -143,6 +145,14 @@ describe('unsupportedImport', () => {
     expect(unsupportedImport(wasix, memory)).toBeUndefined();
 
     expect(unsupportedImport(wasix)).toContain('imports env.memory');
+  });
+
+  it('a PIE main module may import env functions (undefined symbols a side module or nobody defines)', () => {
+    const bytes = readFileSync(
+      new URL('../../../fixtures/wasm-wasi/dylink/weakmain.wasm', import.meta.url)
+    );
+    const module = new WebAssembly.Module(bytes);
+    expect(unsupportedImport(module, importedMemory(bytes))).toBeUndefined();
   });
 
   it('accepts wasm32-wasip1-threads on the shared memory the kernel recorded (5d)', () => {

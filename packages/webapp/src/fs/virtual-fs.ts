@@ -830,9 +830,28 @@ export class VirtualFS {
     }
   }
 
+  private syncDirEntry(name: string, s: FsStatsLike): DirEntry {
+    const type: EntryType = s.isSymbolicLink() ? 'symlink' : s.isDirectory() ? 'directory' : 'file';
+    if (type === 'symlink') return { name, type };
+    return {
+      name,
+      type,
+      size: s.size,
+      mtime: s.mtimeMs,
+      ctime: s.ctimeMs,
+      ...(s.ino !== undefined
+        ? { ino: s.ino, identity: this.localIdentity(s.ino), dev: s.dev }
+        : {}),
+      ...(s.uid !== undefined ? { uid: s.uid } : {}),
+      ...(s.gid !== undefined ? { gid: s.gid } : {}),
+      mode: s.mode,
+    };
+  }
+
   readDirSync(path: string): DirEntry[] | null {
     const normalized = normalizePath(path);
-    if (this.findMount(normalized)) return null;
+
+    if (this.findMount(normalized) || this.linksOntoMountSync(normalized)) return null;
     const sync = this.lfsSync;
     if (typeof sync.readdirSync !== 'function' || typeof sync.lstatSync !== 'function') return null;
     try {
@@ -841,36 +860,36 @@ export class VirtualFS {
       for (const name of names) {
         const childPath = normalized === '/' ? `/${name}` : `${normalized}/${name}`;
         try {
-          const s = sync.lstatSync(childPath);
-          const type: EntryType = s.isSymbolicLink()
-            ? 'symlink'
-            : s.isDirectory()
-              ? 'directory'
-              : 'file';
-
-          entries.push(
-            type === 'symlink'
-              ? { name, type }
-              : {
-                  name,
-                  type,
-                  size: s.size,
-                  mtime: s.mtimeMs,
-                  ctime: s.ctimeMs,
-                  ...(s.ino !== undefined
-                    ? { ino: s.ino, identity: this.localIdentity(s.ino), dev: s.dev }
-                    : {}),
-                  ...(s.uid !== undefined ? { uid: s.uid } : {}),
-                  ...(s.gid !== undefined ? { gid: s.gid } : {}),
-                  mode: s.mode,
-                }
-          );
+          entries.push(this.syncDirEntry(name, sync.lstatSync(childPath)));
         } catch {}
       }
       return entries;
     } catch {
       return null;
     }
+  }
+
+  private linksOntoMountSync(normalized: string): boolean {
+    const sync = this.lfsSync;
+    if (
+      this.mountPoints.size === 0 ||
+      normalized === '/' ||
+      typeof sync.readlinkSync !== 'function'
+    ) {
+      return false;
+    }
+    let current = normalized;
+    try {
+      for (let hops = 0; hops <= MAX_SYMLINK_DEPTH; hops++) {
+        if (!sync.lstatSync?.(current).isSymbolicLink()) return false;
+        const target = sync.readlinkSync(current);
+        current = target.startsWith('/')
+          ? normalizePath(target)
+          : normalizePath(joinPath(splitPath(current).dir, target));
+        if (this.findMount(current)) return true;
+      }
+    } catch {}
+    return false;
   }
 
   statSync(path: string): Stats | null {
@@ -932,6 +951,8 @@ export class VirtualFS {
       current = target.startsWith('/')
         ? normalizePath(target)
         : normalizePath(joinPath(splitPath(current).dir, target));
+
+      if (this.findMount(current)) return null;
     }
     return null;
   }
@@ -1249,6 +1270,8 @@ export class VirtualFS {
     }
 
     const resolved = await this.resolveSymlinks(normalized);
+    const onMount = this.onMount(resolved, normalized);
+    if (onMount) return this.readFileInner(onMount, options);
     try {
       const encoding = options?.encoding ?? 'utf-8';
       if (encoding === 'utf-8') {
@@ -1310,10 +1333,18 @@ export class VirtualFS {
         return null;
       }
     }
+    let resolved: string;
+    try {
+      resolved = await this.resolveSymlinks(normalized);
+    } catch {
+      return null;
+    }
+    const onMount = this.onMount(resolved, normalized);
+    if (onMount) return this.getNativeFile(onMount);
     const root = this.opfsHandle;
     if (!root) return null;
     try {
-      return await fileFromDirectoryHandle(root, await this.resolveSymlinks(normalized));
+      return await fileFromDirectoryHandle(root, resolved);
     } catch {
       return null;
     }
@@ -1372,6 +1403,8 @@ export class VirtualFS {
     } catch {
       resolved = normalized;
     }
+    const onMount = this.onMount(resolved, normalized);
+    if (onMount) return this.writeFileInner(onMount, content, _options);
 
     let wasExisting = false;
     try {
@@ -1436,6 +1469,11 @@ export class VirtualFS {
         let wasExisting = false;
         try {
           resolved = await this.resolveSymlinks(normalized);
+          const onMount = this.onMount(resolved, normalized);
+          if (onMount) {
+            await this.appendMounted(onMount, content);
+            return;
+          }
           const stat = await this.lfs.stat(resolved);
           if (stat.isDirectory()) throw new FsError('EISDIR', 'is a directory', normalized);
           wasExisting = true;
@@ -1530,6 +1568,10 @@ export class VirtualFS {
       return null;
     }
     const resolved = await this.resolveSymlinks(update.normalized);
+    if (this.onMount(resolved, update.normalized)) {
+      await this.stat(resolved);
+      return null;
+    }
     try {
       const stat = await this.lfs.stat(resolved);
       this.markSidecarDirty(resolved);
@@ -1627,6 +1669,8 @@ export class VirtualFS {
 
   private async readDirLocalInner(normalized: string): Promise<DirEntry[]> {
     const resolved = await this.resolveSymlinks(normalized);
+    const onMount = this.onMount(resolved, normalized);
+    if (onMount) return this.readDir(onMount);
     try {
       const names = await this.lfs.readdir(resolved);
       const entries: DirEntry[] = [];
@@ -1726,6 +1770,9 @@ export class VirtualFS {
     const normalized = normalizePath(path);
     if (normalized === '/') return;
 
+    const via = this.mountPoints.size > 0 ? await this.parentOnMount(normalized) : undefined;
+    if (via) return this.mkdir(via, options);
+
     const mount = this.findMount(normalized);
     if (mount) {
       if (mount.relParts.length === 0) return;
@@ -1773,7 +1820,9 @@ export class VirtualFS {
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
-    return this.withKindMismatchRetry(normalizePath(path), () => this.rmInner(path, options));
+    return this.withKindMismatchRetry(normalizePath(path), () =>
+      this.viaMountOnEnoent(normalizePath(path), (p) => this.rmInner(p, options))
+    );
   }
 
   private async rmInner(path: string, options?: RmOptions): Promise<void> {
@@ -1843,40 +1892,47 @@ export class VirtualFS {
     return this.withKindMismatchRetry(path, () => this.statInner(path));
   }
 
+  private async statMounted(
+    normalized: string,
+    mount: { path: string; backend: MountBackend; relParts: string[] }
+  ): Promise<Stats> {
+    if (mount.relParts.length === 0) {
+      try {
+        const s = await this.lfs.stat(normalized);
+        return { type: 'directory', size: s.size, mtime: s.mtimeMs, ctime: s.ctimeMs };
+      } catch {
+        return { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() };
+      }
+    }
+    const relPath = mount.relParts.join('/');
+    try {
+      const ms = await mount.backend.stat(relPath);
+
+      return {
+        type: ms.kind === 'directory' ? 'directory' : 'file',
+        size: ms.size,
+        mtime: ms.mtime,
+        ctime: ms.ctime ?? ms.mtime,
+        ...(ms.ino !== undefined ? { ino: ms.ino } : {}),
+        ...(ms.identity !== undefined ? { identity: ms.identity } : {}),
+        ...(ms.dev !== undefined ? { dev: ms.dev } : {}),
+        ...(ms.uid !== undefined ? { uid: ms.uid } : {}),
+        ...(ms.gid !== undefined ? { gid: ms.gid } : {}),
+        ...(ms.mode !== undefined ? { mode: ms.mode } : {}),
+      };
+    } catch (err) {
+      rebrandFsError(err, normalized);
+    }
+  }
+
   private async statInner(path: string): Promise<Stats> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
-    if (mount) {
-      if (mount.relParts.length === 0) {
-        try {
-          const s = await this.lfs.stat(normalized);
-          return { type: 'directory', size: s.size, mtime: s.mtimeMs, ctime: s.ctimeMs };
-        } catch {
-          return { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() };
-        }
-      }
-      const relPath = mount.relParts.join('/');
-      try {
-        const ms = await mount.backend.stat(relPath);
-
-        return {
-          type: ms.kind === 'directory' ? 'directory' : 'file',
-          size: ms.size,
-          mtime: ms.mtime,
-          ctime: ms.ctime ?? ms.mtime,
-          ...(ms.ino !== undefined ? { ino: ms.ino } : {}),
-          ...(ms.identity !== undefined ? { identity: ms.identity } : {}),
-          ...(ms.dev !== undefined ? { dev: ms.dev } : {}),
-          ...(ms.uid !== undefined ? { uid: ms.uid } : {}),
-          ...(ms.gid !== undefined ? { gid: ms.gid } : {}),
-          ...(ms.mode !== undefined ? { mode: ms.mode } : {}),
-        };
-      } catch (err) {
-        rebrandFsError(err, normalized);
-      }
-    }
+    if (mount) return this.statMounted(normalized, mount);
 
     const resolved = await this.resolveSymlinks(normalized);
+    const onMount = this.onMount(resolved, normalized);
+    if (onMount) return this.statInner(onMount);
     try {
       const s = await this.lfs.stat(resolved);
       return {
@@ -1928,6 +1984,13 @@ export class VirtualFS {
   }
 
   private async renameInner(oldPath: string, newPath: string): Promise<void> {
+    if (this.mountPoints.size > 0) {
+      const [viaOld, viaNew] = await Promise.all([
+        this.parentOnMount(normalizePath(oldPath)),
+        this.parentOnMount(normalizePath(newPath)),
+      ]);
+      if (viaOld || viaNew) return this.renameInner(viaOld ?? oldPath, viaNew ?? newPath);
+    }
     const normalizedOld = normalizePath(oldPath);
     const normalizedNew = normalizePath(newPath);
     if (normalizedOld === normalizedNew) return;
@@ -2035,18 +2098,37 @@ export class VirtualFS {
       : normalizePath(joinPath(splitPath(linkPath).dir, target));
   }
 
-  private assertSymlinkCreateAllowed(target: string, linkPath: string): void {
+  private assertSymlinkCreateAllowed(linkPath: string): void {
     if (this.findMount(linkPath)) {
       throw new FsError('EINVAL', 'symlinks not supported on mounted filesystems', linkPath);
     }
-    const absoluteTarget = this.resolveSymlinkTargetPath(target, linkPath);
-    if (this.findMount(absoluteTarget)) {
-      throw new FsError(
-        'EXDEV',
-        `cannot create a symlink across a mount boundary to '${absoluteTarget}'`,
-        linkPath
-      );
+  }
+
+  private onMount(resolved: string, normalized: string): string | undefined {
+    return resolved !== normalized && this.findMount(resolved) ? resolved : undefined;
+  }
+
+  private async viaMountOnEnoent<T>(normalized: string, op: (p: string) => Promise<T>): Promise<T> {
+    try {
+      return await op(normalized);
+    } catch (err) {
+      if (this.mountPoints.size === 0 || (err as { code?: string }).code !== 'ENOENT') throw err;
+      const via = await this.parentOnMount(normalized);
+      if (!via) throw err;
+      return op(via);
     }
+  }
+
+  private async parentOnMount(normalized: string): Promise<string | undefined> {
+    if (normalized === '/' || this.findMount(normalized)) return undefined;
+    const { dir, base } = splitPath(normalized);
+    let parent: string;
+    try {
+      parent = await this.resolveSymlinks(dir);
+    } catch {
+      return undefined;
+    }
+    return parent !== dir && this.findMount(parent) ? joinPath(parent, base) : undefined;
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
@@ -2057,7 +2139,7 @@ export class VirtualFS {
     if (links.length === 0) return;
     const prepared = links.map((link) => {
       const normalizedLinkPath = normalizePath(link.path);
-      this.assertSymlinkCreateAllowed(link.target, normalizedLinkPath);
+      this.assertSymlinkCreateAllowed(normalizedLinkPath);
       return { target: link.target, normalizedLinkPath };
     });
     const paths = prepared.map((link) => link.normalizedLinkPath);
@@ -2115,15 +2197,20 @@ export class VirtualFS {
   }
 
   async readlink(path: string): Promise<string> {
-    const normalized = normalizePath(path);
-    try {
-      return await this.lfs.readlink(normalized);
-    } catch (err) {
-      throw convertError(err, normalized);
-    }
+    return this.viaMountOnEnoent(normalizePath(path), async (normalized) => {
+      try {
+        return await this.lfs.readlink(normalized);
+      } catch (err) {
+        throw convertError(err, normalized);
+      }
+    });
   }
 
   async lstat(path: string): Promise<Stats> {
+    return this.viaMountOnEnoent(normalizePath(path), (p) => this.lstatInner(p));
+  }
+
+  private async lstatInner(path: string): Promise<Stats> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) {

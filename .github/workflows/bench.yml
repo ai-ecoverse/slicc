@@ -188,8 +188,11 @@ jobs:
           set -euo pipefail
           if command -v google-chrome >/dev/null 2>&1; then google-chrome --version; exit 0; fi
           curl -fsSL -o "$RUNNER_TEMP/chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends "$RUNNER_TEMP/chrome.deb" fonts-liberation
+
+
+          apt=(sudo apt-get -o DPkg::Lock::Timeout=600)
+          "${apt[@]}" update -qq
+          "${apt[@]}" install -y -qq --no-install-recommends "$RUNNER_TEMP/chrome.deb" fonts-liberation
           google-chrome --version
 
       - name: Prepare /slicc

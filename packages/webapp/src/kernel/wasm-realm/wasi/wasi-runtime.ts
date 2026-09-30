@@ -42,7 +42,8 @@ export function unsupportedImport(
   for (const imp of imports) {
     if (imp.module === PREVIEW1 || imp.module === WASIX) continue;
     if (pie && (imp.module === 'GOT.mem' || imp.module === 'GOT.func')) continue;
-    if (pie && imp.module === 'env' && imp.kind !== 'function' && imp.kind !== 'memory') continue;
+
+    if (pie && imp.module === 'env' && imp.kind !== 'memory') continue;
     if (imp.kind === 'memory' && memory?.module === imp.module && memory.name === imp.name)
       continue;
 
@@ -192,7 +193,7 @@ async function instantiate(
   }
   const hostImports = linkImports(module, preview1, wasix, memory, threads);
   const imports: WebAssembly.Imports = sync
-    ? merge(hostImports, sync.linker.mainImports())
+    ? merge(hostImports, sync.linker.mainImports(module))
     : hostImports;
   const instance = await WebAssembly.instantiate(module, imports);
   stats?.phase('instantiate');
@@ -202,6 +203,8 @@ async function instantiate(
     sync.linker.bindMain(instance, !thread);
 
     if (thread) sync.catchUp();
+
+    sync.linker.bindMainGot();
   }
   return { instance, driver };
 }

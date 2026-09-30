@@ -43,6 +43,8 @@ export class WasixLinker {
   private main: WebAssembly.Instance | undefined;
   private readonly modules = new Map<number, Linked>();
   private readonly byPath = new Map<string, Linked>();
+
+  private mainGot: Array<() => void> = [];
   private readonly slots = new Map<unknown, number>();
   private nextHandle = 1;
 
@@ -77,25 +79,43 @@ export class WasixLinker {
     this.cppException = tag();
   }
 
-  mainImports(): Record<string, Record<string, WebAssembly.ImportValue>> {
+  mainImports(module: WebAssembly.Module): Record<string, Record<string, WebAssembly.ImportValue>> {
     const i32 = (v: number) => new WebAssembly.Global({ value: 'i32', mutable: false }, v);
     const got = (v: number) => new WebAssembly.Global({ value: 'i32', mutable: true }, v);
-    return {
-      env: {
-        memory: this.memory,
-        __indirect_function_table: this.table,
-        __stack_pointer: this.stackPointer,
-        __memory_base: i32(this.memoryBase),
-        __table_base: i32(TABLE_BASE),
-        __c_longjmp: this.cLongjmp as unknown as WebAssembly.ImportValue,
-        __cpp_exception: this.cppException as unknown as WebAssembly.ImportValue,
-      },
-      'GOT.mem': {
-        __stack_high: got(this.stackHigh),
-        __stack_low: got(this.stackLow),
-        __heap_base: got(this.stackHigh),
-      },
+    const env: Record<string, WebAssembly.ImportValue> = {
+      memory: this.memory,
+      __indirect_function_table: this.table,
+      __stack_pointer: this.stackPointer,
+      __memory_base: i32(this.memoryBase),
+      __table_base: i32(TABLE_BASE),
+      __c_longjmp: this.cLongjmp as unknown as WebAssembly.ImportValue,
+      __cpp_exception: this.cppException as unknown as WebAssembly.ImportValue,
     };
+    const gotMem: Record<string, WebAssembly.Global> = {
+      __stack_high: got(this.stackHigh),
+      __stack_low: got(this.stackLow),
+      __heap_base: got(this.stackHigh),
+    };
+    const gotFunc: Record<string, WebAssembly.Global> = {};
+    this.mainGot = [];
+
+    for (const imp of WebAssembly.Module.imports(module)) {
+      if (imp.module === 'env' && imp.kind === 'function' && !(imp.name in env)) {
+        env[imp.name] = this.functionImport(imp.name);
+      } else if (imp.module === 'GOT.func' || (imp.module === 'GOT.mem' && !(imp.name in gotMem))) {
+        const g = got(0);
+        (imp.module === 'GOT.func' ? gotFunc : gotMem)[imp.name] = g;
+        const kind = imp.module;
+        this.mainGot.push(() => {
+          g.value = kind === 'GOT.func' ? this.slotOrNull(imp.name) : this.addressOrNull(imp.name);
+        });
+      }
+    }
+    return { env, 'GOT.mem': gotMem, 'GOT.func': gotFunc };
+  }
+
+  bindMainGot(): void {
+    for (const resolve of this.mainGot) resolve();
   }
 
   bindMain(instance: WebAssembly.Instance, relocate: boolean): void {
@@ -242,16 +262,13 @@ export class WasixLinker {
         gotMem[imp.name] = g;
 
         pending.push(() => {
-          g.value = this.address(imp.name);
+          g.value = this.addressOrNull(imp.name);
         });
       } else if (imp.module === 'GOT.func') {
         const g = new WebAssembly.Global({ value: 'i32', mutable: true }, 0);
         gotFunc[imp.name] = g;
         pending.push(() => {
-          const found = this.find(imp.name);
-          if (!found || typeof found[1] !== 'function')
-            throw new DlError(`undefined function: ${imp.name}`);
-          g.value = this.slot(found[1], found[0], imp.name);
+          g.value = this.slotOrNull(imp.name);
         });
       }
     }
@@ -281,19 +298,25 @@ export class WasixLinker {
     return (...args: unknown[]) => {
       if (!resolved) {
         const later = this.find(name);
+
         if (!later || typeof later[1] !== 'function')
-          throw new DlError(`undefined symbol: ${name}`);
+          throw new WebAssembly.RuntimeError(`unresolved symbol ${name}`);
         resolved = later[1] as (...args: unknown[]) => unknown;
       }
       return resolved(...args);
     };
   }
 
-  private address(name: string): number {
+  private addressOrNull(name: string): number {
     const found = this.find(name);
-    if (!found || !(found[1] instanceof WebAssembly.Global))
-      throw new DlError(`undefined data: ${name}`);
+    if (!found || !(found[1] instanceof WebAssembly.Global)) return 0;
     return this.baseOf(found[0]) + (found[1].value as number);
+  }
+
+  private slotOrNull(name: string): number {
+    const found = this.find(name);
+    if (!found || typeof found[1] !== 'function') return 0;
+    return this.slot(found[1], found[0], name);
   }
 
   private find(name: string): [number, unknown] | undefined {
