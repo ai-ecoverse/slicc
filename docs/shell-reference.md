@@ -612,6 +612,62 @@ Python packages reach the native interpreter through their manifests:
 - C extensions load with WASIX `dlopen` (`docs/kernel/process-model.md`,
   **Dynamic linking**).
 
+### Go: `go build` and `go run` over a Go toolchain package
+
+Go's own `go` command cannot start its compiler and linker under WASI
+(wasip1 has no processes), so `go` is SLICC's driver
+(`supplemental-commands/go/`). It plans the build the way `go/build` does,
+then runs the toolchain's `compile` and `link`, which are WASI programs, as
+realm processes:
+
+- `go build [-o out] [-v] [-x] [-tags …] [-gcflags …] [-ldflags …] [packages | files]`
+  and `go run [build flags] package|files [args]`. The packages can be `.`,
+  `./dir`, `./...`, an import path in the main module, or `.go` files.
+- `go version` and `go env [VAR…]`.
+- **Target**: `GOOS=wasip1 GOARCH=wasm` unless the environment sets
+  `GOOS`/`GOARCH`. A wasip1 program runs here (`./prog` in GNU bash,
+  `wasm ./prog`, `go run`). Other targets cross-compile when their standard
+  library is installed, but `go run` refuses them. The output is written
+  0755; windows gets `.exe`.
+- **What builds**: the standard library, which comes precompiled, and the main
+  module's own packages. Files are picked as `go build` picks them:
+  `_test.go` files are left out, `_GOOS` / `_GOARCH` name suffixes and
+  `//go:build` lines are honoured, and `-tags` adds tags. It builds with
+  `CGO_ENABLED=0`.
+- **What does not build yet**, with an error that says so: `import "C"`,
+  `//go:embed`, assembly or C sources for the target, and imports from other
+  modules (nothing is downloaded).
+- **Errors** read as go's: `# example.com/m` and then `./main.go:5:2: …`.
+  `go run` of a program that fails prints `exit status N` and exits 1.
+
+A toolchain package declares what it holds in its manifest:
+
+```json
+"slicc": { "go": {
+  "version": "go1.26.5",
+  "goroot": "goroot",
+  "std": [{ "target": "wasip1/wasm", "dir": "goroot/pkg/wasip1_wasm" }]
+} }
+```
+
+- `goroot` (default: the package root) is a GOROOT whose
+  `pkg/tool/wasip1_wasm/compile` and `link` (and `asm`) are WASI preview1
+  modules, built for `GOOS=wasip1 GOARCH=wasm` with `CGO_ENABLED=0`. The
+  names carry no extension, as in Go's own layout.
+- Each `std` entry is a directory of archives for one target, one per package:
+  `<import path>.a` (`fmt.a`, `internal/abi.a`,
+  `vendor/golang.org/x/net/dns/dnsmessage.a`). These are the files
+  `go list -export std` names for that target, which hold export data and
+  object code. An entry's `version` defaults to the toolchain's, and only
+  archives of the toolchain's own version are used.
+- Any installed package may declare `std` entries without a toolchain, so one
+  target's standard library can be split across packages (to stay under the
+  package size cap). The driver takes the union; where two parts hold the same
+  package, the first wins.
+- The package must not list `go`, `compile` or `link` among its
+  `slicc.commands`. `go` is the driver.
+- `unsafe` has no archive (the compiler provides it).
+
 ### `hf download` fetches several files at once
 
 `hf download` (`hf-command.ts` over `hf-download.ts`) runs a bounded pool: at
