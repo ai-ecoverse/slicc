@@ -2919,14 +2919,19 @@ export class VirtualFS {
     // Same inode (case / NFC-NFD / hardlink) on LightningFS / copy paths:
     // POSIX no-op. Must not notify watchers, and must not fall through to a
     // copy that O_TRUNCs dest before source is read (#3107).
+    let newStat: Stats | undefined;
     if (oldStat) {
       try {
-        const newStat = await this.lstat(normalizedNew);
+        newStat = await this.lstat(normalizedNew);
         if (sameFileIdentity(oldStat, newStat)) return;
       } catch {
         /* dest missing — real rename */
       }
     }
+    // POSIX rename replaces any non-directory at the destination; the store
+    // backend replaces only a regular file (a symlink there is EISDIR), so
+    // `ln -sf` / `mv -f` onto a link failed. The link goes first.
+    const replacesLink = newStat?.type === 'symlink' && entryType !== 'directory';
     try {
       // Mutation, prefix marks, and eager persist share ONE critical
       // section, matching rm/symlink: marking after an unlocked rename
@@ -2941,6 +2946,7 @@ export class VirtualFS {
         await this.dropSidecarConsistency();
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
+        if (replacesLink) await this.lfs.unlink(normalizedNew);
         await this.lfs.rename(normalizedOld, normalizedNew);
         await this.writeOpfsMetadataSidecarUnlocked();
       });
