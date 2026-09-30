@@ -47,6 +47,7 @@ import {
 } from './lifecycle.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
+  lastTurnProviderError,
   parseModelSpec,
   parseSkillsCondition,
   restoreSkills,
@@ -492,6 +493,16 @@ async function runOne(r, ctx) {
   if (tx && !tx.ok && [tx.reason, tx.detail].some((s) => /leader-down/.test(s ?? ''))) {
     failInto(record, 'collect', new Error(`transcript lost: the leader went down (${tx.stage})`));
     record.leader_down = true;
+    return { record, result };
+  }
+  // Likewise a run whose last agent turn died on a provider error: retry it, don't judge it.
+  const providerError = lastTurnProviderError(result);
+  if (providerError) {
+    failInto(
+      record,
+      'agent',
+      new Error(`the last agent turn ended on a provider error: ${providerError}`)
+    );
     return { record, result };
   }
   if (judge) {

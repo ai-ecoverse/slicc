@@ -123,6 +123,20 @@ export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhig
 export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /**
+ * The provider error the run's last agent turn ended on, or null. A cone turn that died on a
+ * Bedrock 5xx, throttling or proxy failure left the task unfinished; judging it scores the outage,
+ * not the agent (on 2026-09-30 a Bedrock incident killed 30–53% of the GPT-6.1 Sol @high/@max runs,
+ * which were then judged at about 0.2).
+ */
+export function lastTurnProviderError(result) {
+  // The cone's conversation, selected by kind as in lastConeAssistantText: a scoop can be listed first.
+  const cone = (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
+  const last = (cone?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
+  if (last?.stopReason !== 'error') return null;
+  return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
+}
+
+/**
  * A bench model spec. `alias@level` names a thinking variant; a plain alias,
  * and an explicit `@default`, leave the leader's level alone. `spec` is what
  * records store as `config.model` (a plain alias stays plain, so older runs
