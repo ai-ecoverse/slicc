@@ -51,7 +51,7 @@ import { createKillCommand } from './kill-command.js';
 import { createLayoutCommand } from './layout-command.js';
 import { createLocalLlmCommand } from './local-llm-command.js';
 import { createManCommand } from './man-command.js';
-import { createMcpCommand } from './mcp-command.js';
+import { createMcpCommand, type McpCommandDeps } from './mcp-command.js';
 import { createMeminfoCommand } from './meminfo-command.js';
 import { createMemoryCommand } from './memory-command.js';
 import { createMktempCommand } from './mktemp-command.js';
@@ -220,12 +220,22 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   terminal?: TerminalPort;
   /** The shell's command policy for programs a wasm process runs natively. */
   gateNativeCommand?: NativeGate;
+  /** Shared MCP connection manager for live tool sessions. */
+  mcpConnectionManager?: import('../mcp/connection-manager.js').McpConnectionManager;
 }
 
 /**
  * `secret` deps: the paired shell-env hooks plus the SAME sudo broker the rest
  * of the shell uses (never a locally constructed one — see `secret-command.ts`).
  */
+function mcpCommandDeps(options: SupplementalCommandsConfig): McpCommandDeps {
+  return {
+    fs: options.fs,
+    scriptCatalog: options.scriptCatalog,
+    connectionManager: options.mcpConnectionManager,
+  };
+}
+
 function secretCommandDeps(options: SupplementalCommandsConfig): SecretCommandDeps {
   return {
     setEnv: options.setEnv,
@@ -327,7 +337,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWebhookCommand(options.webhook),
     createWebsocatCommand(),
     createCrontaskCommand(options.crontask),
-    createMcpCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
+    createMcpCommand(mcpCommandDeps(options)),
     createPluginCommand({ fs: options.fs, fetch: options.fetch }),
     createFsWatchCommand(),
     createSprinkleCommand(),

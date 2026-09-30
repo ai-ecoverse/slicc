@@ -2321,3 +2321,223 @@ describe('mcp auth', () => {
     expect(r.stderr).toContain('401');
   });
 });
+
+// ── mcp list --json ───────────────────────────────────────────────
+
+describe('mcp list --json', () => {
+  beforeEach(async () => {
+    await wipeGlobalFs();
+    _testOnly_resetStoreCache();
+    _testOnly_resetMcpProviderState();
+  });
+  afterEach(async () => {
+    _testOnly_resetMcpProviderState();
+    await wipeGlobalFs();
+  });
+
+  it('--json returns empty array when no servers', async () => {
+    const r = await runCmd(['list', '--json']);
+    expect(r.exitCode).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual([]);
+  });
+
+  it('--json includes exposure and transport fields', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await setServer(
+      'demo',
+      {
+        url: 'https://demo.test/mcp',
+        exposure: 'direct',
+        transport: 'pi',
+        tools: [{ name: 't1', description: 'Tool 1' }],
+        addedAt: '2026-01-01T00:00:00Z',
+      },
+      fs
+    );
+    const r = await runCmd(['list', '--json'], { fs });
+    expect(r.exitCode).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].name).toBe('demo');
+    expect(parsed[0].exposure).toBe('direct');
+    expect(parsed[0].transport).toBe('pi');
+    expect(parsed[0].tools).toBe(1);
+  });
+
+  it('table output includes STATE and EXPOSURE columns', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await setServer('demo', { url: 'https://demo.test/mcp' }, fs);
+    const r = await runCmd(['list'], { fs });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('STATE');
+    expect(r.stdout).toContain('EXPOSURE');
+    expect(r.stdout).toContain('TRANSPORT');
+  });
+
+  it('--json help text is shown', async () => {
+    const r = await runCmd(['list', '--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('--json');
+  });
+});
+
+// ── mcp exposure ──────────────────────────────────────────────────
+
+describe('mcp exposure', () => {
+  beforeEach(async () => {
+    await wipeGlobalFs();
+    _testOnly_resetStoreCache();
+  });
+  afterEach(async () => {
+    await wipeGlobalFs();
+  });
+
+  it('--help shows usage', async () => {
+    const r = await runCmd(['exposure', '--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('usage: mcp exposure');
+  });
+
+  it('no args → error', async () => {
+    const r = await runCmd(['exposure']);
+    expect(r.exitCode).toBe(1);
+  });
+
+  it('rejects invalid mode', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await setServer('demo', { url: 'https://demo.test/mcp' }, fs);
+    const r = await runCmd(['exposure', 'demo', 'invalid'], { fs });
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('invalid mode');
+  });
+
+  it('sets server-level exposure', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await setServer('demo', { url: 'https://demo.test/mcp' }, fs);
+    const r = await runCmd(['exposure', 'demo', 'direct'], { fs });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('direct');
+    const stored = await readServersFile(fs);
+    expect(stored.servers.demo.exposure).toBe('direct');
+  });
+
+  it('sets per-tool exposure with --tool', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await setServer('demo', { url: 'https://demo.test/mcp' }, fs);
+    const r = await runCmd(['exposure', 'demo', 'hidden', '--tool', 'delete_*'], { fs });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('delete_*');
+    const stored = await readServersFile(fs);
+    expect(stored.servers.demo.toolExposure?.['delete_*']).toBe('hidden');
+  });
+
+  it('errors on unknown server', async () => {
+    const r = await runCmd(['exposure', 'nonexistent', 'direct']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('unknown server');
+  });
+});
+
+// ── mcp import ────────────────────────────────────────────────────
+
+describe('mcp import', () => {
+  beforeEach(async () => {
+    await wipeGlobalFs();
+    _testOnly_resetStoreCache();
+  });
+  afterEach(async () => {
+    await wipeGlobalFs();
+  });
+
+  it('--help shows usage', async () => {
+    const r = await runCmd(['import', '--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('usage: mcp import');
+  });
+
+  it('no args → error', async () => {
+    const r = await runCmd(['import']);
+    expect(r.exitCode).toBe(1);
+  });
+
+  it('imports url-based servers and skips stdio', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    const configContent = JSON.stringify({
+      mcpServers: {
+        weather: { url: 'https://weather.test/mcp' },
+        local: { command: 'node', args: ['server.js'] },
+      },
+    });
+    await fs.mkdir('/tmp', { recursive: true });
+    await fs.writeFile('/tmp/config.json', configContent);
+    const r = await runCmd(['import', '/tmp/config.json'], { fs });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('1 added');
+    expect(r.stdout).toContain('1 skipped');
+    expect(r.stdout).toContain('weather');
+    expect(r.stdout).toContain('stdio');
+    const stored = await readServersFile(fs);
+    expect(stored.servers.weather).toBeDefined();
+    expect(stored.servers.weather.url).toBe('https://weather.test/mcp');
+    expect(stored.servers.local).toBeUndefined();
+  });
+
+  it('skips servers that already exist', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await setServer('weather', { url: 'https://existing.test/mcp' }, fs);
+    const configContent = JSON.stringify({
+      mcpServers: {
+        weather: { url: 'https://weather.test/mcp' },
+      },
+    });
+    await fs.mkdir('/tmp', { recursive: true });
+    await fs.writeFile('/tmp/config.json', configContent);
+    const r = await runCmd(['import', '/tmp/config.json'], { fs });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('0 added');
+    expect(r.stdout).toContain('1 skipped');
+    expect(r.stdout).toContain('already exists');
+  });
+
+  it('errors on missing file', async () => {
+    const r = await runCmd(['import', '/nonexistent.json']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('cannot read');
+  });
+
+  it('errors on invalid JSON', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.mkdir('/tmp', { recursive: true });
+    await fs.writeFile('/tmp/bad.json', 'not json');
+    const r = await runCmd(['import', '/tmp/bad.json'], { fs });
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('not valid JSON');
+  });
+});
+
+// ── mcp invoke --json ─────────────────────────────────────────────
+
+describe('mcp invoke --json', () => {
+  beforeEach(async () => {
+    await wipeGlobalFs();
+    _testOnly_resetStoreCache();
+    _testOnly_resetMcpProviderState();
+  });
+  afterEach(async () => {
+    _testOnly_resetMcpProviderState();
+    await wipeGlobalFs();
+  });
+
+  it('invoke help text mentions --json', async () => {
+    const r = await runCmd(['invoke', '--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('--json');
+  });
+
+  it('top-level help mentions exposure and import subcommands', async () => {
+    const r = await runCmd(['--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('exposure');
+    expect(r.stdout).toContain('import');
+  });
+});
