@@ -335,13 +335,21 @@ function decode(content: string | ArrayBuffer): string {
   return typeof content === 'string' ? content : new TextDecoder().decode(content);
 }
 
-function toBytes(content: string | ArrayBuffer): Uint8Array {
-  return typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
+/**
+ * Bytes on a concrete `ArrayBuffer`.
+ *
+ * TS lib `BlobPart` rejects `Uint8Array<ArrayBufferLike>` (a view that might
+ * sit on a SharedArrayBuffer). Copying onto a fresh buffer keeps `new Blob`
+ * and the data-URL fallback type-clean without casts.
+ */
+function toBytes(content: string | ArrayBuffer): Uint8Array<ArrayBuffer> {
+  if (typeof content === 'string') return new TextEncoder().encode(content);
+  const bytes = new Uint8Array(new ArrayBuffer(content.byteLength));
+  bytes.set(new Uint8Array(content));
+  return bytes;
 }
 
 function toBlob(content: string | ArrayBuffer, mime: string): Blob {
-  // Always pass a view: some Blob implementations (and TypeScript's BlobPart)
-  // reject a bare ArrayBuffer while accepting the same bytes as a Uint8Array.
   return new Blob([toBytes(content)], { type: mime });
 }
 
