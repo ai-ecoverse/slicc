@@ -54,9 +54,11 @@ function orphanContents(stream: ProcessStream): Uint8Array | undefined {
 
 /**
  * Hands the program's open VFS files to the kernel as shared descriptions,
- * one per Emscripten description (`shared`): dups stay one description.
+ * one per Emscripten description (`shared`): dups stay one description. A
+ * fork's whole table, a spawn's inherited fds, and a spawn's stdio (a shell's
+ * redirect) each take one.
  */
-function vfsPromoter(
+export function vfsPromoter(
   Fs: ProcessFs,
   sys: ProcessSys,
   streams: KernelStreams,
