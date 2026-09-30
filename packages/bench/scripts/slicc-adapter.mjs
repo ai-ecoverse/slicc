@@ -79,6 +79,13 @@ export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhig
 
 export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
+export function lastTurnProviderError(result) {
+  const cone = (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
+  const last = (cone?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
+  if (last?.stopReason !== 'error') return null;
+  return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
+}
+
 export function parseModelSpec(spec) {
   const text = String(spec).trim();
   const at = text.lastIndexOf('@');

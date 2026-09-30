@@ -1507,3 +1507,23 @@ describe('runIdFor', () => {
     );
   });
 });
+
+describe('provider errors', () => {
+  it('retries a run whose last agent turn died on a provider error instead of keeping it', () => {
+    const task = { id: 't', task: 'x', slicc: {} };
+    const record = {
+      digests: taskDigests(task),
+      error: 'the last agent turn ended on a provider error: 500',
+      error_stage: 'agent',
+      config: {},
+    };
+    expect(
+      resumeAction(record, task, {
+        judge: true,
+        judgeModel: 'j',
+        traceExists: true,
+        defaultSkills: undefined,
+      })
+    ).toBe('run');
+  });
+});

@@ -13,6 +13,7 @@ import {
   exportTranscriptCommand,
   FINAL_INSTRUCTION,
   FLAGS_PROBE,
+  lastTurnProviderError,
   leaderHealth,
   NO_DEFAULT_SKILLS_MISSING,
   PROMPT_ALL_SETTLED,
@@ -2074,5 +2075,35 @@ describe('a prompt that returns while the agent still works', () => {
       capture: { pollMs: 5 },
     });
     expect(result).toMatchObject({ exitCode: 0, finalText: '' });
+  });
+});
+
+describe('lastTurnProviderError', () => {
+  const cone = (...messages) => ({ kind: 'cone', messages });
+  const scoop = (...messages) => ({ kind: 'scoop', messages });
+  const run = (...conversations) => ({ transcript: { conversations } });
+  const dead = {
+    role: 'assistant',
+    stopReason: 'error',
+    errorMessage: 'Internal server error: Bedrock',
+  };
+  const done = { role: 'assistant', stopReason: 'stop' };
+  it('names the error the cone died on, and ignores recovered errors and scoops', () => {
+    expect(lastTurnProviderError(run(cone({ role: 'user' }, dead)))).toBe(
+      'Internal server error: Bedrock'
+    );
+
+    expect(lastTurnProviderError(run(cone(dead, done)))).toBeNull();
+
+    expect(lastTurnProviderError(run(scoop(dead), cone(done)))).toBeNull();
+    expect(lastTurnProviderError(run(cone(done), scoop(dead)))).toBeNull();
+
+    expect(lastTurnProviderError(run(scoop(done), cone(dead)))).toBe(
+      'Internal server error: Bedrock'
+    );
+    expect(lastTurnProviderError({})).toBeNull();
+    expect(lastTurnProviderError(run(cone({ role: 'assistant', stopReason: 'error' })))).toBe(
+      'provider error'
+    );
   });
 });
