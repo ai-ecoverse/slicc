@@ -172,17 +172,17 @@ export class McpConnectionManager {
 
     try {
       await client.initialize();
-      log.debug('transport probe: slicc client succeeded', { serverName });
-      return 'slicc';
-    } catch (err) {
-      const code =
-        err && typeof err === 'object' && 'rpcError' in err
-          ? (err as { rpcError?: { code?: number } }).rpcError?.code
-          : undefined;
-      if (code === -32601 || (err instanceof Error && err.message.includes('HTTP 4'))) {
-        log.debug('transport probe: falling back to pi-mcp', { serverName });
-        return 'pi';
+      const version = client.getNegotiatedProtocolVersion();
+      if (version === '2026-07-28') {
+        log.debug('transport probe: slicc modern protocol', { serverName, version });
+        return 'slicc';
       }
+      log.debug('transport probe: legacy protocol, using pi-mcp for GET stream + notifications', {
+        serverName,
+        version,
+      });
+      return 'pi';
+    } catch (err) {
       log.debug('transport probe: slicc error, defaulting to pi-mcp', {
         serverName,
         error: err instanceof Error ? err.message : String(err),
@@ -276,7 +276,8 @@ export class McpConnectionManager {
       async listTools() {
         return client.toolsList();
       },
-      async callTool(name, args) {
+      async callTool(name, args, options) {
+        if (options?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
         const result = await client.toolsCall(name, args);
         return normalizeCallToolResult(result);
       },
@@ -354,22 +355,30 @@ export function resolveToolExposure(
   toolExposure: Record<string, McpExposureMode> | undefined
 ): McpExposureMode {
   if (toolExposure) {
+    let bestMatch: { specificity: number; index: number; mode: McpExposureMode } | undefined;
     const entries = Object.entries(toolExposure);
-    for (let i = entries.length - 1; i >= 0; i--) {
+    for (let i = 0; i < entries.length; i++) {
       const [pattern, mode] = entries[i];
-      if (matchGlob(pattern, toolName)) return mode;
+      const specificity = matchGlob(pattern, toolName);
+      if (specificity < 0) continue;
+      if (
+        !bestMatch ||
+        specificity > bestMatch.specificity ||
+        (specificity === bestMatch.specificity && i > bestMatch.index)
+      ) {
+        bestMatch = { specificity, index: i, mode };
+      }
     }
+    if (bestMatch) return bestMatch.mode;
   }
   return serverExposure ?? 'codemode';
 }
 
-function matchGlob(pattern: string, name: string): boolean {
-  if (pattern === '*') return true;
-  if (pattern === name) return true;
-  if (pattern.endsWith('*')) {
-    return name.startsWith(pattern.slice(0, -1));
-  }
-  return false;
+function matchGlob(pattern: string, name: string): number {
+  if (pattern === name) return 2;
+  if (pattern === '*') return 0;
+  if (pattern.endsWith('*') && name.startsWith(pattern.slice(0, -1))) return 1;
+  return -1;
 }
 
 // ── Tool name sanitization (Pi convention) ───────────────────────────
@@ -381,4 +390,25 @@ export function mcpAgentToolName(serverName: string, toolName: string): string {
   const raw = `mcp__${serverName}__${toolName}`;
   const sanitized = raw.replace(TOOL_NAME_RE, '_');
   return sanitized.length <= MAX_TOOL_NAME_LEN ? sanitized : sanitized.slice(0, MAX_TOOL_NAME_LEN);
+}
+
+export function deduplicateToolNames(names: string[]): Map<string, string> {
+  const seen = new Map<string, number>();
+  const result = new Map<string, string>();
+  for (const name of names) {
+    const count = seen.get(name) ?? 0;
+    if (count > 0) {
+      const suffix = `_${count}`;
+      const deduped =
+        name.length + suffix.length <= MAX_TOOL_NAME_LEN
+          ? name + suffix
+          : name.slice(0, MAX_TOOL_NAME_LEN - suffix.length) + suffix;
+      result.set(name + `#${count}`, deduped);
+      log.warn('MCP tool name collision after sanitization', { original: name, deduped });
+    } else {
+      result.set(name + '#0', name);
+    }
+    seen.set(name, count + 1);
+  }
+  return result;
 }

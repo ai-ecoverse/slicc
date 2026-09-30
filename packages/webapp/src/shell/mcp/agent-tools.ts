@@ -159,34 +159,57 @@ async function truncateContent(
   toolCallId: string,
   writeOverflow?: (id: string, text: string) => Promise<void>
 ): Promise<ContentBlock[]> {
-  return Promise.all(
-    content.map(async (block) => {
-      if (block.type !== 'text') return block;
-      const bytes = new TextEncoder().encode(block.text).length;
-      if (bytes <= MCP_TEXT_TRUNCATION_BYTES) return block;
+  const encoder = new TextEncoder();
+  let totalTextBytes = 0;
+  for (const block of content) {
+    if (block.type === 'text') totalTextBytes += encoder.encode(block.text).length;
+  }
+  if (totalTextBytes <= MCP_TEXT_TRUNCATION_BYTES) return content;
 
-      const half = Math.floor(MCP_TEXT_TRUNCATION_BYTES / 2);
-      const encoder = new TextEncoder();
-      const fullBytes = encoder.encode(block.text);
-      const head = new TextDecoder().decode(fullBytes.slice(0, half));
-      const tail = new TextDecoder().decode(fullBytes.slice(fullBytes.length - half));
+  let budget = MCP_TEXT_TRUNCATION_BYTES;
+  const result: ContentBlock[] = [];
+  let overflowWritten = false;
+
+  for (const block of content) {
+    if (block.type !== 'text') {
+      result.push(block);
+      continue;
+    }
+    const blockBytes = encoder.encode(block.text);
+    if (blockBytes.length <= budget) {
+      budget -= blockBytes.length;
+      result.push(block);
+      continue;
+    }
+
+    if (!overflowWritten && writeOverflow) {
+      overflowWritten = true;
       const id = toolCallId.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const marker = TRUNCATION_MARKER.replace('{id}', id);
-
-      if (writeOverflow) {
-        try {
-          await writeOverflow(id, block.text);
-        } catch (err) {
-          log.debug('failed to write MCP overflow', {
-            id,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+      const fullText = content
+        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n');
+      try {
+        await writeOverflow(id, fullText);
+      } catch (err) {
+        log.debug('failed to write MCP overflow', {
+          id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
+    }
 
-      return { type: 'text' as const, text: head + marker + tail };
-    })
-  );
+    if (budget <= 0) continue;
+    const half = Math.floor(budget / 2);
+    const head = new TextDecoder().decode(blockBytes.slice(0, half));
+    const tail = new TextDecoder().decode(blockBytes.slice(blockBytes.length - half));
+    const id = toolCallId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const marker = TRUNCATION_MARKER.replace('{id}', id);
+    result.push({ type: 'text' as const, text: head + marker + tail });
+    budget = 0;
+  }
+
+  return result;
 }
 
 export type { McpExposureMode };

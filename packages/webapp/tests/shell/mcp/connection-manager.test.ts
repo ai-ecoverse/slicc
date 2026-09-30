@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  deduplicateToolNames,
   type McpConnection,
   McpConnectionManager,
   mcpAgentToolName,
@@ -81,10 +82,23 @@ describe('resolveToolExposure', () => {
     expect(resolveToolExposure('anything', 'codemode', { '*': 'hidden' })).toBe('hidden');
   });
 
-  it('last matching pattern wins', () => {
+  it('more-specific pattern wins regardless of order', () => {
     expect(resolveToolExposure('get-data', 'codemode', { '*': 'hidden', 'get-*': 'direct' })).toBe(
       'direct'
     );
+    expect(resolveToolExposure('get-data', 'codemode', { 'get-*': 'direct', '*': 'hidden' })).toBe(
+      'direct'
+    );
+  });
+
+  it('exact match beats prefix glob', () => {
+    expect(
+      resolveToolExposure('delete_all', 'codemode', { '*': 'direct', delete_all: 'hidden' })
+    ).toBe('hidden');
+  });
+
+  it('non-matching pattern falls through to server default', () => {
+    expect(resolveToolExposure('list-items', 'direct', { 'get-*': 'hidden' })).toBe('direct');
   });
 });
 
@@ -179,5 +193,30 @@ describe('McpConnectionManager', () => {
     unsub();
     // Internal: verify the listener set is empty
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+// ── deduplicateToolNames ────────────────────────────────────────────
+
+describe('deduplicateToolNames', () => {
+  it('passes unique names through unchanged', () => {
+    const result = deduplicateToolNames(['mcp__a__foo', 'mcp__b__bar']);
+    expect(result.get('mcp__a__foo#0')).toBe('mcp__a__foo');
+    expect(result.get('mcp__b__bar#0')).toBe('mcp__b__bar');
+  });
+
+  it('appends _N suffix for collisions', () => {
+    const result = deduplicateToolNames(['mcp__a__tool', 'mcp__a__tool']);
+    expect(result.get('mcp__a__tool#0')).toBe('mcp__a__tool');
+    expect(result.get('mcp__a__tool#1')).toBe('mcp__a__tool_1');
+  });
+
+  it('truncates deduplicated name to 64 chars', () => {
+    const longName = 'mcp__' + 'x'.repeat(59);
+    expect(longName.length).toBe(64);
+    const result = deduplicateToolNames([longName, longName]);
+    const deduped = result.get(longName + '#1')!;
+    expect(deduped.length).toBeLessThanOrEqual(64);
+    expect(deduped.endsWith('_1')).toBe(true);
   });
 });

@@ -10,9 +10,15 @@
  * to be read alongside the retry loop.
  */
 
+import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { BlindReadLog } from '../../base/blind-reads.js';
 import { providerLabel } from '../../base/provider-labels.js';
-import { adaptTools, createLogger, type ToolAdapterGateConfig } from '../../core/index.js';
+import {
+  adaptTools,
+  createLogger,
+  type ToolAdapterGateConfig,
+  type ToolAdapterSecretsConfig,
+} from '../../core/index.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
@@ -231,7 +237,8 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
     : adaptTools(legacyTools, undefined, secretsConfig, gateConfig);
 
   const mcpTools = await buildMcpAgentTools(deps.fs, scoop);
-  return [...adapted, ...mcpTools];
+  const gatedMcpTools = wrapMcpToolsWithGateAndScrub(mcpTools, gateConfig, secretsConfig);
+  return [...adapted, ...gatedMcpTools];
 }
 
 async function buildMcpAgentTools(
@@ -264,7 +271,13 @@ async function buildMcpAgentTools(
 
     for (const [name, entry] of relevantEntries) {
       try {
-        const { connection } = await manager.connect(name, entry);
+        const { connection, transport } = await manager.connect(name, entry);
+        if (transport !== entry.transport) {
+          entry.transport = transport;
+          import('../../shell/mcp/store.js')
+            .then(({ setServer }) => setServer(name, entry, fs))
+            .catch(() => {});
+        }
         const tools = entry.tools ?? (await connection.listTools());
         const piTools = (tools as import('@earendil-works/pi-mcp').Tool[]) ?? [];
 
@@ -326,6 +339,75 @@ async function buildCodemodeTool(
     });
     return null;
   }
+}
+
+async function checkMcpToolGate(
+  toolName: string,
+  params: unknown,
+  gateConfig: ToolAdapterGateConfig,
+  signal?: AbortSignal
+): Promise<AgentToolResult | null> {
+  const gate = gateConfig.currentGate();
+  if (!gate) return null;
+  if (signal?.aborted) {
+    return {
+      content: [{ type: 'text', text: `${toolName}: not approved (guest-caused turn).` }],
+      details: undefined,
+    };
+  }
+  let allowed: boolean;
+  try {
+    allowed = await gate.approve(toolName, params);
+  } catch {
+    allowed = false;
+  }
+  if (!allowed || signal?.aborted) {
+    return {
+      content: [{ type: 'text', text: `${toolName}: not approved (guest-caused turn).` }],
+      details: undefined,
+    };
+  }
+  return null;
+}
+
+async function scrubMcpToolResult(
+  result: AgentToolResult,
+  scrub: ToolAdapterSecretsConfig['scrubToolResult']
+): Promise<void> {
+  if (!scrub) return;
+  for (let i = 0; i < result.content.length; i++) {
+    const block = result.content[i];
+    if (block.type === 'text' && 'text' in block && typeof block.text === 'string') {
+      try {
+        const scrubbed = await scrub(block.text);
+        if (scrubbed !== block.text) result.content[i] = { type: 'text', text: scrubbed };
+      } catch {
+        // leave unscrubbed rather than crash
+      }
+    }
+  }
+}
+
+function wrapMcpToolsWithGateAndScrub(
+  tools: AgentTool[],
+  gateConfig: ToolAdapterGateConfig,
+  secretsConfig: ToolAdapterSecretsConfig
+): AgentTool[] {
+  return tools.map((tool) => ({
+    ...tool,
+    async execute(
+      toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal,
+      onUpdate?: (partialResult: AgentToolResult) => void
+    ): Promise<AgentToolResult> {
+      const denied = await checkMcpToolGate(tool.name, params, gateConfig, signal);
+      if (denied) return denied;
+      const result = await tool.execute(toolCallId, params, signal, onUpdate);
+      await scrubMcpToolResult(result, secretsConfig.scrubToolResult);
+      return result;
+    },
+  }));
 }
 
 function hasExposureOverrides(entry: import('../../shell/mcp/types.js').McpServerEntry): boolean {
