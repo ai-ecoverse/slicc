@@ -146,6 +146,37 @@ describe('createProcessKernel', () => {
     expect(calls).toHaveLength(3);
   });
 
+  it("hands a stdio slot on a VFS file over as the file itself (a shell's > / <): no capture, no wait", () => {
+    const order: string[] = [];
+    const { t, calls } = transport(() => json(11));
+    const { Fs } = fs('file-data');
+    // Streams 5 and 6 stand for VFS files: the promoter hands them to the kernel.
+    const promote = vi.fn((stream: ProcessStream) => {
+      order.push(`promote ${stream.fd}`);
+      if (stream.fd === 5 || stream.fd === 6) stream.sliccKernelFd = 30 + stream.fd;
+    });
+    const k = createProcessKernel({
+      transport: t,
+      Fs,
+      env: {},
+      beforeSpawn: () => order.push('flush'),
+      afterChild: vi.fn(),
+      describeFork: vi.fn((): ForkStream[] => []),
+      stdioPromoter: () => promote,
+    });
+    // `< in > out 2>&1`: stdin 5, stdout and stderr both 6.
+    expect(k.spawn('wc', ['wc'], null, null, [5, 6, 6])).toBe(11);
+    expect((calls[0] as unknown as { stdio: unknown[] }).stdio).toEqual([
+      { fd: 35 },
+      { fd: 36 },
+      { fd: 36 },
+    ]);
+    // Concurrent: the spawn returns without waiting for the child or collecting output.
+    expect(calls.map((c) => c.op)).toEqual(['proc-spawn']);
+    // What the program wrote is flushed before the file is handed over.
+    expect(order).toEqual(['flush', 'promote 5', 'promote 6', 'promote 6']);
+  });
+
   it('returns a negative WASI errno when the kernel refuses', () => {
     const { k } = kernel(() => ({ ok: false, errno: 'ENOENT', message: 'ENOENT' }));
     expect(k.spawn('nope', ['nope'], null, null, [0, 1, 2])).toBe(-44);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { vfsFile } from '../../../src/kernel/wasm-realm/vfs-file.js';
+import { VfsNode, vfsFile, WRITEBACK_MS } from '../../../src/kernel/wasm-realm/vfs-file.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -47,6 +47,33 @@ describe('vfsFile', () => {
     expect(writes).toEqual([]);
     await Promise.resolve(file.release());
     expect(writes).toEqual([['/o', 'a\nchild\nb\n']]);
+  });
+
+  it('writes back shortly after writes while still open, so other processes see output as it comes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { fs, writes } = memFs({ '/log': '' });
+      const file = vfsFile(fs, { path: '/log', flags: O_WRONLY, position: 0 });
+      await file.file.write!(bytes('1\n'));
+      await file.file.write!(bytes('2\n'));
+      expect(writes).toEqual([]); // not per write
+      await vi.advanceTimersByTimeAsync(WRITEBACK_MS);
+      expect(writes).toEqual([['/log', '1\n2\n']]); // one write-back for both
+      await file.file.write!(bytes('3\n'));
+      await vi.advanceTimersByTimeAsync(WRITEBACK_MS);
+      expect(writes.at(-1)).toEqual(['/log', '1\n2\n3\n']);
+      // Nothing written since: no write-back, and none at close either.
+      await vi.advanceTimersByTimeAsync(WRITEBACK_MS * 4);
+      await Promise.resolve(file.release());
+      expect(writes).toHaveLength(2);
+      // An unlinked-while-open file never writes back, not even after a while.
+      const orphan = new VfsNode(fs, '/gone', bytes(''), true);
+      await orphan.pwrite(bytes('x'), 0);
+      await vi.advanceTimersByTimeAsync(WRITEBACK_MS * 4);
+      expect(writes).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps handed-over orphan contents and never writes them back', async () => {

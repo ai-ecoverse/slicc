@@ -6,10 +6,13 @@
  *
  * A child's stdio slot that is one of the program's kernel descriptors is
  * handed to the kernel as is: the child runs concurrently, and `spawn`
- * returns at once. A slot on a file or pipe inside the program's own FS
- * cannot be shared with another worker, so the child's stdin is what that
- * descriptor holds now, and its output is captured and written there once it
- * has exited — `spawn` returns after the child is done, as in the node realm.
+ * returns at once. So is one on a VFS file (a shell's `> out` / `< in`),
+ * once it is handed to the kernel as a shared description: the child gets
+ * the file itself — its type, size and offset, its writes landing as they
+ * happen. A slot on a pipe or file of the program's own memory FS cannot be
+ * shared with another worker, so the child's stdin is what that descriptor
+ * holds now, and its output is captured and written there once it has
+ * exited — `spawn` returns after the child is done, as in the node realm.
  * Beyond 0-2 the child inherits the program's fds that are not close-on-exec,
  * at the same numbers (`describeInherited`), as execve and posix_spawn do.
  */
@@ -104,6 +107,12 @@ export interface ProcessKernelDeps {
   describeFork(): ForkStream[];
   /** The fds beyond 0-2 a spawned child inherits, after `actions` (process-fork.ts). */
   inherit?(actions?: ReadonlyArray<readonly [number, number]>): InheritedSlot[];
+  /**
+   * For one spawn: hands a stdio slot's VFS file to the kernel (one kernel
+   * description per program description, so `> f 2>&1` stays one). Without
+   * it such a slot is read out or captured like any program-internal one.
+   */
+  stdioPromoter?(): (stream: ProcessStream) => void;
   /** This process's pid: kill() of itself raises the signal in place. */
   pid?: number;
   /** raise(sig) in the program. */
@@ -141,9 +150,10 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
   const call = (req: WasmSyscall, label: string): SyncFsResult =>
     transport.call(req, Infinity, label);
 
-  const slot = (fd: number, n: number): ChildStdio => {
+  const slot = (fd: number, n: number, promote?: (stream: ProcessStream) => void): ChildStdio => {
     const stream = fd >= 0 ? Fs.getStream(fd) : null;
     if (!stream) return { none: true };
+    promote?.(stream);
     if (stream.sliccKernelFd !== undefined) return { fd: stream.sliccKernelFd };
     // The module's own `/dev/null` is no output to capture: capturing makes the
     // spawn wait for the child, which a forked child about to exec must not
@@ -185,8 +195,10 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
 
   return {
     spawn(file, argv, env, cwd, fds, actions) {
-      const stdio = [0, 1, 2].map((n) => slot(fds[n] ?? -1, n));
+      // Flushed first: a VFS file handed to the kernel is what the program wrote.
       deps.beforeSpawn();
+      const promote = deps.stdioPromoter?.();
+      const stdio = [0, 1, 2].map((n) => slot(fds[n] ?? -1, n, promote));
       const inherit = deps.inherit?.(actions) ?? [];
       const r = transport.call(
         {
