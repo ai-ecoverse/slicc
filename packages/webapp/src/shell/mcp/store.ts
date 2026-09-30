@@ -136,6 +136,12 @@ export async function setServer(
   injectedFs?: MinimalFs | null
 ): Promise<McpServerEntry> {
   const file = await readServersFile(injectedFs);
+  const namespace = name.replace(/[^A-Za-z0-9_]/g, '_');
+  const clash = Object.keys(file.servers).find(
+    (other) => other !== name && other.replace(/[^A-Za-z0-9_]/g, '_') === namespace
+  );
+  if (clash)
+    throw new Error(`MCP server "${name}" conflicts with "${clash}" after name normalization`);
   const merged = normalizeEntry({ ...file.servers[name], ...entry });
   if (!merged) throw new Error('MCP server entry requires a URL');
   file.servers[name] = merged;

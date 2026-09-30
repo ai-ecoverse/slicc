@@ -124,8 +124,8 @@ describe('createCodemodeAgentTool', () => {
       tools: [makeTool(), makeTool({ name: 'alerts', description: 'Weather alerts' })],
       connection: makeConnection(),
     });
-    expect(tool!.description).toContain('`get-weather`');
-    expect(tool!.description).toContain('`alerts`');
+    expect(tool!.description).toContain('tools["get-weather"](args)');
+    expect(tool!.description).toContain('tools["alerts"](args)');
     expect(tool!.description).toContain('Weather alerts');
   });
 

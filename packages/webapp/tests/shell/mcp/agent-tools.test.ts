@@ -52,7 +52,7 @@ describe('toAgentTools', () => {
       exposure: 'direct',
     });
     expect(tools).toHaveLength(1);
-    expect(tools[0].name).toBe('mcp__weather__get-weather');
+    expect(tools[0].name).toBe('mcp__weather__get_weather');
     expect(tools[0].label).toBe('mcp:weather/get-weather');
   });
 
@@ -66,7 +66,35 @@ describe('toAgentTools', () => {
       toolExposure: { 'get-weather': 'direct' },
     });
     expect(tools).toHaveLength(1);
-    expect(tools[0].name).toBe('mcp__weather__get-weather');
+    expect(tools[0].name).toBe('mcp__weather__get_weather');
+  });
+
+  it('keeps colliding model names routed to their original wire tools', async () => {
+    const connection = makeConnection();
+    const firstPair = toAgentTools({
+      serverName: 'test-server',
+      tools: [makeTool({ name: 'read-file' }), makeTool({ name: 'read_file' })],
+      connection,
+      exposure: 'direct',
+    });
+    const thirdName = `read_file_${firstPair[0].name.slice(-8)}`;
+    const tools = toAgentTools({
+      serverName: 'test-server',
+      tools: [
+        makeTool({ name: 'read-file' }),
+        makeTool({ name: 'read_file' }),
+        makeTool({ name: thirdName }),
+      ],
+      connection,
+      exposure: 'direct',
+    });
+    expect(new Set(tools.map((tool) => tool.name)).size).toBe(3);
+    await tools[0].execute('call-1', {});
+    await tools[1].execute('call-2', {});
+    await tools[2].execute('call-3', {});
+    expect(connection.callTool).toHaveBeenNthCalledWith(1, 'read-file', {}, { signal: undefined });
+    expect(connection.callTool).toHaveBeenNthCalledWith(2, 'read_file', {}, { signal: undefined });
+    expect(connection.callTool).toHaveBeenNthCalledWith(3, thirdName, {}, { signal: undefined });
   });
 
   it('passes through inputSchema as parameters', () => {

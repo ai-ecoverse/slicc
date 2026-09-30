@@ -64,11 +64,13 @@ export function createCodemodeAgentTool(options: CodemodeToolOptions): AgentTool
   if (codemodeTools.length === 0) return null;
 
   const toolDescriptions = codemodeTools
-    .map((t) => `- \`${t.name}\`: ${t.description ?? '(no description)'}`)
+    .map(
+      (t) => `- \`tools[${JSON.stringify(t.name)}](args)\`: ${t.description ?? '(no description)'}`
+    )
     .join('\n');
 
   const description = `Run JavaScript to orchestrate MCP tool calls from server "${serverName}".
-Scripts run in a QuickJS sandbox with access to the following tools via \`tools.<name>(args)\`:
+Scripts run in a QuickJS sandbox with access to the following tools via \`tools["name"](args)\`:
 ${toolDescriptions}
 
 Top-level \`await\` and \`return\` work. No fetch, no filesystem, no timers — only tool calls.`;

@@ -747,6 +747,21 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
     expect(second.stderr).toContain('already exists');
   });
 
+  it('add: rejects a normalized server-name collision before connecting', async () => {
+    const { fetch, calls } = makeMockMcpFetch({});
+    expect(
+      (await runCmd(['add', 'https://server.test/sse', 'dev-radius'], { fetchImpl: fetch }))
+        .exitCode
+    ).toBe(0);
+    const priorCalls = calls.length;
+    const result = await runCmd(['add', 'https://server.test/sse', 'dev_radius'], {
+      fetchImpl: fetch,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('conflicts with "dev-radius"');
+    expect(calls).toHaveLength(priorCalls);
+  });
+
   it('add: validates url and name', async () => {
     const badUrl = await runCmd(['add', 'not-a-url', 'demo']);
     expect(badUrl.exitCode).toBe(1);
@@ -2335,6 +2350,7 @@ describe('mcp exposure', () => {
     const r = await runCmd(['exposure', '--help']);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('usage: mcp exposure');
+    expect(r.stdout).toContain('tools["get-weather"](args)');
   });
 
   it('no args → error', async () => {
@@ -2434,6 +2450,28 @@ describe('mcp import', () => {
     expect(r.stdout).toContain('0 added');
     expect(r.stdout).toContain('1 skipped');
     expect(r.stdout).toContain('already exists');
+  });
+
+  it('skips imported servers with colliding normalized namespaces', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.mkdir('/tmp', { recursive: true });
+    await fs.writeFile(
+      '/tmp/config.json',
+      JSON.stringify({
+        mcpServers: {
+          'dev-radius': { url: 'https://first.test/mcp' },
+          dev_radius: { url: 'https://second.test/mcp' },
+        },
+      })
+    );
+    const result = await runCmd(['import', '/tmp/config.json'], { fs });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('1 added');
+    expect(result.stdout).toContain('1 skipped');
+    expect(result.stdout).toContain('conflicts with "dev-radius"');
+    const stored = await readServersFile(fs);
+    expect(stored.servers['dev-radius']).toBeDefined();
+    expect(stored.servers.dev_radius).toBeUndefined();
   });
 
   it('errors on missing file', async () => {
