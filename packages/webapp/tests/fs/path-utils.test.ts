@@ -67,4 +67,20 @@ describe('joinPath', () => {
   it('normalizes result', () => {
     expect(joinPath('/a/', '/b/', 'c')).toBe('/a/b/c');
   });
+
+  it('joins scoped package layout segments', () => {
+    expect(joinPath('/workspace/node_modules', '@scope', 'name')).toBe(
+      '/workspace/node_modules/@scope/name'
+    );
+  });
+
+  it('joins conda-meta under a prefix', () => {
+    expect(joinPath('/shared/lib/conda', 'conda-meta', 'pkg-1.0-0.json')).toBe(
+      '/shared/lib/conda/conda-meta/pkg-1.0-0.json'
+    );
+  });
+
+  it('joins a single child under a global bin dir', () => {
+    expect(joinPath('/shared/bin', 'esbuild.jsh')).toBe('/shared/bin/esbuild.jsh');
+  });
 });

@@ -1,5 +1,6 @@
 import type { SecureFetch } from 'just-bash';
 import { FsError, type MetadataUpdate, type VirtualFS } from '../../fs/index.js';
+import { joinPath } from '../../fs/path-utils.js';
 import { normalizeFileMode } from './file-modes.js';
 import { type ExtractedCondaEntry, extractCondaArchive } from './mamba-extract.js';
 import { CONDA_META_DIR, CONDA_PREFIX, DEFAULT_CONDA_CHANNELS } from './mamba-prefix.js';
@@ -52,14 +53,6 @@ export interface InstalledCondaPackage {
   channel?: string;
   filename?: string;
   files: string[];
-}
-
-function joinPath(base: string, ...parts: string[]): string {
-  const segments = [base, ...parts]
-    .join('/')
-    .split('/')
-    .filter((p) => p.length > 0);
-  return `/${segments.join('/')}`;
 }
 
 async function ensureDir(fs: VirtualFS, path: string): Promise<void> {
