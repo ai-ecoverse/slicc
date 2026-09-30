@@ -242,6 +242,23 @@ function escape(target: EventTarget = document.body): boolean {
   return press({ key: 'Escape', code: 'Escape' }, target);
 }
 
+function focusFrame(frame: HTMLElement): void {
+  frame.focus();
+  if (document.activeElement !== frame) {
+    (frame as HTMLElement).tabIndex = 0;
+    frame.focus();
+  }
+  frame.dispatchEvent(new FocusEvent('focusin', { bubbles: true, composed: true }));
+}
+
+function blurFrame(frame: HTMLElement): void {
+  document.body.tabIndex = -1;
+  document.body.focus();
+  if (document.activeElement === frame) {
+    frame.dispatchEvent(new FocusEvent('focusout', { bubbles: true, composed: true }));
+  }
+}
+
 beforeEach(() => {
   vi.spyOn(document, 'hasFocus').mockReturnValue(true);
 });
@@ -1166,7 +1183,7 @@ describe('the mode is the resting state', () => {
     const { handles } = harness();
     await flush();
     expect(handles.active()).toBe(true);
-    frame.focus();
+    focusFrame(frame);
 
     expect(handles.active()).toBe(false);
     expect(hud()).toBeNull();
@@ -1174,7 +1191,7 @@ describe('the mode is the resting state', () => {
     expect(handles.active()).toBe(false);
 
     expect(handles.intent()).toBe('keyboard');
-    frame.blur();
+    blurFrame(frame);
     await flush();
     expect(handles.active()).toBe(true);
   });
@@ -1184,7 +1201,7 @@ describe('the mode is the resting state', () => {
     document.body.append(frame);
     const { handles } = harness();
     await flush();
-    frame.focus();
+    focusFrame(frame);
     expect(handles.active()).toBe(false);
     frame.remove();
 
@@ -1202,10 +1219,10 @@ describe('the mode is the resting state', () => {
     expect(handles.active()).toBe(false);
     escape();
     expect(handles.active()).toBe(true);
-    frame.focus();
+    focusFrame(frame);
     expect(handles.active()).toBe(false);
     await flush();
-    frame.blur();
+    blurFrame(frame);
     await flush();
     expect(handles.active()).toBe(true);
   });
@@ -1231,10 +1248,10 @@ describe('the mode is the resting state', () => {
     const { handles } = harness();
     await flush();
     expect(handles.active()).toBe(true);
-    frame.focus();
+    focusFrame(frame);
     await flush();
     handles.setTrigger('esc');
-    frame.blur();
+    blurFrame(frame);
     await flush();
     expect(handles.active()).toBe(false);
   });
@@ -1246,7 +1263,7 @@ describe('the mode is the resting state', () => {
     composerField.focus();
     await flush();
     expect(handles.active()).toBe(false);
-    frame.focus();
+    focusFrame(frame);
     await flush();
     expect(handles.active()).toBe(false);
     expect(handles.intent()).toBe('composer');

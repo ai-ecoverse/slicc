@@ -252,9 +252,22 @@ function decode(content: string | ArrayBuffer): string {
   return typeof content === 'string' ? content : new TextDecoder().decode(content);
 }
 
+function toBytes(content: string | ArrayBuffer): Uint8Array<ArrayBuffer> {
+  if (typeof content === 'string') return new TextEncoder().encode(content);
+  const bytes = new Uint8Array(new ArrayBuffer(content.byteLength));
+  bytes.set(new Uint8Array(content));
+  return bytes;
+}
+
 function toBlob(content: string | ArrayBuffer, mime: string): Blob {
-  const data = typeof content === 'string' ? new TextEncoder().encode(content) : content;
-  return new Blob([data], { type: mime });
+  return new Blob([toBytes(content)], { type: mime });
+}
+
+function toDataUrl(content: string | ArrayBuffer, mime: string): string {
+  const bytes = toBytes(content);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+  return `data:${mime};base64,${btoa(binary)}`;
 }
 
 let extensionsRegistered = false;
@@ -528,9 +541,13 @@ export class SliccQuickLook extends HTMLElement {
   }
 
   #objectUrl(content: string | ArrayBuffer, mime: string): string {
-    const url = URL.createObjectURL(toBlob(content, mime));
-    this.#blobUrls.push(url);
-    return url;
+    try {
+      const url = URL.createObjectURL(toBlob(content, mime));
+      this.#blobUrls.push(url);
+      return url;
+    } catch {
+      return toDataUrl(content, mime);
+    }
   }
 }
 

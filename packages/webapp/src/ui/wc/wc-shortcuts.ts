@@ -1539,7 +1539,10 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     settler.schedule();
   };
 
-  const onFocusOut = (): void => settler.schedule();
+  const onFocusOut = (): void => {
+    if (mode.on() && isFrameTarget(deepActiveElement(doc))) settler.suspend();
+    settler.schedule();
+  };
   const onFullscreenChange = (): void => syncKeyboardLock(doc);
 
   const onWindowFocus = (): void => settler.schedule();
