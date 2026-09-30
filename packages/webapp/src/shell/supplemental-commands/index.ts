@@ -35,6 +35,7 @@ import { createFlagsCommand } from './flags-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createGelatiereCommand } from './gelatiere-command.js';
 import { createGitCredentialCommand, type GitCredentialDeps } from './git-credential-command.js';
+import { createGoCommand } from './go-command.js';
 import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
 import { createHfCommand } from './hf-command.js';
@@ -234,6 +235,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createStatCommand(),
     createCmpCommand(),
     createWasmCommand(wasmCommandOptions(options)),
+    createGoCommand(wasmCommandOptions(options)),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),
