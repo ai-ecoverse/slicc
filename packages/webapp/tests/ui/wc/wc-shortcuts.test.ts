@@ -277,6 +277,33 @@ function escape(target: EventTarget = document.body): boolean {
 }
 
 /**
+ * Focus a frame the way a browser does.
+ *
+ * jsdom 30.1+ updates `activeElement` on `iframe.focus()` but never emits
+ * `focusin` on the frame (and `iframe.blur()` leaves `activeElement` stuck).
+ * The mode suspends on that `focusin`, so tests have to supply the event the
+ * real document would have fired — otherwise the badge outlives the focus.
+ */
+function focusFrame(frame: HTMLElement): void {
+  frame.focus();
+  if (document.activeElement !== frame) {
+    // Last resort if focus() is a no-op in some harness.
+    (frame as HTMLElement).tabIndex = 0;
+    frame.focus();
+  }
+  frame.dispatchEvent(new FocusEvent('focusin', { bubbles: true, composed: true }));
+}
+
+/** Leave a frame; jsdom 30's `iframe.blur()` does not move `activeElement`. */
+function blurFrame(frame: HTMLElement): void {
+  document.body.tabIndex = -1;
+  document.body.focus();
+  if (document.activeElement === frame) {
+    frame.dispatchEvent(new FocusEvent('focusout', { bubbles: true, composed: true }));
+  }
+}
+
+/**
  * jsdom always reports a document nobody is looking at, and the mode
  * deliberately stays out of one (an unfocused Cherry iframe in a host page
  * must not wear the badge for a keyboard it does not have). Every test but the
@@ -1269,7 +1296,7 @@ describe('the mode is the resting state', () => {
     const { handles } = harness();
     await flush();
     expect(handles.active()).toBe(true);
-    frame.focus();
+    focusFrame(frame);
     // Inline, so the badge does not outlive the focus by a macrotask.
     expect(handles.active()).toBe(false);
     expect(hud()).toBeNull();
@@ -1277,7 +1304,7 @@ describe('the mode is the resting state', () => {
     expect(handles.active()).toBe(false);
     // A suspension, not a decision: the mode the user chose is untouched.
     expect(handles.intent()).toBe('keyboard');
-    frame.blur();
+    blurFrame(frame);
     await flush();
     expect(handles.active()).toBe(true);
   });
@@ -1293,7 +1320,7 @@ describe('the mode is the resting state', () => {
     document.body.append(frame);
     const { handles } = harness();
     await flush();
-    frame.focus();
+    focusFrame(frame);
     expect(handles.active()).toBe(false);
     frame.remove();
     // The removal is seen by an observer, which then schedules a settle.
@@ -1316,10 +1343,10 @@ describe('the mode is the resting state', () => {
     expect(handles.active()).toBe(false);
     escape();
     expect(handles.active()).toBe(true);
-    frame.focus();
+    focusFrame(frame);
     expect(handles.active()).toBe(false);
     await flush();
-    frame.blur();
+    blurFrame(frame);
     await flush();
     expect(handles.active()).toBe(true);
   });
@@ -1349,10 +1376,10 @@ describe('the mode is the resting state', () => {
     const { handles } = harness();
     await flush();
     expect(handles.active()).toBe(true);
-    frame.focus();
+    focusFrame(frame);
     await flush();
     handles.setTrigger('esc');
-    frame.blur();
+    blurFrame(frame);
     await flush();
     expect(handles.active()).toBe(false);
   });
@@ -1364,7 +1391,7 @@ describe('the mode is the resting state', () => {
     composerField.focus();
     await flush();
     expect(handles.active()).toBe(false);
-    frame.focus();
+    focusFrame(frame);
     await flush();
     expect(handles.active()).toBe(false);
     expect(handles.intent()).toBe('composer');
