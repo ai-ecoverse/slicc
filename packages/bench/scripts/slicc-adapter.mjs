@@ -69,6 +69,41 @@ function failure(what, r) {
   return err;
 }
 
+/** Directories cleanup never removes, whatever the probe says. */
+const PROTECTED_DIRS = new Set(['/', '/workspace', '/shared', '/tmp', '/home', '/scoops', '/mnt']);
+
+/**
+ * What each staged file leaves behind, read from the leader before staging (#3696): the highest
+ * directory staging creates for it (anything the agent adds inside goes with it), the file itself
+ * when its directory exists but the file doesn't, or nothing when staging overwrites an existing
+ * file (removing that would delete what was there before). One entry per file, in order.
+ */
+export async function planStagedCleanup(leader, files) {
+  if (!files.length) return [];
+  const probe = files
+    .map(
+      (f) =>
+        `d=${quote(dirname(f.to))}; t=; while [ ! -d "$d" ]; do t="$d"; d=$(dirname "$d"); done; ` +
+        `if [ -n "$t" ]; then echo "dir $t"; elif [ -e ${quote(f.to)} ]; then echo existing; else echo new; fi`
+    )
+    .join('; ');
+  const lines = (await must(leader, probe)).stdout.split('\n');
+  return files.map((f, i) => {
+    const line = lines[i]?.trim() ?? '';
+    if (line.startsWith('dir ')) {
+      const dir = line.slice(4);
+      return PROTECTED_DIRS.has(dir) ? null : dir;
+    }
+    return line === 'new' ? f.to : null;
+  });
+}
+
+/** The paths to remove, outermost first-come: nested paths collapse into their ancestor. */
+export function stagedCleanupPaths(paths) {
+  const unique = [...new Set(paths.filter(Boolean))];
+  return unique.filter((p) => !unique.some((q) => q !== p && p.startsWith(`${q}/`)));
+}
+
 async function must(leader, command, options) {
   const r = await leader.exec(command, options);
   if (r.status !== 0) throw failure(`leader: \`${command.slice(0, 120)}\``, r);
@@ -1151,12 +1186,17 @@ export async function runTask({
   const timeout = task.slicc?.timeoutSeconds ?? timeoutSeconds;
   const t0 = now();
   const health = { before: await leaderHealth(leader, now) };
+  const staged = [];
   try {
     await must(leader, `rm -rf ${dir} && mkdir -p ${dir}`);
-    for (const f of task.slicc?.files ?? []) {
+    const files = task.slicc?.files ?? [];
+    const leaves = await planStagedCleanup(leader, files);
+    for (const [i, f] of files.entries()) {
       await must(leader, `mkdir -p ${quote(dirname(f.to))} && base64 -d > ${quote(f.to)}`, {
         stdin: Buffer.from(readFile(f.from)).toString('base64'),
       });
+      // Only what was actually staged: a staging failure must not remove files it never wrote.
+      staged.push(leaves[i]);
     }
     await closeTabs(leader);
     await mustCli(leader, ['new-session', '--erase']);
@@ -1259,6 +1299,9 @@ export async function runTask({
   } finally {
     await closeTabs(leader).catch(() => {});
     await leader.cli(['new-session', '--erase']).catch(() => {});
+    const leftovers = stagedCleanupPaths(staged);
+    if (leftovers.length)
+      await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});
     await leader.exec(`rm -rf ${dir}`).catch(() => {});
   }
 }
