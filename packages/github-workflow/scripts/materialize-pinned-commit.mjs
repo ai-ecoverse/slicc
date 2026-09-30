@@ -16,6 +16,24 @@ import { fail, input, isMain, setOutput } from './gh-io.mjs';
 import { planPinnedCommitBuild } from './lib.mjs';
 
 /**
+ * A pinned build normally takes about 8 minutes (`npm ci`, then the webapp and node-server
+ * builds), but `npm ci` sometimes never exits after patch-package has applied every patch,
+ * holding the shard for its whole job limit (Benchmark runs 36627096386, 36663826241 and
+ * 36665406202). Each command runs under GNU `timeout`, which starts it in its own process
+ * group and kills the whole group, so a hung `npm exec patch-package` grandchild dies with
+ * it. `npm ci` removes `node_modules` first, so a retry starts clean. The worst case,
+ * 2 × 12 + 2 × 8 = 40 minutes, is what bench.yml adds to the shard's job limit.
+ */
+export const NPM_CI_MINUTES = 12;
+export const NPM_CI_ATTEMPTS = 2;
+export const BUILD_MINUTES = 8;
+
+/** Run `cmd` under GNU `timeout`: TERM to its process group after `minutes`, KILL 30 s later. */
+export function bounded(cmd, minutes) {
+  return ['timeout', '--kill-after=30s', `${minutes}m`, ...cmd];
+}
+
+/**
  * @param {{
  *   ref: string;
  *   dest: string;
@@ -34,9 +52,23 @@ export function materializePinnedCommit(options) {
   exec(plan.fetch[0], plan.fetch.slice(1), { cwd: repo, stdio: 'inherit', env });
   exec(plan.worktree[0], plan.worktree.slice(1), { cwd: repo, stdio: 'inherit', env });
   const buildEnv = { ...env, HUSKY: '0' };
-  for (const cmd of [plan.npmCi, plan.buildWebapp, plan.buildServer]) {
-    exec(cmd[0], cmd.slice(1), { cwd: options.dest, stdio: 'inherit', env: buildEnv });
+  const run = (cmd, minutes) => {
+    const argv = bounded(cmd, minutes);
+    exec(argv[0], argv.slice(1), { cwd: options.dest, stdio: 'inherit', env: buildEnv });
+  };
+  for (let attempt = 1; ; attempt++) {
+    try {
+      run(plan.npmCi, NPM_CI_MINUTES);
+      break;
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      if (attempt >= NPM_CI_ATTEMPTS) {
+        throw new Error(`pin-webapp: npm ci failed ${attempt} times; last: ${why}`);
+      }
+      console.log(`[pin-webapp] npm ci attempt ${attempt} failed (${why}); retrying`);
+    }
   }
+  for (const cmd of [plan.buildWebapp, plan.buildServer]) run(cmd, BUILD_MINUTES);
   const index = join(plan.webapp, 'index.html');
   if (!existsSync(plan.nodeServer) || !existsSync(index)) {
     throw new Error(
