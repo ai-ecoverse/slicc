@@ -77,6 +77,8 @@ async function mustCli(leader, args, options) {
 
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
+export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
 export function parseModelSpec(spec) {
   const text = String(spec).trim();
   const at = text.lastIndexOf('@');
@@ -980,7 +982,7 @@ export async function runTask({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   condition = null,
 }) {
-  if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error(`bad run id ${runId}`);
+  if (!RUN_ID_PATTERN.test(runId)) throw new Error(`bad run id ${runId}`);
   const dir = `/tmp/bench/${runId}`;
   const timeout = task.slicc?.timeoutSeconds ?? timeoutSeconds;
   const t0 = now();

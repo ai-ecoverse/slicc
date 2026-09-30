@@ -19,12 +19,13 @@ import {
   resolveTaskIds,
   resumeAction,
   runConfig,
+  runIdFor,
   SUBSETS_DIR,
   selectTasks,
   shardRuns,
   tracePath,
 } from './run.mjs';
-import { PROMPT_ALL_SETTLED } from './slicc-adapter.mjs';
+import { PROMPT_ALL_SETTLED, RUN_ID_PATTERN } from './slicc-adapter.mjs';
 
 describe('runConfig', () => {
   it('records whether the condition seeds bundled skills', () => {
@@ -1492,5 +1493,17 @@ describe('lanes and guardrails', () => {
     expect(existsSync(recordPath(out, 'Own', 'builtin', 'm', 'own-3', 1))).toBe(false);
     expect(events(out).find((e) => e.type === 'stopped')).toMatchObject({ reason: 'budget' });
     q.mockRestore();
+  });
+});
+
+describe('runIdFor', () => {
+  it('builds a run id the adapter accepts for every skills condition (#3694)', () => {
+    for (const skills of ['builtin', 'none', 'builtin+ecoverse', 'none+tst']) {
+      const id = runIdFor('bu2-001', 'claude-opus-5-5@max', skills, 1, 0);
+      expect(id).toMatch(RUN_ID_PATTERN);
+    }
+    expect(runIdFor('bu2-001', 'gpt-6.1-sol', 'builtin', 2, 36)).toBe(
+      'bu2-001-gpt-6.1-sol-builtin-r2-10'
+    );
   });
 });
