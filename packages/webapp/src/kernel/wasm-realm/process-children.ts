@@ -70,6 +70,8 @@ export interface ProcessKernelDeps {
 
   inherit?(actions?: ReadonlyArray<readonly [number, number]>): InheritedSlot[];
 
+  stdioPromoter?(): (stream: ProcessStream) => void;
+
   pid?: number;
 
   raise?(sig: number): void;
@@ -103,9 +105,10 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
   const call = (req: WasmSyscall, label: string): SyncFsResult =>
     transport.call(req, Infinity, label);
 
-  const slot = (fd: number, n: number): ChildStdio => {
+  const slot = (fd: number, n: number, promote?: (stream: ProcessStream) => void): ChildStdio => {
     const stream = fd >= 0 ? Fs.getStream(fd) : null;
     if (!stream) return { none: true };
+    promote?.(stream);
     if (stream.sliccKernelFd !== undefined) return { fd: stream.sliccKernelFd };
 
     if (stream.path === '/dev/null') return { none: true };
@@ -145,8 +148,9 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
 
   return {
     spawn(file, argv, env, cwd, fds, actions) {
-      const stdio = [0, 1, 2].map((n) => slot(fds[n] ?? -1, n));
       deps.beforeSpawn();
+      const promote = deps.stdioPromoter?.();
+      const stdio = [0, 1, 2].map((n) => slot(fds[n] ?? -1, n, promote));
       const inherit = deps.inherit?.(actions) ?? [];
       const r = transport.call(
         {

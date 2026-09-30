@@ -28,6 +28,10 @@ export interface VfsFileOptions {
   truncate?: boolean;
 }
 
+export const WRITEBACK_MS = 250;
+
+const WRITEBACK_COST_FACTOR = 10;
+
 function within(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`);
 }
@@ -37,6 +41,10 @@ export class VfsNode {
   private length = 0;
   private dirty = false;
   private queue: Promise<unknown> = Promise.resolve();
+
+  private writeBack: ReturnType<typeof setTimeout> | undefined;
+
+  private writeBackCost = 0;
 
   opens = 0;
 
@@ -86,7 +94,7 @@ export class VfsNode {
     if (at > this.length) buf.fill(0, this.length, at);
     buf.set(bytes, at);
     this.length = Math.max(this.length, at + bytes.length);
-    this.dirty = true;
+    this.markDirty();
     return bytes.length;
   }
 
@@ -95,7 +103,17 @@ export class VfsNode {
     const buf = this.ensure(size);
     if (size > this.length) buf.fill(0, this.length, size);
     this.length = size;
+    this.markDirty();
+  }
+
+  private markDirty(): void {
     this.dirty = true;
+    if (this.writeBack !== undefined || this.orphaned) return;
+    const delay = Math.max(WRITEBACK_MS, this.writeBackCost * WRITEBACK_COST_FACTOR);
+    this.writeBack = setTimeout(() => {
+      this.writeBack = undefined;
+      this.serial(() => this.flush()).catch(() => undefined);
+    }, delay);
   }
 
   private ensure(need: number): Uint8Array {
@@ -110,7 +128,9 @@ export class VfsNode {
   async flush(): Promise<void> {
     if (!this.dirty || !this.data || this.orphaned) return;
     this.dirty = false;
+    const started = performance.now();
     await this.fs.writeFile(this.path, this.data.slice(0, this.length));
+    this.writeBackCost = performance.now() - started;
   }
 }
 

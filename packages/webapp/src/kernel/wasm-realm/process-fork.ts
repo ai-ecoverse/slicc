@@ -26,7 +26,7 @@ function orphanContents(stream: ProcessStream): Uint8Array | undefined {
   return live.data?.slice(0, live.len ?? live.data.length) ?? new Uint8Array(0);
 }
 
-function vfsPromoter(
+export function vfsPromoter(
   Fs: ProcessFs,
   sys: ProcessSys,
   streams: KernelStreams,

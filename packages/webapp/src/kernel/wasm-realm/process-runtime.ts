@@ -31,6 +31,7 @@ import {
   describeInherited,
   placeKernelStream,
   restoreForkedStreams,
+  vfsPromoter,
 } from './process-fork.js';
 import { SignalGate } from './process-signals.js';
 import { createSocketKernel } from './process-sockets.js';
@@ -326,6 +327,7 @@ export async function runWasmProcess(
     restartable,
     describeFork: () => describeForFork(running.FS, sys, streams, livePath),
     inherit: (actions) => describeInherited(running.FS, sys, streams, livePath, actions),
+    stdioPromoter: () => vfsPromoter(running.FS, sys, streams, livePath),
   });
   running.sliccKernel.net = createSocketKernel({
     transport,
