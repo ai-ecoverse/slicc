@@ -244,8 +244,8 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 
 **What you CAN see:**
 
-- `open --view <path>` — reads an image from the VFS and returns it. Works with PNG, JPEG, GIF, WebP, SVG.
-- `playwright-cli screenshot --tab=<id>` + `open --view <path>` — screenshot a tab, then view it.
+- `open --view --size <low|medium|high|WxH> <path>` — reads an image from the VFS and returns it, resized to fit the box (`low` 256×256, `medium` 768×768, `high` 1536×1536). `--size` is required. Works with PNG, JPEG, GIF, WebP, SVG.
+- `playwright-cli screenshot --tab=<id> --filename=<path>` + `open --view --size medium <path>` — screenshot a tab, then view it.
 - `screencapture --view screenshot.png` — capture the user's screen via browser screen sharing.
 - `screencapture --video -V 10 clip.webm` — record a timed screen/window/tab clip (WebM).
 - `playwright-cli snapshot --tab=<id>` — accessibility tree (text). Use to verify content without vision.
@@ -268,7 +268,7 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 2. `playwright-cli tab-list` — find the tab by URL, note the targetId.
 3. `playwright-cli snapshot --tab=<id>` — required before screenshot, and often answers your question on its own.
 4. `playwright-cli screenshot --tab=<id> --filename="$TMPDIR/shot.png"` — consider `--max-width` to keep the file small.
-5. `open --view "$TMPDIR/shot.png"` — now you can see it. Strongly prefer doing this from a scoop, not the cone.
+5. `open --view --size medium "$TMPDIR/shot.png"` — now you can see it. Use `--size low` when layout is all you need. Strongly prefer doing this from a scoop, not the cone.
 
 **Don't:**
 
