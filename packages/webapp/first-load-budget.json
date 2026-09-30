@@ -12,8 +12,8 @@
   "maxDeltaKb": 5,
   "//ceiling-raised-pi-0991": "pi 0.84.4 -> 0.99.1 increases the shared pi-ai/pi-agent-core graph and generated chat catalogue. Measured on this branch: page 1105 kB and worker 4604 kB, versus previous ceilings 768/4337. Provider transports remain behind pi-ai's lazy adapters; the model picker and Agent runtime need the shared code at boot. Raising to 1152/4656 leaves about 47/52 kB of platform headroom. The lockfile changes over 200 transitive dependencies, so the same-machine merge-base delta check is skipped by its 25-dependency guard; the absolute ceiling still applies. Revisit after Pi's shared graph can be split further.",
   "dependencyUpgradeException": {
-    "lockfileSha256": "2d4fc73f698737516c8dad464a544ff1a97b1c3bb757586aa4d62bf8da3b1e4d",
-    "reason": "Pi 0.84.4 to 0.99.1 changes 214 lockfile dependencies; the baseline realignment guard is limited to 25. This exact lockfile is reviewed under PR #3648, while the page and worker absolute ceilings remain enforced. Remove this exception after the upgrade merges."
+    "lockfileSha256": "0d6dc92c0d7c887e45855de04e8c6199e0b3908c114b1b9a6a7987c01b9f0f1c",
+    "reason": "Pi 0.99.1 to 0.99.2 changes 152 lockfile dependency paths; the baseline realignment guard permits 25. This exact lockfile is reviewed with the upgrade, while the page and worker absolute eager ceilings remain enforced. Remove this exception after the upgrade merges."
   },
   "pageEagerCeilingKb": 1152,
   "//ceiling-raised-3053": "Approved for the durable tray/webhook lifecycle work in PR #3053: measured worker eager graph growth versus merge-base with page unchanged. Raise 4298 -> 4299 for this wiring and narrow headroom (stacked on #3005's 4298 ceiling); keep the 5 kB per-PR delta gate and page ceiling unchanged.",

@@ -4,6 +4,7 @@ import {
   type McpConnection,
   McpConnectionManager,
   mcpAgentToolName,
+  mcpAgentToolNames,
   resolveToolExposure,
 } from '../../../src/shell/mcp/connection-manager.js';
 import type { McpFetchLike, McpServerEntry } from '../../../src/shell/mcp/types.js';
@@ -41,7 +42,7 @@ function makeEntry(overrides?: Partial<McpServerEntry>): McpServerEntry {
 
 describe('mcpAgentToolName', () => {
   it('produces mcp__server__tool format', () => {
-    expect(mcpAgentToolName('weather', 'get-forecast')).toBe('mcp__weather__get-forecast');
+    expect(mcpAgentToolName('weather', 'get-forecast')).toBe('mcp__weather__get_forecast');
   });
 
   it('sanitizes non-alphanumeric characters', () => {
@@ -54,6 +55,34 @@ describe('mcpAgentToolName', () => {
     const result = mcpAgentToolName(longServer, longTool);
     expect(result.length).toBeLessThanOrEqual(64);
     expect(result.startsWith('mcp__')).toBe(true);
+  });
+
+  it('hashes both tools when hyphens and underscores normalize to the same name', () => {
+    const names = mcpAgentToolNames('my-server', ['read-file', 'read_file']);
+    expect(names.get('read-file')).toMatch(/^mcp__my_server__read_file_[0-9a-f]{8}$/);
+    expect(names.get('read_file')).toMatch(/^mcp__my_server__read_file_[0-9a-f]{8}$/);
+    expect(names.get('read-file')).not.toBe(names.get('read_file'));
+    expect(mcpAgentToolNames('my-server', ['read_file', 'read-file']).get('read-file')).toBe(
+      names.get('read-file')
+    );
+  });
+
+  it('reserves original names before assigning collision suffixes', () => {
+    const initial = mcpAgentToolNames('my-server', ['read-file', 'read_file']);
+    const third = `read_file_${initial.get('read-file')!.slice(-8)}`;
+    const wireNames = ['read-file', 'read_file', third];
+    const names = mcpAgentToolNames('my-server', wireNames);
+    expect(new Set(names.values()).size).toBe(3);
+    expect(names.get(third)).toBe(mcpAgentToolName('my-server', third));
+    expect(mcpAgentToolNames('my-server', [...wireNames].reverse()).get('read-file')).toBe(
+      names.get('read-file')
+    );
+  });
+
+  it('rejects duplicate wire tool names', () => {
+    expect(() => mcpAgentToolNames('my-server', ['read-file', 'read-file'])).toThrow(
+      'duplicate tool names'
+    );
   });
 });
 
@@ -159,6 +188,13 @@ describe('McpConnectionManager', () => {
 
   it('has returns false for unknown servers', () => {
     expect(manager.has('nonexistent')).toBe(false);
+  });
+
+  it('does not connect a second server with the same normalized namespace', async () => {
+    await manager.connect('dev-radius', makeEntry({ transport: 'slicc' }));
+    await expect(manager.connect('dev_radius', makeEntry({ transport: 'slicc' }))).rejects.toThrow(
+      'conflicts with "dev-radius"'
+    );
   });
 
   it('disconnect removes a connection', async () => {

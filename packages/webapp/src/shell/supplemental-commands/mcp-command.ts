@@ -215,7 +215,8 @@ short name resolves on the PATH.
 Options:
   --exposure <mode>   Set the default exposure mode for all tools on this
                       server. Modes: codemode (default), codemode-deferred,
-                      deferred, direct, hidden.
+                      deferred, direct, hidden. codemode-deferred is an alias
+                      for codemode.
 `);
   }
   const parsed = parseKnownFlags(args, { value: ['--exposure'] });
@@ -240,11 +241,17 @@ Options:
     );
   }
 
-  const { getServer, setServer } = await import('../mcp/store.js');
+  const { getServer, listServers, setServer } = await import('../mcp/store.js');
   const existing = await getServer(name, deps.fs);
   if (existing) {
     return err(`mcp add: a server named "${name}" already exists`);
   }
+  const namespace = name.replace(/[^A-Za-z0-9_]/g, '_');
+  const clash = Object.keys(await listServers(deps.fs)).find(
+    (other) => other.replace(/[^A-Za-z0-9_]/g, '_') === namespace
+  );
+  if (clash)
+    return err(`mcp add: server "${name}" conflicts with "${clash}" after name normalization`);
 
   // Step 1: bare initialize (no auth)
   const { McpClient, McpAuthRequiredError } = await import('../mcp/client.js');
@@ -1343,7 +1350,10 @@ async function cmdExposure(args: string[], deps: McpCommandDeps): Promise<ExecRe
 
 Set the exposure mode for an MCP server or individual tools.
 
-Modes: codemode (default), codemode-deferred, deferred, direct, hidden.
+Modes: codemode (default), codemode-deferred (alias for codemode), deferred,
+direct, hidden. Direct tool names exposed to the model replace hyphens with
+underscores. Use the original tool name with mcp invoke and in codemode scripts
+(for example, tools["get-weather"](args)).
 
 Without --tool, sets the server-level default exposure.
 With --tool, sets a per-tool override using a glob pattern.
@@ -1440,7 +1450,7 @@ Examples:
     return err(`mcp import: no mcpServers found in "${filePath}"`);
   }
 
-  const { getServer, setServer } = await import('../mcp/store.js');
+  const { getServer, listServers, setServer } = await import('../mcp/store.js');
   const results: string[] = [];
   let imported = 0;
   let skipped = 0;
@@ -1466,6 +1476,15 @@ Examples:
     const existing = await getServer(name, deps.fs);
     if (existing) {
       results.push(`  skip: "${name}" (already exists)`);
+      skipped++;
+      continue;
+    }
+    const namespace = name.replace(/[^A-Za-z0-9_]/g, '_');
+    const clash = Object.keys(await listServers(deps.fs)).find(
+      (other) => other.replace(/[^A-Za-z0-9_]/g, '_') === namespace
+    );
+    if (clash) {
+      results.push(`  skip: "${name}" (conflicts with "${clash}" after name normalization)`);
       skipped++;
       continue;
     }
