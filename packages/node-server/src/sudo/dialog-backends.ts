@@ -1,6 +1,11 @@
 import { execFile as nodeExecFile } from 'child_process';
 import { promisify } from 'util';
-import type { SudoApproveRequest, SudoBackend, SudoDecision } from './types.js';
+import {
+  type SudoApproveRequest,
+  type SudoBackend,
+  type SudoDecision,
+  unavailableDecision,
+} from './types.js';
 
 export type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }>;
 
@@ -16,6 +21,16 @@ export function describeRequest(req: SudoApproveRequest): string {
 
 function fallbackPattern(req: SudoApproveRequest): string {
   return req.suggestedPattern?.trim() || req.detail.trim();
+}
+
+function denyFromDialogFailure(err: unknown): SudoDecision {
+  const code = (err as { code?: unknown })?.code;
+  if (typeof code === 'number') return { decision: 'deny' };
+  return unavailableDecision();
+}
+
+function isSpawnFailure(err: unknown): boolean {
+  return typeof (err as { code?: unknown })?.code !== 'number';
 }
 
 export function createOsascriptBackend(exec: ExecFn = defaultExec): SudoBackend {
@@ -37,8 +52,8 @@ export function createOsascriptBackend(exec: ExecFn = defaultExec): SudoBackend 
           return { decision: 'always', pattern: text.length > 0 ? text : suggested };
         }
         return { decision: 'deny' };
-      } catch {
-        return { decision: 'deny' };
+      } catch (err) {
+        return denyFromDialogFailure(err);
       }
     },
   };
@@ -69,9 +84,10 @@ export function createPowerShellBackend(exec: ExecFn = defaultExec): SudoBackend
             pattern: pattern && pattern.length > 0 ? pattern : suggested,
           };
         }
+
         return { decision: 'deny' };
-      } catch {
-        return { decision: 'deny' };
+      } catch (err) {
+        return denyFromDialogFailure(err);
       }
     },
   };
@@ -97,6 +113,7 @@ export function createZenityBackend(exec: ExecFn = defaultExec): SudoBackend {
         always = stdout.trim() === 'Always';
         allowed = true;
       } catch (err) {
+        if (isSpawnFailure(err)) return unavailableDecision();
         always = stdoutOf(err).trim() === 'Always';
         allowed = always;
       }
@@ -128,6 +145,7 @@ export function createKdialogBackend(exec: ExecFn = defaultExec): SudoBackend {
         await exec('kdialog', ['--warningyesnocancel', text, '--title', 'SLICC sudo']);
         code = 0;
       } catch (err) {
+        if (isSpawnFailure(err)) return unavailableDecision();
         code = exitCodeOf(err);
       }
       if (code === 0) return { decision: 'allow' };
@@ -146,7 +164,7 @@ export function createDenyBackend(name = 'none'): SudoBackend {
   return {
     name,
     async prompt(): Promise<SudoDecision> {
-      return { decision: 'deny' };
+      return unavailableDecision();
     },
   };
 }

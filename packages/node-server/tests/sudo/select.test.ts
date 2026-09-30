@@ -51,8 +51,13 @@ describe('selectSudoBackend', () => {
     expect(selectSudoBackend(env({ hasTty: true })).name).toBe('tty');
   });
 
-  it('fails closed (deny) when no channel exists', () => {
-    expect(selectSudoBackend(env({})).name).toBe('none');
+  it('fails closed with unavailable when no channel exists', async () => {
+    const backend = selectSudoBackend(env({}));
+    expect(backend.name).toBe('none');
+    expect(await backend.prompt({ kind: 'command', detail: 'x', suggestedPattern: 'x' })).toEqual({
+      decision: 'deny',
+      reason: 'unavailable',
+    });
   });
 
   it('ignores GUI tools without a display', () => {

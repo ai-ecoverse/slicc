@@ -67,7 +67,7 @@ describe('POST /api/sudo-approve', () => {
     });
   });
 
-  it('fails closed (deny) when the backend throws', async () => {
+  it('fails closed (unavailable) when the backend throws', async () => {
     const app = express();
     const warn = vi.fn();
     registerSudoApproveEndpoint(app, {
@@ -81,7 +81,17 @@ describe('POST /api/sudo-approve', () => {
     });
     const res = await makeRequest(app, { kind: 'command', detail: 'x', suggestedPattern: 'x' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ decision: 'deny' });
+    expect(await res.json()).toEqual({ decision: 'deny', reason: 'unavailable' });
     expect(warn).toHaveBeenCalled();
+  });
+
+  it('passes through a bare deny from a genuine human refusal', async () => {
+    const app = express();
+    registerSudoApproveEndpoint(app, {
+      backend: backendReturning({ decision: 'deny' }),
+    });
+    const res = await makeRequest(app, { kind: 'command', detail: 'x', suggestedPattern: 'x' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ decision: 'deny' });
   });
 });

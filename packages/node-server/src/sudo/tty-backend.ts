@@ -1,6 +1,11 @@
 import type { Interface as ReadlineInterface } from 'readline';
 import { createInterface } from 'readline';
-import type { SudoApproveRequest, SudoBackend, SudoDecision } from './types.js';
+import {
+  type SudoApproveRequest,
+  type SudoBackend,
+  type SudoDecision,
+  unavailableDecision,
+} from './types.js';
 
 export interface TtyDeps {
   output?: NodeJS.WritableStream;
@@ -37,7 +42,7 @@ export function createTtyBackend(deps: TtyDeps = {}): SudoBackend {
         }
         return { decision: 'deny' };
       } catch {
-        return { decision: 'deny' };
+        return unavailableDecision();
       } finally {
         try {
           (rl as { close?: () => void }).close?.();

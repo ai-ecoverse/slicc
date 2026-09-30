@@ -1,7 +1,13 @@
 import express, { type Express } from 'express';
 import { requireLoopback } from '../cloud-status.js';
 import { selectSudoBackend } from './select.js';
-import type { SudoApproveRequest, SudoBackend, SudoDecision, SudoKind } from './types.js';
+import {
+  type SudoApproveRequest,
+  type SudoBackend,
+  type SudoDecision,
+  type SudoKind,
+  unavailableDecision,
+} from './types.js';
 
 const VALID_KINDS: readonly SudoKind[] = [
   'command',
@@ -59,8 +65,8 @@ export function registerSudoApproveEndpoint(app: Express, options: SudoEndpointO
     try {
       decision = await backend.prompt(request);
     } catch (err) {
-      warn(`sudo-approve backend "${backend.name}" threw — denying: ${String(err)}`);
-      decision = { decision: 'deny' };
+      warn(`sudo-approve backend "${backend.name}" threw — denying as unavailable: ${String(err)}`);
+      decision = unavailableDecision();
     }
     res.json(decision);
   });

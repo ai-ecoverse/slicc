@@ -22,6 +22,14 @@ export interface SudoApproveRequest {
 export interface SudoDecision {
   decision: 'allow' | 'deny' | 'always';
   pattern?: string;
+
+  reason?: SudoUnansweredReason;
+}
+
+export type SudoUnansweredReason = 'user-timeout' | 'cone-timeout' | 'unavailable';
+
+export function unavailableDecision(): SudoDecision {
+  return { decision: 'deny', reason: 'unavailable' };
 }
 
 export interface SudoBackend {

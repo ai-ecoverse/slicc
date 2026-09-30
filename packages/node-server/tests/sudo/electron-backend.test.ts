@@ -90,13 +90,13 @@ describe('electron backend', () => {
     });
   });
 
-  it('denies when showMessageBox throws', async () => {
+  it('denies as unavailable when showMessageBox throws', async () => {
     const backend = createElectronBackend({
       showMessageBox: vi.fn(async () => {
         throw new Error('no display');
       }),
     });
-    expect(await backend.prompt(REQ)).toEqual({ decision: 'deny' });
+    expect(await backend.prompt(REQ)).toEqual({ decision: 'deny', reason: 'unavailable' });
   });
 
   it('falls back to suggested when promptInput throws', async () => {

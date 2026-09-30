@@ -1,4 +1,9 @@
-import type { SudoApproveRequest, SudoBackend, SudoDecision } from './types.js';
+import {
+  type SudoApproveRequest,
+  type SudoBackend,
+  type SudoDecision,
+  unavailableDecision,
+} from './types.js';
 
 interface MessageBoxResult {
   response: number;
@@ -54,7 +59,7 @@ export function createElectronBackend(deps: ElectronBackendDeps = {}): SudoBacke
         });
         response = result.response;
       } catch {
-        return { decision: 'deny' };
+        return unavailableDecision();
       }
 
       if (response === 1) return { decision: 'allow' };

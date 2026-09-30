@@ -63,7 +63,7 @@ describe('tty backend', () => {
     expect(rl.close).toHaveBeenCalled();
   });
 
-  it('denies when readline throws', async () => {
+  it('denies as unavailable when readline throws', async () => {
     const rl = {
       question: vi.fn(() => {
         throw new Error('input closed');
@@ -74,7 +74,7 @@ describe('tty backend', () => {
       output: { write: vi.fn() } as unknown as NodeJS.WritableStream,
       createRl: () => rl,
     });
-    expect(await backend.prompt(REQ)).toEqual({ decision: 'deny' });
+    expect(await backend.prompt(REQ)).toEqual({ decision: 'deny', reason: 'unavailable' });
     expect(rl.close).toHaveBeenCalledOnce();
   });
 });
