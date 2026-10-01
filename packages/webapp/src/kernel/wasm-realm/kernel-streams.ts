@@ -97,7 +97,9 @@ export interface ProcessSys {
 
   isatty?(fd: number): boolean;
 
-  openTty?(): number;
+  ttyName?(fd: number): string | undefined;
+
+  openTty?(name?: string): number;
 
   tcgets?(fd: number): Termios;
   tcsets?(fd: number, termios: Termios): void;
@@ -209,6 +211,20 @@ export class KernelStreams {
     else delete stream.tty;
   }
 
+  nameTerminal(stream: ProcessStream): void {
+    const kfd = stream.sliccKernelFd;
+    if (!stream.tty || kfd === undefined) return;
+    const name = this.sys.ttyName?.(kfd);
+    if (name) this.nameStream(stream, name);
+  }
+
+  private nameStream(stream: ProcessStream, name: string): void {
+    stream.path = name;
+    if (typeof this.Fs.stat !== 'function') return;
+
+    stream.stream_ops = { ...stream.stream_ops, getattr: () => this.Fs.stat?.(name) ?? {} };
+  }
+
   private ttyOps(kfd: number): object {
     return {
       ops: {
@@ -261,6 +277,18 @@ export class KernelStreams {
         return stream;
       }
 
+      let named: number | undefined;
+      try {
+        named = stream.path ? this.openNamedTerminal(stream.path) : undefined;
+      } catch (e) {
+        this.Fs.closeStream(stream.fd);
+        throw e;
+      }
+      if (named !== undefined) {
+        this.attach(stream, named, true);
+        return stream;
+      }
+
       const terminal = this.stdioTerminal();
       if (terminal !== undefined) this.attach(stream, terminal, true);
       return stream;
@@ -289,6 +317,8 @@ export class KernelStreams {
     }
 
     this.attach(stream, kfd, true);
+
+    this.nameStream(stream, path);
     return stream;
   }
 
@@ -318,6 +348,19 @@ export class KernelStreams {
         ? this.sys.openPty !== undefined
         : (this.sys.ptyNumbers?.().includes(Number(n)) ?? false);
     if (!exists) throw new this.Fs.ErrnoError(wasiErrno('ENOENT'));
+  }
+
+  private openNamedTerminal(path: string): number | undefined {
+    const { openTty } = this.sys;
+    if (!openTty) return undefined;
+    try {
+      return openTty.call(this.sys, path);
+    } catch (e) {
+      if (e instanceof SyscallError && e.code === 'ENXIO') return undefined;
+      return this.call(() => {
+        throw e;
+      });
+    }
   }
 
   private stdioTerminal(): number | undefined {

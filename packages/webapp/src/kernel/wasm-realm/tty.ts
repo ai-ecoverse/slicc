@@ -64,6 +64,8 @@ export class KernelTty {
 
   private hungUp = false;
 
+  name?: string;
+
   constructor(
     private readonly screen: TtyScreen,
     private readonly signal: (sig: number) => void

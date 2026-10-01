@@ -446,6 +446,22 @@ describe('WasmProcess job syscalls', () => {
     expect(got).toMatchObject({ ok: true });
   });
 
+  it('fd-open-tty by name opens a terminal of the invocation from any session; another name is ENXIO', async () => {
+    const { make, tty, jobs } = session();
+    tty.name = '/dev/tty1';
+    make(10);
+    const server = make(11, 10);
+    await server.syscall({ op: 'proc-setsid' });
+    expect(jobs.terminalNamed('/dev/tty1')).toBe(tty);
+
+    expect(await server.syscall({ op: 'fd-open-tty' })).toMatchObject({ errno: 'ENXIO' });
+    const opened = await server.syscall({ op: 'fd-open-tty', name: '/dev/tty1' });
+    expect(opened).toMatchObject({ ok: true, kind: 'json' });
+    expect(await server.syscall({ op: 'fd-open-tty', name: '/dev/tty7' })).toMatchObject({
+      errno: 'ENXIO',
+    });
+  });
+
   it('without a job table each process is its own group and session', async () => {
     const tty = new KernelTty({ write: () => {} }, () => {});
     const fds = new FdTable();

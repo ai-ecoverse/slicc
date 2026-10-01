@@ -458,8 +458,9 @@ export class WasiFds {
   open(path: string, oflags: number, rights: bigint, fdflags: number): number {
     const device = deviceOf(path);
     if (device) return this.install({ type: 'device', device });
-    if (path === '/dev/tty') {
-      const fd = this.kernel.sys.openTty?.();
+
+    if (path === '/dev/tty' || /^\/dev\/tty\d+$/.test(path)) {
+      const fd = this.kernel.sys.openTty?.(path === '/dev/tty' ? undefined : path);
       if (fd === undefined) throw new WasiError('ENXIO');
       this.table.set(fd, { ...kernelEntry(), kind: 'tty' });
       this.bump();

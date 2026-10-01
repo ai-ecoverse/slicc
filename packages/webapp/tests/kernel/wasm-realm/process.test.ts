@@ -6,6 +6,7 @@ import {
   sinkFile,
 } from '../../../src/kernel/wasm-realm/fd-table.js';
 import { isWasmSyscall, WasmProcess } from '../../../src/kernel/wasm-realm/process.js';
+import { PtyTable } from '../../../src/kernel/wasm-realm/pty.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -101,6 +102,23 @@ describe('WasmProcess pipes and poll', () => {
 describe('WasmProcess: numbers a WASI worker holds', () => {
   const json = (r: Awaited<ReturnType<WasmProcess['syscall']>>) =>
     r.ok && r.kind === 'json' ? r.json : r;
+
+  it('fd-info names a pseudo-terminal (ttyname): /dev/pts/N for its slave, /dev/ptmx for its master', async () => {
+    const fds = stdio('', []);
+    const ptys = new PtyTable(() => {});
+    ptys.open();
+    const { pair, master } = ptys.open();
+    pair.locked = false;
+    fds.installAt(3, master);
+    fds.installAt(4, pair.openSlave());
+    const p = new WasmProcess(3099, fds);
+    expect(json(await p.syscall({ op: 'fd-info', fd: 4 }))).toMatchObject({
+      tty: true,
+      name: '/dev/pts/1',
+    });
+    expect(json(await p.syscall({ op: 'fd-info', fd: 3 }))).toMatchObject({ name: '/dev/ptmx' });
+    expect(json(await p.syscall({ op: 'fd-info', fd: 1 }))).not.toHaveProperty('name');
+  });
 
   it('fd-reserve holds a number (the lowest free, or the one asked for); fd-info calls it held', async () => {
     const p = new WasmProcess(3100, stdio('', []));

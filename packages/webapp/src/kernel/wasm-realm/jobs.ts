@@ -95,6 +95,11 @@ export class JobTable {
     return pid;
   }
 
+  terminalNamed(name: string): KernelTty | undefined {
+    const known = new Set([...this.terminals.values(), ...this.foreground.keys()]);
+    return [...known].find((tty) => tty.name === name);
+  }
+
   controllingTerminal(pid: number): KernelTty | null | undefined {
     const member = this.members.get(pid);
     return member && (this.terminals.get(member.sid) ?? null);

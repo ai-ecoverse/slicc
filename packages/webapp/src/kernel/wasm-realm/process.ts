@@ -87,7 +87,7 @@ export type WasmSyscall =
       contents?: Uint8Array;
       orphan?: boolean;
     }
-  | { op: 'fd-open-tty' }
+  | { op: 'fd-open-tty'; name?: string }
   | { op: 'tty-get'; fd: number }
   | { op: 'tty-set'; fd: number; termios: Termios }
   | { op: 'tty-winsz'; fd: number }
@@ -190,6 +190,8 @@ export interface FdInfo {
   meta?: HeldMeta;
   flags?: number;
   cloexec?: true;
+
+  name?: string;
 }
 
 const SYSCALL_OPS: ReadonlySet<string> = new Set([
@@ -506,7 +508,10 @@ export class WasmProcess {
         }
         return { ok: true, kind: 'void' };
       case 'fd-open-tty': {
-        const tty = this.controllingTerminal();
+        const tty =
+          req.name === undefined
+            ? this.controllingTerminal()
+            : this.options.jobs?.terminalNamed(req.name);
         if (!tty) throw new KernelError('ENXIO');
         return { ok: true, kind: 'json', json: this.fds.install(tty.file(), 3) };
       }
@@ -594,6 +599,7 @@ export class WasmProcess {
       ...(file.heldMeta ? { meta: file.heldMeta } : {}),
       ...(flags !== undefined ? { flags } : {}),
       ...(this.fds.closesOnExec(fd) ? { cloexec: true } : {}),
+      ...(file.tty?.name ? { name: file.tty.name } : file.pty ? { name: '/dev/ptmx' } : {}),
     };
   }
 

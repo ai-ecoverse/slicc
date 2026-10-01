@@ -169,6 +169,8 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
   const tty: KernelTty = new KernelTty({ write: (bytes) => lease.write(bytes) }, (sig) =>
     session.signalTerminal(tty, sig)
   );
+
+  tty.name = '/dev/tty1';
   tty.setSize(lease.cols, lease.rows);
   lease.onInput((bytes) => tty.receive(bytes));
   lease.onResize((cols, rows) => tty.resize(cols, rows));
