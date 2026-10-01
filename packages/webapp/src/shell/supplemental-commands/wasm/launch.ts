@@ -30,6 +30,7 @@ import {
   isRealmDefault,
 } from '../../../kernel/wasm-realm/net/realm-network.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
+import { PtyTable } from '../../../kernel/wasm-realm/pty.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
 import {
   type LoopbackNet,
@@ -396,6 +397,8 @@ export class WasmSession {
   private installed: Promise<Map<string, WasmCommand>> | undefined;
   /** Process groups and sessions of the invocation's wasm processes (job control). */
   private readonly jobs = new JobTable();
+  /** The invocation's pseudo-terminals: their signals go to the foreground group each was given. */
+  private readonly ptys = new PtyTable((tty, sig) => this.jobs.signalOwnedForeground(tty, sig));
   /** The invocation's first process: the terminal's foreground until a program picks one. */
   private leader: number | undefined;
   /**
@@ -531,6 +534,7 @@ export class WasmSession {
       forker: this.forker(pid, req),
       kill: (target, sig) => this.kill(target, sig),
       jobs: this.jobs,
+      ptys: this.ptys,
       net: this.net,
       ...(req.fork ? { fork: req.fork } : {}),
       ...(req.ppid !== undefined ? { ppid: req.ppid } : {}),

@@ -49,6 +49,7 @@ import {
   restoreForkedStreams,
   vfsPromoter,
 } from './process-fork.js';
+import type { PtyKernel } from './process-pty.js';
 import { SignalGate } from './process-signals.js';
 import { createSocketKernel } from './process-sockets.js';
 import type { ForkState, InheritedFd, WasmProcessInitMsg } from './protocol.js';
@@ -62,7 +63,7 @@ export {
   SyscallError,
 } from './kernel-streams.js';
 
-export function kernelSys(transport: SyncSabTransport): ProcessSys {
+export function kernelSys(transport: SyncSabTransport): ProcessSys & PtyKernel {
   const call = (req: SyncSabRequestBody, label: string): SyncFsResult => {
     const r = transport.call(req, Number.POSITIVE_INFINITY, label);
     if (!r.ok) throw new SyscallError(r.errno);
@@ -140,6 +141,24 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys {
     winsize(fd) {
       return json(call({ op: 'tty-winsz', fd }, `tty-winsz ${fd}`)) as [number, number];
     },
+    openPty() {
+      return json(call({ op: 'pty-open' }, 'pty-open')) as number;
+    },
+    openPts(n, noctty) {
+      return json(call({ op: 'pty-slave-open', n, noctty }, `pty-slave-open ${n}`)) as number;
+    },
+    ptyNumber(fd) {
+      return json(call({ op: 'pty-number', fd }, `pty-number ${fd}`)) as number;
+    },
+    ptyLock(fd, lock) {
+      call({ op: 'pty-lock', fd, lock }, `pty-lock ${fd}`);
+    },
+    setControllingTerminal(fd) {
+      call({ op: 'pty-ctty', fd }, `pty-ctty ${fd}`);
+    },
+    setWinsize(fd, rows, cols) {
+      call({ op: 'pty-winsz-set', fd, rows, cols }, `pty-winsz-set ${fd}`);
+    },
   };
 }
 
@@ -215,6 +234,7 @@ const GLUE_TRAILER = [
   "  dup3: typeof ___syscall_dup3 === 'function' ? ___syscall_dup3 : undefined,",
   "  socket: typeof ___syscall_socket === 'function' ? ___syscall_socket : undefined,",
   "  accept4: typeof ___syscall_accept4 === 'function' ? ___syscall_accept4 : undefined,",
+  "  ioctl: typeof ___syscall_ioctl === 'function' ? ___syscall_ioctl : undefined,",
   '};',
   // The toolchain's SIGPIPE disposition query (exported once instantiated).
   // Not before the runtime is up: an assertions build (-O0) aborts on an
@@ -324,6 +344,7 @@ export async function runWasmProcess(
           wrapCloexecSyscalls(imports, ownValue<GlueSyscalls>(module, 'sliccSyscalls'), {
             fs: () => ownValue<ProcessFs>(module, 'FS'),
             heap: () => (memory ? new Int32Array(memory.buffer) : undefined),
+            pty: sys,
           });
           return WebAssembly.instantiate(init.program.module, imports);
         })

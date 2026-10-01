@@ -14,6 +14,7 @@
  * FD_CLOEXEC set, so the programs it runs do not inherit it.
  */
 import { KernelPipe, PipeError } from './pipe.js';
+import type { PtyPair } from './pty.js';
 import type { KernelTty } from './tty.js';
 
 /** POSIX errno names the kernel reports to a process. */
@@ -93,6 +94,8 @@ export interface KernelFile {
   stat?(): Promise<{ path: string; size: number; orphan?: true }>;
   /** A terminal: its termios and window size (isatty, tcgetattr, TIOCGWINSZ). */
   tty?: KernelTty;
+  /** A pseudo-terminal's master (`/dev/ptmx`): its pair, for TIOCGPTN / TIOCSPTLCK / TIOCSWINSZ. */
+  pty?: PtyPair;
   /**
    * Held by the process's own worker (a WASI program's buffered VFS file,
    * directory or device): the kernel only keeps its number taken, so the

@@ -19,6 +19,7 @@
  *   `diff /dev/fd/63 /dev/fd/62`.
  */
 import type { ProcessFs, ProcessStream } from './kernel-streams.js';
+import { type PtyKernel, ptyIoctl } from './process-pty.js';
 import { wasiErrno } from './wasi-errno.js';
 
 /** musl's O_CLOEXEC (and SOCK_CLOEXEC, the same bit). */
@@ -75,7 +76,7 @@ export function trackCloseOnExec(Fs: ProcessFs): void {
 }
 
 /** A syscall of the glue: numbers (fds, flags, pointers) in, a result or -errno out. */
-type GlueSyscall = (...args: number[]) => number;
+export type GlueSyscall = (...args: number[]) => number;
 
 /** The glue's own syscall implementations the runtime wraps (absent: not in this program). */
 export interface GlueSyscalls {
@@ -84,6 +85,8 @@ export interface GlueSyscalls {
   dup3?: GlueSyscall;
   socket?: GlueSyscall;
   accept4?: GlueSyscall;
+  /** ioctl(2): its pseudo-terminal requests go to the kernel (`process-pty.ts`). */
+  ioctl?: GlueSyscall;
 }
 
 export interface CloexecDeps {
@@ -91,6 +94,8 @@ export interface CloexecDeps {
   fs(): ProcessFs | undefined;
   /** Its linear memory as 32-bit words (fcntl's argument, pipe2's result). */
   heap(): Int32Array | undefined;
+  /** The kernel's pseudo-terminals, for ioctl (absent: the glue's ioctl stays). */
+  pty?: PtyKernel;
 }
 
 /** Mark or clear FD_CLOEXEC on the program's fd `fd` (no such fd: nothing). */
@@ -163,6 +168,9 @@ function wrappers(glue: GlueSyscalls, deps: CloexecDeps): Map<GlueSyscall, GlueS
   if (glue.dup3) out.set(glue.dup3, cloexecByFlag(glue.dup3, 2, deps));
   if (glue.socket) out.set(glue.socket, cloexecByFlag(glue.socket, 1, deps));
   if (glue.accept4) out.set(glue.accept4, cloexecByFlag(glue.accept4, 3, deps));
+  if (glue.ioctl && deps.pty) {
+    out.set(glue.ioctl, ptyIoctl(glue.ioctl, { fs: deps.fs, heap: deps.heap, kernel: deps.pty }));
+  }
   return out;
 }
 

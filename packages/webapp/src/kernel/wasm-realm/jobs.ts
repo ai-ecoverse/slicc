@@ -127,6 +127,20 @@ export class JobTable {
     return member && (this.terminals.get(member.sid) ?? null);
   }
 
+  /**
+   * A session leader without a controlling terminal takes `tty` as it (an
+   * open without O_NOCTTY, TIOCSCTTY), its group in the foreground. False
+   * when `pid` leads no session, has one, or `tty` is another session's.
+   */
+  acquireTerminal(pid: number, tty: KernelTty): boolean {
+    const member = this.members.get(pid);
+    if (!member || member.sid !== pid || this.terminals.has(pid)) return false;
+    if ([...this.terminals.values()].includes(tty)) return false;
+    this.terminals.set(pid, tty);
+    this.foreground.set(tty, member.pgid);
+    return true;
+  }
+
   /** Signal every process of group `pgid`; false when there is none. */
   killGroup(pgid: number, sig: number): boolean {
     const targets = [...this.members.values()].filter((m) => m.pgid === pgid);
@@ -150,6 +164,17 @@ export class JobTable {
     const inSession = [...this.members.values()].some((m) => m.pgid === pgid && m.sid === self.sid);
     if (!inSession) throw new KernelError('EPERM');
     this.foreground.set(tty, pgid);
+  }
+
+  /**
+   * A pseudo-terminal's signals (SIGHUP, SIGWINCH, ^C typed through its
+   * master): only to a foreground group it was given (a session took it as
+   * its terminal, or tcsetpgrp). A pty nobody owns signals nobody, never the
+   * invocation's leader.
+   */
+  signalOwnedForeground(tty: KernelTty, sig: number): void {
+    const pgid = this.foreground.get(tty);
+    if (pgid !== undefined) this.killGroup(pgid, sig);
   }
 
   /** Where the terminal's signals go (^C, ^Z, SIGWINCH): its foreground group. */

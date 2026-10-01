@@ -83,6 +83,8 @@ export class KernelTty {
   /** The line being edited (canonical mode). */
   private line: number[] = [];
   private waiters: Array<() => void> = [];
+  /** The terminal went away (a pseudo-terminal's master closed): reads end. */
+  private hungUp = false;
 
   /**
    * @param screen where output (and echo) goes
@@ -102,6 +104,17 @@ export class KernelTty {
   resize(cols: number, rows: number): void {
     this.setSize(cols, rows);
     this.signal(SIG.WINCH);
+  }
+
+  /** The terminal is gone (a pseudo-terminal's master closed): every read, now or later, ends. */
+  hangup(): void {
+    this.hungUp = true;
+    this.wake();
+  }
+
+  /** SIGHUP for the foreground processes (the terminal hung up). */
+  signalHangup(): void {
+    this.signal(SIG.HUP);
   }
 
   /** The size, without SIGWINCH (the terminal a program starts on). */
@@ -135,13 +148,15 @@ export class KernelTty {
     return new OpenFile({
       read: (max, signal) => this.read(max, signal),
       write: async (bytes) => {
+        // Nobody reads a hung-up terminal (a pseudo-terminal whose master closed).
+        if (this.hungUp) throw new KernelError('EIO');
         this.output(bytes);
         return bytes.length;
       },
       poll: (): PollState => ({
-        readable: this.readable.length > 0,
+        readable: this.readable.length > 0 || this.hungUp,
         writable: true,
-        hangup: false,
+        hangup: this.hungUp,
       }),
       changed: (signal) => this.changed(signal),
       close: () => {},
@@ -270,7 +285,10 @@ export class KernelTty {
   }
 
   private async read(max: number, signal?: AbortSignal): Promise<Uint8Array> {
-    while (this.readable.length === 0) await this.changed(signal);
+    while (this.readable.length === 0) {
+      if (this.hungUp) return new Uint8Array(0);
+      await this.changed(signal);
+    }
     const head = this.readable[0];
     if (head === null) {
       this.readable.shift();
