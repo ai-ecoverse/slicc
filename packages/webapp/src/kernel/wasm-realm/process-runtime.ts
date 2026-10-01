@@ -7,7 +7,9 @@
  *   (`instantiateWasm`), `argv[0]` selects the program of a multi-call
  *   binary, and the environment is copied into Emscripten's `ENV`.
  * - Files: the live VFS is mounted into the module's FS over the SAB bridge,
- *   as `__slicc_mountVfs` does in the node realm.
+ *   as `__slicc_mountVfs` does in the node realm. A program that uses no files
+ *   (printf only) is linked with Emscripten's minimal FS, a stub without
+ *   streams: it runs on stdio alone, its output through `Module.print`.
  * - fds 0, 1, 2 are kernel descriptors: every read and write is a blocking
  *   `fd-read` / `fd-write` syscall, byte-exact. A read on an empty pipe parks
  *   this worker in `Atomics.wait` until a writer (another process) delivers.
@@ -333,12 +335,16 @@ export async function runWasmProcess(
     },
     // Static constructors may read the cwd: stand it up before they run.
     preRun: [
-      (m: { FS: ProcessFs }) => {
+      (m: object) => {
+        // Emscripten runs this before onRuntimeInitialized: a program without
+        // a FS (see runStdioOnly) has nothing to track or chdir.
+        if (!hasStreams(m)) return;
+        const fs = (m as RunningModule).FS;
         // Before static constructors: an open(O_CLOEXEC) of theirs counts too.
-        trackCloseOnExec(m.FS);
+        trackCloseOnExec(fs);
         try {
-          m.FS.mkdirTree(init.cwd);
-          m.FS.chdir(init.cwd);
+          fs.mkdirTree(init.cwd);
+          fs.chdir(init.cwd);
         } catch {
           /* mounted over below */
         }
@@ -349,6 +355,7 @@ export async function runWasmProcess(
   (deps.evaluate ?? evaluateGlue)(init.program.glue, module);
   await initialized;
   const running = module as unknown as RunningModule;
+  if (!hasStreams(running)) return runStdioOnly(running, init);
   const vfs = mountVfsIntoEmscripten(
     running.FS,
     {
@@ -396,6 +403,35 @@ export async function runWasmProcess(
     restartable,
   });
   try {
+    return runMain(running, init);
+  } finally {
+    // Even when the program traps: what it wrote to open files must not be
+    // lost with the worker.
+    vfs.flush();
+  }
+}
+
+/**
+ * Has the module a real FS? Emscripten's minimal-FS stub (a program that uses
+ * no files) has no streams, and a glue may define no FS at all.
+ */
+function hasStreams(module: object): boolean {
+  return typeof ownValue<Partial<ProcessFs>>(module, 'FS')?.getStream === 'function';
+}
+
+/**
+ * A program without a FS: nothing to mount and no descriptors to wire. Its
+ * stdout and stderr reach the kernel's fds 1 and 2 through `Module.print` /
+ * `printErr`, and it cannot read stdin (that would have pulled in the FS).
+ */
+function runStdioOnly(running: RunningModule, init: WasmProcessInitMsg): number {
+  if (init.fork) throw new Error(`${init.argv0} cannot resume a fork: it has no filesystem`);
+  return runMain(running, init);
+}
+
+/** Run main, or resume a fork; an exit() is its status. */
+function runMain(running: RunningModule, init: WasmProcessInitMsg): number {
+  try {
     if (init.fork) {
       // A forked child: become the parent's copy and go on from fork() returning 0.
       if (!running.sliccForkChild) throw new Error(`${init.argv0} cannot resume a fork`);
@@ -408,9 +444,5 @@ export async function runWasmProcess(
     const status = (e as { status?: unknown })?.status;
     if (typeof status !== 'number') throw e;
     return status;
-  } finally {
-    // Even when the program traps: what it wrote to open files must not be
-    // lost with the worker.
-    vfs.flush();
   }
 }

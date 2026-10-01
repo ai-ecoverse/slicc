@@ -691,6 +691,13 @@ export function mountLiveVfsDirs(
   dirs: readonly string[],
   warn: (message: string) => void
 ): { plugin: LiveVfsPlugin; mounted: string[] } {
+  // Emscripten's minimal FS (a program that uses no files) is a stub.
+  if (typeof Fs.filesystems !== 'object' || !Fs.filesystems) {
+    throw new Error(
+      'the module was linked without filesystem support, so the VFS cannot be mounted ' +
+        '(link it with -sFORCE_FILESYSTEM=1)'
+    );
+  }
   const plugin = Fs.filesystems.SLICC_LIVE_FS ?? createLiveVfsPlugin(Fs);
   Fs.filesystems.SLICC_LIVE_FS = plugin;
   const mounted: string[] = [];
