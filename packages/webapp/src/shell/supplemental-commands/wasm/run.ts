@@ -247,11 +247,27 @@ function listing(commands: Map<string, WasmCommand>): string {
   return rows.map((c) => `${c.name.padEnd(width)}  ${c.pkg}\n`).join('');
 }
 
+async function badScript(ctx: CommandContext, name: string, script: string): Promise<string> {
+  let head = '';
+  try {
+    head = (await ctx.fs.readFile(script)).split('\n', 1)[0] ?? '';
+  } catch {
+    return `${name}: ${script}: No such file or directory`;
+  }
+  if (!head.startsWith('#!')) return `${name}: ${script}: no #! line naming its interpreter`;
+  const interp =
+    head
+      .slice(2)
+      .trim()
+      .split(/[ \t]+/)[0] ?? '';
+  return `${name}: ${interp}: bad interpreter: No such file or directory`;
+}
+
 async function resolveInstalled(
   ctx: CommandContext,
   session: WasmSession,
   call: Invocation
-): Promise<Invocation> {
+): Promise<Invocation | { error: string }> {
   if (call.program.includes('/')) return call;
   if (await ctx.fs.exists(ctx.fs.resolvePath(ctx.cwd, call.program))) return call;
   const command = (await session.commands()).get(call.program);
@@ -262,7 +278,7 @@ async function resolveInstalled(
       argv: [call.program, ...call.args],
       cwd: ctx.cwd,
     });
-    if (!run) return call;
+    if (!run) return { error: await badScript(ctx, call.program, command.script) };
     return {
       ...call,
       argv0: run.target.argv0,
@@ -372,6 +388,8 @@ export async function runWasmCommand(
     options.commands
   );
   const call = await resolveInstalled(ctx, session, parsed);
+
+  if ('error' in call) return { stdout: '', stderr: `${call.error}\n`, exitCode: 127 };
   const gluePath = ctx.fs.resolvePath(ctx.cwd, call.program);
   const modulePathOf = await programModule(ctx, call, gluePath);
 

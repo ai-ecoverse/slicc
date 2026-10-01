@@ -438,6 +438,32 @@ describe('wasm command', () => {
       expect(r.stdout).toBe('frob  p\n');
     });
 
+    it('a script command whose #! interpreter is not installed: bad interpreter, 127 as bash on Linux', async () => {
+      const tools = '/shared/lib/node_modules/@ai-ecoverse/wasix-autoconf';
+      const files = {
+        [`${tools}/package.json`]: JSON.stringify({
+          name: '@ai-ecoverse/wasix-autoconf',
+          slicc: {
+            commands: {
+              autoreconf: { script: 'bin/autoreconf' },
+              broken: { script: 'bin/broken' },
+            },
+          },
+        }),
+        [`${tools}/bin/autoreconf`]: '#!/usr/bin/perl\nprint "hi";\n',
+        [`${tools}/bin/broken`]: 'echo no shebang\n',
+      };
+      const r = await runWasmCommand(['autoreconf', '-fi'], ctx(files));
+      expect(r).toMatchObject({
+        stderr: 'autoreconf: /usr/bin/perl: bad interpreter: No such file or directory\n',
+        exitCode: 127,
+      });
+      expect(spawn).not.toHaveBeenCalled();
+      const b = await runWasmCommand(['broken'], ctx(files));
+      expect(b).toMatchObject({ exitCode: 127 });
+      expect(b.stderr).toMatch(/^broken: .*bin\/broken: no #! line/);
+    });
+
     it('runs a bare name with its glue, module and argv0', async () => {
       await runWasmCommand(['tac', '-s', 'x'], ctx(installed));
       const opts = spawn.mock.calls[0][0];
