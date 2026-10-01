@@ -284,6 +284,8 @@ export async function runWasmProcess(
     noInitialRun: true,
     thisProgram: init.argv0,
     sliccPid: init.pid,
+
+    ...(init.ppid !== undefined ? { sliccPpid: init.ppid } : {}),
     sliccEnv: init.env,
     print: say(1),
     printErr: say(2),
