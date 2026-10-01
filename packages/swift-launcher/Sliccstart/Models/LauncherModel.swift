@@ -349,8 +349,9 @@ final class LauncherModel {
                     let status = UpdateCheckStatus.from(error: error)
                     log.error("checkForUpdates: failed: \(String(describing: error), privacy: .public)")
                     // `upToDate` is AppUpdater's way of saying "nothing newer",
-                    // not a fault — reporting it would drown the real failures.
-                    if status != .upToDate {
+                    // and a rate limit is GitHub asking us to wait — neither is
+                    // a fault, and reporting them would drown the real failures.
+                    if status != .upToDate, !status.isRateLimited {
                         LauncherErrorReport.report(.updateCheck, error)
                     }
                     self.updateCheckStatus = status

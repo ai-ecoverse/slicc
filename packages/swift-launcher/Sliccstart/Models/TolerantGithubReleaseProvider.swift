@@ -36,13 +36,17 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
     private let releasePrefix: String
     private let currentVersion: Version
     private let fetchPage: PageFetcher
+    private let rateLimitGate: GitHubRateLimitGate
+    private let now: @Sendable () -> Date
 
     init(
         authToken: String? = nil,
         host: UpdateHostConfiguration = UpdateHostConfiguration.resolve(),
         releasePrefix: String = "Sliccstart",
         currentVersion: Version = Bundle.main.version,
-        fetchPage: PageFetcher? = nil
+        fetchPage: PageFetcher? = nil,
+        rateLimitGate: GitHubRateLimitGate = GitHubRateLimitGate(),
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         // Treat an empty `GH_TOKEN` (e.g. `export GH_TOKEN=` from a script
         // that forgot to populate it) as no token. Otherwise we would emit
@@ -54,6 +58,8 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
         self.releasePrefix = releasePrefix
         self.currentVersion = currentVersion
         self.fetchPage = fetchPage ?? Self.urlSessionFetchPage
+        self.rateLimitGate = rateLimitGate
+        self.now = now
     }
 
     /// Walks the releases listing newest-first and returns the installable
@@ -70,6 +76,11 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
     /// installed and can never be an update, so that is the natural end of the
     /// search rather than an arbitrary page count. See `hasReached(_:)` for why
     /// "reached" is not simply "saw an older tag".
+    ///
+    /// GitHub's rate-limit headers are honored (see `GitHubRateLimit`): a
+    /// limited response throws `GitHubRateLimitedError` instead of a bare
+    /// `badServerResponse`, and until the advertised reset every later fetch
+    /// fails locally without touching the network.
     func fetchReleases(owner: String, repo: String, proxy: URLRequestProxy?) async throws -> [Release] {
         var nextURL: URL? = Self.firstPageURL(host.releasesURL(owner: owner, repo: repo))
         var viable: [Release] = []
@@ -78,13 +89,19 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
 
         while let url = nextURL, viable.isEmpty, !reachedCurrentVersion, pagesFetched < Self.maxReleasePages {
             pagesFetched += 1
+            try rateLimitGate.check(now: now())
             var request = URLRequest(url: url)
             if let authToken {
                 request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
             }
             request = request.applyOrOriginal(proxy: proxy)
             let (data, httpResponse) = try await fetchPage(request)
+            let blockedUntil = GitHubRateLimit.blockedUntil(httpResponse, body: data, now: now())
+            rateLimitGate.record(blockedUntil)
             guard (200..<300).contains(httpResponse.statusCode) else {
+                if let blockedUntil {
+                    throw GitHubRateLimitedError(retryAfter: blockedUntil)
+                }
                 throw URLError(.badServerResponse)
             }
             let decoder = JSONDecoder()
