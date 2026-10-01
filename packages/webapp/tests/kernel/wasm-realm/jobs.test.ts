@@ -356,10 +356,17 @@ describe('WasmProcess job syscalls', () => {
       fds.installAt(0, file);
       fds.installAt(1, openPipe().read);
       const p = new WasmProcess(pid, fds, { jobs, kill, onPending: () => {} });
-      jobs.add(pid, parent, (sig) => {
-        signals.push([pid, sig]);
-        p.signal(sig);
-      });
+
+      const terminal = parent === undefined ? tty : undefined;
+      jobs.add(
+        pid,
+        parent,
+        (sig) => {
+          signals.push([pid, sig]);
+          p.signal(sig);
+        },
+        terminal
+      );
       return p;
     };
     return { jobs, signals, kill, tty, make };
@@ -420,6 +427,23 @@ describe('WasmProcess job syscalls', () => {
       errno: 'EIO',
     });
     void reading;
+  });
+
+  it("reading a terminal that is not its session's is no background read (screen's backend)", async () => {
+    const { make, signals, tty } = session();
+    const shell = make(10);
+    await shell.syscall({ op: 'tty-pgrp-set', fd: 0, pgrp: 10 });
+    const backend = make(11, 10);
+    expect(await backend.syscall({ op: 'proc-setsid' })).toMatchObject({ json: 11 });
+    let got: unknown;
+    void backend.syscall({ op: 'fd-read', fd: 0, max: 8 }).then((r) => {
+      got = r;
+    });
+    await tick();
+    tty.receive(new TextEncoder().encode('k\n'));
+    await tick();
+    expect(signals).toEqual([]);
+    expect(got).toMatchObject({ ok: true });
   });
 
   it('without a job table each process is its own group and session', async () => {

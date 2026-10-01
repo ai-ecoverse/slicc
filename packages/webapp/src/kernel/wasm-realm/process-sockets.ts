@@ -57,6 +57,28 @@ function errno(e: unknown): number {
   throw e;
 }
 
+const O_WRONLY = 0o1;
+const O_CREAT = 0o100;
+const O_EXCL = 0o200;
+
+function socketNode(Fs: ProcessFs, addr: SockAddr): { remove(): void } | undefined {
+  if (addr.family !== 'unix' || !addr.path || addr.path.startsWith('\0')) return undefined;
+  const fs = Fs as ProcessFs & { unlink?(path: string): void };
+  let stream: ProcessStream;
+  try {
+    stream = Fs.open(addr.path, O_WRONLY | O_CREAT | O_EXCL, 0o755);
+  } catch (e) {
+    if ((e as { errno?: unknown })?.errno === wasiErrno('EEXIST')) {
+      throw new SyscallError('EADDRINUSE');
+    }
+    throw e;
+  }
+
+  if (Fs.close) Fs.close(stream);
+  else Fs.closeStream(stream.fd);
+  return { remove: () => fs.unlink?.(addr.path) };
+}
+
 export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
   const { transport, Fs, sys, streams } = deps;
 
@@ -131,7 +153,16 @@ export function createSocketKernel(deps: SocketKernelDeps): SocketKernel {
           throw e;
         }
       }),
-    bind: (fd, addr) => guard(() => done({ op: 'sock-bind', fd: kfd(fd), addr })),
+    bind: (fd, addr) =>
+      guard(() => {
+        const node = socketNode(Fs, addr);
+        try {
+          return done({ op: 'sock-bind', fd: kfd(fd), addr });
+        } catch (e) {
+          node?.remove();
+          throw e;
+        }
+      }),
     listen: (fd, backlog) => guard(() => done({ op: 'sock-listen', fd: kfd(fd), backlog })),
     accept: (fd, nonblock, cloexec) =>
       guard(() => {

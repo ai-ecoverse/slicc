@@ -6,6 +6,7 @@ export const TIOCGPTN = 0x80045430;
 export const TIOCSPTLCK = 0x40045431;
 export const TIOCSCTTY = 0x540e;
 export const TIOCSWINSZ = 0x5414;
+export const TIOCPKT = 0x5420;
 
 export interface PtyKernel {
   ptyNumber(kfd: number): number;
@@ -13,6 +14,8 @@ export interface PtyKernel {
   ptyLock(kfd: number, lock: boolean): void;
 
   setControllingTerminal(kfd: number): void;
+
+  setPacketMode(kfd: number, on: boolean): void;
 
   setWinsize(kfd: number, rows: number, cols: number): void;
 }
@@ -37,7 +40,8 @@ export function ptyIoctl(ioctl: GlueSyscall, deps: PtyIoctlDeps): GlueSyscall {
       request !== TIOCGPTN &&
       request !== TIOCSPTLCK &&
       request !== TIOCSCTTY &&
-      request !== TIOCSWINSZ
+      request !== TIOCSWINSZ &&
+      request !== TIOCPKT
     ) {
       return ioctl(fd, op, varargs);
     }
@@ -72,6 +76,9 @@ function answer(
       return 0;
     case TIOCSCTTY:
       kernel.setControllingTerminal(kfd);
+      return 0;
+    case TIOCPKT:
+      kernel.setPacketMode(kfd, (heap[argp >> 2] ?? 0) !== 0);
       return 0;
     default: {
       const word = heap[argp >> 2] ?? 0;

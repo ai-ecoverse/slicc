@@ -120,18 +120,42 @@ function cloexecByFlag(syscall: GlueSyscall, flagArg: number, deps: CloexecDeps)
   };
 }
 
-function wrappers(glue: GlueSyscalls, deps: CloexecDeps): Map<GlueSyscall, GlueSyscall> {
-  const out = new Map<GlueSyscall, GlueSyscall>();
-  if (glue.fcntl) out.set(glue.fcntl, cloexecFcntl(glue.fcntl, deps));
-  if (glue.pipe2) out.set(glue.pipe2, cloexecPipe2(glue.pipe2, deps));
+type SyscallName = keyof GlueSyscalls;
 
-  if (glue.dup3) out.set(glue.dup3, cloexecByFlag(glue.dup3, 2, deps));
-  if (glue.socket) out.set(glue.socket, cloexecByFlag(glue.socket, 1, deps));
-  if (glue.accept4) out.set(glue.accept4, cloexecByFlag(glue.accept4, 3, deps));
-  if (glue.ioctl && deps.pty) {
-    out.set(glue.ioctl, ptyIoctl(glue.ioctl, { fs: deps.fs, heap: deps.heap, kernel: deps.pty }));
-  }
-  return out;
+const IMPORT_NAMES: Readonly<Record<SyscallName, string>> = {
+  fcntl: '__syscall_fcntl64',
+  pipe2: '__syscall_pipe2',
+  dup3: '__syscall_dup3',
+  socket: '__syscall_socket',
+  accept4: '__syscall_accept4',
+  ioctl: '__syscall_ioctl',
+};
+
+function wrapperFactories(
+  deps: CloexecDeps
+): Partial<Record<SyscallName, (syscall: GlueSyscall) => GlueSyscall>> {
+  const { pty } = deps;
+  return {
+    fcntl: (f) => cloexecFcntl(f, deps),
+    pipe2: (f) => cloexecPipe2(f, deps),
+
+    dup3: (f) => cloexecByFlag(f, 2, deps),
+    socket: (f) => cloexecByFlag(f, 1, deps),
+    accept4: (f) => cloexecByFlag(f, 3, deps),
+    ...(pty
+      ? { ioctl: (f: GlueSyscall) => ptyIoctl(f, { fs: deps.fs, heap: deps.heap, kernel: pty }) }
+      : {}),
+  };
+}
+
+function syscallOf(glue: GlueSyscalls, name: string, value: unknown): SyscallName | undefined {
+  const names = Object.keys(IMPORT_NAMES) as SyscallName[];
+  const own = names.find((key) => glue[key] !== undefined && glue[key] === value);
+  if (own) return own;
+
+  return typeof value === 'function'
+    ? names.find((key) => glue[key] !== undefined && IMPORT_NAMES[key] === name)
+    : undefined;
 }
 
 export function wrapCloexecSyscalls(
@@ -140,15 +164,15 @@ export function wrapCloexecSyscalls(
   deps: CloexecDeps
 ): void {
   if (!glue) return;
-  const replace = wrappers(glue, deps);
-  if (replace.size === 0) return;
+  const factories = wrapperFactories(deps);
   const seen = new Set<object>();
   for (const namespace of Object.values(imports)) {
     if (!namespace || typeof namespace !== 'object' || seen.has(namespace)) continue;
     seen.add(namespace);
     for (const [name, value] of Object.entries(namespace)) {
-      const wrapped = replace.get(value as GlueSyscall);
-      if (wrapped) namespace[name] = wrapped;
+      const key = syscallOf(glue, name, value);
+      const wrap = key && factories[key];
+      if (wrap) namespace[name] = wrap(value as GlueSyscall);
     }
   }
 }

@@ -271,6 +271,58 @@ describe('KernelStreams', () => {
     void streams;
   });
 
+  it('chown / chmod / stat by path on /dev/pts/N and /dev/ptmx answer for the kernel ptys', () => {
+    const { fs } = fakeFs();
+    let ptys = [3];
+    const sys = {
+      close: () => {},
+      openPty: () => 0,
+      ptyNumbers: () => ptys,
+    } as unknown as ProcessSys;
+    const calls: string[] = [];
+    Object.assign(fs, {
+      open: (path: string, flags: number) =>
+        ({ fd: 9, flags, path, stream_ops: {} }) as unknown as ProcessStream,
+      chown: (p: string) => void calls.push(`chown ${p}`),
+      chmod: (p: string) => void calls.push(`chmod ${p}`),
+      stat: (p: string) => {
+        calls.push(`stat ${p}`);
+        return { mode: 0o100644 };
+      },
+    });
+    new KernelStreams(fs, sys).useControllingTerminal();
+    const f = fs as unknown as {
+      chown(p: string, u: number, g: number): void;
+      chmod(p: string, m: number): void;
+      stat(p: string): { mode: number; rdev: number; uid: number };
+    };
+    f.chown('/dev/pts/3', 1000, 5);
+    f.chmod('/dev/pts/3', 0o620);
+    expect(f.stat('/dev/pts/3')).toMatchObject({ mode: 0o20620, rdev: (136 << 8) | 3, uid: 1000 });
+    expect(f.stat('/dev/ptmx').mode).toBe(0o20666);
+    expect(calls).toEqual([]);
+
+    f.chown('/tmp/x', 1000, 1000);
+    expect(f.stat('/tmp/x').mode).toBe(0o100644);
+    expect(calls).toEqual(['chown /tmp/x', 'stat /tmp/x']);
+
+    const enoent = { errno: 44 };
+    expect(() => f.stat('/dev/pts/999')).toThrow(expect.objectContaining(enoent));
+    expect(() => f.chmod('/dev/pts/999', 0o620)).toThrow(expect.objectContaining(enoent));
+    ptys = [];
+    expect(() => f.chown('/dev/pts/3', 1000, 5)).toThrow(expect.objectContaining(enoent));
+    expect(f.stat('/dev/ptmx').mode).toBe(0o20666);
+  });
+
+  it('without kernel pseudo-terminals, /dev/ptmx and /dev/pts/N do not exist', () => {
+    const { fs } = fakeFs();
+    Object.assign(fs, { open: () => ({}), stat: () => ({ mode: 0o100644 }) });
+    new KernelStreams(fs, { close: () => {} } as unknown as ProcessSys).useControllingTerminal();
+    const f = fs as unknown as { stat(p: string): unknown };
+    expect(() => f.stat('/dev/ptmx')).toThrow(expect.objectContaining({ errno: 44 }));
+    expect(() => f.stat('/dev/pts/0')).toThrow(expect.objectContaining({ errno: 44 }));
+  });
+
   it("opens /dev/tty on the kernel's controlling terminal, or fails with ENXIO", () => {
     const { fs } = fakeFs();
     const closed: number[] = [];

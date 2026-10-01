@@ -614,6 +614,8 @@ export class WasmProcess {
   private checkForeground(tty: KernelTty): void {
     const jobs = this.options.jobs;
     if (!jobs) return;
+    const session = jobs.controllingTerminal(this.pid);
+    if (session !== undefined && session !== tty) return;
     const pgid = this.pgid();
     if (jobs.tcgetpgrp(tty, this.sid()) === pgid) return;
     if (this.ignored & sigbit(SIG.TTIN)) throw new KernelError('EIO');
