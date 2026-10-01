@@ -28,7 +28,7 @@ env:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     outputs:
       webapp: ${{ steps.filter.outputs.webapp }}
       vfs-root: ${{ steps.filter.outputs.vfs-root }}
@@ -310,7 +310,7 @@ jobs:
           esac
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -382,7 +382,7 @@ jobs:
   # is linear by construction, so this is skipped (= passing).
   linear-history:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -401,7 +401,7 @@ jobs:
   # covers the merge-queue candidate, not just the PR head.
   dependency-review:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     permissions:
       contents: read
     steps:
@@ -437,7 +437,7 @@ jobs:
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -467,7 +467,7 @@ jobs:
       needs.changes.outputs.github-workflow == 'true' ||
       needs.changes.outputs.bench == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 25
@@ -497,7 +497,7 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 25
@@ -607,7 +607,7 @@ jobs:
   e2e:
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Budget covers setup + three builds + the full suite on one worker, and on
     # the speech leg the kokoro spec alone may take up to its 25-minute test
     # timeout (staging recovery = one page reboot + a second ~6-min download
@@ -776,7 +776,7 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -822,7 +822,7 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1256,7 +1256,7 @@ jobs:
     if: >-
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1286,7 +1286,7 @@ jobs:
     if: >-
       needs.changes.outputs.github-workflow == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1333,7 +1333,7 @@ jobs:
     if: >-
       needs.changes.outputs.bench == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1369,7 +1369,7 @@ jobs:
       needs.changes.outputs.root-config == 'true'
     # Pure stdlib string/JSON logic with no OS-specific paths, unlike
     # slicc-cli's process-group signalling — one Linux job covers it.
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@v7
@@ -1451,7 +1451,7 @@ jobs:
     if: >-
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1482,7 +1482,7 @@ jobs:
       needs.changes.outputs.webcomponents == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1515,7 +1515,7 @@ jobs:
     if: >-
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1549,7 +1549,7 @@ jobs:
     if: >-
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -2319,7 +2319,7 @@ jobs:
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -2443,7 +2443,7 @@ jobs:
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -2512,7 +2512,7 @@ jobs:
         github-workflow,
         bench,
       ]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cloud-run]
     steps:
       - name: Check job results
         run: |
