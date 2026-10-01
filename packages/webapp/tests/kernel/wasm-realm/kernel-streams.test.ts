@@ -420,6 +420,25 @@ describe('KernelStreams', () => {
     expect(fs.open('/dev/tty1', 2).sliccKernelFd).toBe(0); // the stdio terminal, as before
   });
 
+  it('a named terminal open that fails for another reason (EMFILE) fails, closing its stream', () => {
+    const { fs, streams } = fakeFs();
+    const closed: number[] = [];
+    Object.assign(fs, {
+      open: (path: string, flags: number) =>
+        ({ fd: 9, flags, path, stream_ops: {}, tty: { ops: {} } }) as unknown as ProcessStream,
+      closeStream: (fd: number) => closed.push(fd),
+    });
+    (streams[0] as ProcessStream).sliccKernelFd = 0;
+    const sys = fakeSys({
+      openTty: () => {
+        throw new SyscallError('EMFILE');
+      },
+    });
+    new KernelStreams(fs, sys).useControllingTerminal();
+    expect(() => fs.open('/dev/tty1', 2)).toThrow(expect.objectContaining({ errno: 33 }));
+    expect(closed).toEqual([9]);
+  });
+
   it('wireKernelFd opens a kernel descriptor beyond stdio at its own number', () => {
     const streams: Record<number, ProcessStream> = {};
     const closed: number[] = [];

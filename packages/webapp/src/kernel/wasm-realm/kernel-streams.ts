@@ -353,7 +353,13 @@ export class KernelStreams {
       }
       // A terminal device by name (the panel's `/dev/tty1`, as ttyname()
       // reports it): the kernel's, whatever session asks.
-      const named = stream.path ? this.openNamedTerminal(stream.path) : undefined;
+      let named: number | undefined;
+      try {
+        named = stream.path ? this.openNamedTerminal(stream.path) : undefined;
+      } catch (e) {
+        this.Fs.closeStream(stream.fd);
+        throw e;
+      }
       if (named !== undefined) {
         this.attach(stream, named, true);
         return stream;
@@ -437,13 +443,21 @@ export class KernelStreams {
     if (!exists) throw new this.Fs.ErrnoError(wasiErrno('ENOENT'));
   }
 
-  /** A new kernel fd on the terminal device named `path`, or undefined when the kernel has none. */
+  /**
+   * A new kernel fd on the terminal device named `path`; undefined when the
+   * kernel has none of that name (ENXIO). Any other failure (EMFILE) is the
+   * open's.
+   */
   private openNamedTerminal(path: string): number | undefined {
-    if (!this.sys.openTty) return undefined;
+    const { openTty } = this.sys;
+    if (!openTty) return undefined;
     try {
-      return this.sys.openTty(path);
-    } catch {
-      return undefined;
+      return openTty.call(this.sys, path);
+    } catch (e) {
+      if (e instanceof SyscallError && e.code === 'ENXIO') return undefined;
+      return this.call(() => {
+        throw e;
+      });
     }
   }
 
