@@ -50,6 +50,10 @@ const S_IFDIR = 0o040000;
 const S_IFREG = 0o100000;
 const S_IFLNK = 0o120000;
 const PERM_MASK = 0o7777;
+/** What the VFS gives a directory its mkdir makes. */
+const DEFAULT_DIR_PERM = 0o755;
+/** The umask a created directory's mode is masked with (Emscripten applies none). */
+const UMASK = 0o022;
 const SEEK_CUR = 1;
 const SEEK_END = 2;
 
@@ -435,6 +439,13 @@ function createNodeOps(h: LiveHelpers): LiveNodeOps {
       const path = childPath(parent, name);
       if (Fs.isDir(mode)) {
         call(() => bridgeOf(parent).mkdir(path));
+        // The bridge's mkdir takes no mode (the VFS default is 0755), and
+        // Emscripten chmods a file it creates but not a directory, nor masks
+        // the mode with a umask. Apply what was asked for, under umask 022 as
+        // on a stock Linux account: mkdir(0700) is 0700 (screen refuses a
+        // socket dir that is not), mkdir(0777) stays 0755.
+        const perm = mode & PERM_MASK & ~UMASK;
+        if (perm !== DEFAULT_DIR_PERM) metadataCall(() => bridgeOf(parent).chmod(path, perm));
       } else if (Fs.isFile(mode)) {
         call(() => bridgeOf(parent).writeFile(path, new Uint8Array(0)));
       } else {

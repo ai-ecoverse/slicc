@@ -210,6 +210,16 @@ os.unlink('/work/link')
     expect(py('st.st_mode & 0o777')).toBe(0o755);
   });
 
+  it('a directory gets the mode its mkdir asked for (screen wants its socket dir 0700)', () => {
+    py(`
+import os
+os.mkdir('/work/private', 0o700)
+os.mkdir('/work/plain')
+`);
+    expect(nodeFs.statSync(join(host, 'private')).mode & 0o777).toBe(0o700);
+    expect(nodeFs.statSync(join(host, 'plain')).mode & 0o777).toBe(0o755);
+  });
+
   // hostfs / File System Access mounts store no permissions or times:
   // VirtualFS answers chmod / utimes with ENOSYS. Emscripten's open(O_CREAT)
   // chmods every file it creates, so failing made files uncreatable there.
