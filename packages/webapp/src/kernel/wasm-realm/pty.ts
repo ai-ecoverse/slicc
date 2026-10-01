@@ -200,6 +200,7 @@ export type PtySyscall =
   | { op: 'pty-lock'; fd: number; lock: boolean }
   | { op: 'pty-ctty'; fd: number }
   | { op: 'pty-packet'; fd: number; on: boolean }
+  | { op: 'pty-list' }
   | { op: 'pty-winsz-set'; fd: number; rows: number; cols: number };
 
 export const PTY_OPS: readonly PtySyscall['op'][] = [
@@ -209,6 +210,7 @@ export const PTY_OPS: readonly PtySyscall['op'][] = [
   'pty-lock',
   'pty-ctty',
   'pty-packet',
+  'pty-list',
   'pty-winsz-set',
 ];
 
@@ -264,6 +266,8 @@ export function ptySyscall(req: PtySyscall, ctx: PtyContext): SyncFsResult {
       if (!ctx.jobs?.acquireTerminal(ctx.pid, tty)) throw new KernelError('EPERM');
       return done;
     }
+    case 'pty-list':
+      return json(ctx.ptys?.numbers() ?? []);
     case 'pty-packet':
       masterOf(ctx, req.fd).packet = req.on;
       return done;

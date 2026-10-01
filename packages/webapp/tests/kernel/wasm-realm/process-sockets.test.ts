@@ -159,6 +159,7 @@ describe('createSocketKernel', () => {
     const { net, calls, Fs } = setup((req) => (req.op === 'sock-open' ? json(5) : done));
     const created: Array<[string, number, number]> = [];
     const unlinked: string[] = [];
+    const closed: string[] = [];
     let exists = false;
     Object.assign(Fs, {
       open: (path: string, flags: number, mode: number) => {
@@ -166,12 +167,15 @@ describe('createSocketKernel', () => {
         created.push([path, flags, mode]);
         return { fd: 7, path, flags, stream_ops: {} };
       },
+      // FS.close: the node's close hook runs (the live VFS counts its opens).
+      close: (stream: { path: string }) => void closed.push(stream.path),
       unlink: (path: string) => void unlinked.push(path),
     });
     const fd = net.socket('unix', false);
     const addr = { family: 'unix' as const, path: '/tmp/screens/1.pts-0.host' };
     expect(net.bind(fd, addr)).toBe(0);
     expect(created).toEqual([['/tmp/screens/1.pts-0.host', 0o301, 0o755]]); // O_WRONLY|O_CREAT|O_EXCL
+    expect(closed).toEqual(['/tmp/screens/1.pts-0.host']); // closed through FS.close, not just freed
     expect(calls.at(-1)).toEqual({ op: 'sock-bind', fd: 5, addr });
     exists = true;
     expect(net.bind(net.socket('unix', false), addr)).toBeLessThan(0); // EADDRINUSE, no kernel bind

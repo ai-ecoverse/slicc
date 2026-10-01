@@ -132,6 +132,8 @@ export interface ProcessSys {
   /** `/dev/ptmx`: a new pseudo-terminal's master; `/dev/pts/N`: its slave (`noctty`: O_NOCTTY). */
   openPty?(): number;
   openPts?(n: number, noctty: boolean): number;
+  /** The pseudo-terminals in use (what `/dev/pts` holds). */
+  ptyNumbers?(): number[];
 }
 
 export interface StreamOps {
@@ -190,6 +192,8 @@ export interface ProcessFs extends EmscriptenFsForHook {
   open(path: string, flags: number, mode?: number): ProcessStream;
   dupStream(stream: ProcessStream, fd: number): ProcessStream;
   closeStream(fd: number): void;
+  /** close(2) of a stream: its `stream_ops.close` (a node's close hook), then the descriptor. */
+  close?(stream: ProcessStream): void;
   isFile(mode: number): boolean;
   mkdirTree(path: string): void;
   cwd(): string;
@@ -362,7 +366,9 @@ export class KernelStreams {
    * Emscripten's FS (an open goes to the kernel, {@link openPty}): chown and
    * chmod succeed with no effect (grantpt's work, which GNU screen does
    * itself; SLICC has one user and no owners), and stat answers a
-   * character device the realm user owns.
+   * character device the realm user owns. Only for a pty that exists: a
+   * `/dev/pts/N` the kernel has no pair for (never opened, or closed) is
+   * ENOENT, as is `/dev/ptmx` without the kernel's pseudo-terminals.
    */
   private usePtyPaths(): void {
     const fs = this.Fs as unknown as PtyPathFs;
@@ -370,14 +376,27 @@ export class KernelStreams {
       const original = fs[name];
       if (typeof original !== 'function') continue;
       fs[name] = (path: string, ...rest: number[]) =>
-        isPtyPath(path) ? undefined : original.call(fs, path, ...rest);
+        isPtyPath(path) ? this.existingPty(path) : original.call(fs, path, ...rest);
     }
     for (const name of ['stat', 'lstat'] as const) {
       const original = fs[name];
       if (typeof original !== 'function') continue;
-      fs[name] = (path: string, ...rest: unknown[]) =>
-        isPtyPath(path) ? ptyStat(path) : original.call(fs, path, ...rest);
+      fs[name] = (path: string, ...rest: unknown[]) => {
+        if (!isPtyPath(path)) return original.call(fs, path, ...rest);
+        this.existingPty(path);
+        return ptyStat(path);
+      };
     }
+  }
+
+  /** ENOENT unless the pty path names one the kernel has. */
+  private existingPty(path: string): void {
+    const n = PTY_PATH.exec(path)?.[1];
+    const exists =
+      n === undefined
+        ? this.sys.openPty !== undefined
+        : (this.sys.ptyNumbers?.().includes(Number(n)) ?? false);
+    if (!exists) throw new this.Fs.ErrnoError(wasiErrno('ENOENT'));
   }
 
   /** The kernel descriptor of the terminal the process's stdio is on. */

@@ -100,7 +100,9 @@ function socketNode(Fs: ProcessFs, addr: SockAddr): { remove(): void } | undefin
     }
     throw e;
   }
-  Fs.closeStream(stream.fd);
+  // FS.close runs the node's close hook (the live VFS counts its opens), then frees the fd.
+  if (Fs.close) Fs.close(stream);
+  else Fs.closeStream(stream.fd);
   return { remove: () => fs.unlink?.(addr.path) };
 }
 

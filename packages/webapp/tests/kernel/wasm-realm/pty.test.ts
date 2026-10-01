@@ -130,6 +130,9 @@ describe('ptySyscall', () => {
       .json;
     expect(ctx.fds.get(slave).file.tty).toBe(ctx.ptys.get(0).slave);
     expect(ctx.jobs.controllingTerminal(ctx.pid)).toBe(ctx.ptys.get(0).slave);
+    // What /dev/pts holds: the numbers in use.
+    expect(ptySyscall({ op: 'pty-list' }, ctx)).toMatchObject({ json: [0] });
+    expect(ptySyscall({ op: 'pty-list' }, { ...ctx, ptys: undefined })).toMatchObject({ json: [] });
   });
 
   it('O_NOCTTY leaves the session without a terminal; TIOCSCTTY then takes it, once', () => {
