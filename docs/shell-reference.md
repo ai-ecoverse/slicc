@@ -2334,6 +2334,10 @@ Rules: earlier root wins a basename conflict; first basename wins inside a root;
 
 `/usr`, `/usr/bin`, and `/usr/bin/<command>` are synthesized from the command
 registry — they have no VFS entry — so `VfsAdapter` answers for them directly.
+Reading `/usr/bin/<command>` gives a three-line `#!/bin/sh` script that runs the
+command (`exec <command> "$@"`), and `stat` reports its size, so a program that
+inspects a bin's shebang (Bundler, `file`, `head`) sees an executable, not an
+empty file. Running the path still resolves to the command by name.
 All three metadata surfaces agree: `exists`, `stat`, **and `lstat`** (none of
 these paths can be a symlink, so `stat` and `lstat` return the same answer).
 That last one matters for commands that read metadata without following links —
