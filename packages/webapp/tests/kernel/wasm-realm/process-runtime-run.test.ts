@@ -40,6 +40,7 @@ type FakeModule = {
   sliccRunMain?: (args: string[]) => number;
   sliccForkChild?: (state: object) => number;
   sliccPid?: number;
+  sliccPpid?: number;
 };
 
 describe('runWasmProcess', () => {
@@ -102,6 +103,24 @@ describe('runWasmProcess', () => {
     });
     expect(code).toBe(40);
     expect(pid).toBe(1); // getpid() is the kernel pid
+  });
+
+  it("hands the program its parent's kernel pid for getppid() (a spawned child's)", async () => {
+    const module = await WebAssembly.compile(NEEDS_IMPORT);
+    const seen: Array<number | undefined> = [];
+    const run = (ppid?: number) =>
+      runWasmProcess({ ...init(module), pid: 12, ...(ppid !== undefined ? { ppid } : {}) }, port, {
+        evaluate: (_glue, m) => {
+          const fake = m as FakeModule;
+          seen.push(fake.sliccPpid);
+          fake.FS = { getStream: () => null };
+          fake.callMain = () => 0;
+          fake.onRuntimeInitialized();
+        },
+      });
+    await run(11);
+    await run();
+    expect(seen).toEqual([11, undefined]);
   });
 
   it("resumes a forked child from the parent's state on its rebuilt fd table", async () => {
