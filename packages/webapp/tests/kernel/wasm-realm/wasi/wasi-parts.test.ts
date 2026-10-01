@@ -15,7 +15,11 @@ import {
   resolveUnder,
 } from '../../../../src/kernel/wasm-realm/wasi/wasi-files.js';
 import { importedMemory } from '../../../../src/kernel/wasm-realm/wasi/wasi-module.js';
-import { unsupportedImport } from '../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js';
+import {
+  captureBacktraces,
+  trapMessage,
+  unsupportedImport,
+} from '../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js';
 import { WasiThreads } from '../../../../src/kernel/wasm-realm/wasi/wasi-threads.js';
 import { FakeFs, FakeKernel } from './fakes.js';
 
@@ -251,5 +255,56 @@ describe('WasiThreads.spawn', () => {
       memory,
       modules: { '/lib/libm.so': lib },
     });
+  });
+});
+
+describe('trapMessage', () => {
+  const trap = () => {
+    const e = new WebAssembly.RuntimeError('unreachable');
+    e.stack = [
+      'RuntimeError: unreachable',
+      '    at debug.defaultPanic (wasm://wasm/00ce402e:wasm-function[2560]:0x24b977)',
+      '    at Build.Step.zigProcessUpdate (wasm://wasm/00ce402e:wasm-function[1674]:0x196785)',
+    ].join('\n');
+    return e;
+  };
+
+  it('is the message alone by default', () => {
+    expect(trapMessage(trap(), {})).toBe('wasm trap: unreachable');
+  });
+
+  it("shows the program's wasm frames, not the runtime's JS ones under them", () => {
+    const e = trap();
+    e.stack += [
+      '',
+      '    at runWasiProcess (http://localhost/assets/wasi-runtime-X.js:1:2000)',
+      '    at async http://localhost/assets/process-worker-Y.js:1:300',
+    ].join('\n');
+    const lines = trapMessage(e, { SLICC_WASM_BACKTRACE: '1' }).split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines.slice(1).every((line) => line.includes('wasm://wasm/'))).toBe(true);
+  });
+
+  it('captureBacktraces raises the stack limit only when asked', () => {
+    const before = Error.stackTraceLimit;
+    try {
+      Error.stackTraceLimit = 10;
+      captureBacktraces({});
+      expect(Error.stackTraceLimit).toBe(10);
+      captureBacktraces({ SLICC_WASM_BACKTRACE: '1' });
+      expect(Error.stackTraceLimit).toBeGreaterThanOrEqual(40);
+    } finally {
+      Error.stackTraceLimit = before;
+    }
+  });
+
+  it('adds the wasm frames with SLICC_WASM_BACKTRACE=1, naming a thread', () => {
+    expect(trapMessage(trap(), { SLICC_WASM_BACKTRACE: '1' }, ' in thread 2')).toBe(
+      [
+        'wasm trap in thread 2: unreachable',
+        '    at debug.defaultPanic (wasm://wasm/00ce402e:wasm-function[2560]:0x24b977)',
+        '    at Build.Step.zigProcessUpdate (wasm://wasm/00ce402e:wasm-function[1674]:0x196785)',
+      ].join('\n')
+    );
   });
 });
