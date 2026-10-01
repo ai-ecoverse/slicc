@@ -859,6 +859,8 @@ the caller's arguments. For example, a Ruby package can expose `gem` through
 `{ "wasm": "bin/ruby.wasm", "args": ["-S", "gem"] }`, so `gem --version` runs
 the equivalent of `ruby -S gem --version`. These arguments apply when the
 command is launched from the shell or spawned by another wasm process.
+`${package}` in an argument expands to the installed package directory, so
+`"args": ["${package}/bin/gem"]` names a package script directly.
 
 ```json
 "slicc": {

@@ -91,12 +91,12 @@ describe('commandsFromManifest', () => {
       slicc: {
         abi: 'wasi',
         commands: {
-          gem: { wasm: 'bin/ruby.wasm', args: ['-S', 'gem'] },
+          gem: { wasm: 'bin/ruby.wasm', args: ['${package}/bin/gem', '--verbose'] },
           bad: { wasm: 'bin/ruby.wasm', args: ['-S', 42] },
         },
       },
     });
-    expect(commands[0]?.args).toEqual(['-S', 'gem']);
+    expect(commands[0]?.args).toEqual([`${dir}/bin/gem`, '--verbose']);
     expect(commands[1]).not.toHaveProperty('args');
   });
 
