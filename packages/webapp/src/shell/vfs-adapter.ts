@@ -20,6 +20,7 @@ import * as justBash from 'just-bash';
 import type { DirEntry, MetadataUpdate, Stats, VirtualFS } from '../fs/index.js';
 import { FsError, joinPath, normalizePath, statsFromDirEntry } from '../fs/index.js';
 import { consumeCachedBinary } from './binary-cache.js';
+import { identityFile, identityFileNames, isMissing } from './identity-files.js';
 import { parkReadBytes } from './request-body-provenance.js';
 
 // just-bash v3 ships `DefenseInDepthBox` from `security/index.js` (re-exported
@@ -120,6 +121,25 @@ export interface VfsAdapterOptions {
 function binAlias(normalized: string): string {
   if (normalized === '/bin') return '/usr/bin';
   return normalized.startsWith('/bin/') ? `/usr${normalized}` : normalized;
+}
+
+/** A listing of `dir` with the synthetic identity files it lacks ({@link identityFileNames}). */
+function withIdentityNames(dir: string, names: string[]): string[] {
+  const missing = identityFileNames(dir).filter((n) => !names.includes(n));
+  return missing.length ? [...names, ...missing].sort() : names;
+}
+
+/** As {@link withIdentityNames}, for a typed listing. */
+function withIdentityDirents(dir: string, entries: DirentEntry[]): DirentEntry[] {
+  const missing = identityFileNames(dir).filter((n) => !entries.some((e) => e.name === n));
+  if (!missing.length) return entries;
+  const extra = missing.map((name) => ({
+    name,
+    isFile: true,
+    isDirectory: false,
+    isSymbolicLink: false,
+  }));
+  return [...entries, ...extra].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export class VfsAdapter implements IFileSystem {
@@ -335,8 +355,7 @@ export class VfsAdapter implements IFileSystem {
   async readFile(path: string, options?: ReadFileOptions | BufferEncoding): Promise<string> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-      const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });
-      const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw as string);
+      const bytes = await this.readRaw(normalized);
       const encoding = fileEncoding(options);
       const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(encoding);
       // curl's string-typed request body still needs the original bytes when
@@ -348,12 +367,34 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
-    return this.trusted(async () => {
-      const normalized = normalizePath(path);
-      const content = await this.vfs.readFile(normalized, { encoding: 'binary' });
-      if (content instanceof Uint8Array) return content;
-      return new TextEncoder().encode(content as string);
-    });
+    return this.trusted(() => this.readRaw(normalizePath(path)));
+  }
+
+  /** A file's bytes; `/etc/passwd` / `/etc/group` when the VFS has none ({@link identityFile}). */
+  private async readRaw(normalized: string): Promise<Uint8Array> {
+    let content: string | Uint8Array;
+    try {
+      content = await this.vfs.readFile(normalized, { encoding: 'binary' });
+    } catch (e) {
+      const synthetic = identityFile(normalized);
+      if (synthetic && isMissing(e)) return synthetic;
+      throw e;
+    }
+    return content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
+  }
+
+  /** The stat of a synthetic identity file, standing in when the VFS said ENOENT. */
+  private identityStat(normalized: string, err: unknown): FsStat | undefined {
+    const synthetic = identityFile(normalized);
+    if (!synthetic || !isMissing(err)) return undefined;
+    return {
+      isFile: true,
+      isDirectory: false,
+      isSymbolicLink: false,
+      mode: 0o644,
+      size: synthetic.length,
+      mtime: new Date(0),
+    };
   }
 
   async readFileBytes(path: string): Promise<ByteString> {
@@ -409,86 +450,106 @@ export class VfsAdapter implements IFileSystem {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
       if (this.virtualUsrStat(normalized)) return true;
-      return this.vfs.exists(normalized);
+      return (await this.vfs.exists(normalized)) || identityFile(normalized) !== undefined;
     });
   }
 
   async stat(path: string): Promise<FsStat> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-      // Virtual /usr, /usr/bin, and /usr/bin/<command> entries
-      const virtual = this.virtualUsrStat(normalized);
-      if (virtual) return virtual;
-      // Fast path: synchronous CacheFS stat for non-mounted paths
-      const fast = this.vfs.statSync(normalized);
-      if (fast) {
-        return {
-          isFile: fast.type === 'file',
-          isDirectory: fast.type === 'directory',
-          isSymbolicLink: !!fast.isSymlink,
-          mode: fast.mode ?? (fast.type === 'directory' ? 0o755 : 0o644),
-          size: fast.size,
-          mtime: new Date(fast.mtime),
-          identity: fast.identity,
-          dev: fast.dev,
-          ino: fast.identity === undefined ? undefined : fast.ino,
-        };
+      try {
+        return await this.statVfs(normalized);
+      } catch (e) {
+        const synthetic = this.identityStat(normalized, e);
+        if (synthetic) return synthetic;
+        throw e;
       }
-      // What the directory listing just reported, when it reported it
-      // (#2716) — never a symlink, so `stat` and `lstat` share the answer.
-      const s = this.primedStats(normalized) ?? (await this.vfs.stat(normalized));
-      return {
-        isFile: s.type === 'file',
-        isDirectory: s.type === 'directory',
-        isSymbolicLink: !!s.isSymlink,
-        mode: s.mode ?? (s.type === 'directory' ? 0o755 : 0o644),
-        size: s.size,
-        mtime: new Date(s.mtime),
-        identity: s.identity,
-        dev: s.dev,
-        ino: s.identity === undefined ? undefined : s.ino,
-      };
     });
+  }
+
+  private async statVfs(normalized: string): Promise<FsStat> {
+    // Virtual /usr, /usr/bin, and /usr/bin/<command> entries
+    const virtual = this.virtualUsrStat(normalized);
+    if (virtual) return virtual;
+    // Fast path: synchronous CacheFS stat for non-mounted paths
+    const fast = this.vfs.statSync(normalized);
+    if (fast) {
+      return {
+        isFile: fast.type === 'file',
+        isDirectory: fast.type === 'directory',
+        isSymbolicLink: !!fast.isSymlink,
+        mode: fast.mode ?? (fast.type === 'directory' ? 0o755 : 0o644),
+        size: fast.size,
+        mtime: new Date(fast.mtime),
+        identity: fast.identity,
+        dev: fast.dev,
+        ino: fast.identity === undefined ? undefined : fast.ino,
+      };
+    }
+    // What the directory listing just reported, when it reported it
+    // (#2716) — never a symlink, so `stat` and `lstat` share the answer.
+    const s = this.primedStats(normalized) ?? (await this.vfs.stat(normalized));
+    return {
+      isFile: s.type === 'file',
+      isDirectory: s.type === 'directory',
+      isSymbolicLink: !!s.isSymlink,
+      mode: s.mode ?? (s.type === 'directory' ? 0o755 : 0o644),
+      size: s.size,
+      mtime: new Date(s.mtime),
+      identity: s.identity,
+      dev: s.dev,
+      ino: s.identity === undefined ? undefined : s.ino,
+    };
   }
 
   async lstat(path: string): Promise<FsStat> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-      // Virtual /usr entries — none of them can be a symlink, so `lstat`
-      // answers exactly as `stat` does. Omitting this is what made `du`,
-      // `find -type`, and `tar` blind to the virtual bin tree.
-      const virtual = this.virtualUsrStat(normalized);
-      if (virtual) return virtual;
-      // Fast path: synchronous CacheFS lstat for non-mounted paths
-      const fast = this.vfs.lstatSync(normalized);
-      if (fast) {
-        return {
-          isFile: fast.type === 'file',
-          isDirectory: fast.type === 'directory',
-          isSymbolicLink: fast.type === 'symlink',
-          mode:
-            fast.mode ??
-            (fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644),
-          size: fast.size,
-          mtime: new Date(fast.mtime),
-          identity: fast.identity,
-          dev: fast.dev,
-          ino: fast.identity === undefined ? undefined : fast.ino,
-        };
+      try {
+        return await this.lstatVfs(normalized);
+      } catch (e) {
+        const synthetic = this.identityStat(normalized, e);
+        if (synthetic) return synthetic;
+        throw e;
       }
-      const s = this.primedStats(normalized) ?? (await this.vfs.lstat(normalized));
-      return {
-        isFile: s.type === 'file',
-        isDirectory: s.type === 'directory',
-        isSymbolicLink: s.type === 'symlink',
-        mode: s.mode ?? (s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644),
-        size: s.size,
-        mtime: new Date(s.mtime),
-        identity: s.identity,
-        dev: s.dev,
-        ino: s.identity === undefined ? undefined : s.ino,
-      };
     });
+  }
+
+  private async lstatVfs(normalized: string): Promise<FsStat> {
+    // Virtual /usr entries — none of them can be a symlink, so `lstat`
+    // answers exactly as `stat` does. Omitting this is what made `du`,
+    // `find -type`, and `tar` blind to the virtual bin tree.
+    const virtual = this.virtualUsrStat(normalized);
+    if (virtual) return virtual;
+    // Fast path: synchronous CacheFS lstat for non-mounted paths
+    const fast = this.vfs.lstatSync(normalized);
+    if (fast) {
+      return {
+        isFile: fast.type === 'file',
+        isDirectory: fast.type === 'directory',
+        isSymbolicLink: fast.type === 'symlink',
+        mode:
+          fast.mode ??
+          (fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644),
+        size: fast.size,
+        mtime: new Date(fast.mtime),
+        identity: fast.identity,
+        dev: fast.dev,
+        ino: fast.identity === undefined ? undefined : fast.ino,
+      };
+    }
+    const s = this.primedStats(normalized) ?? (await this.vfs.lstat(normalized));
+    return {
+      isFile: s.type === 'file',
+      isDirectory: s.type === 'directory',
+      isSymbolicLink: s.type === 'symlink',
+      mode: s.mode ?? (s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644),
+      size: s.size,
+      mtime: new Date(s.mtime),
+      identity: s.identity,
+      dev: s.dev,
+      ino: s.identity === undefined ? undefined : s.ino,
+    };
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
@@ -505,13 +566,20 @@ export class VfsAdapter implements IFileSystem {
       if (binAlias(normalized) === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
       // Fast path: synchronous CacheFS read for non-mounted paths
       const fast = this.vfs.readDirSync(normalized);
-      if (fast !== null) return fast.map((e) => e.name);
+      if (fast !== null)
+        return withIdentityNames(
+          normalized,
+          fast.map((e) => e.name)
+        );
       // `ls -l` stats every name this just returned (#2716); ask the backend
       // for listing stats so an FSA mount pays one getFile per entry instead
       // of a follow-up stat (#2765).
       const entries = await this.vfs.readDir(normalized, { includeStats: true });
       this.primeListingStats(normalized, entries);
-      return entries.map((e) => e.name);
+      return withIdentityNames(
+        normalized,
+        entries.map((e) => e.name)
+      );
     });
   }
 
@@ -538,7 +606,7 @@ export class VfsAdapter implements IFileSystem {
       // the CacheFS internal isn't available.
       const fastEntries = this.vfs.readDirSync(normalized);
       if (fastEntries !== null) {
-        return this.mapFastEntriesToDirents(fastEntries);
+        return withIdentityDirents(normalized, this.mapFastEntriesToDirents(fastEntries));
       }
 
       // Slow path: async VirtualFS readDir for mounted paths. Always ask
@@ -546,7 +614,7 @@ export class VfsAdapter implements IFileSystem {
       // (du, find -ls, …) stats each entry right after listing (#2765).
       const entries = await this.vfs.readDir(normalized, { includeStats: true });
       this.primeListingStats(normalized, entries);
-      return this.mapAsyncEntriesToDirents(entries);
+      return withIdentityDirents(normalized, this.mapAsyncEntriesToDirents(entries));
     });
   }
 
