@@ -703,11 +703,16 @@ export class WasmProcess {
   /**
    * A read of the terminal by a process outside its foreground group: SIGTTIN
    * to the process's group, which stops it (the read runs again once it is
-   * continued in the foreground); EIO when it ignores the signal.
+   * continued in the foreground); EIO when it ignores the signal. Only for
+   * its session's controlling terminal: any other terminal (GNU screen's
+   * backend, in a session of its own, reads the one it was started on) has
+   * no foreground group for it to be outside of, as on Linux.
    */
   private checkForeground(tty: KernelTty): void {
     const jobs = this.options.jobs;
     if (!jobs) return;
+    const session = jobs.controllingTerminal(this.pid);
+    if (session !== undefined && session !== tty) return;
     const pgid = this.pgid();
     if (jobs.tcgetpgrp(tty, this.sid()) === pgid) return;
     if (this.ignored & sigbit(SIG.TTIN)) throw new KernelError('EIO');

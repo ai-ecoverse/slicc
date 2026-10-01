@@ -147,6 +147,9 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys & PtyKernel {
     openPts(n, noctty) {
       return json(call({ op: 'pty-slave-open', n, noctty }, `pty-slave-open ${n}`)) as number;
     },
+    ptyNumbers() {
+      return json(call({ op: 'pty-list' }, 'pty-list')) as number[];
+    },
     ptyNumber(fd) {
       return json(call({ op: 'pty-number', fd }, `pty-number ${fd}`)) as number;
     },
@@ -155,6 +158,9 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys & PtyKernel {
     },
     setControllingTerminal(fd) {
       call({ op: 'pty-ctty', fd }, `pty-ctty ${fd}`);
+    },
+    setPacketMode(fd, on) {
+      call({ op: 'pty-packet', fd, on }, `pty-packet ${fd}`);
     },
     setWinsize(fd, rows, cols) {
       call({ op: 'pty-winsz-set', fd, rows, cols }, `pty-winsz-set ${fd}`);

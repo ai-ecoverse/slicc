@@ -204,6 +204,46 @@ describe('wrapCloexecSyscalls', () => {
     expect([s, conn, plain].map((fd) => call('a', fd, F_GETFD, 0))).toEqual([1, 1, 0]);
   });
 
+  it("wraps an assertions build's imports by name, around Asyncify's own wrappers", () => {
+    const { Fs } = fakeFs();
+    trackCloseOnExec(Fs);
+    Fs.open('/0', 0);
+    const fcntl = vi.fn(() => 0);
+    const ioctl = vi.fn(() => -22);
+    const kernel = {
+      ptyNumber: vi.fn(() => 0),
+      ptyLock: vi.fn(),
+      setControllingTerminal: vi.fn(),
+      setPacketMode: vi.fn(),
+      setWinsize: vi.fn(),
+    };
+    // Asyncify (with assertions) has put each import behind a checking wrapper.
+    const checked = (f: (...a: number[]) => number) => vi.fn((...a: number[]) => f(...a));
+    const asyncifyFcntl = checked(fcntl);
+    const asyncifyIoctl = checked(ioctl);
+    const other = checked(() => 7);
+    const env = {
+      __syscall_fcntl64: asyncifyFcntl,
+      __syscall_ioctl: asyncifyIoctl,
+      __syscall_dup: other,
+    };
+    const imports = { env } as unknown as WebAssembly.Imports;
+    const heap = new Int32Array(16);
+    wrapCloexecSyscalls(imports, { fcntl, ioctl }, { fs: () => Fs, heap: () => heap, pty: kernel });
+    heap[1] = 1; // FD_CLOEXEC
+    expect(env.__syscall_fcntl64(0, F_SETFD, 4)).toBe(0);
+    expect(env.__syscall_fcntl64(0, F_GETFD, 0)).toBe(1);
+    // The pty request reaches the kernel (it never did: identity found no import).
+    (Fs.getStream(0) as unknown as { sliccKernelFd: number }).sliccKernelFd = 9;
+    heap[0] = 16;
+    expect(env.__syscall_ioctl(0, 0x40045431, 0)).toBe(0); // TIOCSPTLCK
+    expect(kernel.ptyLock).toHaveBeenCalledWith(9, false);
+    // Anything else still goes through Asyncify's wrapper to the glue's.
+    expect(env.__syscall_ioctl(0, 0x5401, 0)).toBe(-22);
+    expect(asyncifyIoctl).toHaveBeenCalledTimes(1);
+    expect(env.__syscall_dup).toBe(other);
+  });
+
   it('leaves the rest of the import object, and a glue without them, alone', () => {
     const { table, other } = setup();
     expect(table.f).toBe(other);

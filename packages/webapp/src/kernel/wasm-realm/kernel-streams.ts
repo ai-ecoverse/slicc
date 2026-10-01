@@ -29,6 +29,43 @@ export const O_NONBLOCK = 0o4000;
 /** A socket node's mode: S_IFSOCK, rwx for all. */
 const SOCKET_MODE = 0o140777;
 
+/** The path calls {@link KernelStreams.usePtyPaths} answers for pseudo-terminals. */
+interface PtyPathFs {
+  chown?: (path: string, ...rest: number[]) => void;
+  lchown?: (path: string, ...rest: number[]) => void;
+  chmod?: (path: string, ...rest: number[]) => void;
+  lchmod?: (path: string, ...rest: number[]) => void;
+  stat?: (path: string, ...rest: unknown[]) => unknown;
+  lstat?: (path: string, ...rest: unknown[]) => unknown;
+}
+
+const PTY_PATH = /^\/dev\/(?:ptmx|pts\/(\d+))$/;
+
+function isPtyPath(path: string): boolean {
+  return PTY_PATH.test(path);
+}
+
+/** A pseudo-terminal's stat, as Linux has it: crw--w---- (ptmx crw-rw-rw-), major 136 / 5. */
+function ptyStat(path: string): object {
+  const n = PTY_PATH.exec(path)?.[1];
+  const now = new Date();
+  return {
+    dev: 0x16,
+    ino: n === undefined ? 2 : 3 + Number(n),
+    mode: n === undefined ? 0o20666 : 0o20620,
+    nlink: 1,
+    uid: 1000,
+    gid: 1000,
+    rdev: n === undefined ? (5 << 8) | 2 : (136 << 8) | Number(n),
+    size: 0,
+    blksize: 4096,
+    blocks: 0,
+    atime: now,
+    mtime: now,
+    ctime: now,
+  };
+}
+
 // musl's open(2) flags (Linux's).
 const O_CREAT = 0o100;
 const O_EXCL = 0o200;
@@ -95,6 +132,8 @@ export interface ProcessSys {
   /** `/dev/ptmx`: a new pseudo-terminal's master; `/dev/pts/N`: its slave (`noctty`: O_NOCTTY). */
   openPty?(): number;
   openPts?(n: number, noctty: boolean): number;
+  /** The pseudo-terminals in use (what `/dev/pts` holds). */
+  ptyNumbers?(): number[];
 }
 
 export interface StreamOps {
@@ -153,6 +192,8 @@ export interface ProcessFs extends EmscriptenFsForHook {
   open(path: string, flags: number, mode?: number): ProcessStream;
   dupStream(stream: ProcessStream, fd: number): ProcessStream;
   closeStream(fd: number): void;
+  /** close(2) of a stream: its `stream_ops.close` (a node's close hook), then the descriptor. */
+  close?(stream: ProcessStream): void;
   isFile(mode: number): boolean;
   mkdirTree(path: string): void;
   cwd(): string;
@@ -260,6 +301,7 @@ export class KernelStreams {
    */
   useControllingTerminal(): void {
     if (typeof this.Fs.open !== 'function') return; // an FS without open(): nothing to route
+    this.usePtyPaths();
     const open = this.Fs.open.bind(this.Fs);
     this.Fs.open = (path, flags, mode) => {
       const pty = this.openPty(open, path, flags, mode);
@@ -317,6 +359,44 @@ export class KernelStreams {
     // true on it too).
     this.attach(stream, kfd, true);
     return stream;
+  }
+
+  /**
+   * Path calls on `/dev/ptmx` and `/dev/pts/N`, which have no node in
+   * Emscripten's FS (an open goes to the kernel, {@link openPty}): chown and
+   * chmod succeed with no effect (grantpt's work, which GNU screen does
+   * itself; SLICC has one user and no owners), and stat answers a
+   * character device the realm user owns. Only for a pty that exists: a
+   * `/dev/pts/N` the kernel has no pair for (never opened, or closed) is
+   * ENOENT, as is `/dev/ptmx` without the kernel's pseudo-terminals.
+   */
+  private usePtyPaths(): void {
+    const fs = this.Fs as unknown as PtyPathFs;
+    for (const name of ['chown', 'lchown', 'chmod', 'lchmod'] as const) {
+      const original = fs[name];
+      if (typeof original !== 'function') continue;
+      fs[name] = (path: string, ...rest: number[]) =>
+        isPtyPath(path) ? this.existingPty(path) : original.call(fs, path, ...rest);
+    }
+    for (const name of ['stat', 'lstat'] as const) {
+      const original = fs[name];
+      if (typeof original !== 'function') continue;
+      fs[name] = (path: string, ...rest: unknown[]) => {
+        if (!isPtyPath(path)) return original.call(fs, path, ...rest);
+        this.existingPty(path);
+        return ptyStat(path);
+      };
+    }
+  }
+
+  /** ENOENT unless the pty path names one the kernel has. */
+  private existingPty(path: string): void {
+    const n = PTY_PATH.exec(path)?.[1];
+    const exists =
+      n === undefined
+        ? this.sys.openPty !== undefined
+        : (this.sys.ptyNumbers?.().includes(Number(n)) ?? false);
+    if (!exists) throw new this.Fs.ErrnoError(wasiErrno('ENOENT'));
   }
 
   /** The kernel descriptor of the terminal the process's stdio is on. */

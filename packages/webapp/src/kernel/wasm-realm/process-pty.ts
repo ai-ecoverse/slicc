@@ -1,8 +1,9 @@
 /**
  * `process-pty.ts` — an Emscripten program's side of the kernel's
  * pseudo-terminals (`pty.ts`): the ioctls musl's `posix_openpt` /
- * `unlockpt` / `ptsname` / `openpty` / `login_tty` make on them, which
- * Emscripten's own `ioctl` does not know, answered by the kernel. The
+ * `unlockpt` / `ptsname` / `openpty` / `login_tty` make on them, and the
+ * packet mode GNU screen sets (TIOCPKT), which Emscripten's own `ioctl`
+ * does not know, answered by the kernel. The
  * glue's `__syscall_ioctl` is wrapped like its fcntl (`process-fds.ts`);
  * any other request goes to it unchanged.
  */
@@ -15,6 +16,7 @@ export const TIOCGPTN = 0x80045430;
 export const TIOCSPTLCK = 0x40045431;
 export const TIOCSCTTY = 0x540e;
 export const TIOCSWINSZ = 0x5414;
+export const TIOCPKT = 0x5420;
 
 /** The kernel calls behind them, on kernel descriptors. */
 export interface PtyKernel {
@@ -24,6 +26,8 @@ export interface PtyKernel {
   ptyLock(kfd: number, lock: boolean): void;
   /** TIOCSCTTY: the terminal becomes the session's controlling terminal. */
   setControllingTerminal(kfd: number): void;
+  /** TIOCPKT: packet mode on (or off) for a master's reads. */
+  setPacketMode(kfd: number, on: boolean): void;
   /** TIOCSWINSZ, on a terminal or a master. */
   setWinsize(kfd: number, rows: number, cols: number): void;
 }
@@ -50,7 +54,8 @@ export function ptyIoctl(ioctl: GlueSyscall, deps: PtyIoctlDeps): GlueSyscall {
       request !== TIOCGPTN &&
       request !== TIOCSPTLCK &&
       request !== TIOCSCTTY &&
-      request !== TIOCSWINSZ
+      request !== TIOCSWINSZ &&
+      request !== TIOCPKT
     ) {
       // termios and TIOCGWINSZ: the glue's terminal hooks, which the kernel answers.
       return ioctl(fd, op, varargs);
@@ -86,6 +91,9 @@ function answer(
       return 0;
     case TIOCSCTTY:
       kernel.setControllingTerminal(kfd);
+      return 0;
+    case TIOCPKT:
+      kernel.setPacketMode(kfd, (heap[argp >> 2] ?? 0) !== 0);
       return 0;
     default: {
       // TIOCSWINSZ: struct winsize { unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel; }
