@@ -12,7 +12,7 @@ import { createSudoFs } from '../../fs/sudo-fs.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../../sudo/sudo-manager.js';
-import type { SudoDecision, SudoRequest } from '../../sudo/types.js';
+import type { EscalationCounts, SudoBroker, SudoDecision, SudoRequest } from '../../sudo/types.js';
 import {
   type CapabilityBroker,
   createRestCapabilityBroker,
@@ -38,6 +38,8 @@ export interface ShellAndSkillsDeps {
 
   capabilityBroker?: CapabilityBroker | null;
   onSudoRequest?: (request: SudoRequest) => Promise<SudoDecision>;
+
+  escalations?: EscalationCounts;
   processManager: ProcessManager | null;
   processOwner: ProcessOwner;
 
@@ -58,6 +60,8 @@ export interface ShellAndSkills {
   memoryFs: VirtualFS;
 
   blindReads: BlindReadLog | null;
+
+  sudoBroker: SudoBroker | null;
   skills: Skill[];
 }
 
@@ -119,6 +123,8 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
     unit,
     folder: scoop.folder,
     onSudoRequest: deps.onSudoRequest,
+    escalate: scoop.config?.escalate !== false,
+    ...(deps.escalations ? { escalations: deps.escalations } : {}),
   });
   const sudoFs = (
     sudoWiring
@@ -171,5 +177,5 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
 
   log.info('AlmostBashShell initialized', { folder: scoop.folder });
   const skills = await loadSkills(effectiveSkillsFs, SKILLS_LIBRARY_DIR);
-  return { shell, gatedFs, memoryFs, blindReads, skills };
+  return { shell, gatedFs, memoryFs, blindReads, sudoBroker: sudoWiring?.broker ?? null, skills };
 }

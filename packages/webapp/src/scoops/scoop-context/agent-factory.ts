@@ -60,9 +60,19 @@ export function createScoopAgent(init: ScoopAgentInit): Agent {
     transformContext,
     streamFn: init.streamFn,
     afterToolCall: async (context) => {
-      if (capture && context.toolCall.name === 'StructuredOutput') capture(context.args);
+      if (capture && context.toolCall.name === 'StructuredOutput' && !context.isError) {
+        capture(context.args);
+      }
       return undefined;
     },
+    ...(capture
+      ? {
+          finishTurn: (turn) =>
+            turn.toolResults.some((r) => r.toolName === 'StructuredOutput' && !r.isError)
+              ? { action: 'end' as const }
+              : undefined,
+        }
+      : {}),
   });
   return agent;
 }

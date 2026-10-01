@@ -12,7 +12,7 @@ import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import { resolveModelSelectionForScoop } from '../../providers/account-store.js';
 import type { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
-import type { TurnGuestGate } from '../../sudo/types.js';
+import type { SudoDecision, SudoRequest, TurnGuestGate } from '../../sudo/types.js';
 import {
   createBashTool,
   createFileTools,
@@ -48,6 +48,8 @@ export interface ScoopToolsDeps {
   memoryFs: VirtualFS;
 
   blindReads?: BlindReadLog | null;
+
+  onSudoRequest?: (request: SudoRequest) => Promise<SudoDecision>;
   processManager: ProcessManager | null;
   processOwner: ProcessOwner;
   getTurnPid: () => number | undefined;
@@ -99,7 +101,7 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
     onScheduleScoopWait: callbacks.onScheduleScoopWait,
     onSetGlobalMemory: callbacks.setGlobalMemory,
     getGlobalMemory: callbacks.getGlobalMemory,
-    onSudoRequest: callbacks.onSudoRequest,
+    onSudoRequest: deps.onSudoRequest ?? callbacks.onSudoRequest,
     onSudoResolve: callbacks.onSudoResolve,
     onListSudoRequests: callbacks.onListSudoRequests,
   };

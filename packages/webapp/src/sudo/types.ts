@@ -48,6 +48,12 @@ export function unavailableDecision(): SudoDecision {
   return { decision: 'deny', reason: 'unavailable' };
 }
 
+export interface EscalationCounts {
+  asked: number;
+  allowed: number;
+  denied: number;
+}
+
 export interface SudoRequestOptions {
   signal?: AbortSignal;
 }

@@ -167,6 +167,11 @@ export class SudoManager {
     return mergePolicies(...policies);
   }
 
+  getConfiguredPolicyForScoop(folder: string): SudoersPolicy {
+    const config = this.scoopConfigPolicies.get(folder);
+    return config ? mergePolicies(builtinScoopGrants(), config) : builtinScoopGrants();
+  }
+
   registerScoopConfig(folder: string, config?: ScoopConfig | null): void {
     this.scoopConfigPolicies.set(folder, parseSudoers(generateScoopSudoers(config ?? undefined)));
     this.onPolicyReload(folder);

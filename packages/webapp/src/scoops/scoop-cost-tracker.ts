@@ -1,6 +1,7 @@
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { canonicalModelId, representativeModelId } from '../providers/claude-model-version.js';
 import type { ScoopCostData } from '../shell/supplemental-commands/cost-command.js';
+import type { EscalationCounts } from '../sudo/types.js';
 import { isRootUnit } from '../work-unit/policy.js';
 import { modelIdFor, modelProviderFor } from '../work-unit/record.js';
 import type { ScoopContext } from './scoop-context.js';
@@ -48,6 +49,22 @@ function reportModelSpellings(
   return { current, models };
 }
 
+function zeroEscalations(): EscalationCounts {
+  return { asked: 0, allowed: 0, denied: 0 };
+}
+
+function addEscalations(
+  into: EscalationCounts,
+  from: Readonly<EscalationCounts> | undefined
+): EscalationCounts {
+  if (from) {
+    into.asked += from.asked;
+    into.allowed += from.allowed;
+    into.denied += from.denied;
+  }
+  return into;
+}
+
 export interface ModelCostData {
   model: string;
   input: number;
@@ -87,7 +104,9 @@ export function buildScoopCost(
   context: ScoopContext,
   source: ScoopCostData['source'] = 'live',
 
-  foldedMessages: readonly AssistantMessage[] = []
+  foldedMessages: readonly AssistantMessage[] = [],
+
+  foldedEscalations?: Readonly<EscalationCounts>
 ): ScoopCostData | null {
   const messages = context.getAgentMessages();
   const ownAssistant = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
@@ -138,6 +157,11 @@ export function buildScoopCost(
     source,
     usage: aggregated,
     turns: assistantMsgs.length,
+
+    escalations: addEscalations(
+      addEscalations(zeroEscalations(), context.getEscalations?.()),
+      foldedEscalations
+    ),
     firstActivity,
     lastActivity,
     activeTimeMs,
@@ -159,6 +183,8 @@ export class ScoopCostTracker {
   private droppedMessages: AssistantMessage[][] = [];
 
   private foldedByParent = new Map<string, AssistantMessage[]>();
+
+  private foldedEscalationsByParent = new Map<string, EscalationCounts>();
   private readonly deps: ScoopCostTrackerDeps;
 
   constructor(deps: ScoopCostTrackerDeps) {
@@ -169,9 +195,15 @@ export class ScoopCostTracker {
     return this.foldedByParent.get(jid) ?? [];
   }
 
+  private foldedEscalationsFor(jid: string): EscalationCounts | undefined {
+    return this.foldedEscalationsByParent.get(jid);
+  }
+
   async settleFolded(jid: string): Promise<void> {
     const folded = this.foldedByParent.get(jid);
+    const foldedEscalations = this.foldedEscalationsFor(jid);
     this.foldedByParent.delete(jid);
+    this.foldedEscalationsByParent.delete(jid);
     if (!folded || folded.length === 0) return;
 
     const scoop = this.deps.getScoops().get(jid);
@@ -181,7 +213,7 @@ export class ScoopCostTracker {
     if (merged) return;
 
     const emptyContext = { getAgentMessages: () => [] } as unknown as ScoopContext;
-    const costData = buildScoopCost(scoop, emptyContext, 'dropped', folded);
+    const costData = buildScoopCost(scoop, emptyContext, 'dropped', folded, foldedEscalations);
     if (!costData) return;
     this.droppedMessages.push([...folded]);
     this.dropped.push(costData);
@@ -197,18 +229,24 @@ export class ScoopCostTracker {
     const ownAssistant = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
 
     const foldedIntoSelf = [...this.foldedMessagesFor(jid)];
+    const escalationsIntoSelf = this.foldedEscalationsFor(jid);
 
     if (shouldFoldIntoParent(scoop, scoops)) {
       if (ownAssistant.length === 0 && foldedIntoSelf.length === 0) return;
       const parentJid = scoop.parentJid;
       const existing = this.foldedByParent.get(parentJid) ?? [];
       this.foldedByParent.set(parentJid, [...existing, ...ownAssistant, ...foldedIntoSelf]);
+      const parentEscalations = this.foldedEscalationsFor(parentJid) ?? zeroEscalations();
+      addEscalations(parentEscalations, context.getEscalations?.());
+      addEscalations(parentEscalations, escalationsIntoSelf);
+      this.foldedEscalationsByParent.set(parentJid, parentEscalations);
 
       this.foldedByParent.delete(jid);
+      this.foldedEscalationsByParent.delete(jid);
       return;
     }
 
-    const costData = buildScoopCost(scoop, context, 'dropped', foldedIntoSelf);
+    const costData = buildScoopCost(scoop, context, 'dropped', foldedIntoSelf, escalationsIntoSelf);
     if (costData) {
       this.dropped.push(costData);
     }
@@ -217,6 +255,7 @@ export class ScoopCostTracker {
       this.droppedMessages.push(forModelAgg);
     }
     this.foldedByParent.delete(jid);
+    this.foldedEscalationsByParent.delete(jid);
   }
 
   getSessionCosts(options: CostScopeOptions = {}): ScoopCostData[] {
@@ -225,7 +264,13 @@ export class ScoopCostTracker {
     for (const scoop of this.deps.getScoops().values()) {
       const context = contexts.get(scoop.jid);
       if (!context) continue;
-      const costData = buildScoopCost(scoop, context, 'live', this.foldedMessagesFor(scoop.jid));
+      const costData = buildScoopCost(
+        scoop,
+        context,
+        'live',
+        this.foldedMessagesFor(scoop.jid),
+        this.foldedEscalationsFor(scoop.jid)
+      );
       if (costData) results.push(costData);
     }
     if (options.includeDropped) results.push(...this.dropped);
@@ -341,5 +386,6 @@ export class ScoopCostTracker {
     this.dropped = [];
     this.droppedMessages = [];
     this.foldedByParent.clear();
+    this.foldedEscalationsByParent.clear();
   }
 }

@@ -96,6 +96,8 @@ export interface ScoopConfig {
 
   canCreateChildren?: boolean;
 
+  escalate?: boolean;
+
   structuredOutputSchema?: JsonSchemaObject;
 }
 

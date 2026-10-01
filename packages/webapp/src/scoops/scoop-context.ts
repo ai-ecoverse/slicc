@@ -24,7 +24,7 @@ import type { RestrictedFS } from '../fs/restricted-fs.js';
 import type { Process, ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
 import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
-import type { TurnGuestGate } from '../sudo/types.js';
+import type { EscalationCounts, TurnGuestGate } from '../sudo/types.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { conversationIdentityFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
@@ -91,6 +91,8 @@ export class ScoopContext {
   private didStreamDeltas = false;
   private promptStreamErrorMessage: string | null = null;
   private unsubscribe: (() => void) | null = null;
+
+  private readonly escalations: EscalationCounts = { asked: 0, allowed: 0, denied: 0 };
 
   private promptAbortController: AbortController | null = null;
 
@@ -284,6 +286,7 @@ export class ScoopContext {
         callbacks: this.callbacks,
         sessions: this.sessions,
         sudoManager: this.sudoManager,
+        escalations: this.escalations,
         capabilityBroker: this.capabilityBroker,
         processManager: this.processManager,
         processOwner: this.owner,
@@ -299,6 +302,7 @@ export class ScoopContext {
           this.shell = shell;
         },
         onStructuredOutput: (value) => {
+          if (this.structuredOutputCaptured) return;
           this.structuredOutputValue = value;
           this.structuredOutputCaptured = true;
         },
@@ -685,6 +689,10 @@ export class ScoopContext {
 
   getAgentMessages(): AgentMessage[] {
     return this.agent?.state?.messages ? structuredClone(this.agent.state.messages) : [];
+  }
+
+  getEscalations(): EscalationCounts {
+    return { ...this.escalations };
   }
 
   getContextFill(): number {

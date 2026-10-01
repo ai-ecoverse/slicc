@@ -30,6 +30,7 @@ const mockCosts: ScoopCostData[] = [
       cost: { input: 0.45, output: 0.51, cacheRead: 0.12, cacheWrite: 0.05, total: 1.13 },
     },
     turns: 5,
+    escalations: { asked: 0, allowed: 0, denied: 0 },
     firstActivity: now - 60 * 60 * 1000,
     lastActivity: now,
     activeTimeMs: 60 * 60 * 1000,
@@ -49,6 +50,7 @@ const mockCosts: ScoopCostData[] = [
       cost: { input: 0.1, output: 0.05, cacheRead: 0, cacheWrite: 0, total: 0.15 },
     },
     turns: 2,
+    escalations: { asked: 3, allowed: 1, denied: 2 },
     firstActivity: now - 30 * 60 * 1000,
     lastActivity: now,
     activeTimeMs: 30 * 60 * 1000,
@@ -207,6 +209,18 @@ describe('cost command', () => {
       'frozen',
     ]);
     expect(scopes).toEqual(['all']);
+  });
+
+  it('carries escalations on every --json row; a frozen row reports zeros', async () => {
+    registerScopedProvider([]);
+    const result = await createCostCommand().execute(['--all', '--json'], ctx);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.scoops.map((row: ScoopCostData) => row.escalations)).toEqual([
+      { asked: 0, allowed: 0, denied: 0 },
+      { asked: 3, allowed: 1, denied: 2 },
+      { asked: 3, allowed: 1, denied: 2 },
+      { asked: 0, allowed: 0, denied: 0 },
+    ]);
   });
 
   it('emits an EMPTY envelope with --json rather than prose', async () => {

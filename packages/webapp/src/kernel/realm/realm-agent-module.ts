@@ -12,6 +12,10 @@ interface SliccyAgentOptions {
   allowedCommands?: string;
 
   readOnly?: string | string[];
+
+  images?: string[];
+
+  escalate?: boolean;
 }
 
 interface SliccyAgentSpawnResult {
@@ -42,6 +46,8 @@ function buildAgentArgv(prompt: string, opts: SliccyAgentOptions, realmCwd: stri
       Array.isArray(opts.readOnly) ? opts.readOnly.join(',') : String(opts.readOnly)
     );
   }
+  for (const image of opts.images ?? []) flags.push('--image', String(image));
+  if (opts.escalate === false) flags.push('--no-escalate');
   const cwd = opts.cwd !== undefined ? String(opts.cwd) : realmCwd || '.';
   const allowed = opts.allowedCommands !== undefined ? String(opts.allowedCommands) : '*';
   return ['agent', ...flags, cwd, allowed, String(prompt)];

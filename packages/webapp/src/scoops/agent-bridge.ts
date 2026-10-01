@@ -1,5 +1,6 @@
 import { createLogger } from '../base/logger.js';
 import type { SessionStore } from '../core/session.js';
+import type { ImageContent } from '../core/types.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
 
@@ -64,6 +65,10 @@ export interface AgentSpawnOptions {
   thinkingLevel?: ThinkingLevel;
 
   structuredOutputSchema?: JsonSchemaObject;
+
+  images?: ImageContent[];
+
+  escalate?: boolean;
 
   notifyOnComplete?: boolean;
 
@@ -484,6 +489,21 @@ async function writeAgentSessionArchive(
   }
 }
 
+async function prepareImages(
+  images: readonly ImageContent[]
+): Promise<{ images: ImageContent[] } | { error: AgentSpawnResult }> {
+  const { processImageContent } = await import('../core/image-processor.js');
+  const prepared: ImageContent[] = [];
+  for (const [i, image] of images.entries()) {
+    const result = await processImageContent(image);
+    if (result.type !== 'image') {
+      return { error: { finalText: `agent: image ${i + 1}: ${result.text}`, exitCode: 1 } };
+    }
+    prepared.push(result);
+  }
+  return { images: prepared };
+}
+
 function buildScoopConfig(
   options: AgentSpawnOptions,
   effectiveModelId: string,
@@ -525,6 +545,9 @@ function buildScoopConfig(
   if (options.structuredOutputSchema !== undefined) {
     scoopConfig.structuredOutputSchema = options.structuredOutputSchema;
   }
+  if (options.escalate === false) {
+    scoopConfig.escalate = false;
+  }
 
   return scoopConfig;
 }
@@ -563,9 +586,10 @@ async function runScoopAndCaptureOutput(
   jid: string,
   prompt: string,
   structuredOutputSchema: JsonSchemaObject | undefined,
-  observerState: ReturnType<typeof registerScoopObserver>
+  observerState: ReturnType<typeof registerScoopObserver>,
+  images: ImageContent[] = []
 ): Promise<AgentSpawnResult | null> {
-  await orchestrator.sendPrompt(jid, prompt, 'agent', 'agent');
+  await orchestrator.sendPrompt(jid, prompt, 'agent', 'agent', images);
 
   if (observerState.scoopError !== null) {
     return { finalText: observerState.scoopError, exitCode: 1 };
@@ -695,7 +719,8 @@ async function runScoopToOutcomeInner(
       jid,
       options.prompt,
       options.structuredOutputSchema,
-      observerHandle
+      observerHandle,
+      options.images
     );
     if (options.signal?.aborted) {
       return { finalText: 'agent: aborted', exitCode: 1 };
@@ -724,9 +749,16 @@ export function createAgentBridge(
     resolveModel: deps.resolveModel ?? defaultResolveModel,
   };
 
-  async function spawn(options: AgentSpawnOptions): Promise<AgentSpawnResult> {
+  async function spawn(requested: AgentSpawnOptions): Promise<AgentSpawnResult> {
+    let options = requested;
     const validation = validateSpawnOptions(options, ctx.resolveModel);
     if ('error' in validation) return validation.error;
+
+    if (options.images?.length) {
+      const prepared = await prepareImages(options.images);
+      if ('error' in prepared) return prepared.error;
+      options = { ...options, images: prepared.images };
+    }
 
     const parentModel = resolveParentModelSelection(ctx.orchestrator, options.parentJid);
     const effectiveModelId = validation.resolvedModelId ?? parentModel?.modelId ?? '';
