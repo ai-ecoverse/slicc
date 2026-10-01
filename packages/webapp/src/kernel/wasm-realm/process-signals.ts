@@ -37,6 +37,8 @@ export class SignalGate {
   private lastDelivered = 0;
   /** Syscalls in progress: a handler's own syscalls nest inside the one it interrupted. */
   private depth = 0;
+  /** Asking the program for its dispositions (see {@link report}). */
+  private reporting = false;
 
   constructor(
     private readonly raw: SyncSabTransport,
@@ -67,7 +69,19 @@ export class SignalGate {
   }
 
   private report(): void {
-    const masks = this.hooks.masks();
+    // Asking the program can itself make a syscall (an assertions build that
+    // aborts writes its message): that one reports nothing, and a program that
+    // cannot answer keeps the dispositions last reported.
+    if (this.reporting) return;
+    this.reporting = true;
+    let masks: ReturnType<SignalHooks['masks']>;
+    try {
+      masks = this.hooks.masks();
+    } catch {
+      masks = null;
+    } finally {
+      this.reporting = false;
+    }
     if (!masks) return;
     this.restart = masks.restart;
     const { caught, ignored } = masks;
