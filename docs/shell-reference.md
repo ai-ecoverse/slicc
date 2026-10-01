@@ -888,8 +888,10 @@ command name) picks the program of a multi-call binary. `env`, on `slicc` and pe
 command (which wins), gives the program environment defaults; the caller's
 environment still wins. A relative value that names something in the package
 (`"MAGICK_CONFIGURE_PATH": "etc/ImageMagick-7"`) becomes its absolute path, and
-`${package}` stands for the package directory; anything else (`America/New_York`,
-a URL) is literal. An `@ai-ecoverse/wasm-*`
+`${package}` stands for the package directory. `${NAME}` is the caller's `NAME`
+when the program starts (`"ZIG_GLOBAL_CACHE_DIR": "${HOME}/.cache/zig"`); a
+default naming a variable the caller has not set is left out, so the program
+falls back to its own. Anything else (`America/New_York`, a URL) is literal. An `@ai-ecoverse/wasm-*`
 package without a `slicc` field offers each `bin/<x>` that has a `bin/<x>.wasm`
 beside it. Programs never come from a host mount, so they work in every float
 that has the wasm realm.
