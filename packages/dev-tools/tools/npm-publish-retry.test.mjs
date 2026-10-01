@@ -4,11 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  isPublishConflict,
   isTransientPublishFailure,
   main,
+  matchesRegistry,
   packageDir,
   publishWithRetry,
   RETRY_DELAYS_MS,
+  run,
   verifyPublishAuth,
 } from './npm-publish-retry.mjs';
 import { BIOME_JSH_PUBLISH_CMD } from './release-native.mjs';
@@ -63,33 +66,124 @@ describe('packageDir', () => {
   });
 });
 
-function fakeChild(code, output = '') {
+function fakeChild(code, { stdout = '', stderr = '' } = {}) {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
+  child.kill = vi.fn();
   queueMicrotask(() => {
-    if (output) child.stderr.emit('data', Buffer.from(output));
+    if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+    if (stderr) child.stderr.emit('data', Buffer.from(stderr));
     child.emit('close', code);
   });
   return child;
 }
 
+/** A child that only exits once killed, like a wedged `npm publish`. */
+function hungChild() {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn((signal) => queueMicrotask(() => child.emit('close', null, signal)));
+  return child;
+}
+
+const INTEGRITY = 'sha512-local';
+const PROVENANCE = { provenance: { predicateType: 'https://slsa.dev/provenance/v1' } };
+
 /**
- * Scripted npm: `publish` pops the next result from `publishes`, `view`
- * answers with `viewVersion` (null = E404).
+ * Scripted npm: `publish` pops the next entry from `publishes` ('hang' or
+ * [code, stderr]); `view` answers with `dist` (null = E404); `pack` reports
+ * `localIntegrity`; `probe: 'hang'` wedges both probes.
  */
-function scriptedNpm(publishes, viewVersion = null) {
+function scriptedNpm(publishes, { dist = null, localIntegrity = INTEGRITY, probe } = {}) {
   const calls = [];
   const spawn = vi.fn((_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'view') {
-      return viewVersion ? fakeChild(0, `${viewVersion}\n`) : fakeChild(1, 'npm error code E404');
+    if (args[0] === 'view' || args[0] === 'pack') {
+      if (probe === 'hang') return hungChild();
+      if (args[0] === 'view') {
+        return dist
+          ? fakeChild(0, { stdout: JSON.stringify(dist) })
+          : fakeChild(1, { stderr: 'npm error code E404' });
+      }
+      return fakeChild(0, { stdout: JSON.stringify([{ integrity: localIntegrity }]) });
     }
-    const [code, output] = publishes.shift();
-    return fakeChild(code, output);
+    const next = publishes.shift();
+    if (next === 'hang') return hungChild();
+    return fakeChild(next[0], { stderr: next[1] });
   });
   return { spawn, calls };
 }
+
+describe('isPublishConflict', () => {
+  it('matches npm refusing to overwrite a version', () => {
+    expect(isPublishConflict(PUBLISH_CONFLICT)).toBe(true);
+    expect(isPublishConflict('npm error code EPUBLISHCONFLICT')).toBe(true);
+  });
+
+  it('does not match other 403s', () => {
+    expect(isPublishConflict('npm error code E403\nnpm error 403 Forbidden')).toBe(false);
+  });
+});
+
+describe('matchesRegistry', () => {
+  it('accepts the same tarball with provenance', () => {
+    expect(
+      matchesRegistry({
+        localIntegrity: INTEGRITY,
+        dist: { integrity: INTEGRITY, attestations: PROVENANCE },
+        requireProvenance: true,
+      })
+    ).toBe(true);
+  });
+
+  it('rejects different bytes', () => {
+    expect(
+      matchesRegistry({
+        localIntegrity: INTEGRITY,
+        dist: { integrity: 'sha512-other', attestations: PROVENANCE },
+        requireProvenance: true,
+      })
+    ).toBe(false);
+  });
+
+  it('rejects missing provenance only when it is required', () => {
+    const input = { localIntegrity: INTEGRITY, dist: { integrity: INTEGRITY } };
+    expect(matchesRegistry({ ...input, requireProvenance: true })).toBe(false);
+    expect(matchesRegistry({ ...input, requireProvenance: false })).toBe(true);
+  });
+
+  it('rejects an unknown local integrity', () => {
+    expect(matchesRegistry({ localIntegrity: undefined, dist: {}, requireProvenance: false })).toBe(
+      false
+    );
+  });
+});
+
+describe('run', () => {
+  it('kills a child that outlives the timeout and reports timedOut', async () => {
+    const child = hungChild();
+    const result = await run(() => child, 'npm', ['publish'], {
+      cwd: '.',
+      env: {},
+      timeoutMs: 5,
+    });
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(result).toMatchObject({ code: null, timedOut: true });
+  });
+
+  it('keeps stdout separate for JSON probes', async () => {
+    const result = await run(
+      () => fakeChild(0, { stdout: '{"a":1}', stderr: 'npm warn x' }),
+      'npm',
+      [],
+      { cwd: '.', env: {}, timeoutMs: 1000 }
+    );
+    expect(result).toMatchObject({ code: 0, stdoutText: '{"a":1}', timedOut: false });
+    expect(result.output).toContain('npm warn x');
+  });
+});
 
 describe('publishWithRetry', () => {
   let dir;
@@ -108,33 +202,55 @@ describe('publishWithRetry', () => {
     stdout: { write() {} },
     stderr: { write() {} },
     log: () => {},
+    sleep: vi.fn(async () => {}),
+    publishTimeoutMs: 5,
+    probeTimeoutMs: 5,
   });
 
   it('publishes on the first try without sleeping', async () => {
-    const { spawn, calls } = scriptedNpm([[0, '+ sliccy@6.231.1']]);
-    const sleep = vi.fn(async () => {});
+    const { spawn, calls } = scriptedNpm([[0, '']]);
+    const opts = base();
     const result = await publishWithRetry({
-      ...base(),
+      ...opts,
       args: ['.', '--provenance', '--tag', 'latest'],
       spawn,
-      sleep,
     });
     expect(result).toEqual({ code: 0, attempts: 1, alreadyPublished: false });
     expect(calls).toEqual([['publish', '.', '--provenance', '--tag', 'latest']]);
-    expect(sleep).not.toHaveBeenCalled();
+    expect(opts.sleep).not.toHaveBeenCalled();
   });
 
   it('rides out the #3719 Fulcio DNS failure with backoff', async () => {
     const { spawn, calls } = scriptedNpm([
       [1, FULCIO_DNS],
       [1, FULCIO_DNS],
-      [0, '+ sliccy@6.231.1'],
+      [0, ''],
     ]);
-    const sleep = vi.fn(async () => {});
-    const result = await publishWithRetry({ ...base(), args: ['.'], spawn, sleep });
+    const opts = base();
+    const result = await publishWithRetry({ ...opts, args: ['.'], spawn });
     expect(result).toEqual({ code: 0, attempts: 3, alreadyPublished: false });
-    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual(RETRY_DELAYS_MS.slice(0, 2));
+    expect(opts.sleep.mock.calls.map(([ms]) => ms)).toEqual(RETRY_DELAYS_MS.slice(0, 2));
     expect(calls.filter(([verb]) => verb === 'publish')).toHaveLength(3);
+  });
+
+  it('kills a hung publish and retries it', async () => {
+    const { spawn } = scriptedNpm(['hang', [0, '']]);
+    const log = vi.fn();
+    const result = await publishWithRetry({ ...base(), log, args: ['.'], spawn });
+    expect(result).toEqual({ code: 0, attempts: 2, alreadyPublished: false });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('hung past'));
+  });
+
+  it('treats hung registry probes as not published and keeps retrying', async () => {
+    const { spawn } = scriptedNpm(
+      [
+        [1, FULCIO_DNS],
+        [0, ''],
+      ],
+      { probe: 'hang' }
+    );
+    const result = await publishWithRetry({ ...base(), args: ['.'], spawn });
+    expect(result).toEqual({ code: 0, attempts: 2, alreadyPublished: false });
   });
 
   it('gives up after the last delay and returns the npm exit code', async () => {
@@ -143,49 +259,91 @@ describe('publishWithRetry', () => {
       [1, REGISTRY_503],
       [1, REGISTRY_503],
     ]);
-    const sleep = vi.fn(async () => {});
+    const opts = base();
+    const result = await publishWithRetry({ ...opts, args: ['.'], spawn, delays: [1, 2] });
+    expect(result).toEqual({ code: 1, attempts: 3, alreadyPublished: false });
+    expect(opts.sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops retrying once the next attempt would exceed the budget', async () => {
+    const { spawn } = scriptedNpm([
+      [1, REGISTRY_503],
+      [1, REGISTRY_503],
+    ]);
+    let clock = 0;
+    const opts = base();
+    opts.sleep = vi.fn(async (ms) => {
+      clock += ms;
+    });
     const result = await publishWithRetry({
-      ...base(),
+      ...opts,
       args: ['.'],
       spawn,
-      sleep,
-      delays: [1, 2],
+      now: () => clock,
+      delays: [10, 10, 10],
+      budgetMs: 15,
     });
-    expect(result).toEqual({ code: 1, attempts: 3, alreadyPublished: false });
-    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ code: 1, attempts: 2, alreadyPublished: false });
+    expect(opts.sleep).toHaveBeenCalledTimes(1);
   });
 
-  it('fails a non-transient error on the first attempt', async () => {
-    const { spawn } = scriptedNpm([[1, AUTH_404]]);
-    const sleep = vi.fn(async () => {});
-    const result = await publishWithRetry({ ...base(), args: ['.'], spawn, sleep });
+  it('fails a non-transient error on the first attempt without asking the registry', async () => {
+    const dist = { integrity: INTEGRITY, attestations: PROVENANCE };
+    const { spawn, calls } = scriptedNpm([[1, AUTH_404]], { dist });
+    const opts = base();
+    const result = await publishWithRetry({ ...opts, args: ['.', '--provenance'], spawn });
     expect(result).toEqual({ code: 1, attempts: 1, alreadyPublished: false });
-    expect(sleep).not.toHaveBeenCalled();
+    expect(calls.map(([verb]) => verb)).toEqual(['publish']);
+    expect(opts.sleep).not.toHaveBeenCalled();
   });
 
-  it('treats a version already on the registry as published', async () => {
-    const { spawn, calls } = scriptedNpm([[1, PUBLISH_CONFLICT]], '6.231.1');
+  it('accepts a conflict when the registry holds the same tarball with provenance', async () => {
+    const dist = { integrity: INTEGRITY, attestations: PROVENANCE };
+    const { spawn, calls } = scriptedNpm([[1, PUBLISH_CONFLICT]], { dist });
     const log = vi.fn();
-    const result = await publishWithRetry({ ...base(), log, args: ['.'], spawn });
+    const result = await publishWithRetry({ ...base(), log, args: ['.', '--provenance'], spawn });
     expect(result).toEqual({ code: 0, attempts: 1, alreadyPublished: true });
-    expect(calls[1]).toEqual(['view', 'sliccy@6.231.1', 'version']);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('sliccy@6.231.1 is on the registry'));
+    expect(calls[1]).toEqual(['view', 'sliccy@6.231.1', 'dist', '--json']);
+    expect(calls[2]).toEqual(['pack', dir, '--dry-run', '--json', '--ignore-scripts']);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('exact tarball'));
+  });
+
+  it('keeps the conflict failure when the registry bytes differ', async () => {
+    const dist = { integrity: 'sha512-other', attestations: PROVENANCE };
+    const { spawn } = scriptedNpm([[1, PUBLISH_CONFLICT]], { dist });
+    const result = await publishWithRetry({ ...base(), args: ['.', '--provenance'], spawn });
+    expect(result).toEqual({ code: 1, attempts: 1, alreadyPublished: false });
+  });
+
+  it('keeps the conflict failure when provenance is missing', async () => {
+    const { spawn } = scriptedNpm([[1, PUBLISH_CONFLICT]], { dist: { integrity: INTEGRITY } });
+    const result = await publishWithRetry({ ...base(), args: ['.', '--provenance'], spawn });
+    expect(result).toEqual({ code: 1, attempts: 1, alreadyPublished: false });
+  });
+
+  it('accepts a transient failure whose publish actually landed', async () => {
+    const dist = { integrity: INTEGRITY, attestations: PROVENANCE };
+    const { spawn } = scriptedNpm([[1, REGISTRY_503]], { dist });
+    const result = await publishWithRetry({ ...base(), args: ['.', '--provenance'], spawn });
+    expect(result).toEqual({ code: 0, attempts: 1, alreadyPublished: true });
   });
 
   it('reads name and version from the positional package directory', async () => {
-    const { spawn, calls } = scriptedNpm([[1, PUBLISH_CONFLICT]], '1.2.3');
     const nested = mkdtempSync(join(dir, 'nested-'));
     writeFileSync(
       join(nested, 'package.json'),
       JSON.stringify({ name: '@ai-ecoverse/biome-jsh', version: '1.2.3' })
     );
+    const { spawn, calls } = scriptedNpm([[1, PUBLISH_CONFLICT]], {
+      dist: { integrity: INTEGRITY },
+    });
     const result = await publishWithRetry({
       ...base(),
       args: [nested, '--access', 'public'],
       spawn,
     });
     expect(result.alreadyPublished).toBe(true);
-    expect(calls[1]).toEqual(['view', '@ai-ecoverse/biome-jsh@1.2.3', 'version']);
+    expect(calls[1]).toEqual(['view', '@ai-ecoverse/biome-jsh@1.2.3', 'dist', '--json']);
   });
 });
 

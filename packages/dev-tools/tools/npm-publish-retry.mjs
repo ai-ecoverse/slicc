@@ -13,12 +13,18 @@
  * worker, or GitHub Releases.
  *
  * This wrapper runs from the `@semantic-release/exec` `publishCmd` instead and
- * retries with backoff (about eight minutes in total) when the failure is
- * transient: DNS/socket errors, sigstore CA/TLog/TSA errors, or registry
- * 408/429/5xx. Auth, permission, and validation errors fail on the first
- * attempt. After any failure it asks the registry whether `name@version` is
- * already there; if so, the publish counts as done (a lost response, or a
- * re-run after a partial publish).
+ * retries with backoff when the failure is transient: DNS/socket errors,
+ * sigstore CA/TLog/TSA errors, registry 408/429/5xx, or an attempt that hangs
+ * past `PUBLISH_TIMEOUT_MS` (the child is killed). Retries stop once the next
+ * attempt would start after `RETRY_BUDGET_MS`. Auth, permission, and
+ * validation errors fail on the first attempt.
+ *
+ * A transient failure or a version conflict may hide a publish that did land
+ * (a lost response, or a re-run after a partial publish). In those cases the
+ * wrapper compares the registry's `dist.integrity` with `npm pack` of the
+ * local directory, and with `--provenance` also requires a provenance
+ * attestation. Only an exact match counts as published; anything else keeps
+ * the original failure.
  *
  * The npm CLI handles trusted publishing itself: in GitHub Actions it
  * exchanges the job's OIDC token for a publish token and turns on provenance.
@@ -38,6 +44,13 @@ import { fileURLToPath } from 'node:url';
 
 /** Wait before retry N (1-based); the last entry bounds the attempt count. */
 export const RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 120_000, 240_000];
+/** A single `npm publish` normally takes about a minute, provenance included. */
+export const PUBLISH_TIMEOUT_MS = 5 * 60_000;
+/** Bound on the `npm view` / `npm pack --dry-run` registry checks. */
+export const PROBE_TIMEOUT_MS = 60_000;
+/** No retry starts later than this after the first attempt (60-minute job). */
+export const RETRY_BUDGET_MS = 20 * 60_000;
+const KILL_GRACE_MS = 10_000;
 
 const TRANSIENT_PATTERNS = [
   // Sigstore signing: Fulcio certificate, Rekor log entry, timestamp authority.
@@ -47,6 +60,9 @@ const TRANSIENT_PATTERNS = [
   /npm error code E(408|429|5\d\d)\b/,
 ];
 
+const PUBLISH_CONFLICT_PATTERN =
+  /npm error code EPUBLISHCONFLICT\b|cannot publish over the previously published version/i;
+
 /**
  * True when a failed `npm publish` is worth retrying.
  *
@@ -55,6 +71,15 @@ const TRANSIENT_PATTERNS = [
 export function isTransientPublishFailure(output) {
   const text = String(output ?? '');
   return TRANSIENT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/**
+ * True when npm refused because `name@version` already exists.
+ *
+ * @param {string} output Combined stdout and stderr.
+ */
+export function isPublishConflict(output) {
+  return PUBLISH_CONFLICT_PATTERN.test(String(output ?? ''));
 }
 
 /**
@@ -69,42 +94,99 @@ export function packageDir(args, cwd) {
 
 /**
  * Run a command, forward its output, and resolve with exit code and output.
+ * Past `timeoutMs` the child gets SIGTERM, then SIGKILL after a grace period,
+ * and the result reports `timedOut`.
  *
  * @param {typeof spawn} spawnFn
  * @param {string} command
  * @param {string[]} args
- * @param {{ cwd: string, env: NodeJS.ProcessEnv, stdout?: NodeJS.WritableStream, stderr?: NodeJS.WritableStream }} options
- * @returns {Promise<{ code: number | null, output: string }>}
+ * @param {{ cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number, stdout?: NodeJS.WritableStream, stderr?: NodeJS.WritableStream }} options
+ * @returns {Promise<{ code: number | null, output: string, stdoutText: string, timedOut: boolean }>}
  */
-export function run(spawnFn, command, args, { cwd, env, stdout, stderr }) {
+export function run(spawnFn, command, args, { cwd, env, timeoutMs, stdout, stderr }) {
   return new Promise((resolvePromise, reject) => {
     const child = spawnFn(command, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     const chunks = [];
-    const forward = (stream, dest) => {
+    const outChunks = [];
+    let timedOut = false;
+    let killTimer;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
+    }, timeoutMs);
+    const forward = (stream, dest, own) => {
       stream?.on('data', (chunk) => {
-        chunks.push(Buffer.from(chunk));
+        const buf = Buffer.from(chunk);
+        chunks.push(buf);
+        own?.push(buf);
         dest?.write(chunk);
       });
     };
-    forward(child.stdout, stdout);
+    forward(child.stdout, stdout, outChunks);
     forward(child.stderr, stderr);
-    child.on('error', reject);
-    child.on('close', (code) =>
-      resolvePromise({ code, output: Buffer.concat(chunks).toString('utf8') })
-    );
+    const settle = () => {
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+    };
+    child.on('error', (error) => {
+      settle();
+      reject(error);
+    });
+    child.on('close', (code) => {
+      settle();
+      resolvePromise({
+        code,
+        output: Buffer.concat(chunks).toString('utf8'),
+        stdoutText: Buffer.concat(outChunks).toString('utf8'),
+        timedOut,
+      });
+    });
   });
 }
 
 /**
- * Ask the registry whether `name@version` exists. Network trouble reads as
- * "not published" so the caller keeps retrying.
+ * True when the registry holds exactly the tarball we tried to publish.
+ *
+ * @param {{ localIntegrity?: string, dist?: { integrity?: string, attestations?: { provenance?: unknown } }, requireProvenance: boolean }} input
  */
-async function isPublished({ spawnFn, name, version, cwd, env }) {
-  const result = await run(spawnFn, 'npm', ['view', `${name}@${version}`, 'version'], {
+export function matchesRegistry({ localIntegrity, dist, requireProvenance }) {
+  if (!localIntegrity || dist?.integrity !== localIntegrity) return false;
+  return !requireProvenance || Boolean(dist.attestations?.provenance);
+}
+
+/** Run a JSON-printing npm probe; any failure or timeout reads as undefined. */
+async function probeJson(spawnFn, args, { cwd, env, timeoutMs }) {
+  try {
+    const result = await run(spawnFn, 'npm', args, { cwd, env, timeoutMs });
+    if (result.code !== 0 || result.timedOut) return undefined;
+    return JSON.parse(result.stdoutText);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Does the registry already hold this exact tarball? Network trouble, a
+ * different tarball, or missing provenance all read as "no".
+ */
+async function isSameTarballPublished({ spawnFn, args, pkg, cwd, env, timeoutMs }) {
+  const dist = await probeJson(spawnFn, ['view', `${pkg.name}@${pkg.version}`, 'dist', '--json'], {
     cwd,
     env,
-  }).catch(() => ({ code: 1, output: '' }));
-  return result.code === 0 && result.output.trim() === version;
+    timeoutMs,
+  });
+  if (!dist?.integrity) return false;
+  const packed = await probeJson(
+    spawnFn,
+    ['pack', packageDir(args, cwd), '--dry-run', '--json', '--ignore-scripts'],
+    { cwd, env, timeoutMs }
+  );
+  return matchesRegistry({
+    localIntegrity: Array.isArray(packed) ? packed[0]?.integrity : undefined,
+    dist,
+    requireProvenance: args.includes('--provenance'),
+  });
 }
 
 /**
@@ -112,7 +194,11 @@ async function isPublished({ spawnFn, name, version, cwd, env }) {
  * @param {string[]} options.args `npm publish` arguments.
  * @param {typeof spawn} [options.spawn]
  * @param {(ms: number) => Promise<void>} [options.sleep]
+ * @param {() => number} [options.now]
  * @param {number[]} [options.delays]
+ * @param {number} [options.publishTimeoutMs]
+ * @param {number} [options.probeTimeoutMs]
+ * @param {number} [options.budgetMs]
  * @param {string} [options.cwd]
  * @param {NodeJS.ProcessEnv} [options.env]
  * @param {NodeJS.WritableStream} [options.stdout]
@@ -124,7 +210,11 @@ export async function publishWithRetry({
   args,
   spawn: spawnFn = spawn,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  now = Date.now,
   delays = RETRY_DELAYS_MS,
+  publishTimeoutMs = PUBLISH_TIMEOUT_MS,
+  probeTimeoutMs = PROBE_TIMEOUT_MS,
+  budgetMs = RETRY_BUDGET_MS,
   cwd = process.cwd(),
   env = process.env,
   stdout = process.stdout,
@@ -133,18 +223,39 @@ export async function publishWithRetry({
 }) {
   const pkg = JSON.parse(readFileSync(join(packageDir(args, cwd), 'package.json'), 'utf8'));
   const id = `${pkg.name}@${pkg.version}`;
+  const startedAt = now();
 
   for (let attempt = 1; ; attempt++) {
-    const result = await run(spawnFn, 'npm', ['publish', ...args], { cwd, env, stdout, stderr });
-    if (result.code === 0) return { code: 0, attempts: attempt, alreadyPublished: false };
+    const result = await run(spawnFn, 'npm', ['publish', ...args], {
+      cwd,
+      env,
+      timeoutMs: publishTimeoutMs,
+      stdout,
+      stderr,
+    });
+    if (result.code === 0 && !result.timedOut) {
+      return { code: 0, attempts: attempt, alreadyPublished: false };
+    }
+    if (result.timedOut) {
+      log(
+        `[npm-publish-retry] ${id}: attempt ${attempt} hung past ${publishTimeoutMs / 1000}s; killed.`
+      );
+    }
 
-    if (await isPublished({ spawnFn, name: pkg.name, version: pkg.version, cwd, env })) {
-      log(`[npm-publish-retry] ${id} is on the registry despite the error; treating as published.`);
+    const transient = result.timedOut || isTransientPublishFailure(result.output);
+    if (
+      (transient || isPublishConflict(result.output)) &&
+      (await isSameTarballPublished({ spawnFn, args, pkg, cwd, env, timeoutMs: probeTimeoutMs }))
+    ) {
+      log(
+        `[npm-publish-retry] ${id}: the registry already holds this exact tarball; treating as published.`
+      );
       return { code: 0, attempts: attempt, alreadyPublished: true };
     }
 
     const delay = delays[attempt - 1];
-    if (!isTransientPublishFailure(result.output) || delay === undefined) {
+    const overBudget = delay !== undefined && now() - startedAt + delay > budgetMs;
+    if (!transient || delay === undefined || overBudget) {
       return { code: result.code || 1, attempts: attempt, alreadyPublished: false };
     }
     log(
