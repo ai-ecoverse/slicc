@@ -61,6 +61,7 @@ final class LauncherModel {
 
     var targets: [AppTarget] = []
     var isReady = false
+    @ObservationIgnored private var isInitializing = false
     var alertMessage: String?
     var showAlert = false
     var showDebugBuildDialog = false
@@ -114,7 +115,20 @@ final class LauncherModel {
 
     /// Bootstrap if needed, scan, reattach anything the previous Sliccstart
     /// left running across an update, then either auto-launch or stay put.
+    ///
+    /// Runs from each launcher window's `.task`, but the model is shared, so
+    /// only the first call does the startup work. A later window (reopened
+    /// from the Dock) just rescans; an in-flight call is not joined twice.
+    /// A failed bootstrap leaves `isReady` false so the next window retries.
     func initialize() async {
+        if isReady {
+            rescan()
+            return
+        }
+        guard !isInitializing else { return }
+        isInitializing = true
+        defer { isInitializing = false }
+
         let sliccDir = process.resolvedSliccDir
         let status = checkInstallation(sliccDir)
         if status != .installed && status != .needsBuild {

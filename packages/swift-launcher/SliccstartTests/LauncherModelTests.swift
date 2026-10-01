@@ -772,6 +772,56 @@ final class LauncherModelTests: XCTestCase {
     }
 }
 
+// MARK: - Startup idempotence
+
+extension LauncherModelTests {
+    /// Every launcher window runs `initialize()` from its `.task`. A second
+    /// window — historically one per link routed to us as the default browser
+    /// — must not repeat the update check (burning GitHub's anonymous rate
+    /// limit) or the startup auto-launch.
+    func testASecondInitializeOnlyRescans() async throws {
+        let process = RecordingProcess()
+        var scans = 0
+        var checks = 0
+        let model = makeModel(
+            process: process,
+            scan: { _ in
+                scans += 1
+                return [self.target("Chrome", bundleId: "com.google.Chrome")]
+            },
+            isBundledBuild: true,
+            startupLaunchEnabled: true,
+            updateChecking: .init(
+                check: { onDone, _ in
+                    checks += 1
+                    onDone()
+                }, isUpdateReady: { false })
+        )
+
+        await model.initialize()
+        for _ in 0..<10 where model.updateCheckStatus == .checking { await Task.yield() }
+        XCTAssertTrue(model.updateCheckStatus.allowsRetry, "precondition: a re-check would not be suppressed")
+
+        await model.initialize()
+
+        XCTAssertEqual(checks, 1)
+        XCTAssertEqual(process.standaloneLaunches, ["Chrome"])
+        XCTAssertEqual(scans, 2, "a reopened window still refreshes the app list")
+    }
+
+    func testAFailedBootstrapIsRetriedByTheNextInitialize() async {
+        struct Boom: Error {}
+        let bootstrapper = FailingBootstrapper(error: Boom())
+        let model = makeModel(installation: .notInstalled, bootstrapper: bootstrapper)
+
+        await model.initialize()
+        await model.initialize()
+
+        XCTAssertEqual(bootstrapper.bootstrapCalls, 2)
+        XCTAssertFalse(model.isReady)
+    }
+}
+
 // MARK: - Stubs
 
 /// Records what the model asked the process to do instead of launching
