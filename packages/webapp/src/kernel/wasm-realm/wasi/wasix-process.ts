@@ -179,6 +179,7 @@ export class WasixProcess {
         cloexec: [...fds.cloexec],
         cwd: this.host.cwd,
         ...(fds.isShared ? { shared: true as const } : {}),
+        setjmps: this.driver.setjmps(),
       };
       return this.call({
         op: 'proc-fork',

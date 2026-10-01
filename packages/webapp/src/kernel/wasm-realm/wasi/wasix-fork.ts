@@ -11,6 +11,18 @@ export interface WasiForkState {
   cwd: string;
 
   shared?: true;
+
+  setjmps?: WasiSetjmps;
+}
+
+export interface WasiSetjmps {
+  next: number;
+  snapshots: Array<[number, Snapshot]>;
+}
+
+interface Snapshot {
+  frames: Uint8Array;
+  globals: Array<[string, number]>;
 }
 
 interface AsyncifyExports {
@@ -45,10 +57,7 @@ export class AsyncifyDriver {
   private pending: (() => number) | undefined;
 
   private answer = 0;
-  private readonly snapshots = new Map<
-    number,
-    { frames: Uint8Array; globals: Array<[string, number]> }
-  >();
+  private readonly snapshots = new Map<number, Snapshot>();
   private nextSnapshot = 1;
 
   constructor(private readonly mem: WasiMemory) {}
@@ -73,7 +82,13 @@ export class AsyncifyDriver {
     return true;
   }
 
+  setjmps(): WasiSetjmps {
+    return { next: this.nextSnapshot, snapshots: [...this.snapshots] };
+  }
+
   startChild(state: WasiForkState): void {
+    for (const [id, snap] of state.setjmps?.snapshots ?? []) this.snapshots.set(id, snap);
+    this.nextSnapshot = Math.max(this.nextSnapshot, state.setjmps?.next ?? 1);
     this.restoreGlobals(state.globals);
     this.answer = 0;
     this.exports.asyncify_start_rewind?.(state.asyncifyData);
