@@ -19,6 +19,8 @@ export interface RenameFs {
   rename?: (a: string, b: string) => Promise<void>;
   mv?: (a: string, b: string) => Promise<void>;
   stat: (path: string) => Promise<{ identity?: string; isDirectory?: boolean }>;
+  /** The entry itself, a symlink not followed (without one, `stat`). */
+  lstat?: (path: string) => Promise<{ isDirectory?: boolean; isSymbolicLink?: boolean }>;
   readFileBuffer: (path: string) => Promise<Uint8Array>;
   writeFile: (path: string, content: Uint8Array | string) => Promise<void>;
   rm: (path: string, opts?: { recursive?: boolean }) => Promise<void>;
@@ -55,6 +57,21 @@ function parentOf(path: string): string {
   return slash <= 0 ? '/' : path.slice(0, slash);
 }
 
+/** `path`'s stat (its lstat with `entry`), or undefined when it does not exist; other errors propagate. */
+async function statIfPresent(
+  fs: RenameFs,
+  path: string,
+  entry: boolean
+): Promise<{ identity?: string; isDirectory?: boolean; isSymbolicLink?: boolean } | undefined> {
+  try {
+    return entry && fs.lstat ? await fs.lstat(path) : await fs.stat(path);
+  } catch (err) {
+    // Only ENOENT says it is absent; an EIO or a denied lookup says so.
+    if ((err as { code?: unknown } | null)?.code === 'ENOENT') return undefined;
+    throw err;
+  }
+}
+
 export async function renameViaFs(fs: RenameFs, src: string, dest: string): Promise<void> {
   if (src === dest) return;
   const native = await nativeRename(fs, src, dest);
@@ -86,13 +103,16 @@ export async function renameViaFs(fs: RenameFs, src: string, dest: string): Prom
     if (native && code !== 'ENOENT') throw native;
     throw posixError('EXDEV', `cannot move directory ${src} to ${dest}`);
   }
-  try {
-    const toStat = await fs.stat(dest);
-    if (fromStat.identity && fromStat.identity === toStat.identity) return;
-  } catch {
-    /* dest missing — a plain copy */
-  }
+  const toStat = await statIfPresent(fs, dest, false);
+  if (toStat && fromStat.identity && fromStat.identity === toStat.identity) return;
+  // The destination entry itself: a symlink is replaced (even one to a
+  // directory), a directory is not — the copy's writeFile would fail on it
+  // unseen, and the source would then be removed with nothing written.
+  const toEntry = fs.lstat ? await statIfPresent(fs, dest, true) : toStat;
+  if (toEntry?.isDirectory) throw posixError('EISDIR', `is a directory: ${dest}`);
   const content = await fs.readFileBuffer(src);
+  // writeFile would follow the link: the link goes, the file takes its place.
+  if (toEntry?.isSymbolicLink) await fs.rm(dest);
   await fs.writeFile(dest, content);
   await fs.rm(src, { recursive: true });
 }

@@ -249,7 +249,21 @@ function buildBackendDescriptor(backend: MountBackend, normalizedPath: string): 
   }
 }
 
-/** Where a rename may park a destination symlink until it lands: a hidden sibling. */
+/**
+ * What a rename onto a `dest`-typed entry moves aside first, because POSIX
+ * rename replaces it and the store's refuses: a symlink (under anything but
+ * a directory), or a directory under a directory (when empty).
+ */
+function displacedByRename(
+  dest: string | undefined,
+  source: string | undefined
+): 'link' | 'dir' | undefined {
+  if (dest === 'symlink' && source !== 'directory') return 'link';
+  if (dest === 'directory' && source === 'directory') return 'dir';
+  return undefined;
+}
+
+/** Where a rename may park the entry it replaces until it lands: a hidden sibling. */
 function parkedLinkCandidate(path: string): string {
   const slash = path.lastIndexOf('/');
   const nonce = Math.random().toString(36).slice(2, 10);
@@ -2986,7 +3000,8 @@ export class VirtualFS {
     // POSIX rename replaces any non-directory at the destination; the store
     // backend replaces only a regular file (a symlink there is EISDIR), so
     // `ln -sf` / `mv -f` onto a link failed. The link goes first.
-    const replacesLink = newStat?.type === 'symlink' && entryType !== 'directory';
+    const displaced = displacedByRename(newStat?.type, entryType);
+    if (displaced) this.refuseMountedDisplacement(normalizedNew);
     try {
       // Mutation, prefix marks, and eager persist share ONE critical
       // section, matching rm/symlink: marking after an unlocked rename
@@ -3001,28 +3016,7 @@ export class VirtualFS {
         await this.dropSidecarConsistency();
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
-        // The link is parked beside itself, not deleted: a failed rename moves
-        // the very same entry back (identity, times), and it is removed only
-        // once the rename landed.
-        const parked = replacesLink ? await this.freeParkedLinkPath(normalizedNew) : undefined;
-        // Dirty before it exists, so whichever way the rename ends, the
-        // sidecar records the parked path: gone, or holding the link.
-        if (parked) this.markSidecarDirty(parked);
-        if (parked) await this.lfs.rename(normalizedNew, parked);
-        try {
-          await this.lfs.rename(normalizedOld, normalizedNew);
-        } catch (err) {
-          try {
-            if (parked) await this.restoreParkedLink(parked, normalizedNew, err);
-          } finally {
-            // Persist what the failure left (the link back, or still parked);
-            // a write that fails keeps the marks for the next flush, and must
-            // not mask the error that explains the state.
-            await this.writeOpfsMetadataSidecarUnlocked().catch(() => undefined);
-          }
-          throw err;
-        }
-        if (parked) await this.lfs.unlink(parked).catch(() => undefined);
+        await this.storeRenameReplacing(normalizedOld, normalizedNew, displaced);
         await this.writeOpfsMetadataSidecarUnlocked();
       });
     } catch (err) {
@@ -3034,6 +3028,59 @@ export class VirtualFS {
     ]);
     // Update mount index if paths are under mounts
     this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+  }
+
+  /**
+   * A mount's entry is its backend's: the store sees only the mount root's
+   * placeholder (empty, whatever the mount holds), so parking it would
+   * shadow the mount. EBUSY for the root, EXDEV inside; same-backend renames
+   * went to the backend before this.
+   */
+  private refuseMountedDisplacement(path: string): void {
+    const mount = this.findMount(path);
+    if (!mount) return;
+    const code = mount.relParts.length === 0 ? 'EBUSY' : 'EXDEV';
+    throw new FsError(code, 'rename onto a mounted entry', path);
+  }
+
+  /**
+   * The store's rename of `from` onto `to`, replacing what POSIX rename
+   * replaces there and the store does not: a symlink, or an empty directory
+   * (a non-empty one is ENOTEMPTY, before anything moves). That entry is
+   * parked beside itself, not deleted: a failed rename moves the very same
+   * entry back (identity, times), and it is removed only once the rename
+   * landed. Under the write lock; the caller persists the sidecar.
+   */
+  private async storeRenameReplacing(
+    from: string,
+    to: string,
+    displaced: 'link' | 'dir' | undefined
+  ): Promise<void> {
+    if (displaced === 'dir' && (await this.lfs.readdir(to)).length > 0) {
+      throw new FsError('ENOTEMPTY', 'directory not empty', to);
+    }
+    const parked = displaced ? await this.freeParkedLinkPath(to) : undefined;
+    // Dirty before it exists, so whichever way the rename ends, the
+    // sidecar records the parked path: gone, or holding the entry.
+    if (parked) this.markSidecarDirty(parked);
+    if (parked) await this.lfs.rename(to, parked);
+    try {
+      await this.lfs.rename(from, to);
+    } catch (err) {
+      try {
+        if (parked) await this.restoreParkedLink(parked, to, err);
+      } finally {
+        // Persist what the failure left (the entry back, or still parked);
+        // a write that fails keeps the marks for the next flush, and must
+        // not mask the error that explains the state.
+        await this.writeOpfsMetadataSidecarUnlocked().catch(() => undefined);
+      }
+      throw err;
+    }
+    if (parked) {
+      const drop = displaced === 'dir' ? this.lfs.rmdir(parked) : this.lfs.unlink(parked);
+      await drop.catch(() => undefined);
+    }
   }
 
   /**
@@ -3066,7 +3113,7 @@ export class VirtualFS {
       const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
       throw new FsError(
         'EIO',
-        `rename failed (${why(cause)}) and the symlink it replaced could not be put back ` +
+        `rename failed (${why(cause)}) and the entry it replaced could not be put back ` +
           `(${why(restoreErr)}); it is at ${parked}`,
         path
       );

@@ -132,6 +132,51 @@ describe('renameViaFs', () => {
       expect([...fs.store.keys()]).toEqual(['/f']);
     });
 
+    it("reports a failed destination lookup's own error, not an absent destination", async () => {
+      const fs = memoryFs({ '/f': 'F' });
+      const stat = fs.stat.bind(fs);
+      fs.stat = async (path) => {
+        if (path === '/g') throw Object.assign(new Error('EIO: offline'), { code: 'EIO' });
+        return stat(path);
+      };
+      fs.rename = async () => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      };
+      await expect(renameViaFs(fs, '/f', '/g')).rejects.toMatchObject({ code: 'EIO' });
+      expect(new TextDecoder().decode(fs.store.get('/f'))).toBe('F');
+    });
+
+    it('replaces a symlink to a directory with the file, leaving the directory alone', async () => {
+      const fs = memoryFs({ '/f': 'F' }, ['/d']);
+      // /l is a link to /d: stat follows it, lstat does not.
+      const stat = fs.stat.bind(fs);
+      let linked = true;
+      fs.stat = async (path) => (path === '/l' && linked ? stat('/d') : stat(path));
+      fs.lstat = async (path) =>
+        path === '/l' && linked ? { isDirectory: false, isSymbolicLink: true } : stat(path);
+      const rm = fs.rm.bind(fs);
+      fs.rm = async (path, opts) => {
+        if (path === '/l') linked = false;
+        return rm(path, opts);
+      };
+      fs.rename = async () => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      };
+      await renameViaFs(fs, '/f', '/l');
+      expect(new TextDecoder().decode(fs.store.get('/l'))).toBe('F');
+      expect(fs.store.has('/f')).toBe(false);
+      expect(fs.dirs.has('/d')).toBe(true);
+    });
+
+    it('EISDIR for a file onto a directory: the file is not removed', async () => {
+      const fs = memoryFs({ '/f': 'F' }, ['/d']);
+      fs.rename = async () => {
+        throw Object.assign(new Error('EISDIR'), { code: 'EISDIR' });
+      };
+      await expect(renameViaFs(fs, '/f', '/d')).rejects.toMatchObject({ code: 'EISDIR' });
+      expect(new TextDecoder().decode(fs.store.get('/f'))).toBe('F');
+    });
+
     it('ENOTDIR when the parent is a file, even after a native ENOENT', async () => {
       const fs = memoryFs({ '/f': 'F', '/file': 'x' });
       fs.rename = async () => {
