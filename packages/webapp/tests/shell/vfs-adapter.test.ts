@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
-import { VfsAdapter } from '../../src/shell/vfs-adapter.js';
+import { binStub, VfsAdapter } from '../../src/shell/vfs-adapter.js';
 
 describe('VfsAdapter', () => {
   let vfs: VirtualFS;
@@ -160,6 +160,20 @@ describe('VfsAdapter', () => {
       expect(s.isFile).toBe(true);
       expect(s.isDirectory).toBe(false);
       expect(s.mode).toBe(0o755);
+    });
+
+    it('/usr/bin/<command> reads as a script that runs the command, sized to match', async () => {
+      const script = await adapter.readFile('/usr/bin/node');
+      expect(script).toBe('#!/bin/sh\n# SLICC command\nexec node "$@"\n');
+      expect((await adapter.stat('/usr/bin/node')).size).toBe(script.length);
+      expect(new TextDecoder().decode(await adapter.readFileBuffer('/bin/git'))).toContain(
+        'exec git "$@"'
+      );
+      await expect(adapter.readFile('/usr/bin/nonexistent')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+
+      expect(new TextDecoder().decode(binStub("it's"))).toContain(`exec 'it'\\''s' "$@"`);
     });
 
     it('/bin aliases /usr/bin (merged /usr), so /bin/sh exists', async () => {

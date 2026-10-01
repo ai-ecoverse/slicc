@@ -73,6 +73,11 @@ function binAlias(normalized: string): string {
   return normalized.startsWith('/bin/') ? `/usr${normalized}` : normalized;
 }
 
+export function binStub(command: string): Uint8Array {
+  const word = /^[A-Za-z0-9._+-]+$/.test(command) ? command : `'${command.replace(/'/g, `'\\''`)}'`;
+  return new TextEncoder().encode(`#!/bin/sh\n# SLICC command\nexec ${word} "$@"\n`);
+}
+
 function withIdentityNames(dir: string, names: string[]): string[] {
   const missing = identityFileNames(dir).filter((n) => !names.includes(n));
   return missing.length ? [...names, ...missing].sort() : names;
@@ -167,6 +172,10 @@ export class VfsAdapter implements IFileSystem {
     return identityFile(normalized, this.identityFn?.() ?? DEFAULT_IDENTITY);
   }
 
+  private isVirtualBinCommand(name: string): boolean {
+    return name.length > 0 && !name.includes('/') && this.getVirtualBinCommands().includes(name);
+  }
+
   private getVirtualBinCommands(): string[] {
     return this.registeredCommandsFn?.() ?? [];
   }
@@ -185,17 +194,13 @@ export class VfsAdapter implements IFileSystem {
     }
     if (normalized.startsWith('/usr/bin/')) {
       const cmdName = normalized.slice('/usr/bin/'.length);
-      if (
-        cmdName.length > 0 &&
-        !cmdName.includes('/') &&
-        this.getVirtualBinCommands().includes(cmdName)
-      ) {
+      if (this.isVirtualBinCommand(cmdName)) {
         return {
           isFile: true,
           isDirectory: false,
           isSymbolicLink: false,
           mode: 0o755,
-          size: 0,
+          size: binStub(cmdName).length,
           mtime: new Date(0),
         };
       }
@@ -240,6 +245,10 @@ export class VfsAdapter implements IFileSystem {
   }
 
   private async readRaw(normalized: string): Promise<Uint8Array> {
+    const bin = binAlias(normalized);
+    if (bin.startsWith('/usr/bin/') && this.isVirtualBinCommand(bin.slice('/usr/bin/'.length))) {
+      return binStub(bin.slice('/usr/bin/'.length));
+    }
     let content: string | Uint8Array;
     try {
       content = await this.vfs.readFile(normalized, { encoding: 'binary' });
