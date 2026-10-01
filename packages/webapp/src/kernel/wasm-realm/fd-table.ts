@@ -1,4 +1,5 @@
 import { KernelPipe, PipeError } from './pipe.js';
+import type { PtyPair } from './pty.js';
 import type { KernelTty } from './tty.js';
 
 export type KernelErrno =
@@ -69,6 +70,8 @@ export interface KernelFile {
   stat?(): Promise<{ path: string; size: number; orphan?: true }>;
 
   tty?: KernelTty;
+
+  pty?: PtyPair;
 
   stat?(): Promise<{ size: number; path: string; orphan?: true }>;
   held?: true;

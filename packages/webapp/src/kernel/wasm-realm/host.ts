@@ -33,6 +33,7 @@ import {
   type WasmThread,
   type WasmThreadInitMsg,
 } from './protocol.js';
+import type { PtyTable } from './pty.js';
 import { SIG, sigbit } from './signals.js';
 import { KernelSocket, type LoopbackNet } from './socket.js';
 
@@ -69,6 +70,8 @@ export interface SpawnWasmOptions {
   kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
 
   jobs?: JobTable;
+
+  ptys?: PtyTable;
 
   net?: LoopbackNet;
 }
@@ -139,6 +142,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     fs: opts.fs,
     kill: opts.kill,
     jobs: opts.jobs,
+    ptys: opts.ptys,
     net: opts.net,
 
     onPending: (sig) => void Atomics.or(header, SAB_I_SIGNALS, sigbit(sig)),

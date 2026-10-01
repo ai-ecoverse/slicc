@@ -15,6 +15,7 @@ import {
   isRealmDefault,
 } from '../../../kernel/wasm-realm/net/realm-network.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
+import { PtyTable } from '../../../kernel/wasm-realm/pty.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
 import {
   type LoopbackNet,
@@ -307,6 +308,8 @@ export class WasmSession {
 
   private readonly jobs = new JobTable();
 
+  private readonly ptys = new PtyTable((tty, sig) => this.jobs.signalOwnedForeground(tty, sig));
+
   private leader: number | undefined;
 
   private readonly net: LoopbackNet;
@@ -416,6 +419,7 @@ export class WasmSession {
       forker: this.forker(pid, req),
       kill: (target, sig) => this.kill(target, sig),
       jobs: this.jobs,
+      ptys: this.ptys,
       net: this.net,
       ...(req.fork ? { fork: req.fork } : {}),
       ...(req.ppid !== undefined ? { ppid: req.ppid } : {}),

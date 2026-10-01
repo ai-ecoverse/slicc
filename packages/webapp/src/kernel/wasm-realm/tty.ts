@@ -62,6 +62,8 @@ export class KernelTty {
   private line: number[] = [];
   private waiters: Array<() => void> = [];
 
+  private hungUp = false;
+
   constructor(
     private readonly screen: TtyScreen,
     private readonly signal: (sig: number) => void
@@ -75,6 +77,15 @@ export class KernelTty {
   resize(cols: number, rows: number): void {
     this.setSize(cols, rows);
     this.signal(SIG.WINCH);
+  }
+
+  hangup(): void {
+    this.hungUp = true;
+    this.wake();
+  }
+
+  signalHangup(): void {
+    this.signal(SIG.HUP);
   }
 
   setSize(cols: number, rows: number): void {
@@ -105,13 +116,14 @@ export class KernelTty {
     return new OpenFile({
       read: (max, signal) => this.read(max, signal),
       write: async (bytes) => {
+        if (this.hungUp) throw new KernelError('EIO');
         this.output(bytes);
         return bytes.length;
       },
       poll: (): PollState => ({
-        readable: this.readable.length > 0,
+        readable: this.readable.length > 0 || this.hungUp,
         writable: true,
-        hangup: false,
+        hangup: this.hungUp,
       }),
       changed: (signal) => this.changed(signal),
       close: () => {},
@@ -228,7 +240,10 @@ export class KernelTty {
   }
 
   private async read(max: number, signal?: AbortSignal): Promise<Uint8Array> {
-    while (this.readable.length === 0) await this.changed(signal);
+    while (this.readable.length === 0) {
+      if (this.hungUp) return new Uint8Array(0);
+      await this.changed(signal);
+    }
     const head = this.readable[0];
     if (head === null) {
       this.readable.shift();

@@ -19,6 +19,7 @@ import {
 } from './fd-table.js';
 import type { JobTable } from './jobs.js';
 import type { ForkState } from './protocol.js';
+import { PTY_OPS, type PtySyscall, type PtyTable, ptySyscall } from './pty.js';
 import { selectFds } from './select.js';
 import { type DefaultAction, defaultAction, isSignal, SIG, sigbit } from './signals.js';
 import { KernelSocket, LoopbackNet } from './socket.js';
@@ -117,7 +118,8 @@ export type WasmSyscall =
   | { op: 'tty-pgrp-get'; fd: number }
   | { op: 'tty-pgrp-set'; fd: number; pgrp: number }
   | { op: 'sig-mask'; caught: number; ignored: number }
-  | SocketSyscall;
+  | SocketSyscall
+  | PtySyscall;
 
 type FdSyscall = Extract<WasmSyscall, { op: `fd-${string}` }>;
 
@@ -135,6 +137,10 @@ const JOB_OPS: ReadonlySet<string> = new Set([
 
 function isJobSyscall(req: WasmSyscall): req is JobSyscall {
   return JOB_OPS.has(req.op);
+}
+
+function isPtySyscall(req: WasmSyscall): req is PtySyscall {
+  return req.op.startsWith('pty-');
 }
 
 function isSocketSyscall(req: WasmSyscall): req is SocketSyscall {
@@ -229,6 +235,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'tty-pgrp-set',
   'sig-mask',
   ...SOCKET_OPS,
+  ...PTY_OPS,
 ]);
 
 type TtySyscall = Extract<WasmSyscall, { op: `tty-${string}` }>;
@@ -258,6 +265,8 @@ export interface WasmProcessOptions {
   raise?: (sig: number) => void;
 
   jobs?: JobTable;
+
+  ptys?: PtyTable;
 
   net?: LoopbackNet;
 }
@@ -367,6 +376,10 @@ export class WasmProcess {
       if (isTtySyscall(req)) return this.ttySyscall(req);
       if (isJobSyscall(req)) return this.jobSyscall(req);
       if (isSocketSyscall(req)) return await this.socketSyscall(req);
+      if (isPtySyscall(req)) {
+        const { ptys, jobs } = this.options;
+        return ptySyscall(req, { pid: this.pid, fds: this.fds, ptys, jobs });
+      }
       return await this.procSyscall(req);
     } catch (e) {
       if (e instanceof KernelError || e instanceof SpawnError) {
@@ -649,7 +662,8 @@ export class WasmProcess {
   }
 
   private tty(fd: number): KernelTty {
-    const tty = this.fds.get(fd).file.tty;
+    const file = this.fds.get(fd).file;
+    const tty = file.tty ?? file.pty?.slave;
     if (!tty) throw new KernelError('ENOTTY');
     return tty;
   }
@@ -664,7 +678,7 @@ export class WasmProcess {
   }
 
   private async procSyscall(
-    req: Exclude<WasmSyscall, FdSyscall | TtySyscall | JobSyscall | SocketSyscall>
+    req: Exclude<WasmSyscall, FdSyscall | TtySyscall | JobSyscall | SocketSyscall | PtySyscall>
   ): Promise<SyncFsResult> {
     switch (req.op) {
       case 'proc-fork':

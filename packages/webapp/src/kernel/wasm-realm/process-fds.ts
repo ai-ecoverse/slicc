@@ -1,4 +1,5 @@
 import type { ProcessFs, ProcessStream } from './kernel-streams.js';
+import { type PtyKernel, ptyIoctl } from './process-pty.js';
 import { wasiErrno } from './wasi-errno.js';
 
 export const O_CLOEXEC = 0o2000000;
@@ -45,7 +46,7 @@ export function trackCloseOnExec(Fs: ProcessFs): void {
   }
 }
 
-type GlueSyscall = (...args: number[]) => number;
+export type GlueSyscall = (...args: number[]) => number;
 
 export interface GlueSyscalls {
   fcntl?: GlueSyscall;
@@ -53,12 +54,16 @@ export interface GlueSyscalls {
   dup3?: GlueSyscall;
   socket?: GlueSyscall;
   accept4?: GlueSyscall;
+
+  ioctl?: GlueSyscall;
 }
 
 export interface CloexecDeps {
   fs(): ProcessFs | undefined;
 
   heap(): Int32Array | undefined;
+
+  pty?: PtyKernel;
 }
 
 function marker(deps: CloexecDeps): (fd: number, on: boolean) => void {
@@ -123,6 +128,9 @@ function wrappers(glue: GlueSyscalls, deps: CloexecDeps): Map<GlueSyscall, GlueS
   if (glue.dup3) out.set(glue.dup3, cloexecByFlag(glue.dup3, 2, deps));
   if (glue.socket) out.set(glue.socket, cloexecByFlag(glue.socket, 1, deps));
   if (glue.accept4) out.set(glue.accept4, cloexecByFlag(glue.accept4, 3, deps));
+  if (glue.ioctl && deps.pty) {
+    out.set(glue.ioctl, ptyIoctl(glue.ioctl, { fs: deps.fs, heap: deps.heap, kernel: deps.pty }));
+  }
   return out;
 }
 

@@ -12,6 +12,10 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __EMSCRIPTEN__
+#include <sys/ioctl.h>
+#include <termios.h>
+#endif
 
 static int fail(const char *what) {
   fprintf(stderr, "%s: %s\n", what, strerror(errno));
@@ -105,6 +109,42 @@ static int rw(const char *path) {
   return 0;
 }
 
+#ifdef __EMSCRIPTEN__
+/* A pseudo-terminal end to end (the kernel's /dev/ptmx, Emscripten only:
+ * wasi-libc has no posix_openpt). */
+static int pty(void) {
+  int m = posix_openpt(O_RDWR | O_NOCTTY);
+  if (m < 0) return perror("posix_openpt"), 1;
+  if (grantpt(m) || unlockpt(m)) return perror("unlockpt"), 1;
+  const char *name = ptsname(m);
+  printf("ptsname %s isatty-master %d\n", name ? name : "(null)", isatty(m));
+  struct termios t;
+  int tc = tcgetattr(m, &t); /* a master's termios is its slave's */
+  printf("tcgetattr-master %d icanon %d\n", tc, tc == 0 && (t.c_lflag & ICANON) != 0);
+  int s = open(name, O_RDWR | O_NOCTTY);
+  if (s < 0) return perror("open slave"), 1;
+  printf("isatty-slave %d\n", isatty(s));
+  struct winsize ws = {.ws_row = 33, .ws_col = 99};
+  if (ioctl(m, TIOCSWINSZ, &ws)) perror("TIOCSWINSZ");
+  struct winsize got = {0};
+  ioctl(s, TIOCGWINSZ, &got);
+  printf("winsize %d %d\n", got.ws_row, got.ws_col);
+  char buf[64];
+  write(m, "typed\n", 6); /* the keyboard: a canonical line, echoed */
+  ssize_t n = read(s, buf, sizeof buf);
+  printf("slave read %zd [%.*s]\n", n, (int)(n > 0 ? n - 1 : 0), buf);
+  n = read(m, buf, sizeof buf);
+  printf("master echo %zd\n", n);
+  write(s, "out\n", 4); /* the program's output: \n becomes \r\n */
+  n = read(m, buf, sizeof buf);
+  printf("master read %zd crlf %d\n", n, n == 5 && buf[3] == '\r' && buf[4] == '\n');
+  close(s);
+  n = read(m, buf, sizeof buf);
+  printf("slave closed: read %zd %s\n", n, n < 0 && errno == EIO ? "EIO" : "?");
+  return 0;
+}
+#endif
+
 int main(int argc, char **argv) {
   if (argc < 2) return 0;
   const char *cmd = argv[1];
@@ -134,6 +174,9 @@ int main(int argc, char **argv) {
     printf("slept %s\n", ms >= 30 ? "enough" : "too little");
     return 0;
   }
+#ifdef __EMSCRIPTEN__
+  if (!strcmp(cmd, "pty")) return pty();
+#endif
   if (!strcmp(cmd, "tty")) {
     printf("isatty 0=%d 1=%d\n", isatty(0), isatty(1));
     printf("lseek stdin %s\n", lseek(0, 0, SEEK_CUR) < 0 && errno == ESPIPE ? "ESPIPE" : "ok");

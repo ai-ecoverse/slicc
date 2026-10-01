@@ -100,6 +100,15 @@ export class JobTable {
     return member && (this.terminals.get(member.sid) ?? null);
   }
 
+  acquireTerminal(pid: number, tty: KernelTty): boolean {
+    const member = this.members.get(pid);
+    if (!member || member.sid !== pid || this.terminals.has(pid)) return false;
+    if ([...this.terminals.values()].includes(tty)) return false;
+    this.terminals.set(pid, tty);
+    this.foreground.set(tty, member.pgid);
+    return true;
+  }
+
   killGroup(pgid: number, sig: number): boolean {
     const targets = [...this.members.values()].filter((m) => m.pgid === pgid);
     const pids = new Set(targets.map((m) => m.pid));
@@ -119,6 +128,11 @@ export class JobTable {
     const inSession = [...this.members.values()].some((m) => m.pgid === pgid && m.sid === self.sid);
     if (!inSession) throw new KernelError('EPERM');
     this.foreground.set(tty, pgid);
+  }
+
+  signalOwnedForeground(tty: KernelTty, sig: number): void {
+    const pgid = this.foreground.get(tty);
+    if (pgid !== undefined) this.killGroup(pgid, sig);
   }
 
   signalForeground(tty: KernelTty, fallback: number, sig: number): void {
