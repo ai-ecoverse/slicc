@@ -124,9 +124,10 @@ export const SLICC_CLI_SCRIPT = 'packages/slicc-cli/sign-and-package.sh';
 export const CHROME_PUBLISH_CMD = 'npm run publish:chrome';
 // biome-jsh is published from its own directory (it is not an npm workspace of
 // the root package). `--provenance` / `--access public` mirror the settings the
-// former second @semantic-release/npm target used.
+// former second @semantic-release/npm target used. npm-publish-retry.mjs rides
+// out transient sigstore / registry network failures (#3719).
 export const BIOME_JSH_PUBLISH_CMD =
-  'npm publish packages/dev-tools/biome-jsh --provenance --access public';
+  'node packages/dev-tools/tools/npm-publish-retry.mjs packages/dev-tools/biome-jsh --provenance --access public';
 
 // An empty / unset / placeholder tag means "first release" — build both.
 export function isFirstRelease(lastTag) {

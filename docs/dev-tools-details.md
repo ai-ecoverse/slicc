@@ -1102,3 +1102,16 @@ does not GraphQL-resolve `#NNNN` from commit messages. It writes
 `deferred=true|false` to `$GITHUB_OUTPUT`. `tools/release-alert.mjs` opens
 (or comments on) the "Release pipeline is red" tracking issue on a failed
 publish, and closes it on a green non-deferred publish.
+
+`tools/npm-publish-retry.mjs` runs `npm publish` for `sliccy` (first in the
+`@semantic-release/exec` `publishCmd`) and `@ai-ecoverse/biome-jsh`. It
+retries transient DNS/socket, sigstore CA/TLog/TSA, and registry 408/429/5xx
+failures with 15s–240s backoff (5-minute per-attempt kill, 60s registry
+probes, 20-minute retry budget). After a transient failure or version
+conflict it counts the version as published only when the registry
+`dist.integrity` equals local `npm pack --dry-run` and, with `--provenance`,
+a provenance attestation exists. `@semantic-release/npm` has `npmPublish: false` because its
+single `npm publish` runs after the version tag is pushed: v6.231.1 was
+stranded by `getaddrinfo ENOTFOUND fulcio.sigstore.dev` (#3719). `--verify`
+(exec `verifyConditionsCmd`) fails early when the job lacks
+`id-token: write`.
