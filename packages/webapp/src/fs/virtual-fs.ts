@@ -152,6 +152,14 @@ function buildBackendDescriptor(backend: MountBackend, normalizedPath: string): 
   }
 }
 
+function parkedLinkCandidate(path: string): string {
+  const slash = path.lastIndexOf('/');
+  const nonce = Math.random().toString(36).slice(2, 10);
+  return `${path.slice(0, slash + 1)}.${path.slice(slash + 1)}.slicc-rename-${nonce}`;
+}
+
+const PARK_ATTEMPTS = 8;
+
 export class VirtualFS {
   private lfs: FsPromisesLike;
 
@@ -2040,16 +2048,21 @@ export class VirtualFS {
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
 
-        const linkTarget = replacesLink ? await this.lfs.readlink(normalizedNew) : undefined;
-        if (linkTarget !== undefined) await this.lfs.unlink(normalizedNew);
+        const parked = replacesLink ? await this.freeParkedLinkPath(normalizedNew) : undefined;
+
+        if (parked) this.markSidecarDirty(parked);
+        if (parked) await this.lfs.rename(normalizedNew, parked);
         try {
           await this.lfs.rename(normalizedOld, normalizedNew);
         } catch (err) {
-          if (linkTarget !== undefined) {
-            await this.lfs.symlink(linkTarget, normalizedNew).catch(() => undefined);
+          try {
+            if (parked) await this.restoreParkedLink(parked, normalizedNew, err);
+          } finally {
+            await this.writeOpfsMetadataSidecarUnlocked().catch(() => undefined);
           }
           throw err;
         }
+        if (parked) await this.lfs.unlink(parked).catch(() => undefined);
         await this.writeOpfsMetadataSidecarUnlocked();
       });
     } catch (err) {
@@ -2061,6 +2074,33 @@ export class VirtualFS {
     ]);
 
     this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+  }
+
+  private async freeParkedLinkPath(path: string): Promise<string> {
+    for (let i = 0; i < PARK_ATTEMPTS; i++) {
+      const candidate = parkedLinkCandidate(path);
+      try {
+        await this.lfs.lstat(candidate);
+      } catch (err) {
+        if ((err as { code?: unknown })?.code === 'ENOENT') return candidate;
+        throw err;
+      }
+    }
+    throw new FsError('EEXIST', 'no free name to park the symlink at during rename', path);
+  }
+
+  private async restoreParkedLink(parked: string, path: string, cause: unknown): Promise<void> {
+    try {
+      await this.lfs.rename(parked, path);
+    } catch (restoreErr) {
+      const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
+      throw new FsError(
+        'EIO',
+        `rename failed (${why(cause)}) and the symlink it replaced could not be put back ` +
+          `(${why(restoreErr)}); it is at ${parked}`,
+        path
+      );
+    }
   }
 
   async readTextFile(path: string): Promise<string> {
