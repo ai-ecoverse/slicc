@@ -252,7 +252,17 @@ int main(int argc, char **argv) {
     }
     pid_t pid = fork();
     if (pid < 0) return perror("fork"), 1;
-    if (pid == 0) depth(5);
+    if (pid == 0) {
+      /* A setjmp of the child's own takes a fresh snapshot: it must not
+       * reuse (and so replace) the parent's that `env` names. */
+      static jmp_buf own;
+      if (setjmp(own)) {
+        printf("child landed in its own setjmp\n");
+        fflush(stdout);
+        _exit(1);
+      }
+      depth(5);
+    }
     int status;
     waitpid(pid, &status, 0);
     report("forkjmp child", status);
