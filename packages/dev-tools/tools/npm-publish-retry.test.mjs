@@ -96,7 +96,10 @@ const PROVENANCE = { provenance: { predicateType: 'https://slsa.dev/provenance/v
  * [code, stderr]); `view` answers with `dist` (null = E404); `pack` reports
  * `localIntegrity`; `probe: 'hang'` wedges both probes.
  */
-function scriptedNpm(publishes, { dist = null, localIntegrity = INTEGRITY, probe } = {}) {
+function scriptedNpm(
+  publishes,
+  { dist = null, localIntegrity = INTEGRITY, probe, probeStderr = '' } = {}
+) {
   const calls = [];
   const spawn = vi.fn((_cmd, args) => {
     calls.push(args);
@@ -104,10 +107,13 @@ function scriptedNpm(publishes, { dist = null, localIntegrity = INTEGRITY, probe
       if (probe === 'hang') return hungChild();
       if (args[0] === 'view') {
         return dist
-          ? fakeChild(0, { stdout: JSON.stringify(dist) })
+          ? fakeChild(0, { stdout: JSON.stringify(dist), stderr: probeStderr })
           : fakeChild(1, { stderr: 'npm error code E404' });
       }
-      return fakeChild(0, { stdout: JSON.stringify([{ integrity: localIntegrity }]) });
+      return fakeChild(0, {
+        stdout: JSON.stringify([{ integrity: localIntegrity }]),
+        stderr: probeStderr,
+      });
     }
     const next = publishes.shift();
     if (next === 'hang') return hungChild();
@@ -324,6 +330,19 @@ describe('publishWithRetry', () => {
   it('accepts a transient failure whose publish actually landed', async () => {
     const dist = { integrity: INTEGRITY, attestations: PROVENANCE };
     const { spawn } = scriptedNpm([[1, REGISTRY_503]], { dist });
+    const result = await publishWithRetry({ ...base(), args: ['.', '--provenance'], spawn });
+    expect(result).toEqual({ code: 0, attempts: 1, alreadyPublished: true });
+  });
+
+  it('ignores npm warnings on stderr when reading registry probes', async () => {
+    // setup-node `registry-url` writes `always-auth`; npm 11 warns about it
+    // on stderr while printing the JSON on stdout.
+    const dist = { integrity: INTEGRITY, attestations: PROVENANCE };
+    const { spawn } = scriptedNpm([[1, FULCIO_DNS]], {
+      dist,
+      probeStderr:
+        'npm warn Unknown user config "always-auth". This will stop working in the next major version of npm.\n',
+    });
     const result = await publishWithRetry({ ...base(), args: ['.', '--provenance'], spawn });
     expect(result).toEqual({ code: 0, attempts: 1, alreadyPublished: true });
   });
