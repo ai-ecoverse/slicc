@@ -237,9 +237,14 @@ const GLUE_TRAILER = [
   "  ioctl: typeof ___syscall_ioctl === 'function' ? ___syscall_ioctl : undefined,",
   '};',
   // The toolchain's SIGPIPE disposition query (exported once instantiated).
-  // Not before the runtime is up: an assertions build (-O0) aborts on an
-  // export called earlier, and the first syscall can come during init.
-  "const __sliccUp = () => typeof runtimeInitialized === 'undefined' || runtimeInitialized;",
+  // Only while the runtime is up: an assertions build (-O0) aborts on an
+  // export called before it is initialized or after it exited, and syscalls
+  // come during init and after exit (the final stdio flush) — an abort there
+  // writes its message, whose syscall asks again, without end.
+  'const __sliccUp = () =>',
+  "  (typeof runtimeInitialized === 'undefined' || runtimeInitialized) &&",
+  "  !(typeof runtimeExited !== 'undefined' && runtimeExited) &&",
+  "  !(typeof ABORT !== 'undefined' && ABORT);",
   "Module.sliccSigpipe ??= () => (__sliccUp() && typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
   // The toolchain's signal support (slicc_signals.c): dispositions and raise().
   "Module.sliccSigMask ??= (w) => (__sliccUp() && typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
