@@ -316,6 +316,49 @@ describe('KernelStreams', () => {
     expect(f.stat('/dev/ptmx').mode).toBe(0o20666);
   });
 
+  it("names a terminal stream after its device, which ttyname() reads back; the panel's keeps its path", () => {
+    const { fs, streams } = fakeFs();
+    const names: Record<number, string> = { 0: '/dev/pts/2' };
+    const sys = {
+      close: () => {},
+      isatty: (fd: number) => fd !== 2,
+      ttyName: (fd: number) => names[fd],
+    } as unknown as ProcessSys;
+    for (const s of streams) (s as { path?: string }).path = '/dev/tty';
+    Object.assign(fs, { stat: (p: string) => ({ dev: 22, ino: p.length }) });
+    wireKernelStdio(fs, new KernelStreams(fs, sys));
+    expect(streams.map((s) => (s as { path?: string }).path)).toEqual([
+      '/dev/pts/2', // a pty slave
+      '/dev/tty', // the panel's terminal: no name
+      '/dev/tty', // not a terminal at all
+    ]);
+    // ttyname() takes the name only when stat(name) and fstat(fd) are one file.
+    const named = streams[0] as ProcessStream;
+    expect(named.stream_ops.getattr?.(named)).toEqual({ dev: 22, ino: '/dev/pts/2'.length });
+    // The FS's stat at fstat time, not when stdio was wired (the pty paths' stat comes later).
+    Object.assign(fs, { stat: () => ({ dev: 136, ino: 2 }) });
+    expect(named.stream_ops.getattr?.(named)).toEqual({ dev: 136, ino: 2 });
+    expect((streams[1] as ProcessStream).stream_ops.getattr).toBeUndefined();
+  });
+
+  it('a stream opened on /dev/pts/N or /dev/ptmx keeps that path, not its vessel', () => {
+    const { fs } = fakeFs();
+    const sys = {
+      close: () => {},
+      openPty: () => 7,
+      openPts: () => 8,
+      ptyNumbers: () => [0],
+      tcgets: () => ({}),
+    } as unknown as ProcessSys;
+    Object.assign(fs, {
+      open: (path: string, flags: number) =>
+        ({ fd: 9, flags, path, stream_ops: {} }) as unknown as ProcessStream,
+    });
+    new KernelStreams(fs, sys).useControllingTerminal();
+    expect(fs.open('/dev/pts/0', 2).path).toBe('/dev/pts/0');
+    expect(fs.open('/dev/ptmx', 2).path).toBe('/dev/ptmx');
+  });
+
   it('without kernel pseudo-terminals, /dev/ptmx and /dev/pts/N do not exist', () => {
     const { fs } = fakeFs();
     Object.assign(fs, { open: () => ({}), stat: () => ({ mode: 0o100644 }) });
@@ -350,6 +393,31 @@ describe('KernelStreams', () => {
     ctty = undefined;
     expect(() => fs.open('/dev/tty', 2)).toThrow(expect.objectContaining({ errno: 60 }));
     expect(closed).toEqual([9]); // Emscripten's console stream does not stay open
+  });
+
+  it("opens a terminal device by name (/dev/tty1) on the kernel's, else the one its stdio is on", () => {
+    const { fs, streams } = fakeFs();
+    Object.assign(fs, {
+      open: (path: string, flags: number) =>
+        ({ fd: 9, flags, path, stream_ops: {}, tty: { ops: {} } }) as unknown as ProcessStream,
+    });
+    (streams[0] as ProcessStream).sliccKernelFd = 0;
+    (streams[0] as { tty?: object }).tty = {};
+    const asked: Array<string | undefined> = [];
+    let known = true;
+    const sys = fakeSys({
+      openTty: (name?: string) => {
+        asked.push(name);
+        if (!known) throw new SyscallError('ENXIO');
+        return 11;
+      },
+    });
+    new KernelStreams(fs, sys).useControllingTerminal();
+    // GNU screen's server, in a session of its own, opening the attacher's terminal.
+    expect(fs.open('/dev/tty1', 2).sliccKernelFd).toBe(11);
+    expect(asked).toEqual(['/dev/tty1']);
+    known = false;
+    expect(fs.open('/dev/tty1', 2).sliccKernelFd).toBe(0); // the stdio terminal, as before
   });
 
   it('wireKernelFd opens a kernel descriptor beyond stdio at its own number', () => {

@@ -49,6 +49,7 @@ export class PtyPair {
     this.slave = new KernelTty({ write: (bytes) => this.fromSlave(bytes) }, (sig) =>
       signal(this.slave, sig)
     );
+    this.slave.name = `/dev/pts/${index}`;
   }
 
   /** The master side: one open file description (`/dev/ptmx`). */

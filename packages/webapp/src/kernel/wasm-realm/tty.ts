@@ -85,6 +85,8 @@ export class KernelTty {
   private waiters: Array<() => void> = [];
   /** The terminal went away (a pseudo-terminal's master closed): reads end. */
   private hungUp = false;
+  /** Its device path (`ttyname()`): a pseudo-terminal's `/dev/pts/N`; none for the panel's. */
+  name?: string;
 
   /**
    * @param screen where output (and echo) goes

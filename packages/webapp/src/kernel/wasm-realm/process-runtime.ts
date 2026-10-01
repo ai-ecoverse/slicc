@@ -130,8 +130,13 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys & PtyKernel {
         (json(call({ op: 'fd-info', fd }, `fd-info ${fd}`)) as { tty?: boolean })?.tty === true
       );
     },
-    openTty() {
-      return json(call({ op: 'fd-open-tty' }, 'fd-open-tty')) as number;
+    ttyName(fd) {
+      return (json(call({ op: 'fd-info', fd }, `fd-info ${fd}`)) as { name?: string })?.name;
+    },
+    openTty(name) {
+      const req =
+        name === undefined ? { op: 'fd-open-tty' as const } : { op: 'fd-open-tty' as const, name };
+      return json(call(req, `fd-open-tty ${name ?? ''}`)) as number;
     },
     tcgets(fd) {
       return json(call({ op: 'tty-get', fd }, `tty-get ${fd}`)) as Termios;
@@ -181,7 +186,9 @@ export function wireKernelFd(Fs: ProcessFs, streams: KernelStreams, entry: Inher
 export function wireKernelStdio(Fs: ProcessFs, streams: KernelStreams): void {
   for (const fd of [0, 1, 2]) {
     const stream = Fs.getStream(fd);
-    if (stream) streams.attach(stream, fd);
+    if (!stream) continue;
+    streams.attach(stream, fd);
+    streams.nameTerminal(stream);
   }
 }
 
