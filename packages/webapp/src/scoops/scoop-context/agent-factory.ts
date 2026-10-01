@@ -84,7 +84,12 @@ export function createScoopAgent(init: ScoopAgentInit): Agent {
     transformContext,
     streamFn: init.streamFn,
     afterToolCall: async (context) => {
-      if (capture && context.toolCall.name === 'StructuredOutput') capture(context.args);
+      // A failed call (e.g. short-circuited by the adapter) is not a result:
+      // capture is first-write-wins, so locking it in would discard the valid
+      // retry — the same `!isError` test `finishTurn` ends the run on.
+      if (capture && context.toolCall.name === 'StructuredOutput' && !context.isError) {
+        capture(context.args);
+      }
       return undefined;
     },
     ...(capture

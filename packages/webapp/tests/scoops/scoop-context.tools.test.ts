@@ -172,6 +172,29 @@ describe('ScoopContext active tool surface', () => {
     expect(ctx.getStructuredOutput()).toEqual({ captured: true, value: { action: 'first' } });
   });
 
+  it('does not lock in a failed StructuredOutput call, so the valid retry is kept', async () => {
+    const scoop = {
+      ...testScoop,
+      config: { structuredOutputSchema: { type: 'object' } },
+    };
+    const ctx = new ScoopContext(scoop, createMockCallbacks(), createMockFs() as any);
+
+    await ctx.init();
+
+    const options = mocks.agentCtorCalls[0];
+    await options.afterToolCall({
+      toolCall: { name: 'StructuredOutput' },
+      args: { action: 'invalid' },
+      isError: true,
+    });
+    expect(ctx.getStructuredOutput().captured).toBe(false);
+    await options.afterToolCall({
+      toolCall: { name: 'StructuredOutput' },
+      args: { action: 'valid' },
+    });
+    expect(ctx.getStructuredOutput()).toEqual({ captured: true, value: { action: 'valid' } });
+  });
+
   // `sudo_request` must ask through the same wired broker as the shell and FS
   // gates; otherwise it would bypass `--no-escalate` and the escalation tally.
   it('routes sudo_request through the wired broker (no-escalate refuses; the tally counts)', async () => {
