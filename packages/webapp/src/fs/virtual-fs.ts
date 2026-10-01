@@ -244,12 +244,15 @@ function buildBackendDescriptor(backend: MountBackend, normalizedPath: string): 
   }
 }
 
-/** Where a rename parks a destination symlink until it lands: a hidden sibling. */
-function parkedLinkPath(path: string): string {
+/** Where a rename may park a destination symlink until it lands: a hidden sibling. */
+function parkedLinkCandidate(path: string): string {
   const slash = path.lastIndexOf('/');
   const nonce = Math.random().toString(36).slice(2, 10);
   return `${path.slice(0, slash + 1)}.${path.slice(slash + 1)}.slicc-rename-${nonce}`;
 }
+
+/** Tries before {@link VirtualFS.freeParkedLinkPath} gives up on a free name. */
+const PARK_ATTEMPTS = 8;
 
 export class VirtualFS {
   /**
@@ -2956,12 +2959,22 @@ export class VirtualFS {
         // The link is parked beside itself, not deleted: a failed rename moves
         // the very same entry back (identity, times), and it is removed only
         // once the rename landed.
-        const parked = replacesLink ? parkedLinkPath(normalizedNew) : undefined;
+        const parked = replacesLink ? await this.freeParkedLinkPath(normalizedNew) : undefined;
+        // Dirty before it exists, so whichever way the rename ends, the
+        // sidecar records the parked path: gone, or holding the link.
+        if (parked) this.markSidecarDirty(parked);
         if (parked) await this.lfs.rename(normalizedNew, parked);
         try {
           await this.lfs.rename(normalizedOld, normalizedNew);
         } catch (err) {
-          if (parked) await this.restoreParkedLink(parked, normalizedNew, err);
+          try {
+            if (parked) await this.restoreParkedLink(parked, normalizedNew, err);
+          } finally {
+            // Persist what the failure left (the link back, or still parked);
+            // a write that fails keeps the marks for the next flush, and must
+            // not mask the error that explains the state.
+            await this.writeOpfsMetadataSidecarUnlocked().catch(() => undefined);
+          }
           throw err;
         }
         if (parked) await this.lfs.unlink(parked).catch(() => undefined);
@@ -2976,6 +2989,24 @@ export class VirtualFS {
     ]);
     // Update mount index if paths are under mounts
     this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+  }
+
+  /**
+   * A parking name beside `path` that nothing holds. Called under the write
+   * lock, so no VFS writer can take the name between the check and the move;
+   * a store `rename` replaces its destination, so a taken name is never used.
+   */
+  private async freeParkedLinkPath(path: string): Promise<string> {
+    for (let i = 0; i < PARK_ATTEMPTS; i++) {
+      const candidate = parkedLinkCandidate(path);
+      try {
+        await this.lfs.lstat(candidate);
+      } catch (err) {
+        if ((err as { code?: unknown })?.code === 'ENOENT') return candidate;
+        throw err;
+      }
+    }
+    throw new FsError('EEXIST', 'no free name to park the symlink at during rename', path);
   }
 
   /**

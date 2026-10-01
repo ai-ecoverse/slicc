@@ -102,4 +102,58 @@ describe('rename onto an existing symlink', () => {
     expect(await fs.readlink(parked)).toBe('/d/x');
     expect(await fs.readlink('/d/t')).toBe('/d/y');
   });
+
+  it('never parks the link over an entry that already holds the parking name', async () => {
+    await fs.symlink('/d/x', '/d/a');
+    await fs.symlink('/d/y', '/d/t');
+    // The first parking name is taken; 0.5 and 0.25 name `.a.slicc-rename-i` / `-9`.
+    await fs.writeFile('/d/.a.slicc-rename-i', 'KEEP');
+    const random = vi.spyOn(Math, 'random').mockReturnValueOnce(0.5).mockReturnValueOnce(0.25);
+    await fs.rename('/d/t', '/d/a');
+    random.mockRestore();
+    expect(await fs.readlink('/d/a')).toBe('/d/y');
+    expect(await fs.readFile('/d/.a.slicc-rename-i', { encoding: 'utf-8' })).toBe('KEEP');
+    await expect(fs.lstat('/d/.a.slicc-rename-9')).rejects.toThrow();
+  });
+
+  it('a link left parked by a double failure is marked and persisted for the sidecar', async () => {
+    await fs.symlink('/d/x', '/d/a');
+    await fs.symlink('/d/y', '/d/t');
+    type Internals = {
+      lfs: { rename: (a: string, b: string) => Promise<void> };
+      markSidecarDirty(path: string, kind?: string): void;
+      writeOpfsMetadataSidecarUnlocked(): Promise<void>;
+    };
+    const inner = fs as unknown as Internals;
+    const order: string[] = [];
+    const real = inner.lfs.rename.bind(inner.lfs);
+    // Every move onto /d/a fails: the rename, and putting the link back.
+    const rename = vi.spyOn(inner.lfs, 'rename').mockImplementation(async (from, to) => {
+      order.push(`rename ${from} -> ${to}`);
+      if (to === '/d/a') throw Object.assign(new Error('EIO: injected'), { code: 'EIO' });
+      return real(from, to);
+    });
+    const mark = vi.spyOn(inner, 'markSidecarDirty').mockImplementation((path) => {
+      order.push(`mark ${path}`);
+    });
+    const persist = vi
+      .spyOn(inner, 'writeOpfsMetadataSidecarUnlocked')
+      .mockImplementation(async () => {
+        order.push('persist');
+      });
+    const err = await fs.rename('/d/t', '/d/a').then(
+      () => undefined,
+      (e: Error) => e
+    );
+    rename.mockRestore();
+    mark.mockRestore();
+    persist.mockRestore();
+    const parked = /(\/d\/\.a\.slicc-rename-[a-z0-9]+)/.exec(err?.message ?? '')?.[1] as string;
+    expect(await fs.readlink(parked)).toBe('/d/x');
+    // Marked before it was moved there, so a sidecar flush keeps it...
+    expect(order.indexOf(`mark ${parked}`)).toBeGreaterThan(-1);
+    expect(order.indexOf(`mark ${parked}`)).toBeLessThan(order.indexOf(`rename /d/a -> ${parked}`));
+    // ...and persisted although the rename threw.
+    expect(order.at(-1)).toBe('persist');
+  });
 });
