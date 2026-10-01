@@ -10,7 +10,12 @@
  * readable in one screen instead of woven through shell construction.
  */
 
-import type { DefaultDisposition, PathOp, SudoersPolicy } from '../../base/sudoers.js';
+import {
+  type DefaultDisposition,
+  mergePolicies,
+  type PathOp,
+  type SudoersPolicy,
+} from '../../base/sudoers.js';
 import type { ShellSudoConfig } from '../../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../../sudo/sudo-manager.js';
 import type { EscalationCounts, SudoBroker, SudoDecision, SudoRequest } from '../../sudo/types.js';
@@ -58,6 +63,24 @@ export const NO_ESCALATE_NOTE =
 const noEscalateBroker: SudoBroker = {
   requestApproval: async () => ({ decision: 'deny', note: NO_ESCALATE_NOTE }),
 };
+
+/**
+ * The policy a no-escalate unit runs under. Its own configured grants still
+ * skip the gate; every other `NOPASSWD` rule — a stored "Always" in
+ * `/etc/sudoers.d/granted` or a reused folder's `scoop-<folder>` — is demoted
+ * to a plain rule, so it reaches the refusing broker instead of quietly
+ * widening the agent call's grant.
+ */
+function noEscalatePolicy(manager: SudoManager, folder: string): SudoersPolicy {
+  const effective = manager.getPolicyForScoop(folder);
+  const demote = (rules: SudoersPolicy['cmnd']) => rules.map((r) => ({ ...r, nopasswd: false }));
+  return mergePolicies(manager.getConfiguredPolicyForScoop(folder), {
+    cmnd: demote(effective.cmnd),
+    read: demote(effective.read),
+    write: demote(effective.write),
+    export: demote(effective.export ?? []),
+  });
+}
 
 /** Wrap `broker` so every request it answers (or throws on) is tallied. */
 function countingBroker(broker: SudoBroker, counts: EscalationCounts): SudoBroker {
@@ -112,7 +135,9 @@ export function buildSudoWiring({
   const broker = countingBroker(routed, escalations);
   const getPolicy = userIsAuthority
     ? () => manager.getPolicy()
-    : () => manager.getPolicyForScoop(folder);
+    : escalate
+      ? () => manager.getPolicyForScoop(folder)
+      : () => noEscalatePolicy(manager, folder);
   const defaultDisposition: DefaultDisposition = policy.sudoDefaultDisposition;
 
   const baseShell = manager.getShellConfig();

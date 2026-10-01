@@ -89,7 +89,7 @@ async function harness(opts: { escalate?: boolean; decision?: SudoDecision } = {
     mgr.dispose();
     await vfs.dispose?.();
   });
-  return { wiring, gatedFs, shell, onSudoRequest, userBroker, escalations };
+  return { wiring, gatedFs, shell, onSudoRequest, userBroker, escalations, mgr, vfs };
 }
 
 describe('buildSudoWiring — escalate: false (agent --no-escalate)', () => {
@@ -116,6 +116,30 @@ describe('buildSudoWiring — escalate: false (agent --no-escalate)', () => {
     expect(h.onSudoRequest).not.toHaveBeenCalled();
     expect(h.userBroker.requestApproval).not.toHaveBeenCalled();
     expect(h.escalations).toEqual({ asked: 1, allowed: 0, denied: 1 });
+  });
+
+  // A stored "Always" grant must not widen a no-escalate call: the folder may
+  // be reused, and `/etc/sudoers.d/granted` is shared by every unit.
+  it('ignores stored scoop and global grants, which still apply without the flag', async () => {
+    for (const escalate of [false, undefined]) {
+      const h = await harness({ escalate });
+      await h.mgr.appendScoopRule('agent-x', 'command', 'ls *');
+      await h.vfs.writeFile('/etc/sudoers.d/granted', 'NOPASSWD Write /shared/**\n');
+      await h.mgr.reload();
+
+      const ls = await h.shell.executeCommand('ls /shared');
+      const write = h.gatedFs.writeFile('/shared/leak.txt', 'x');
+      if (escalate === false) {
+        expect(ls.stderr).toContain(NO_ESCALATE_NOTE);
+        await expect(write).rejects.toThrow(NO_ESCALATE_NOTE);
+        expect(h.escalations).toEqual({ asked: 2, allowed: 0, denied: 2 });
+      } else {
+        expect(ls.exitCode).toBe(0);
+        await expect(write).resolves.toBeUndefined();
+        expect(h.escalations).toEqual({ asked: 0, allowed: 0, denied: 0 });
+      }
+      expect(h.onSudoRequest).not.toHaveBeenCalled();
+    }
   });
 
   it('without the flag, the same write escalates to the cone as before', async () => {

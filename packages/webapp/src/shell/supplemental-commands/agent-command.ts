@@ -193,7 +193,8 @@ Options:
                           writable paths, asks the invoking cone for approval;
                           with this flag it is refused at once and the scoop
                           is told it is not permitted for this call. Nothing
-                          reaches the cone or the user.
+                          reaches the cone or the user, and stored "Always"
+                          grants do not apply either.
   --persist-session       Write the spawned agent's full session transcript to
                           /sessions/agent-<name>-<timestamp>.md (durable —
                           survives a new chat) for later human analysis.
