@@ -568,6 +568,30 @@ describe("require('sliccy:agent') — callable + non-throwing .spawn", () => {
     expect(argvOf(calls[0])).toEqual(['agent', '--read-only', '/a,/b,/c', '/workspace', '*', 'x']);
   });
 
+  it('images → one --image per path; escalate: false → --no-escalate', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'ok\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      await agent('look', { images: ['/tmp/a.png', 'b.jpg'], escalate: false, allowedCommands: 'open' });
+      await agent('plain', { escalate: true, images: [] });
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(argvOf(calls[0])).toEqual([
+      'agent',
+      '--image',
+      '/tmp/a.png',
+      '--image',
+      'b.jpg',
+      '--no-escalate',
+      '/workspace',
+      'open',
+      'look',
+    ]);
+    expect(argvOf(calls[1])).toEqual(['agent', '/workspace', '*', 'plain']);
+  });
+
   it('schema → --schema-b64 present (decodes to schema JSON) and result is JSON-parsed', async () => {
     const calls: ExecCall[] = [];
     const ctx = makeAgentCtx({ stdout: '{"ok":true,"n":42}\n' }, calls);

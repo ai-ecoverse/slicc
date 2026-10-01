@@ -25,6 +25,18 @@ interface SliccyAgentOptions {
    * invoking cwd (#2271), not a hardcoded `/workspace/`.
    */
   readOnly?: string | string[];
+  /**
+   * VFS paths of images (PNG, JPEG, GIF, WebP) attached to the prompt, each
+   * forwarded as `--image`; at most 8. The scoop sees them without needing a
+   * command to open them.
+   */
+  images?: string[];
+  /**
+   * `false` forwards `--no-escalate`: a command outside `allowedCommands` or
+   * a write outside the scoop's paths is refused at once instead of asking
+   * the invoking cone. Omitted or `true` keeps the default (escalate).
+   */
+  escalate?: boolean;
 }
 
 /** Non-throwing result shape returned by `agent.spawn`. */
@@ -55,7 +67,8 @@ function agentSchemaToB64(json: string): string {
 /**
  * Build the `agent` command argv. Mirrors the workflow-DSL `agent()` in
  * `workflow-prelude.ts`: flags (`--model` / `--thinking` / `--schema-b64`)
- * first, then an optional `--read-only <csv>` flag and the three positionals
+ * first, then an optional `--read-only <csv>` flag, one `--image <path>` per
+ * image, `--no-escalate` for `escalate: false`, and the three positionals
  * `<cwd> <allowedCommands> <prompt>`.
  *
  * `--read-only` is emitted ONLY when the caller asked for it. The flag is
@@ -74,6 +87,8 @@ function buildAgentArgv(prompt: string, opts: SliccyAgentOptions, realmCwd: stri
       Array.isArray(opts.readOnly) ? opts.readOnly.join(',') : String(opts.readOnly)
     );
   }
+  for (const image of opts.images ?? []) flags.push('--image', String(image));
+  if (opts.escalate === false) flags.push('--no-escalate');
   const cwd = opts.cwd !== undefined ? String(opts.cwd) : realmCwd || '.';
   const allowed = opts.allowedCommands !== undefined ? String(opts.allowedCommands) : '*';
   return ['agent', ...flags, cwd, allowed, String(prompt)];

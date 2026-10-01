@@ -5,6 +5,7 @@ import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from '../../base
 import { normalizePath } from '../../fs/path-utils.js';
 import type { ImplementedWorkspaceMode } from '../../work-unit/workspace-mode.js';
 import { parseWorkspaceMode } from '../../work-unit/workspace-mode.js';
+import type { ImageContent } from './agent-images.js';
 
 const log = createLogger('agent-command');
 
@@ -65,7 +66,14 @@ interface AgentSpawnOptions {
    * at parse time before the bridge is called.
    */
   workspaceMode?: ImplementedWorkspaceMode;
+  /** `--image` files, read and base64-encoded; the bridge validates and resizes them. */
+  images?: ImageContent[];
+  /** `false` for `--no-escalate`: the scoop's sudo requests are refused, not escalated. */
+  escalate?: boolean;
 }
+
+/** Most `--image` flags one call accepts. */
+const MAX_IMAGES = 8;
 
 /** Options accepted by {@link createAgentCommand}. */
 export interface AgentCommandOptions {
@@ -91,94 +99,6 @@ interface AgentBridge {
   spawn(options: AgentSpawnOptions): Promise<AgentSpawnResult>;
 }
 
-const AGENT_HELP = `usage: agent <cwd> <allowed-commands> <prompt>
-
-Spawns a sub-scoop, feeds it a task, blocks until the agent loop completes,
-then prints the scoop's final message on stdout.
-
-Arguments:
-  <cwd>               Working directory for the spawned scoop. Becomes the
-                      scoop's sole writable prefix. Relative paths are resolved
-                      against the current shell's cwd; '.', '..', and absolute
-                      paths are all supported.
-  <allowed-commands>  Comma-separated list of bash commands the scoop may run.
-                      Use '*' to allow every command. Whitespace is trimmed
-                      around each entry; duplicates are tolerated.
-  <prompt>            Prompt forwarded verbatim to the scoop.
-
-Default sandbox:
-  The spawned scoop sees (read-only):  the OWNING cone's workspace (+ skills)
-                                       + the invoking shell's cwd
-  The spawned scoop writes to:         <cwd>, /shared/, /scoops/<name>/, /tmp/
-  /tmp/ is always writable — no flag toggles it.
-
-Options:
-  --model <id>            Override the model id used by the spawned scoop.
-                          Accepts an exact id, a shorthand ('haiku', 'sonnet',
-                          'claude-haiku-4-5'), or the 'provider:model' form
-                          the 'models' command prints
-                          ('openrouter:openai/gpt-5.6-terra-pro'). A bare id
-                          resolves against the selected provider first, then
-                          against any other CONFIGURED provider that offers
-                          it; matching several is an error listing the
-                          qualified ids. The scoop runs on the provider the
-                          model was resolved from. A model from a provider
-                          other than the selected one must also be allowed in
-                          /etc/models; the error quotes the line to add. An id
-                          that cannot be resolved (or is not allowed) exits 1 —
-                          it never falls back to the parent's model. Defaults
-                          to inheriting the parent's model.
-  --thinking <level>      Reasoning / thinking level for the spawned scoop.
-                          One of: off, minimal, low, medium, high, xhigh.
-                          Defaults to inheriting the parent's level (or 'off'
-                          when there is no parent). 'xhigh' is silently
-                          clamped to 'high' when the resolved model doesn't
-                          support it. Ignored entirely for non-reasoning
-                          models. Aliased as --effort.
-  --workspace-mode <mode> Isolation policy for the spawned scoop's filesystem
-                          view. One of: private, shared-readonly (default),
-                          snapshot, shared-live. Default shared-readonly is
-                          today's sandbox: parent workspace + skills + the
-                          invoking cwd are visible, <cwd> + /shared/ + scratch
-                          are writable, mounts stay readable. private is an
-                          isolated sandbox (own cwd/scratch only — no parent
-                          workspace, no implicit /shared/, mounts are NOT
-                          auto-visible). snapshot and shared-live are not
-                          implemented and exit 1. Explicit --read-only still
-                          replaces the mode's visiblePaths.
-  --read-only <paths>     Comma-separated VFS paths exposed read-only to the
-                          spawned scoop (visiblePaths). Pure replace — the
-                          owning cone's roots AND the implicit ctx.cwd add are
-                          BOTH dropped. To keep them, name your own cone's
-                          workspace ("$(pwd),/workspace/skills/") — a literal
-                          /workspace/ is the PRIMARY cone's. Each entry is
-                          normalized to a trailing slash.
-  --background-after <s>  Seconds the spawned scoop's bash tool waits for a
-                          command before detaching it to the background and
-                          continuing (default 600). The detached command's exit
-                          code and output come back to the scoop as a
-                          "Background Command" lick, so a slow or stuck command
-                          never wedges an unsupervised run. Use 0 to detach
-                          every command immediately. Must be >= 0.
-  --persist-session       Write the spawned agent's full session transcript to
-                          /sessions/agent-<name>-<timestamp>.md (durable —
-                          survives a new chat) for later human analysis.
-  --no-persist-session    Do not write a session transcript at all. With
-                          NEITHER flag, the transcript is written to
-                          /tmp/agent-<name>-<timestamp>.md, which a new chat
-                          clears.
-  -h, --help              Show this help message and exit.
-
-Examples:
-  agent . "*" "say hello in one word"
-  agent /home ls,wc,find "how many files do I have in my home directory"
-  agent --model claude-haiku-4-5 . "*" "summarize files in this directory"
-  agent --thinking high . "*" "design a careful plan first"
-  agent --read-only /workspace/,/shared/assets/ . "*" "review the docs"
-  agent --workspace-mode private . "*" "work only in this directory"
-  agent --background-after 60 . "*" "run the slow build and report"
-`;
-
 interface ParsedArgs {
   help: boolean;
   cwd?: string;
@@ -191,6 +111,8 @@ interface ParsedArgs {
   structuredOutputSchema?: JsonSchemaObject;
   persistSession?: boolean;
   workspaceMode?: ImplementedWorkspaceMode;
+  imagePaths?: string[];
+  noEscalate?: boolean;
   error?: string;
 }
 
@@ -302,6 +224,8 @@ interface ParseState {
   schemaOut?: JsonSchemaObject;
   persistSession?: boolean;
   workspaceMode?: ImplementedWorkspaceMode;
+  imagePaths: string[];
+  noEscalate: boolean;
 }
 
 type FlagHandler = (
@@ -372,6 +296,16 @@ const FLAG_HANDLERS: Record<string, FlagHandler> = {
     state.persistSession = false;
     return { consumed: 1 };
   },
+  '--image': (flag, args, i, state) => {
+    const result = parseFlagWithValue(flag, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    state.imagePaths.push(result.value);
+    return { consumed: result.consumed };
+  },
+  '--no-escalate': (_flag, _args, _i, state) => {
+    state.noEscalate = true;
+    return { consumed: 1 };
+  },
 };
 
 /** Process one argument. Returns error or null and consumed count. */
@@ -383,6 +317,13 @@ function processArg(
 ): { error?: string; consumed: number } {
   if (state.positionals.length === 2) {
     state.positionals.push(arg);
+    return { consumed: 1 };
+  }
+
+  if (arg.startsWith('--image=')) {
+    const path = arg.slice('--image='.length);
+    if (path === '') return { error: 'agent: --image requires a non-empty value', consumed: 0 };
+    state.imagePaths.push(path);
     return { consumed: 1 };
   }
 
@@ -435,6 +376,8 @@ function parseArgs(args: string[]): ParsedArgs {
   const state: ParseState = {
     positionals: [],
     help: false,
+    imagePaths: [],
+    noEscalate: false,
   };
 
   let i = 0;
@@ -450,6 +393,12 @@ function parseArgs(args: string[]): ParsedArgs {
   }
   if ('error' in validation) {
     return { help: false, error: validation.error };
+  }
+  if (state.imagePaths.length > MAX_IMAGES) {
+    return {
+      help: false,
+      error: `agent: too many images (${state.imagePaths.length}); --image accepts at most ${MAX_IMAGES}`,
+    };
   }
 
   const positionals = validation as {
@@ -470,6 +419,8 @@ function parseArgs(args: string[]): ParsedArgs {
     structuredOutputSchema: state.schemaOut,
     persistSession: state.persistSession,
     workspaceMode: state.workspaceMode,
+    imagePaths: state.imagePaths,
+    noEscalate: state.noEscalate,
   };
 }
 
@@ -592,6 +543,9 @@ function buildSpawnOptions(
   if (parsed.workspaceMode !== undefined) {
     spawnOptions.workspaceMode = parsed.workspaceMode;
   }
+  if (parsed.noEscalate) {
+    spawnOptions.escalate = false;
+  }
   if (ctx.cwd && ctx.cwd.length > 0) {
     spawnOptions.invokingCwd = ctx.cwd;
   }
@@ -637,6 +591,8 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
     const parsed = parseArgs(args);
 
     if (parsed.help) {
+      // Lazy: the help text is the bulk of this module, and only `--help` reads it.
+      const { AGENT_HELP } = await import('./agent-help.js');
       return { stdout: AGENT_HELP, stderr: '', exitCode: 0 };
     }
 
@@ -670,6 +626,18 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
       return { stdout: '', stderr: writableError, exitCode: 1 };
     }
 
+    let images: ImageContent[] | undefined;
+    if (parsed.imagePaths !== undefined && parsed.imagePaths.length > 0) {
+      // Loaded only for `--image`: keeps the sniff/encode path off the boot graph.
+      const { readImages } = await import('./agent-images.js');
+      const read = await readImages(
+        ctx.fs,
+        parsed.imagePaths.map((arg) => ({ arg, path: resolveCwd(arg, ctx.cwd) }))
+      );
+      if ('error' in read) return { stdout: '', stderr: read.error, exitCode: 1 };
+      images = read.images;
+    }
+
     const bridge = getBridge();
     if (!bridge) {
       return { stdout: '', stderr: 'agent: orchestrator bridge not available\n', exitCode: 1 };
@@ -683,6 +651,7 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
       ctx,
       getParentJid
     );
+    if (images !== undefined) spawnOptions.images = images;
 
     // `runSpawn` calls `bridge.spawn` synchronously before its first await, so
     // spawn-start is still reached promptly (no extra microtask before spawn).

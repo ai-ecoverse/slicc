@@ -294,6 +294,17 @@ export class SudoManager {
   }
 
   /**
+   * A scoop's OWN authority: {@link builtinScoopGrants} ∪ the grants derived
+   * from its `ScoopConfig`, without the global policy or the persisted
+   * "Always" grants. A unit spawned with `escalate: false` may skip the gate
+   * only on these (`scoops/scoop-context/sudo-wiring.ts`).
+   */
+  getConfiguredPolicyForScoop(folder: string): SudoersPolicy {
+    const config = this.scoopConfigPolicies.get(folder);
+    return config ? mergePolicies(builtinScoopGrants(), config) : builtinScoopGrants();
+  }
+
+  /**
    * Register a scoop's config-derived sandbox grants directly in memory
    * (#2416). Synchronous — no filesystem round-trip — so the grants are
    * effective before the scoop's first gated operation. This is what makes

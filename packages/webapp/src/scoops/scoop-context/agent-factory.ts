@@ -32,7 +32,10 @@ export interface ScoopAgentInit {
    * Set only when the unit declared a `structuredOutputSchema`: the tool's
    * arguments ARE the unit's return value, so they are captured at the
    * `afterToolCall` boundary as well as inside the tool itself (the tool may
-   * be short-circuited by the adapter).
+   * be short-circuited by the adapter). A turn that returned it successfully
+   * also ENDS the run: the tool says "call exactly once, as your last action",
+   * and without enforcement a model kept calling it as if each call were an
+   * action — 120+ calls in one `agent()` run.
    */
   captureStructuredOutput?: (value: unknown) => void;
 }
@@ -81,9 +84,22 @@ export function createScoopAgent(init: ScoopAgentInit): Agent {
     transformContext,
     streamFn: init.streamFn,
     afterToolCall: async (context) => {
-      if (capture && context.toolCall.name === 'StructuredOutput') capture(context.args);
+      // A failed call (e.g. short-circuited by the adapter) is not a result:
+      // capture is first-write-wins, so locking it in would discard the valid
+      // retry — the same `!isError` test `finishTurn` ends the run on.
+      if (capture && context.toolCall.name === 'StructuredOutput' && !context.isError) {
+        capture(context.args);
+      }
       return undefined;
     },
+    ...(capture
+      ? {
+          finishTurn: (turn) =>
+            turn.toolResults.some((r) => r.toolName === 'StructuredOutput' && !r.isError)
+              ? { action: 'end' as const }
+              : undefined,
+        }
+      : {}),
   });
   return agent;
 }

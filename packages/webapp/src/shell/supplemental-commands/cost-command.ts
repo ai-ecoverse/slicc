@@ -6,6 +6,7 @@ import {
   formatBudgetResets,
   type ProviderBudgetWindow,
 } from '../../providers/provider-budget.js';
+import type { EscalationCounts } from '../../sudo/types.js';
 import type { FrozenSessionIndexEntry } from '../../transcript/frozen-archive-format.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
@@ -51,6 +52,13 @@ export interface ScoopCostData {
     };
   };
   turns: number;
+  /**
+   * Sudo requests the unit raised that reached its broker, including those of
+   * silent `agent` children folded into this row. Always present (zeros
+   * included); a frozen session's row is always zero — the index does not
+   * keep them.
+   */
+  escalations: EscalationCounts;
   /** Timestamp (ms) of first assistant message */
   firstActivity?: number;
   /** Timestamp (ms) of last assistant message */
@@ -130,6 +138,7 @@ export function frozenSessionToCostData(entry: FrozenSessionIndexEntry): ScoopCo
       },
     },
     turns: frozenModels.reduce((total, item) => total + finiteNumber(item?.turns), 0),
+    escalations: { asked: 0, allowed: 0, denied: 0 },
   };
 }
 
@@ -169,6 +178,13 @@ Silent one-shot children (the \`agent\` command and other scoops with
 \`notifyOnComplete: false\`) fold their usage into the invoking parent when
 they tear down, so their tokens, cost, and model appear on that parent's
 row in the default (live) report — not as a separate dropped entry.
+
+Each JSON row carries \`escalations: { asked, allowed, denied }\`: the sudo
+requests that unit raised (unlisted commands, writes outside its paths,
+\`sudo_request\`), counted when they reach the approver. \`allowed\` covers
+allow and always; \`denied\` covers refusals, timeouts, and the immediate
+refusals of an \`agent --no-escalate\` run. Folded \`agent\` children add
+theirs to the parent's row; frozen sessions report zeros.
 
 JSON shape: { "budget": <window|null>, "scoops": [ ... ] }
 `;

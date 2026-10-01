@@ -160,6 +160,19 @@ export function unavailableDecision(): SudoDecision {
   return { decision: 'deny', reason: 'unavailable' };
 }
 
+/**
+ * Sudo requests one unit raised that reached its broker: `allowed` counts
+ * `allow` and `always`, `denied` counts every `deny` (refusal, timeout,
+ * fail-closed, or a no-escalate unit's immediate refusal). Surfaced per scoop
+ * on `cost --json` so an eval harness can tell a run that leaned on
+ * approvals from one that stayed inside its grant.
+ */
+export interface EscalationCounts {
+  asked: number;
+  allowed: number;
+  denied: number;
+}
+
 /** Per-call options every {@link SudoBroker} accepts. */
 export interface SudoRequestOptions {
   /**

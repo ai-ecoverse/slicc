@@ -36,9 +36,13 @@ describe('ScoopCostTracker', () => {
     } as unknown as RegisteredScoop;
   }
 
-  function createMockContext(messages: AssistantMessage[]): ScoopContext {
+  function createMockContext(
+    messages: AssistantMessage[],
+    escalations?: { asked: number; allowed: number; denied: number }
+  ): ScoopContext {
     return {
       getAgentMessages: () => messages,
+      ...(escalations ? { getEscalations: () => ({ ...escalations }) } : {}),
     } as ScoopContext;
   }
 
@@ -315,6 +319,107 @@ describe('ScoopCostTracker', () => {
       expect(tracker.getModelCosts({ includeDropped: true }).map((m) => m.model)).toContain(
         'claude-haiku-4-5'
       );
+    });
+  });
+
+  describe('escalations (cost --json)', () => {
+    const turn = () => createAssistantMessage('claude-opus-4-6', 10, 5, 0, 0, 0.01, 0);
+
+    it('reports explicit zeros, and a live unit its own tally', () => {
+      scoopsMap.set('cone', createMockScoop('cone', 'sliccy', true));
+      contextsMap.set('cone', createMockContext([turn()]));
+      scoopsMap.set(
+        'worker',
+        createMockScoop('worker', 'worker', false, undefined, { parentJid: 'cone' })
+      );
+      contextsMap.set('worker', createMockContext([turn()], { asked: 3, allowed: 1, denied: 2 }));
+
+      expect(tracker.getSessionCosts().map((r) => [r.name, r.escalations])).toEqual([
+        ['sliccy', { asked: 0, allowed: 0, denied: 0 }],
+        ['worker', { asked: 3, allowed: 1, denied: 2 }],
+      ]);
+    });
+
+    it("keeps a dropped scoop's tally on its --all row", () => {
+      scoopsMap.set('cone', createMockScoop('cone', 'sliccy', true));
+      contextsMap.set('cone', createMockContext([turn()]));
+      scoopsMap.set(
+        'worker',
+        createMockScoop('worker', 'worker', false, undefined, {
+          parentJid: 'cone',
+          notifyOnComplete: true,
+        })
+      );
+      contextsMap.set('worker', createMockContext([turn()], { asked: 2, allowed: 2, denied: 0 }));
+
+      tracker.snapshot('worker');
+      scoopsMap.delete('worker');
+      contextsMap.delete('worker');
+
+      expect(tracker.getSessionCosts({ includeDropped: true })).toMatchObject([
+        { name: 'sliccy', escalations: { asked: 0, allowed: 0, denied: 0 } },
+        { name: 'worker', source: 'dropped', escalations: { asked: 2, allowed: 2, denied: 0 } },
+      ]);
+    });
+
+    it('folds silent agent children (and their own folded children) into the parent row once', () => {
+      scoopsMap.set('cone', createMockScoop('cone', 'sliccy', true));
+      contextsMap.set('cone', createMockContext([turn()], { asked: 1, allowed: 1, denied: 0 }));
+      const silent = { notifyOnComplete: false };
+      scoopsMap.set(
+        'agent_a',
+        createMockScoop('agent_a', 'agent-a', false, undefined, { parentJid: 'cone', ...silent })
+      );
+      contextsMap.set('agent_a', createMockContext([turn()], { asked: 4, allowed: 0, denied: 4 }));
+      scoopsMap.set(
+        'agent_b',
+        createMockScoop('agent_b', 'agent-b', false, undefined, { parentJid: 'agent_a', ...silent })
+      );
+      contextsMap.set('agent_b', createMockContext([turn()], { asked: 2, allowed: 1, denied: 1 }));
+
+      // Nested `agent` inside `agent`: the grandchild tears down first.
+      for (const jid of ['agent_b', 'agent_a']) {
+        tracker.snapshot(jid);
+        scoopsMap.delete(jid);
+        contextsMap.delete(jid);
+      }
+
+      const expected = { asked: 7, allowed: 2, denied: 5 };
+      expect(tracker.getSessionCosts()).toMatchObject([{ name: 'sliccy', escalations: expected }]);
+      const all = tracker.getSessionCosts({ includeDropped: true });
+      expect(all).toHaveLength(1);
+      expect(all[0].escalations).toEqual(expected);
+
+      // The parent's own drop carries the folded tally onto its dropped row.
+      tracker.snapshot('cone');
+      scoopsMap.delete('cone');
+      contextsMap.delete('cone');
+      expect(tracker.getSessionCosts({ includeDropped: true })).toMatchObject([
+        { name: 'sliccy', source: 'dropped', escalations: expected },
+      ]);
+    });
+
+    it("keeps a settled fold's tally on the dropped ledger at the session boundary", async () => {
+      scoopsMap.set('cone', createMockScoop('cone', 'sliccy', true));
+      contextsMap.set('cone', createMockContext([turn()]));
+      scoopsMap.set(
+        'agent_a',
+        createMockScoop('agent_a', 'agent-a', false, undefined, {
+          parentJid: 'cone',
+          notifyOnComplete: false,
+        })
+      );
+      contextsMap.set('agent_a', createMockContext([turn()], { asked: 1, allowed: 1, denied: 0 }));
+      tracker.snapshot('agent_a');
+      scoopsMap.delete('agent_a');
+      contextsMap.delete('agent_a');
+
+      await tracker.settleFolded('cone');
+      contextsMap.set('cone', createMockContext([]));
+
+      expect(tracker.getSessionCosts({ includeDropped: true })).toMatchObject([
+        { name: 'sliccy', source: 'dropped', escalations: { asked: 1, allowed: 1, denied: 0 } },
+      ]);
     });
   });
 

@@ -1147,6 +1147,66 @@ describe('createAgentBridge — structured output schema', () => {
   });
 });
 
+describe('createAgentBridge — --no-escalate', () => {
+  it('carries escalate: false into scoop.config, and nothing when absent', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    let n = 0;
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => `jolly-mint${++n === 1 ? '' : '-two'}`,
+    });
+
+    await bridge.spawn({ ...BASE_OPTS, escalate: false });
+    await bridge.spawn(BASE_OPTS);
+
+    expect(registerCalls[0].config?.escalate).toBe(false);
+    expect(registerCalls[1].config).not.toHaveProperty('escalate');
+  });
+});
+
+describe('createAgentBridge — prompt images', () => {
+  // 1×1 PNG: small enough that `processImageContent` passes it through untouched.
+  const PNG_1X1 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+  it('hands the images to sendPrompt with the prompt', async () => {
+    const { orchestrator } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateName: () => 'jolly-mint' });
+    const image = { type: 'image' as const, data: PNG_1X1, mimeType: 'image/png' };
+
+    const result = await bridge.spawn({ ...BASE_OPTS, images: [image] });
+
+    expect(result.exitCode).toBe(0);
+    expect(orchestrator.sendPrompt).toHaveBeenCalledWith(
+      'agent_jolly_mint',
+      'hello',
+      'agent',
+      'agent',
+      [image]
+    );
+  });
+
+  it('fails an unusable image before any scoop is registered', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateName: () => 'jolly-mint' });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      images: [
+        { type: 'image', data: PNG_1X1, mimeType: 'image/png' },
+        { type: 'image', data: 'Qk0=', mimeType: 'image/bmp' },
+      ],
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toMatch(/^agent: image 2: .*unsupported format "image\/bmp"/);
+    expect(registerCalls).toHaveLength(0);
+    expect(orchestrator.sendPrompt).not.toHaveBeenCalled();
+  });
+});
+
 describe('createAgentBridge — output capture', () => {
   it('returns the last send_message as finalText', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();

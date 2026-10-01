@@ -19,7 +19,7 @@ import type { RestrictedFS } from '../../fs/restricted-fs.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import type { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../../sudo/sudo-manager.js';
-import type { TurnGuestGate } from '../../sudo/types.js';
+import type { EscalationCounts, SudoRequest, TurnGuestGate } from '../../sudo/types.js';
 import type { BashJobProcess } from '../../tools/types.js';
 import type { CapabilityBroker } from '../../work-unit/capability/index.js';
 import { thinkingFor } from '../../work-unit/record.js';
@@ -48,6 +48,8 @@ export interface RuntimeInitDeps {
   callbacks: ScoopContextCallbacks;
   sessions: SessionPersistence;
   sudoManager: SudoManager | null;
+  /** The unit's sudo tally (see `sudo-wiring.ts`). */
+  escalations?: EscalationCounts;
   /** Privileged-capability adapter for this float (#2276). */
   capabilityBroker: CapabilityBroker | null;
   processManager: ProcessManager | null;
@@ -98,7 +100,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
   log.info('Filesystem ready', { folder: scoop.folder });
   await ensureDirectoryStructure(fs, scoop, unit, tmpDir);
 
-  const { shell, gatedFs, memoryFs, blindReads, skills } = await initShellAndSkills({
+  const { shell, gatedFs, memoryFs, blindReads, sudoBroker, skills } = await initShellAndSkills({
     scoop,
     unit,
     fs,
@@ -108,6 +110,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
     sudoManager: deps.sudoManager,
     capabilityBroker: deps.capabilityBroker,
     onSudoRequest: callbacks.onSudoRequest,
+    ...(deps.escalations ? { escalations: deps.escalations } : {}),
     processManager: deps.processManager,
     processOwner: deps.processOwner,
     getTurnPid: deps.getTurnPid,
@@ -127,6 +130,11 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
     gatedFs,
     memoryFs,
     blindReads,
+    // `sudo_request` asks through the same wired broker as the shell and FS
+    // gates, so `--no-escalate` and the escalation tally cover it too.
+    ...(callbacks.onSudoRequest && sudoBroker
+      ? { onSudoRequest: (request: SudoRequest) => sudoBroker.requestApproval(request) }
+      : {}),
     processManager: deps.processManager,
     processOwner: deps.processOwner,
     getTurnPid: deps.getTurnPid,
