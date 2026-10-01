@@ -17,6 +17,8 @@ export class SignalGate {
 
   private depth = 0;
 
+  private reporting = false;
+
   constructor(
     private readonly raw: SyncSabTransport,
     private readonly header: Int32Array,
@@ -44,7 +46,16 @@ export class SignalGate {
   }
 
   private report(): void {
-    const masks = this.hooks.masks();
+    if (this.reporting) return;
+    this.reporting = true;
+    let masks: ReturnType<SignalHooks['masks']>;
+    try {
+      masks = this.hooks.masks();
+    } catch {
+      masks = null;
+    } finally {
+      this.reporting = false;
+    }
     if (!masks) return;
     this.restart = masks.restart;
     const { caught, ignored } = masks;

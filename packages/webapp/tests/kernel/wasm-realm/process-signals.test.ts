@@ -33,6 +33,19 @@ describe('SignalGate', () => {
     expect(calls).toEqual(['sig-mask', 'fd-read', 'fd-read']);
   });
 
+  it('a mask query that throws, or that makes a syscall itself, neither recurses nor fails the call', () => {
+    const { gate, calls, hooks } = setup();
+    const t = gate.transport();
+
+    hooks.masks.mockImplementation(() => {
+      t.call({ op: 'fd-write', fd: 2, body: new Uint8Array(1) }, Infinity, 'abort message');
+      throw new Error('Assertion failed: native function called after runtime exit');
+    });
+    expect(t.call({ op: 'fd-read', fd: 0, max: 1 }, Infinity, 'x')).toEqual(ok);
+    expect(hooks.masks).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['fd-write', 'fd-read']);
+  });
+
   it('runs the handlers of the signals pending after a call', () => {
     const { gate, header, raised, setOnCall } = setup();
     setOnCall(() => Atomics.or(header, SAB_I_SIGNALS, sigbit(SIG.USR1) | sigbit(SIG.TERM)));

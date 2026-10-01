@@ -203,7 +203,10 @@ const GLUE_TRAILER = [
   "  ioctl: typeof ___syscall_ioctl === 'function' ? ___syscall_ioctl : undefined,",
   '};',
 
-  "const __sliccUp = () => typeof runtimeInitialized === 'undefined' || runtimeInitialized;",
+  'const __sliccUp = () =>',
+  "  (typeof runtimeInitialized === 'undefined' || runtimeInitialized) &&",
+  "  !(typeof runtimeExited !== 'undefined' && runtimeExited) &&",
+  "  !(typeof ABORT !== 'undefined' && ABORT);",
   "Module.sliccSigpipe ??= () => (__sliccUp() && typeof _slicc_sigpipe === 'function' ? _slicc_sigpipe() : -1);",
 
   "Module.sliccSigMask ??= (w) => (__sliccUp() && typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",

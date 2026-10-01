@@ -184,6 +184,34 @@ describe('evaluateGlue', () => {
     expect(module.sliccSigMask?.(0)).toBe(7);
   });
 
+  it('calls none after the runtime exited or aborted (the final stdio flush, an abort message)', () => {
+    const glue = [
+      "var Module = typeof Module != 'undefined' ? Module : {};",
+      'var ENV = {};',
+      'var runtimeInitialized = true;',
+      'var runtimeExited = false;',
+      'var ABORT = false;',
+      "function _slicc_sig_mask(w) { if (runtimeExited || ABORT) throw new Error('assert'); return 7; }",
+      "function _slicc_raise(sig) { if (runtimeExited || ABORT) throw new Error('assert'); }",
+      'Module.exit = () => { runtimeExited = true; };',
+      'Module.abort = () => { runtimeExited = false; ABORT = true; };',
+    ].join('\n');
+    const module = { sliccEnv: {} } as {
+      sliccEnv: object;
+      sliccSigMask?: (w: number) => number;
+      sliccRaise?: (sig: number) => void;
+      exit?: () => void;
+      abort?: () => void;
+    };
+    evaluateGlue(glue, module);
+    expect(module.sliccSigMask?.(0)).toBe(7);
+    module.exit?.();
+    expect(module.sliccSigMask?.(0)).toBe(-1);
+    expect(() => module.sliccRaise?.(1)).not.toThrow();
+    module.abort?.();
+    expect(module.sliccSigMask?.(0)).toBe(-1);
+  });
+
   it('keeps what the program exported', () => {
     const exported = { exported: true };
     const module = { sliccEnv: {}, FS: exported } as { sliccEnv: object; FS?: object };
