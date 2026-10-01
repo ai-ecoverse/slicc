@@ -22,8 +22,8 @@
  * Directories not named in LAYER_RANK (kernel/, providers/, speech/, …) sit
  * outside the documented stack; they are scanned as importers only when a
  * ranked layer is the target, and are never a target themselves — except
- * scoops/ (#3231) and the rank-0 fs/ and base/ (#3728) value-importing
- * kernel/. Ranking kernel itself is not cheap: cdp/, shell/, and core/
+ * scoops/ (#3231) value-importing kernel/, and the rank-0 fs/ and base/
+ * value-importing ANY unranked directory (#3728, #3742, #3743). Ranking kernel itself is not cheap: cdp/, shell/, and core/
  * already value-import it. A top-level `import type { … } from` clause
  * still erases and is allowed.
  *
@@ -103,7 +103,8 @@ export const LAYER_RANK = {
  * ui-only gate caught. They rank just under `ui/`: an import into `ui/` is a
  * back-edge, imports into every other layer are not, and they are never a
  * back-edge target themselves — except a value import of kernel/ from one of
- * KERNEL_VALUE_BANNED_LAYERS.
+ * KERNEL_VALUE_BANNED_LAYERS, or of ANY unranked directory from one of
+ * BOTTOM_LAYERS.
  */
 const UNRANKED_IMPORTER_RANK = LAYER_RANK.ui - 0.5;
 
@@ -113,6 +114,14 @@ const UNRANKED_IMPORTER_RANK = LAYER_RANK.ui - 0.5;
  * the rank-0 fs/ and base/ (#3728), which every other layer sits above.
  */
 export const KERNEL_VALUE_BANNED_LAYERS = new Set(['scoops', 'fs', 'base']);
+
+/**
+ * The rank-0 layers. Every unranked directory (kernel/, sudo/, providers/,
+ * work-unit/, …) sits above them, so a VALUE import from fs/ or base/ into
+ * any unranked directory is a back-edge (#3742, #3743); `import type`
+ * clauses still erase and are allowed.
+ */
+export const BOTTOM_LAYERS = new Set(['fs', 'base']);
 
 /** A scannable webapp source file (not a test). */
 export function isWebappSource(name) {
@@ -368,15 +377,28 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
 
   const consider = (specifier, matchIndex, resolvedTarget) => {
     const queryAt = specifier.indexOf('?');
+    const bare = queryAt >= 0 ? specifier.slice(0, queryAt) : specifier;
+    // A specifier that climbs out of the scan root is the cross-package
+    // pass's business (findCrossPackageEscapes), not a layer edge.
+    const escapesRoot =
+      resolvedTarget === undefined && !resolve('/@root', importerDir, bare).startsWith('/@root/');
     const target =
       resolvedTarget ??
       resolve('/', importerDir, queryAt >= 0 ? specifier.slice(0, queryAt) : specifier).slice(1);
     const toLayer = stack.layerOf(target);
     const toRank = stack.layerRank[toLayer];
-    const kernelValue =
-      kernelValueBanned && toLayer === 'kernel' && !typeOnlyFromIndices.has(matchIndex);
-    if (toRank === undefined && !kernelValue) return;
-    const up = kernelValue || (toRank !== undefined && toRank > fromRank);
+    const valueImport = !typeOnlyFromIndices.has(matchIndex);
+    const kernelValue = kernelValueBanned && toLayer === 'kernel' && valueImport;
+    // A top-level src/ file (`globals.d.ts`, …) has no `/` and is no layer.
+    const unrankedValue =
+      stack.id === 'webapp' &&
+      BOTTOM_LAYERS.has(fromLayer) &&
+      toRank === undefined &&
+      target.includes('/') &&
+      !escapesRoot &&
+      valueImport;
+    if (toRank === undefined && !kernelValue && !unrankedValue) return;
+    const up = kernelValue || unrankedValue || (toRank !== undefined && toRank > fromRank);
     const sideways =
       isolated.has(fromLayer) &&
       fromLayer === toLayer &&

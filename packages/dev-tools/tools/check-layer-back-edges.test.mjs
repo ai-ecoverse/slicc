@@ -156,6 +156,58 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     ).toEqual([]);
   });
 
+  it('flags fs/ and base/ VALUE imports of ANY unranked directory (#3742, #3743)', () => {
+    expect(
+      findLayerBackEdges(
+        'fs/sudo-fs.ts',
+        "import { sudoRefusalMessage } from '../sudo/approval-timeout.js';"
+      )
+    ).toEqual([{ line: 1, specifier: '../sudo/approval-timeout.js', from: 'fs', to: 'sudo' }]);
+    expect(
+      findLayerBackEdges(
+        'fs/mount/profile.ts',
+        "const { getAccounts } = await import('../../providers/account-store.js');"
+      )
+    ).toEqual([
+      { line: 1, specifier: '../../providers/account-store.js', from: 'fs', to: 'providers' },
+    ]);
+    expect(
+      findLayerBackEdges('base/x.ts', "import { x } from '../work-unit/capability/index.js';")
+    ).toEqual([
+      { line: 1, specifier: '../work-unit/capability/index.js', from: 'base', to: 'work-unit' },
+    ]);
+  });
+
+  it('allows fs/ and base/ type-only imports of unranked dirs and same-rung imports', () => {
+    expect(
+      findLayerBackEdges(
+        'fs/sudo-fs.ts',
+        "import type { SudoBroker } from '../sudo/types.js';\nimport { x } from '../base/sudo-refusal.js';"
+      )
+    ).toEqual([]);
+    expect(
+      findLayerBackEdges(
+        'base/stored-accounts.ts',
+        "import type { Account } from '../providers/account-store.js';"
+      )
+    ).toEqual([]);
+  });
+
+  it('leaves a src/-escaping specifier from base/ to the cross-package pass', () => {
+    expect(
+      findLayerBackEdges(
+        'base/gelatiere-store.ts',
+        "import md from '../../../vfs-root/shared/GELATIERE.md?raw';"
+      )
+    ).toEqual([]);
+  });
+
+  it('does not extend the unranked ban to higher layers', () => {
+    expect(
+      findLayerBackEdges('shell/x.ts', "import { sudoRefusalMessage } from '../sudo/index.js';")
+    ).toEqual([]);
+  });
+
   it('still ignores kernel/ value imports from shell/ and other unbanned layers', () => {
     expect(
       findLayerBackEdges(

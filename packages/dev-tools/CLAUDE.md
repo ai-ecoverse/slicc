@@ -45,7 +45,7 @@ Each bold gate is an `npm run` script unless the raw command is shown.
 
 **Baseline ratchets** (each `tools/check-*.mjs` + a `*-baseline.json`, `--update`):
 
-- **Layer back-edges** (`lint:layer-back-edges`): `check-layer-back-edges.mjs`. Per-package stacks (webapp, node-server, chrome-extension, cloudflare-worker) + zero-tolerance: no relative import escapes `packages/webapp/src` into a sibling; webapp flags `scoops/`, `fs/`, `base/` value-importing `kernel/`. [details](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
+- **Layer back-edges** (`lint:layer-back-edges`): `check-layer-back-edges.mjs`. Per-package stacks (webapp, node-server, chrome-extension, cloudflare-worker) + zero-tolerance: no relative import escapes `packages/webapp/src` into a sibling; webapp flags `scoops/` value-importing `kernel/`, and `fs/`/`base/` value-importing any unranked dir. [details](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
 - **Float probes** (`lint:no-float-probes`): `check-no-float-probes.mjs` (`--allow-growth`) — bans `FLOAT_PROBE_NAMES` + raw `__slicc_connect_mode` under `scoops/`/`tools/`/`kernel/`. [details](../../docs/dev-tools-details.md#float-probe-ratchet).
 - **`Record<string, unknown>`** (`lint:record-string-unknown`): `check-record-string-unknown.mjs` + `.biome-plugins/no-record-string-unknown.grit` (`biome.record-gate.json`). [details](../../docs/dev-tools-details.md#record-string-unknown-ratchet).
 

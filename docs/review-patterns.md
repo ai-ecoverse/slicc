@@ -337,8 +337,8 @@ attention-promotion paths without rebuilding live panel state.
     lower layer, but equally `cdp/` importing `scoops/` or `tools/` importing `core/`.
     Unranked directories (`providers/`, `kernel/`, `speech/`, `transcript/`, `sudo/`) sit
     below `ui/`: they may import any ranked layer except `ui/`. A **value** import
-    from `scoops/`, `fs/`, or `base/` into `kernel/` is still a back-edge (#3231,
-    #3728) — type-only named
+    from `scoops/` into `kernel/` is still a back-edge (#3231), and so is one from
+    `fs/` or `base/` into ANY unranked directory (#3728, #3742, #3743) — type-only named
     clauses erase and are allowed; constants belong in `base/`, not
     `kernel/messages.ts`.
   - **node-server** `transport → services → entry` — `cdp-proxy/`, `bridge-security.ts`,
