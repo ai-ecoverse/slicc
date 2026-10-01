@@ -118,6 +118,7 @@ export type WasmSyscall =
   | { op: 'tty-pgrp-get'; fd: number }
   | { op: 'tty-pgrp-set'; fd: number; pgrp: number }
   | { op: 'sig-mask'; caught: number; ignored: number }
+  | { op: 'sig-pause' }
   | SocketSyscall
   | PtySyscall;
 
@@ -234,6 +235,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'tty-pgrp-get',
   'tty-pgrp-set',
   'sig-mask',
+  'sig-pause',
   ...SOCKET_OPS,
   ...PTY_OPS,
 ]);
@@ -733,9 +735,18 @@ export class WasmProcess {
         this.caught = req.caught;
         this.ignored = req.ignored;
         return { ok: true, kind: 'void' };
+      case 'sig-pause':
+        return this.pause();
       case 'proc-captured':
         return { ok: true, kind: 'bytes', bytes: this.children.captured(req.pid, req.slot) };
     }
+  }
+
+  private pause(): Promise<never> {
+    const signal = this.blockingSignal();
+    return new Promise<never>((_, reject) => {
+      signal.addEventListener('abort', () => reject(new KernelError('EINTR')), { once: true });
+    });
   }
 
   private readonly dlLog: LinkRecord[] = [];

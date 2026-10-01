@@ -43,6 +43,8 @@ export interface ProcessKernel {
 
   kill(pid: number, sig: number): number;
 
+  pause(): number;
+
   setpgid(pid: number, pgid: number): number;
   setsid(): number;
 
@@ -257,6 +259,9 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
       if (!r.ok) return -wasiErrno(r.errno);
       deps.afterChild();
       return r.kind === 'json' ? (r.json as [number, number])[1] : 0;
+    },
+    pause() {
+      return status(call({ op: 'sig-pause' }, 'pause'));
     },
     kill(pid, sig) {
       if (pid === deps.pid) {
