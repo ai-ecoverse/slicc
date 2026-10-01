@@ -213,6 +213,33 @@ describe('evaluateGlue', () => {
     expect(module.sliccSigMask?.(0)).toBe(-1);
   });
 
+  it("hands over setitimer, and fires an expired timer through Emscripten's own expiry", () => {
+    const glue = [
+      "var Module = typeof Module != 'undefined' ? Module : {};",
+      'var ENV = {};',
+      'var runtimeInitialized = true;',
+      'var fired = [];',
+      'var __setitimer_js = (which, ms) => 0;',
+      'var __emscripten_timeout = (which, now) => { fired.push([which, typeof now]); };',
+      'var _emscripten_get_now = () => 5;',
+      'Module.fired = () => fired;',
+    ].join('\n');
+    const module = { sliccEnv: {} } as {
+      sliccEnv: object;
+      sliccSyscalls?: { setitimer?: unknown };
+      sliccTimerFire?: (which: number) => boolean;
+      fired?: () => unknown[];
+    };
+    evaluateGlue(glue, module);
+    expect(typeof module.sliccSyscalls?.setitimer).toBe('function');
+    expect(module.sliccTimerFire?.(0)).toBe(true);
+    expect(module.fired?.()).toEqual([[0, 'number']]);
+    // A glue without timers: nothing to fire, the caller raises the signal itself.
+    const plain = { sliccEnv: {} } as { sliccEnv: object; sliccTimerFire?: (w: number) => boolean };
+    evaluateGlue("var Module = typeof Module != 'undefined' ? Module : {}; var ENV = {};", plain);
+    expect(plain.sliccTimerFire?.(0)).toBe(false);
+  });
+
   it('keeps what the program exported', () => {
     const exported = { exported: true };
     const module = { sliccEnv: {}, FS: exported } as { sliccEnv: object; FS?: object };

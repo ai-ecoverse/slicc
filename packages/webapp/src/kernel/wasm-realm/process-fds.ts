@@ -87,6 +87,8 @@ export interface GlueSyscalls {
   accept4?: GlueSyscall;
   /** ioctl(2): its pseudo-terminal requests go to the kernel (`process-pty.ts`). */
   ioctl?: GlueSyscall;
+  /** Emscripten's `_setitimer_js(which, ms)`: ITIMER_REAL goes to the kernel's clock. */
+  setitimer?: GlueSyscall;
 }
 
 export interface CloexecDeps {
@@ -96,6 +98,8 @@ export interface CloexecDeps {
   heap(): Int32Array | undefined;
   /** The kernel's pseudo-terminals, for ioctl (absent: the glue's ioctl stays). */
   pty?: PtyKernel;
+  /** The kernel's interval timer, for ITIMER_REAL (absent: the glue's setTimeout stays). */
+  timer?: { arm(ms: number): void };
 }
 
 /** Mark or clear FD_CLOEXEC on the program's fd `fd` (no such fd: nothing). */
@@ -170,14 +174,16 @@ const IMPORT_NAMES: Readonly<Record<SyscallName, string>> = {
   socket: '__syscall_socket',
   accept4: '__syscall_accept4',
   ioctl: '__syscall_ioctl',
+  setitimer: '_setitimer_js',
 };
 
 /** How each syscall is wrapped, given the function the import holds. */
 function wrapperFactories(
   deps: CloexecDeps
 ): Partial<Record<SyscallName, (syscall: GlueSyscall) => GlueSyscall>> {
-  const { pty } = deps;
+  const { pty, timer } = deps;
   return {
+    ...(timer ? { setitimer: (f: GlueSyscall) => kernelTimer(f, timer) } : {}),
     fcntl: (f) => cloexecFcntl(f, deps),
     pipe2: (f) => cloexecPipe2(f, deps),
     // dup3(old, new, flags); socket(domain, type, protocol); accept4(fd, addr, len, flags).
@@ -187,6 +193,18 @@ function wrapperFactories(
     ...(pty
       ? { ioctl: (f: GlueSyscall) => ptyIoctl(f, { fs: deps.fs, heap: deps.heap, kernel: pty }) }
       : {}),
+  };
+}
+
+/**
+ * `_setitimer_js(which, ms)` with ITIMER_REAL (0) on the kernel's clock
+ * (`proc-alarm`); the virtual and profiling timers stay the glue's.
+ */
+function kernelTimer(setitimer: GlueSyscall, timer: { arm(ms: number): void }): GlueSyscall {
+  return (which, ms) => {
+    if (which !== 0) return setitimer(which, ms);
+    timer.arm(ms ?? 0);
+    return 0;
   };
 }
 
