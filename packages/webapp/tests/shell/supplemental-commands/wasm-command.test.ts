@@ -441,7 +441,7 @@ describe('wasm command', () => {
       expect(r.stdout).toBe('frob  p\n');
     });
 
-    it("a script command whose #! interpreter is not installed: bash's bad interpreter, 126", async () => {
+    it('a script command whose #! interpreter is not installed: bad interpreter, 127 as bash on Linux', async () => {
       const tools = '/shared/lib/node_modules/@ai-ecoverse/wasix-autoconf';
       const files = {
         [`${tools}/package.json`]: JSON.stringify({
@@ -459,11 +459,11 @@ describe('wasm command', () => {
       const r = await runWasmCommand(['autoreconf', '-fi'], ctx(files));
       expect(r).toMatchObject({
         stderr: 'autoreconf: /usr/bin/perl: bad interpreter: No such file or directory\n',
-        exitCode: 126,
+        exitCode: 127,
       });
       expect(spawn).not.toHaveBeenCalled();
       const b = await runWasmCommand(['broken'], ctx(files));
-      expect(b).toMatchObject({ exitCode: 126 });
+      expect(b).toMatchObject({ exitCode: 127 });
       expect(b.stderr).toMatch(/^broken: .*bin\/broken: no #! line/);
     });
 

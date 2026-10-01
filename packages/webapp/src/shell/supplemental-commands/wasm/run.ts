@@ -336,8 +336,8 @@ async function badScript(ctx: CommandContext, name: string, script: string): Pro
  * A bare PROGRAM that is no file in the working directory names an
  * installed command: run its glue and module with its `argv[0]` — or, for a
  * script command (`cc`), its interpreter with the script. A script command
- * whose interpreter cannot run is an error (exit 126, as in bash), not a
- * program to look for in the working directory.
+ * whose interpreter cannot run is an error (exit 127, as bash on Linux), not
+ * a program to look for in the working directory.
  */
 async function resolveInstalled(
   ctx: CommandContext,
@@ -479,7 +479,9 @@ export async function runWasmCommand(
     options.commands
   );
   const call = await resolveInstalled(ctx, session, parsed);
-  if ('error' in call) return { stdout: '', stderr: `${call.error}\n`, exitCode: 126 };
+  // 127: Linux's execve answers ENOENT for a missing interpreter, which bash
+  // (5.1+) reports as not found; 126 is for one found but not executable.
+  if ('error' in call) return { stdout: '', stderr: `${call.error}\n`, exitCode: 127 };
   const gluePath = ctx.fs.resolvePath(ctx.cwd, call.program);
   const modulePathOf = await programModule(ctx, call, gluePath);
 
