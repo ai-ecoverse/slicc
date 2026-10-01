@@ -148,6 +148,30 @@ describe('ScoopContext active tool surface', () => {
     expect(toolNames).not.toContain('find');
   });
 
+  // The run ends on the first StructuredOutput; a second call (same batch, or
+  // a model that ignores the end) must not replace the captured value.
+  it('keeps the first StructuredOutput capture', async () => {
+    const scoop = {
+      ...testScoop,
+      config: { structuredOutputSchema: { type: 'object' } },
+    };
+    const ctx = new ScoopContext(scoop, createMockCallbacks(), createMockFs() as any);
+
+    await ctx.init();
+
+    const options = mocks.agentCtorCalls[0];
+    const tool = options.initialState.tools.find(
+      (t: { name: string }) => t.name === 'StructuredOutput'
+    ) as { execute: (input: unknown) => Promise<unknown> };
+    await tool.execute({ action: 'first' });
+    await options.afterToolCall({
+      toolCall: { name: 'StructuredOutput' },
+      args: { action: 'second' },
+    });
+    await tool.execute({ action: 'third' });
+    expect(ctx.getStructuredOutput()).toEqual({ captured: true, value: { action: 'first' } });
+  });
+
   // `sudo_request` must ask through the same wired broker as the shell and FS
   // gates; otherwise it would bypass `--no-escalate` and the escalation tally.
   it('routes sudo_request through the wired broker (no-escalate refuses; the tally counts)', async () => {

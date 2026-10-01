@@ -398,6 +398,9 @@ export class ScoopContext {
           this.shell = shell;
         },
         onStructuredOutput: (value) => {
+          // First capture wins: the run ends on it, so a second call (same
+          // batch, or a model that ignores the end) must not replace it.
+          if (this.structuredOutputCaptured) return;
           this.structuredOutputValue = value;
           this.structuredOutputCaptured = true;
         },
