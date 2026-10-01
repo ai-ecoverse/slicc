@@ -108,12 +108,15 @@ export class WasixProcess {
 
   private openFor(op: SpawnFdOp, cwd: string): number {
     const path = resolveFrom(cwd, op.path);
-    if (!this.host.o.fs.exists(path) && !(op.oflags & OFLAG_CREAT)) {
+    const create = (op.oflags & OFLAG_CREAT) !== 0;
+    if (!create && !this.host.o.fs.exists(path)) {
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }
     const flags = (op.rightsWrite ? O_RDWR : 0) | (op.append ? O_APPEND : 0);
+
     return this.host.o.kernel.sys.openVfs(path, op.rightsWrite ? flags || O_WRONLY : 0, 0, {
-      ...(op.oflags & OFLAG_TRUNC ? { contents: new Uint8Array(0) } : {}),
+      ...(create ? { create } : {}),
+      ...(op.oflags & OFLAG_TRUNC ? { truncate: true } : {}),
     });
   }
 
@@ -131,6 +134,8 @@ export class WasixProcess {
       }) as number;
     } finally {
       for (const kfd of opened) this.host.o.kernel.sys.close(kfd);
+
+      this.host.o.fs.invalidate?.();
     }
   }
 
@@ -150,6 +155,8 @@ export class WasixProcess {
       number,
     ];
     if (child === 0) return;
+
+    this.host.o.fs.invalidate?.();
     v.setUint8(pidPtr, 1);
     v.setUint32(pidPtr + 4, child, true);
     const sig = status & 0x7f;

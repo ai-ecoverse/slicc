@@ -46,6 +46,10 @@ export class FakeKernel implements WasiKernel {
   readonly killed: Array<[number, number]> = [];
 
   readonly opened: string[] = [];
+
+  readonly openedOpts: Array<object | undefined> = [];
+
+  waitResult: [number, number] = [0, 0];
   tty = false;
 
   constructor() {
@@ -120,8 +124,9 @@ export class FakeKernel implements WasiKernel {
       return [r, w];
     },
     poll: () => ({ readable: true, writable: true, hangup: false }),
-    openVfs: (path) => {
+    openVfs: (path, _flags, _position, opts) => {
       this.opened.push(path);
+      this.openedOpts.push(opts);
       const fd = this.free(3);
       this.add(fd, 'file').path = path;
       return fd;
@@ -172,6 +177,8 @@ export class FakeKernel implements WasiKernel {
         return undefined;
       case 'proc-spawn':
         throw posix('ENOENT');
+      case 'proc-wait':
+        return this.waitResult;
       case 'fd-info':
         return this.info(req.fd);
       case 'fd-select': {

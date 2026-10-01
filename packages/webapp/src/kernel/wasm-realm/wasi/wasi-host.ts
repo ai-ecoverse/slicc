@@ -42,7 +42,8 @@ export interface WasiHostOptions {
 
   ppid?: number;
   kernel: WasiKernel;
-  fs: SyncFsPosixBridge;
+
+  fs: SyncFsPosixBridge & { invalidate?(): void };
 
   inherited?: ReadonlyArray<{ fd: number; kind?: KernelFdKind; flags?: number }>;
 

@@ -14,6 +14,7 @@ import {
   KernelError,
   type KernelFdKind,
   kernelFdKind,
+  type OpenFile,
   openPipe,
   pollFile,
 } from './fd-table.js';
@@ -53,6 +54,8 @@ export type WasmSyscall =
       orphan?: boolean;
 
       truncate?: boolean;
+
+      create?: boolean;
     }
   | { op: 'fd-pread'; fd: number; offset: number; max: number }
   | { op: 'fd-pwrite'; fd: number; offset: number; body: Uint8Array }
@@ -425,6 +428,23 @@ export class WasmProcess {
     );
   }
 
+  private openVfsFile(req: Extract<FdSyscall, { op: 'fd-open-vfs' }>): OpenFile {
+    if (!this.options.fs) throw new SpawnError('ENOSYS');
+    return vfsFile(
+      this.options.fs,
+      {
+        path: req.path,
+        flags: req.flags,
+        position: req.position,
+        ...(req.contents !== undefined ? { contents: req.contents } : {}),
+        ...(req.orphan ? { orphan: true } : {}),
+        ...(req.truncate ? { truncate: true } : {}),
+        ...(req.create ? { create: true } : {}),
+      },
+      this.nodes
+    );
+  }
+
   private async fdSyscall(req: FdSyscall): Promise<SyncFsResult> {
     if (isVfsSyscall(req)) return this.vfsSyscall(req);
     switch (req.op) {
@@ -449,22 +469,8 @@ export class WasmProcess {
       }
       case 'fd-poll':
         return { ok: true, kind: 'json', json: pollFile(this.fds.get(req.fd).file) };
-      case 'fd-open-vfs': {
-        if (!this.options.fs) throw new SpawnError('ENOSYS');
-        const file = vfsFile(
-          this.options.fs,
-          {
-            path: req.path,
-            flags: req.flags,
-            position: req.position,
-            ...(req.contents !== undefined ? { contents: req.contents } : {}),
-            ...(req.orphan ? { orphan: true } : {}),
-            ...(req.truncate ? { truncate: true } : {}),
-          },
-          this.nodes
-        );
-        return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
-      }
+      case 'fd-open-vfs':
+        return { ok: true, kind: 'json', json: this.fds.install(this.openVfsFile(req), 3) };
       case 'fd-info':
         return { ok: true, kind: 'json', json: this.fdInfo(req.fd) };
       case 'fd-list':

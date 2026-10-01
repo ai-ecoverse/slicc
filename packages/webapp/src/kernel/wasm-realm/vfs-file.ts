@@ -26,6 +26,8 @@ export interface VfsFileOptions {
   orphan?: boolean;
 
   truncate?: boolean;
+
+  create?: boolean;
 }
 
 export const WRITEBACK_MS = 250;
@@ -47,6 +49,8 @@ export class VfsNode {
   private writeBackCost = 0;
 
   opens = 0;
+
+  private missing = false;
 
   constructor(
     private readonly fs: VfsFileFs,
@@ -71,10 +75,18 @@ export class VfsNode {
         this.data = await this.fs.readFileBuffer(this.path);
       } catch {
         this.data = new Uint8Array(0);
+        this.missing = true;
       }
       this.length = this.data.length;
     }
     return this.data;
+  }
+
+  async materialize(): Promise<void> {
+    await this.load();
+    if (!this.missing || this.orphaned) return;
+    this.missing = false;
+    await this.fs.writeFile(this.path, this.data?.slice(0, this.length) ?? new Uint8Array(0));
   }
 
   async size(): Promise<number> {
@@ -196,6 +208,7 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
     nodes && opts.contents === undefined && !opts.orphan
       ? nodes.open(opts.path)
       : new VfsNode(fs, opts.path, opts.contents, opts.orphan === true);
+  if (opts.create) void node.serial(() => node.materialize());
   if (opts.truncate) void node.serial(() => node.truncate(0));
   let offset = opts.position;
   const serial = <T>(op: () => Promise<T>) => node.serial(op);
