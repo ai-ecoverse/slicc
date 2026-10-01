@@ -10,7 +10,7 @@
  * and `fetch-proxy.fetch` handlers.
  *
  * The transport skeleton (cached Port, correlation, panel-RPC fallback) lives
- * in `kernel/port-bridge-client.ts`; this file only owns the per-call-site
+ * in `base/port-bridge-client.ts`; this file only owns the per-call-site
  * policy: `mount.sign-and-forward` Port name, 120s timeout (mount fetches
  * whole objects, so align with the proxied-fetch worker leg), reject-on-fail
  * semantics with `FsError('EIO')` (a mount that silently degrades is a bug —
@@ -23,7 +23,7 @@
  */
 
 import type { SignAndForwardReply } from '@slicc/shared-ts';
-import { createPortBridgeClient } from '../../kernel/port-bridge-client.js';
+import { createPortBridgeClient } from '../../base/port-bridge-client.js';
 import { FsError } from '../types.js';
 
 export type MountSignAndForwardType = 'mount.s3-sign-and-forward' | 'mount.da-sign-and-forward';

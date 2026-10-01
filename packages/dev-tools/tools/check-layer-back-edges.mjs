@@ -22,9 +22,10 @@
  * Directories not named in LAYER_RANK (kernel/, providers/, speech/, …) sit
  * outside the documented stack; they are scanned as importers only when a
  * ranked layer is the target, and are never a target themselves — except
- * scoops/ value-importing kernel/ (#3231). Ranking kernel itself is not
- * cheap: cdp/, shell/, and core/ already value-import it. A top-level
- * `import type { … } from` clause still erases and is allowed.
+ * scoops/ (#3231) and the rank-0 fs/ and base/ (#3728) value-importing
+ * kernel/. Ranking kernel itself is not cheap: cdp/, shell/, and core/
+ * already value-import it. A top-level `import type { … } from` clause
+ * still erases and is allowed.
  *
  * The same pass also catches the *cross-package* form of the same mistake: a
  * relative specifier that climbs out of packages/webapp/src into a sibling
@@ -101,9 +102,17 @@ export const LAYER_RANK = {
  * import from one of them is the same bundle-bloat back-edge the original
  * ui-only gate caught. They rank just under `ui/`: an import into `ui/` is a
  * back-edge, imports into every other layer are not, and they are never a
- * back-edge target themselves — except scoops/ value-importing kernel/ (#3231).
+ * back-edge target themselves — except a value import of kernel/ from one of
+ * KERNEL_VALUE_BANNED_LAYERS.
  */
 const UNRANKED_IMPORTER_RANK = LAYER_RANK.ui - 0.5;
+
+/**
+ * Webapp layers that must not VALUE-import the unranked kernel/ (top-level
+ * `import type { … } from` still erases and is allowed): scoops/ (#3231) and
+ * the rank-0 fs/ and base/ (#3728), which every other layer sits above.
+ */
+export const KERNEL_VALUE_BANNED_LAYERS = new Set(['scoops', 'fs', 'base']);
 
 /** A scannable webapp source file (not a test). */
 export function isWebappSource(name) {
@@ -295,7 +304,7 @@ const RELATIVE_IMPORT_RE =
 // ... } from '<spec>'` re-export (still a live binding at the type level,
 // and not the narrow shape this repo grants) — the one exemption this repo
 // grants is narrow on purpose. Shared by the chrome-extension webapp-escape
-// pass and the scoops→kernel value-import check (#3231).
+// pass and the kernel/ value-import check (#3231, #3728).
 const TYPE_ONLY_NAMED_CLAUSE_RE = /import\s+type\s*\{[^}]*\}\s*from\s*['"](\.\.?\/[^'"]+)['"]/g;
 
 /**
@@ -335,10 +344,11 @@ function kernelSegmentFollowsInterpolation(raw) {
  * For stacks with `isolatedLayers`, an import between two different files in
  * the same isolated layer is also a back-edge (sideways route→route).
  *
- * On the webapp stack, a scoops/ value import of kernel/ is a back-edge even
- * though kernel/ is unranked (#3231). Top-level `import type { … } from`
- * clauses still erase and are allowed. Quoted specifiers and static
- * template-literal `import(\`…\`)` are both scanned (#3237 P2).
+ * On the webapp stack, a value import of kernel/ from scoops/, fs/, or base/
+ * is a back-edge even though kernel/ is unranked (#3231, #3728). Top-level `import type { … } from`
+ * clauses still erase and are allowed. Quoted specifiers, static
+ * template-literal `import(\`…\`)` (#3237 P2), and `+`-concatenated
+ * literal `import()`/`require()` specifiers (#3728) are all scanned.
  */
 export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   const fromLayer = stack.layerOf(importerRel);
@@ -348,7 +358,8 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   const stripped = stripComments(source);
   const isolated = stack.isolatedLayers;
   const typeOnlyFromIndices = new Set();
-  if (stack.id === 'webapp' && fromLayer === 'scoops') {
+  const kernelValueBanned = stack.id === 'webapp' && KERNEL_VALUE_BANNED_LAYERS.has(fromLayer);
+  if (kernelValueBanned) {
     for (const tm of stripped.matchAll(TYPE_ONLY_NAMED_CLAUSE_RE)) {
       const idx = typeOnlyFromKeywordIndex(tm);
       if (idx >= 0) typeOnlyFromIndices.add(idx);
@@ -362,13 +373,10 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
       resolve('/', importerDir, queryAt >= 0 ? specifier.slice(0, queryAt) : specifier).slice(1);
     const toLayer = stack.layerOf(target);
     const toRank = stack.layerRank[toLayer];
-    const scoopsKernelValue =
-      stack.id === 'webapp' &&
-      fromLayer === 'scoops' &&
-      toLayer === 'kernel' &&
-      !typeOnlyFromIndices.has(matchIndex);
-    if (toRank === undefined && !scoopsKernelValue) return;
-    const up = scoopsKernelValue || (toRank !== undefined && toRank > fromRank);
+    const kernelValue =
+      kernelValueBanned && toLayer === 'kernel' && !typeOnlyFromIndices.has(matchIndex);
+    if (toRank === undefined && !kernelValue) return;
+    const up = kernelValue || (toRank !== undefined && toRank > fromRank);
     const sideways =
       isolated.has(fromLayer) &&
       fromLayer === toLayer &&
@@ -384,11 +392,7 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   for (const m of stripped.matchAll(BACKTICK_IMPORT_RE)) {
     const raw = m[1];
     if (raw.includes('${')) {
-      if (
-        stack.id === 'webapp' &&
-        fromLayer === 'scoops' &&
-        kernelSegmentFollowsInterpolation(raw)
-      ) {
+      if (kernelValueBanned && kernelSegmentFollowsInterpolation(raw)) {
         consider(raw, m.index, 'kernel/__interp__.js');
         continue;
       }
@@ -403,6 +407,12 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
       continue;
     }
     consider(raw, m.index);
+  }
+  // `import('../' + 'kernel/x.js')` — a `+`-joined literal specifier is the
+  // same edge in disguise (#3728 review; same shape as findWebappEscapes).
+  for (const m of stripped.matchAll(CONCAT_CALL_ARGS_RE)) {
+    const joined = [...m[1].matchAll(QUOTED_SEGMENT_RE)].map((seg) => seg[1]).join('');
+    if (/^\.\.?\//.test(joined)) consider(joined, m.index);
   }
   return hits;
 }

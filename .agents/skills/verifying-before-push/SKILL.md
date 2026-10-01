@@ -77,7 +77,7 @@ baseline-ratcheted; fix the layering, never grow `layer-back-edge-baseline.json`
 `getChromeExtensionRealm`, `setChromeExtensionRealm`, `hasChromeRuntimeConnect`,
 `canConnectToChromeRuntime`, `getExtensionDelegateId`, `setExtensionDelegateId` — plus the raw
 `__slicc_connect_mode` global-bag key; no new read under `scoops/`, `tools/`, `kernel/` except
-`kernel/host.ts` / `kernel/kernel-worker.ts` / `kernel/port-bridge-client.ts` — baseline-ratcheted,
+`kernel/host.ts` / `kernel/kernel-worker.ts` — baseline-ratcheted,
 starts empty; ask the injected `CapabilityBroker` instead, never grow `float-probe-baseline.json`),
 `lint:record-string-unknown` (no new `Record<string, unknown>` in non-test source —
 baseline-ratcheted; name the shape, or suppress a genuinely untyped payload with
@@ -269,8 +269,7 @@ The gate enforces seven "debt lists" of files grandfathered out of a rule:
 - Float/topology probes (`packages/dev-tools/tools/float-probe-baseline.json`; cap: **0**
   reads of the ten names in `check-no-float-probes.mjs`'s `FLOAT_PROBE_NAMES` plus the raw
   `__slicc_connect_mode` global-bag key, under `scoops/`, `tools/`, `kernel/` except
-  `kernel/host.ts` / `kernel/kernel-worker.ts` / `kernel/port-bridge-client.ts` — ask the
-  injected `CapabilityBroker` instead)
+  `kernel/host.ts` / `kernel/kernel-worker.ts` — ask the injected `CapabilityBroker` instead)
 - Untyped string-keyed bags (`packages/dev-tools/tools/record-string-unknown-baseline.json`;
   cap: **0** `Record<string, unknown>` in non-test source)
 

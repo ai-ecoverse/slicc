@@ -8,7 +8,7 @@
  * 'secrets.crud' })` Port — the SW side mirrors the `fetch-proxy.fetch` handler.
  *
  * The transport skeleton (cached Port, correlation, panel-RPC fallback) lives
- * in `kernel/port-bridge-client.ts`; this file only owns the per-call-site
+ * in `base/port-bridge-client.ts`; this file only owns the per-call-site
  * policy: `secrets.crud` Port name, 10s timeout, best-effort semantics (secrets
  * never block boot — unavailable / timeout / no panel-RPC client resolve
  * `undefined`), and the Port message shape `{ id, type, ...payload }`.
@@ -16,7 +16,7 @@
  * Payloads are secret-adjacent — only the control `type` is ever logged.
  */
 
-import { createPortBridgeClient } from '../kernel/port-bridge-client.js';
+import { createPortBridgeClient } from '../base/port-bridge-client.js';
 
 /** Per-call timeout; multi-MB downloads aren't on this path, so 10s is ample. */
 const CALL_TIMEOUT_MS = 10_000;

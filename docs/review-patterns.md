@@ -337,7 +337,8 @@ attention-promotion paths without rebuilding live panel state.
     lower layer, but equally `cdp/` importing `scoops/` or `tools/` importing `core/`.
     Unranked directories (`providers/`, `kernel/`, `speech/`, `transcript/`, `sudo/`) sit
     below `ui/`: they may import any ranked layer except `ui/`. A **value** import
-    from `scoops/` into `kernel/` is still a back-edge (#3231) — type-only named
+    from `scoops/`, `fs/`, or `base/` into `kernel/` is still a back-edge (#3231,
+    #3728) — type-only named
     clauses erase and are allowed; constants belong in `base/`, not
     `kernel/messages.ts`.
   - **node-server** `transport → services → entry` — `cdp-proxy/`, `bridge-security.ts`,
@@ -363,8 +364,8 @@ attention-promotion paths without rebuilding live panel state.
   / `hasChromeRuntimeConnect` / `canConnectToChromeRuntime` /
   `getExtensionDelegateId` / `setExtensionDelegateId` call (or a raw
   `__slicc_connect_mode` read) in `scoops/`, `tools/`, or `kernel/` (except
-  the three composition roots `kernel/host.ts` / `kernel/kernel-worker.ts` /
-  `kernel/port-bridge-client.ts`) business logic — in ANY form (named,
+  the two composition roots `kernel/host.ts` / `kernel/kernel-worker.ts`)
+  business logic — in ANY form (named,
   default, namespace `import * as`, dynamic `import(…)`), including one
   reached through a re-export under a different name (`export const
 isTrayExtension = getChromeExtensionRealm` and the like). Privileged float
