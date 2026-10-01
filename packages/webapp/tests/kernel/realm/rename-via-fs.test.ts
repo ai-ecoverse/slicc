@@ -132,6 +132,15 @@ describe('renameViaFs', () => {
       expect([...fs.store.keys()]).toEqual(['/f']);
     });
 
+    it('EISDIR for a file onto a directory: the file is not removed', async () => {
+      const fs = memoryFs({ '/f': 'F' }, ['/d']);
+      fs.rename = async () => {
+        throw Object.assign(new Error('EISDIR'), { code: 'EISDIR' });
+      };
+      await expect(renameViaFs(fs, '/f', '/d')).rejects.toMatchObject({ code: 'EISDIR' });
+      expect(new TextDecoder().decode(fs.store.get('/f'))).toBe('F');
+    });
+
     it('ENOTDIR when the parent is a file, even after a native ENOENT', async () => {
       const fs = memoryFs({ '/f': 'F', '/file': 'x' });
       fs.rename = async () => {

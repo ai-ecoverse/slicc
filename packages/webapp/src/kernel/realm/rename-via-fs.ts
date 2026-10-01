@@ -86,12 +86,16 @@ export async function renameViaFs(fs: RenameFs, src: string, dest: string): Prom
     if (native && code !== 'ENOENT') throw native;
     throw posixError('EXDEV', `cannot move directory ${src} to ${dest}`);
   }
+  let toStat: { identity?: string; isDirectory?: boolean } | undefined;
   try {
-    const toStat = await fs.stat(dest);
-    if (fromStat.identity && fromStat.identity === toStat.identity) return;
+    toStat = await fs.stat(dest);
   } catch {
     /* dest missing — a plain copy */
   }
+  if (toStat && fromStat.identity && fromStat.identity === toStat.identity) return;
+  // A file does not replace a directory: the copy's writeFile would fail on
+  // it unseen, and the source would then be removed with nothing written.
+  if (toStat?.isDirectory) throw posixError('EISDIR', `is a directory: ${dest}`);
   const content = await fs.readFileBuffer(src);
   await fs.writeFile(dest, content);
   await fs.rm(src, { recursive: true });
