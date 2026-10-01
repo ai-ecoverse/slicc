@@ -248,10 +248,14 @@ describe('runWasmProcess', () => {
     it('runs main on stdio alone, without mounting the VFS', async () => {
       mount.mockClear();
       const module = await WebAssembly.compile(NEEDS_IMPORT);
+      const fs = stubFs();
+      const open = fs.open;
       const code = await runWasmProcess(init(module), port, {
         evaluate: (_glue, m) => {
-          const fake = m as FakeModule;
-          fake.FS = stubFs();
+          const fake = m as FakeModule & { preRun?: Array<(m: object) => void> };
+          fake.FS = fs;
+          // Emscripten runs preRun before the runtime is up.
+          for (const run of fake.preRun ?? []) run(fake);
           fake.callMain = () => {
             throw Object.assign(new Error('exit'), { status: 7 });
           };
@@ -260,13 +264,15 @@ describe('runWasmProcess', () => {
       });
       expect(code).toBe(7);
       expect(mount).not.toHaveBeenCalled();
+      expect(fs.open).toBe(open); // the stub is left alone, not wrapped for FD_CLOEXEC
     });
 
     it('runs a glue that has no FS at all', async () => {
       const module = await WebAssembly.compile(NEEDS_IMPORT);
       const code = await runWasmProcess(init(module), port, {
         evaluate: (_glue, m) => {
-          const fake = m as FakeModule;
+          const fake = m as FakeModule & { preRun?: Array<(m: object) => void> };
+          for (const run of fake.preRun ?? []) run(fake);
           fake.callMain = () => 4;
           fake.onRuntimeInitialized();
         },

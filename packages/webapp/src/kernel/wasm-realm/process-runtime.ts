@@ -335,12 +335,16 @@ export async function runWasmProcess(
     },
     // Static constructors may read the cwd: stand it up before they run.
     preRun: [
-      (m: { FS: ProcessFs }) => {
+      (m: object) => {
+        // Emscripten runs this before onRuntimeInitialized: a program without
+        // a FS (see runStdioOnly) has nothing to track or chdir.
+        if (!hasStreams(m)) return;
+        const fs = (m as RunningModule).FS;
         // Before static constructors: an open(O_CLOEXEC) of theirs counts too.
-        trackCloseOnExec(m.FS);
+        trackCloseOnExec(fs);
         try {
-          m.FS.mkdirTree(init.cwd);
-          m.FS.chdir(init.cwd);
+          fs.mkdirTree(init.cwd);
+          fs.chdir(init.cwd);
         } catch {
           /* mounted over below */
         }
@@ -411,8 +415,8 @@ export async function runWasmProcess(
  * Has the module a real FS? Emscripten's minimal-FS stub (a program that uses
  * no files) has no streams, and a glue may define no FS at all.
  */
-function hasStreams(running: RunningModule): boolean {
-  return typeof ownValue<Partial<ProcessFs>>(running, 'FS')?.getStream === 'function';
+function hasStreams(module: object): boolean {
+  return typeof ownValue<Partial<ProcessFs>>(module, 'FS')?.getStream === 'function';
 }
 
 /**
