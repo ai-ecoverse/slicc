@@ -62,6 +62,9 @@ final class LauncherModel {
     var targets: [AppTarget] = []
     var isReady = false
     @ObservationIgnored private var isInitializing = false
+    /// Startup finished once. Distinct from `isReady`, which `updateRuntime()`
+    /// clears while the runtime is rebuilt.
+    @ObservationIgnored private var hasInitialized = false
     var alertMessage: String?
     var showAlert = false
     var showDebugBuildDialog = false
@@ -119,10 +122,12 @@ final class LauncherModel {
     /// Runs from each launcher window's `.task`, but the model is shared, so
     /// only the first call does the startup work. A later window (reopened
     /// from the Dock) just rescans; an in-flight call is not joined twice.
-    /// A failed bootstrap leaves `isReady` false so the next window retries.
+    /// A failed bootstrap leaves startup unfinished so the next window
+    /// retries. A window opened during `updateRuntime()` waits for it to
+    /// rescan rather than starting over against a changing runtime.
     func initialize() async {
-        if isReady {
-            rescan()
+        if hasInitialized {
+            if isReady { rescan() }
             return
         }
         guard !isInitializing else { return }
@@ -156,6 +161,7 @@ final class LauncherModel {
         }
 
         isReady = true
+        hasInitialized = true
 
         // Keep the discovered join URL honest for the rest of the session —
         // the browser can re-mint its tray at any time (see
