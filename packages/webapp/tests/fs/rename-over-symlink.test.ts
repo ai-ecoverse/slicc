@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 
 describe('rename onto an existing symlink', () => {
@@ -44,5 +44,19 @@ describe('rename onto an existing symlink', () => {
     expect((await fs.readDir('/d/dir')).map((e) => (typeof e === 'string' ? e : e.name))).toEqual([
       'inside',
     ]);
+  });
+
+  it('keeps the link when the rename itself fails', async () => {
+    await fs.symlink('/d/x', '/d/a');
+    await fs.symlink('/d/y', '/d/t');
+    // The backend rename fails after the link was taken out of the way.
+    const lfs = (fs as unknown as { lfs: { rename: (a: string, b: string) => Promise<void> } }).lfs;
+    const rename = vi
+      .spyOn(lfs, 'rename')
+      .mockRejectedValueOnce(Object.assign(new Error('EIO'), { code: 'EIO' }));
+    await expect(fs.rename('/d/t', '/d/a')).rejects.toThrow();
+    rename.mockRestore();
+    expect(await fs.readlink('/d/a')).toBe('/d/x');
+    expect(await fs.readlink('/d/t')).toBe('/d/y');
   });
 });
