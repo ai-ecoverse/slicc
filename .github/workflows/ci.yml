@@ -654,8 +654,12 @@ jobs:
           restore-keys: |
             playwright-chromium-${{ runner.os }}-
       - name: Install Playwright Chromium
+        # Self-hosted Cloud Run runners cannot sudo (no_new_privs); their image
+        # already ships the Playwright system dependencies.
         run: |
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+          if [ "${{ runner.environment }}" = "self-hosted" ]; then
+            [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ] || npx playwright install chromium
+          elif [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
             npx playwright install-deps chromium
           else
             npx playwright install --with-deps chromium
