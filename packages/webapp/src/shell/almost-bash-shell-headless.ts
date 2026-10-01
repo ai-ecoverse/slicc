@@ -529,6 +529,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     this.staticBuiltinNames = new Set(this.builtinCommandNames);
     this.vfsAdapter.setRegisteredCommandsFn(() => [...this.builtinCommandNames]);
 
+    this.vfsAdapter.setIdentityFn(() => ({
+      user: this.lastEnv.USER ?? 'user',
+      home: this.lastEnv.HOME ?? DEFAULT_HOME_DIR,
+    }));
+
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
 

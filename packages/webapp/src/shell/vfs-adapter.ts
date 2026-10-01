@@ -13,6 +13,13 @@ import * as justBash from 'just-bash';
 import type { DirEntry, MetadataUpdate, Stats, VirtualFS } from '../fs/index.js';
 import { FsError, joinPath, normalizePath, statsFromDirEntry } from '../fs/index.js';
 import { consumeCachedBinary } from './binary-cache.js';
+import {
+  DEFAULT_IDENTITY,
+  identityFile,
+  identityFileNames,
+  isMissing,
+  type ShellIdentity,
+} from './identity-files.js';
 import { parkReadBytes } from './request-body-provenance.js';
 
 type RunTrustedAsync = <T>(fn: () => Promise<T> | T) => Promise<T>;
@@ -66,8 +73,26 @@ function binAlias(normalized: string): string {
   return normalized.startsWith('/bin/') ? `/usr${normalized}` : normalized;
 }
 
+function withIdentityNames(dir: string, names: string[]): string[] {
+  const missing = identityFileNames(dir).filter((n) => !names.includes(n));
+  return missing.length ? [...names, ...missing].sort() : names;
+}
+
+function withIdentityDirents(dir: string, entries: DirentEntry[]): DirentEntry[] {
+  const missing = identityFileNames(dir).filter((n) => !entries.some((e) => e.name === n));
+  if (!missing.length) return entries;
+  const extra = missing.map((name) => ({
+    name,
+    isFile: true,
+    isDirectory: false,
+    isSymbolicLink: false,
+  }));
+  return [...entries, ...extra].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export class VfsAdapter implements IFileSystem {
   private registeredCommandsFn: (() => string[]) | null = null;
+  private identityFn: (() => ShellIdentity) | null = null;
 
   private readonly listingStats = new Map<string, { stats: Stats; at: number }>();
   private readonly listingStatsMax: number;
@@ -134,6 +159,14 @@ export class VfsAdapter implements IFileSystem {
     this.registeredCommandsFn = fn;
   }
 
+  setIdentityFn(fn: () => ShellIdentity): void {
+    this.identityFn = fn;
+  }
+
+  private identityFile(normalized: string): Uint8Array | undefined {
+    return identityFile(normalized, this.identityFn?.() ?? DEFAULT_IDENTITY);
+  }
+
   private getVirtualBinCommands(): string[] {
     return this.registeredCommandsFn?.() ?? [];
   }
@@ -193,8 +226,7 @@ export class VfsAdapter implements IFileSystem {
   async readFile(path: string, options?: ReadFileOptions | BufferEncoding): Promise<string> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-      const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });
-      const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw as string);
+      const bytes = await this.readRaw(normalized);
       const encoding = fileEncoding(options);
       const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(encoding);
 
@@ -204,12 +236,32 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
-    return this.trusted(async () => {
-      const normalized = normalizePath(path);
-      const content = await this.vfs.readFile(normalized, { encoding: 'binary' });
-      if (content instanceof Uint8Array) return content;
-      return new TextEncoder().encode(content as string);
-    });
+    return this.trusted(() => this.readRaw(normalizePath(path)));
+  }
+
+  private async readRaw(normalized: string): Promise<Uint8Array> {
+    let content: string | Uint8Array;
+    try {
+      content = await this.vfs.readFile(normalized, { encoding: 'binary' });
+    } catch (e) {
+      const synthetic = this.identityFile(normalized);
+      if (synthetic && isMissing(e)) return synthetic;
+      throw e;
+    }
+    return content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
+  }
+
+  private identityStat(normalized: string, err: unknown): FsStat | undefined {
+    const synthetic = this.identityFile(normalized);
+    if (!synthetic || !isMissing(err)) return undefined;
+    return {
+      isFile: true,
+      isDirectory: false,
+      isSymbolicLink: false,
+      mode: 0o644,
+      size: synthetic.length,
+      mtime: new Date(0),
+    };
   }
 
   async readFileBytes(path: string): Promise<ByteString> {
@@ -254,83 +306,101 @@ export class VfsAdapter implements IFileSystem {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
       if (this.virtualUsrStat(normalized)) return true;
-      return this.vfs.exists(normalized);
+      return (await this.vfs.exists(normalized)) || this.identityFile(normalized) !== undefined;
     });
   }
 
   async stat(path: string): Promise<FsStat> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-
-      const virtual = this.virtualUsrStat(normalized);
-      if (virtual) return virtual;
-
-      const fast = this.vfs.statSync(normalized);
-      if (fast) {
-        return {
-          isFile: fast.type === 'file',
-          isDirectory: fast.type === 'directory',
-          isSymbolicLink: !!fast.isSymlink,
-          mode: fast.mode ?? (fast.type === 'directory' ? 0o755 : 0o644),
-          size: fast.size,
-          mtime: new Date(fast.mtime),
-          identity: fast.identity,
-          dev: fast.dev,
-          ino: fast.identity === undefined ? undefined : fast.ino,
-        };
+      try {
+        return await this.statVfs(normalized);
+      } catch (e) {
+        const synthetic = this.identityStat(normalized, e);
+        if (synthetic) return synthetic;
+        throw e;
       }
-
-      const s = this.primedStats(normalized) ?? (await this.vfs.stat(normalized));
-      return {
-        isFile: s.type === 'file',
-        isDirectory: s.type === 'directory',
-        isSymbolicLink: !!s.isSymlink,
-        mode: s.mode ?? (s.type === 'directory' ? 0o755 : 0o644),
-        size: s.size,
-        mtime: new Date(s.mtime),
-        identity: s.identity,
-        dev: s.dev,
-        ino: s.identity === undefined ? undefined : s.ino,
-      };
     });
+  }
+
+  private async statVfs(normalized: string): Promise<FsStat> {
+    const virtual = this.virtualUsrStat(normalized);
+    if (virtual) return virtual;
+
+    const fast = this.vfs.statSync(normalized);
+    if (fast) {
+      return {
+        isFile: fast.type === 'file',
+        isDirectory: fast.type === 'directory',
+        isSymbolicLink: !!fast.isSymlink,
+        mode: fast.mode ?? (fast.type === 'directory' ? 0o755 : 0o644),
+        size: fast.size,
+        mtime: new Date(fast.mtime),
+        identity: fast.identity,
+        dev: fast.dev,
+        ino: fast.identity === undefined ? undefined : fast.ino,
+      };
+    }
+
+    const s = this.primedStats(normalized) ?? (await this.vfs.stat(normalized));
+    return {
+      isFile: s.type === 'file',
+      isDirectory: s.type === 'directory',
+      isSymbolicLink: !!s.isSymlink,
+      mode: s.mode ?? (s.type === 'directory' ? 0o755 : 0o644),
+      size: s.size,
+      mtime: new Date(s.mtime),
+      identity: s.identity,
+      dev: s.dev,
+      ino: s.identity === undefined ? undefined : s.ino,
+    };
   }
 
   async lstat(path: string): Promise<FsStat> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-
-      const virtual = this.virtualUsrStat(normalized);
-      if (virtual) return virtual;
-
-      const fast = this.vfs.lstatSync(normalized);
-      if (fast) {
-        return {
-          isFile: fast.type === 'file',
-          isDirectory: fast.type === 'directory',
-          isSymbolicLink: fast.type === 'symlink',
-          mode:
-            fast.mode ??
-            (fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644),
-          size: fast.size,
-          mtime: new Date(fast.mtime),
-          identity: fast.identity,
-          dev: fast.dev,
-          ino: fast.identity === undefined ? undefined : fast.ino,
-        };
+      try {
+        return await this.lstatVfs(normalized);
+      } catch (e) {
+        const synthetic = this.identityStat(normalized, e);
+        if (synthetic) return synthetic;
+        throw e;
       }
-      const s = this.primedStats(normalized) ?? (await this.vfs.lstat(normalized));
-      return {
-        isFile: s.type === 'file',
-        isDirectory: s.type === 'directory',
-        isSymbolicLink: s.type === 'symlink',
-        mode: s.mode ?? (s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644),
-        size: s.size,
-        mtime: new Date(s.mtime),
-        identity: s.identity,
-        dev: s.dev,
-        ino: s.identity === undefined ? undefined : s.ino,
-      };
     });
+  }
+
+  private async lstatVfs(normalized: string): Promise<FsStat> {
+    const virtual = this.virtualUsrStat(normalized);
+    if (virtual) return virtual;
+
+    const fast = this.vfs.lstatSync(normalized);
+    if (fast) {
+      return {
+        isFile: fast.type === 'file',
+        isDirectory: fast.type === 'directory',
+        isSymbolicLink: fast.type === 'symlink',
+        mode:
+          fast.mode ??
+          (fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644),
+        size: fast.size,
+        mtime: new Date(fast.mtime),
+        identity: fast.identity,
+        dev: fast.dev,
+        ino: fast.identity === undefined ? undefined : fast.ino,
+      };
+    }
+    const s = this.primedStats(normalized) ?? (await this.vfs.lstat(normalized));
+    return {
+      isFile: s.type === 'file',
+      isDirectory: s.type === 'directory',
+      isSymbolicLink: s.type === 'symlink',
+      mode: s.mode ?? (s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644),
+      size: s.size,
+      mtime: new Date(s.mtime),
+      identity: s.identity,
+      dev: s.dev,
+      ino: s.identity === undefined ? undefined : s.ino,
+    };
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
@@ -347,11 +417,18 @@ export class VfsAdapter implements IFileSystem {
       if (binAlias(normalized) === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
 
       const fast = this.vfs.readDirSync(normalized);
-      if (fast !== null) return fast.map((e) => e.name);
+      if (fast !== null)
+        return withIdentityNames(
+          normalized,
+          fast.map((e) => e.name)
+        );
 
       const entries = await this.vfs.readDir(normalized, { includeStats: true });
       this.primeListingStats(normalized, entries);
-      return entries.map((e) => e.name);
+      return withIdentityNames(
+        normalized,
+        entries.map((e) => e.name)
+      );
     });
   }
 
@@ -375,12 +452,12 @@ export class VfsAdapter implements IFileSystem {
 
       const fastEntries = this.vfs.readDirSync(normalized);
       if (fastEntries !== null) {
-        return this.mapFastEntriesToDirents(fastEntries);
+        return withIdentityDirents(normalized, this.mapFastEntriesToDirents(fastEntries));
       }
 
       const entries = await this.vfs.readDir(normalized, { includeStats: true });
       this.primeListingStats(normalized, entries);
-      return this.mapAsyncEntriesToDirents(entries);
+      return withIdentityDirents(normalized, this.mapAsyncEntriesToDirents(entries));
     });
   }
 
@@ -416,7 +493,15 @@ export class VfsAdapter implements IFileSystem {
     return this.trusted(async () => {
       const normalizedSrc = normalizePath(src);
       const normalizedDest = normalizePath(dest);
-      const stat = await this.vfs.stat(normalizedSrc);
+      let stat: Stats;
+      try {
+        stat = await this.vfs.stat(normalizedSrc);
+      } catch (e) {
+        const synthetic = this.identityFile(normalizedSrc);
+        if (!synthetic || !isMissing(e)) throw e;
+        await this.vfs.writeFile(normalizedDest, synthetic);
+        return;
+      }
 
       if (stat.type === 'directory') {
         if (!options?.recursive) {
@@ -440,6 +525,12 @@ export class VfsAdapter implements IFileSystem {
       } else {
         await this.vfs.copyFile(srcChild, destChild);
       }
+    }
+
+    const names = new Set(entries.map((e) => e.name));
+    for (const name of identityFileNames(src)) {
+      const synthetic = names.has(name) ? undefined : this.identityFile(joinPath(src, name));
+      if (synthetic) await this.vfs.writeFile(joinPath(dest, name), synthetic);
     }
   }
 
