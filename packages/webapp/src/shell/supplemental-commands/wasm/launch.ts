@@ -74,6 +74,32 @@ export const SECRET_FUNCTION =
  * process is bash (as `bash` or `sh`): every one, the command's own or one a
  * program starts (make's recipe shell), unless its environment has one.
  */
+const ENV_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/**
+ * Defaults with each `${NAME}` replaced by the caller's `NAME`, so a package
+ * can put a cache under the user's home (`${HOME}/.cache/zig`). A default
+ * that names a variable the caller has not set is left out: the program's
+ * own default beats a path missing its first part.
+ */
+export function expandDefaults(
+  defaults: Readonly<Record<string, string>>,
+  env: Readonly<Record<string, string>>
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(defaults)) {
+    let missing = false;
+    const expanded = value.replace(ENV_REFERENCE, (_, name: string) => {
+      // Own variables only: `${toString}` names no environment variable.
+      const set = Object.hasOwn(env, name) ? env[name] : undefined;
+      if (set === undefined) missing = true;
+      return set ?? '';
+    });
+    if (!missing) out[key] = expanded;
+  }
+  return out;
+}
+
 /**
  * A command's environment defaults under the caller's environment, which wins.
  * A package's `GIT_CONFIG_NOSYSTEM` would also switch off the system config
@@ -81,10 +107,11 @@ export const SECRET_FUNCTION =
  * it does not apply over that one; exported, it does.
  */
 function withDefaults(
-  defaults: Readonly<Record<string, string>> | undefined,
+  given: Readonly<Record<string, string>> | undefined,
   env: Record<string, string>
 ): Record<string, string> {
-  if (!defaults) return env;
+  if (!given) return env;
+  const defaults = expandDefaults(given, env);
   const realmGitConfig =
     env.GIT_CONFIG_SYSTEM !== undefined &&
     isRealmDefault('GIT_CONFIG_SYSTEM', env.GIT_CONFIG_SYSTEM);

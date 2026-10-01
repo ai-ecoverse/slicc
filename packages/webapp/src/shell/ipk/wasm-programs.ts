@@ -27,7 +27,9 @@
  * name). `env` (on `slicc`, and per command, which wins) gives the program
  * environment defaults — the caller's environment still wins. A value that
  * is a relative path (`etc/ImageMagick-7`) names a place in the package, and
- * `${package}` stands for the package directory; anything else is literal. Until the `@ai-ecoverse/wasm-*` packages carry the manifest, such a
+ * `${package}` stands for the package directory; `${NAME}` is the caller's
+ * `NAME` when the program starts (`${HOME}/.cache/zig`), and a default naming
+ * an unset one is left out; anything else is literal. Until the `@ai-ecoverse/wasm-*` packages carry the manifest, such a
  * package without one offers each `bin/<x>` that has a `bin/<x>.wasm` beside it.
  */
 
