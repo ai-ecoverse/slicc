@@ -2946,8 +2946,17 @@ export class VirtualFS {
         await this.dropSidecarConsistency();
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
-        if (replacesLink) await this.lfs.unlink(normalizedNew);
-        await this.lfs.rename(normalizedOld, normalizedNew);
+        // The link is gone only once the rename lands: a failed rename puts it back.
+        const linkTarget = replacesLink ? await this.lfs.readlink(normalizedNew) : undefined;
+        if (linkTarget !== undefined) await this.lfs.unlink(normalizedNew);
+        try {
+          await this.lfs.rename(normalizedOld, normalizedNew);
+        } catch (err) {
+          if (linkTarget !== undefined) {
+            await this.lfs.symlink(linkTarget, normalizedNew).catch(() => undefined);
+          }
+          throw err;
+        }
         await this.writeOpfsMetadataSidecarUnlocked();
       });
     } catch (err) {
