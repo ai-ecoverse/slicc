@@ -121,7 +121,7 @@ export function createPySubprocessModule(hooks: PySubprocessHooks): {
  * The Python half. Installed after the realm's filesystem is mounted and
  * `os.environ` is populated, before user code runs.
  */
-export const PYTHON_SUBPROCESS_SHIM = String.raw`
+export const PYTHON_SUBPROCESS_SHIM = `
 def __slicc_install_subprocess():
     import errno, io, itertools, json, os, subprocess, sys
     import _slicc_proc
