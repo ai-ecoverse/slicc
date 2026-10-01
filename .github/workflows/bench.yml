@@ -43,7 +43,7 @@ on:
         description: 'Leaders per shard, side by side (1-8; about 2 vCPU each)'
         default: '4'
       runner:
-        description: 'Runner label the shards run on: cloud-run-bench (Cloud Run pool) or gcp-bench-8core (old GCE pool)'
+        description: 'Runner label the shards run on: cloud-run-bench (Cloud Run pool), cloud-run-gpu (L4 GPU: leaders get WebGPU) or gcp-bench-8core (old GCE pool)'
         default: 'cloud-run-bench'
       resume-run:
         description: "Continue an earlier Benchmark run (its run id): each shard starts from that run's shard artifact. Use the same sets, tasks, models, skills, repeats and shards"
@@ -260,6 +260,8 @@ jobs:
           INPUT_PROVIDER_BASE_URL: https://bedrock-runtime.${{ vars.RUM_AWS_REGION || 'us-west-2' }}.amazonaws.com
           INPUT_MODEL: bedrock-camp:global.anthropic.claude-sonnet-5
           INPUT_MASK_JOIN_URL: 'true'
+
+          SLICC_CHROME_GPU: ${{ github.event_name == 'workflow_dispatch' && inputs.runner == 'cloud-run-gpu' && '1' || '' }}
         run: |
           set -euo pipefail
           fallback="$BENCH_JUDGE_FALLBACK_MODEL"

@@ -238,6 +238,8 @@ export function buildChromeLaunchArgs(options: {
   hosted?: boolean;
 
   mockKeychain?: boolean;
+
+  gpu?: boolean;
 }): string[] {
   const args = [
     `--remote-debugging-port=${options.cdpPort}`,
@@ -268,13 +270,19 @@ export function buildChromeLaunchArgs(options: {
     const base = args.findIndex((arg) => arg.startsWith('--disable-features='));
     if (base >= 0) args[base] = chromeDisableFeaturesArg(true);
 
-    args.push(
-      '--headless=new',
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--font-render-hinting=none'
-    );
+    args.push('--headless=new', '--no-sandbox', '--disable-dev-shm-usage');
+
+    if (options.gpu) {
+      args.push(
+        '--enable-unsafe-webgpu',
+        '--enable-features=Vulkan',
+        '--use-angle=vulkan',
+        '--ignore-gpu-blocklist'
+      );
+    } else {
+      args.push('--disable-gpu');
+    }
+    args.push('--font-render-hinting=none');
   }
 
   args.push(options.launchUrl);
