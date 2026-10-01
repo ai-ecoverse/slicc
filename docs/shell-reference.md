@@ -854,6 +854,12 @@ module) or `"wasi"` (a WASI preview1 module with no glue, so a command names onl
 its `wasm`). It may be set per command too, which wins, so one package can mix
 both; a package or command of any other ABI offers nothing.
 
+For a wasm command, `"args"` is an optional array of fixed strings placed before
+the caller's arguments. For example, a Ruby package can expose `gem` through
+`{ "wasm": "bin/ruby.wasm", "args": ["-S", "gem"] }`, so `gem --version` runs
+the equivalent of `ruby -S gem --version`. These arguments apply when the
+command is launched from the shell or spawned by another wasm process.
+
 ```json
 "slicc": {
   "abi": "wasi",

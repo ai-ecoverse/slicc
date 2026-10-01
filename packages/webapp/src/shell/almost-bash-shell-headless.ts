@@ -1783,7 +1783,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           // A script command runs by name: `wasm` hands it to its interpreter.
           wasm.script
             ? [cmdName, ...args]
-            : ['--argv0', wasm.argv0, '--module', wasm.wasm, wasm.glue, ...args],
+            : [
+                '--argv0',
+                wasm.argv0,
+                '--module',
+                wasm.wasm,
+                wasm.glue,
+                ...(wasm.args ?? []),
+                ...args,
+              ],
           ctx,
           {
             processConfig: this.buildJshProcessConfig(runPidFromEnv(ctx.env)),

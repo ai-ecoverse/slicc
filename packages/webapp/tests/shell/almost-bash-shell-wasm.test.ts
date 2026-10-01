@@ -55,6 +55,30 @@ describe('AlmostBashShellHeadless installed wasm commands', () => {
     ]);
   });
 
+  it('passes manifest arguments before the caller arguments', async () => {
+    await fs.mkdir(`${PKG}/bin`, { recursive: true });
+    await fs.writeFile(
+      `${PKG}/package.json`,
+      JSON.stringify({
+        name: 'wasm-tools',
+        slicc: { abi: 'wasi', commands: { gem: { wasm: 'bin/ruby.wasm', args: ['-S', 'gem'] } } },
+      })
+    );
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+    await shell.executeCommand('gem --version');
+    expect(run.mock.calls[0][0]).toEqual([
+      '--argv0',
+      'gem',
+      '--module',
+      `${PKG}/bin/ruby.wasm`,
+      `${PKG}/bin/ruby.wasm`,
+      '-S',
+      'gem',
+      '--version',
+    ]);
+  });
+
   it('hands a program run by name its own env defaults', async () => {
     await fs.mkdir(`${PKG}/bin`, { recursive: true });
     await fs.writeFile(

@@ -24,7 +24,8 @@
  *   "slicc": { "commands": { "cc": { "script": "bin/cc" } } }
  *
  * `argv0` selects the program of a multi-call binary (default: the command
- * name). `env` (on `slicc`, and per command, which wins) gives the program
+ * name). `args` prepends fixed arguments before the caller's arguments.
+ * `env` (on `slicc`, and per command, which wins) gives the program
  * environment defaults — the caller's environment still wins. A value that
  * is a relative path (`etc/ImageMagick-7`) names a place in the package, and
  * `${package}` stands for the package directory; `${NAME}` is the caller's
@@ -65,6 +66,8 @@ export interface WasmCommand {
   wasm: string;
   /** `argv[0]` the program runs with. */
   argv0: string;
+  /** Fixed arguments before those supplied by the caller. */
+  args?: readonly string[];
   /** The package that provides it. */
   pkg: string;
   /** Environment defaults for the program (the manifest's `env`, resolved). */
@@ -108,6 +111,7 @@ interface CommandEntry {
   glue?: unknown;
   wasm?: unknown;
   argv0?: unknown;
+  args?: unknown;
   env?: unknown;
 }
 
@@ -175,6 +179,53 @@ function validCommandName(name: string): boolean {
   return /^[A-Za-z0-9._+-]+$/.test(name) && name !== '.' && name !== '..';
 }
 
+function manifestArgs(raw: unknown): string[] | undefined {
+  return Array.isArray(raw) && raw.every((arg) => typeof arg === 'string') && raw.length > 0
+    ? raw
+    : undefined;
+}
+
+function commandFromEntry(
+  pkgDir: string,
+  pkgName: string,
+  command: string,
+  raw: CommandEntry,
+  packageAbi: WasmAbi,
+  packageEnv: Record<string, string>
+): WasmCommand | undefined {
+  if (!validCommandName(command) || !raw || typeof raw !== 'object') return undefined;
+  const script = insidePackage(pkgDir, raw.script);
+  if (script) {
+    const env = { ...packageEnv, ...manifestEnv(pkgDir, raw.env) };
+    return {
+      name: command,
+      glue: script,
+      wasm: script,
+      argv0: command,
+      pkg: pkgName,
+      script,
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+    };
+  }
+  const abi = abiOf(raw.abi, packageAbi);
+  const wasm = insidePackage(pkgDir, raw.wasm);
+  const glue = abi === 'wasi' ? wasm : insidePackage(pkgDir, raw.glue);
+  if (!abi || !glue || !wasm) return undefined;
+  const argv0 = typeof raw.argv0 === 'string' && raw.argv0 ? raw.argv0 : command;
+  const args = manifestArgs(raw.args);
+  const env = { ...packageEnv, ...manifestEnv(pkgDir, raw.env) };
+  return {
+    name: command,
+    abi,
+    glue,
+    wasm,
+    argv0,
+    ...(args ? { args } : {}),
+    pkg: pkgName,
+    ...(Object.keys(env).length > 0 ? { env } : {}),
+  };
+}
+
 /** The commands a package's manifest declares (empty when it declares none it can run). */
 export function commandsFromManifest(pkgDir: string, pkg: PackageJson): WasmCommand[] {
   const slicc = pkg.slicc;
@@ -188,36 +239,8 @@ export function commandsFromManifest(pkgDir: string, pkg: PackageJson): WasmComm
   const packageEnv = manifestEnv(pkgDir, slicc.env);
   const out: WasmCommand[] = [];
   for (const [command, raw] of Object.entries(commands as Record<string, CommandEntry>)) {
-    if (!validCommandName(command) || !raw || typeof raw !== 'object') continue;
-    const script = insidePackage(pkgDir, raw.script);
-    if (script) {
-      const env = { ...packageEnv, ...manifestEnv(pkgDir, raw.env) };
-      out.push({
-        name: command,
-        glue: script,
-        wasm: script,
-        argv0: command,
-        pkg: name,
-        script,
-        ...(Object.keys(env).length > 0 ? { env } : {}),
-      });
-      continue;
-    }
-    const abi = abiOf(raw.abi, packageAbi);
-    const wasm = insidePackage(pkgDir, raw.wasm);
-    const glue = abi === 'wasi' ? wasm : insidePackage(pkgDir, raw.glue);
-    if (!abi || !glue || !wasm) continue;
-    const argv0 = typeof raw.argv0 === 'string' && raw.argv0 ? raw.argv0 : command;
-    const env = { ...packageEnv, ...manifestEnv(pkgDir, raw.env) };
-    out.push({
-      name: command,
-      abi,
-      glue,
-      wasm,
-      argv0,
-      pkg: name,
-      ...(Object.keys(env).length > 0 ? { env } : {}),
-    });
+    const parsed = commandFromEntry(pkgDir, name, command, raw, packageAbi, packageEnv);
+    if (parsed) out.push(parsed);
   }
   return out;
 }
