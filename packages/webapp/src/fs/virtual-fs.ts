@@ -101,6 +101,9 @@ export interface MetadataUpdate {
   mtime?: Date;
 }
 
+/** Idle gap for coalescing individual metadata syscalls into one sidecar write. */
+const METADATA_SIDECAR_IDLE_MS = 100;
+
 /**
  * One entry for {@link VirtualFS.symlinkBatch}: create a symlink at `path`
  * pointing to `target` (absolute or relative to the link's directory).
@@ -520,6 +523,7 @@ export class VirtualFS {
         refs: 0,
         asyncCache: asyncCache !== false,
         sidecarDirty: { paths: new Set(), prefixes: new Set() },
+        sidecarFlushTimer: null,
       };
       VirtualFS.opfsBackends.set(vfs.dbName, entry);
     }
@@ -633,6 +637,7 @@ export class VirtualFS {
        * See {@link writeOpfsMetadataSidecarUnlocked} and `sidecar-merge.ts`.
        */
       sidecarDirty: SidecarDirtyState;
+      sidecarFlushTimer: ReturnType<typeof setTimeout> | null;
     }
   > = new Map();
   private static async ensureRootMount(zenfs: typeof import('@zenfs/core')): Promise<void> {
@@ -1026,6 +1031,26 @@ export class VirtualFS {
       dirty.paths.clear();
       dirty.prefixes.clear();
     }
+    const entry = VirtualFS.opfsBackends.get(this.dbName);
+    if (entry && entry.sidecarFlushTimer !== null) {
+      clearTimeout(entry.sidecarFlushTimer);
+      entry.sidecarFlushTimer = null;
+    }
+  }
+
+  /** Coalesce successive chmod/utimes calls without losing an eventual write. */
+  private scheduleMetadataSidecarFlush(): void {
+    if (this.backend !== 'opfs') return;
+    const entry = VirtualFS.opfsBackends.get(this.dbName);
+    if (!entry) return;
+    if (entry.sidecarFlushTimer !== null) clearTimeout(entry.sidecarFlushTimer);
+    entry.sidecarFlushTimer = setTimeout(() => {
+      entry.sidecarFlushTimer = null;
+      void this.writeOpfsMetadataSidecar().catch((error: unknown) => {
+        // Dirty paths remain available for the next timer, flush, or dispose.
+        console.warn('[virtual-fs] deferred metadata sidecar flush failed', error);
+      });
+    }, METADATA_SIDECAR_IDLE_MS);
   }
 
   /**
@@ -2268,7 +2293,7 @@ export class VirtualFS {
       await this.stat(normalized);
       throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
     }
-    await this.updateMetadataBatch([{ path, mode }]);
+    await this.applyMetadataUpdates([{ path, mode }], false);
   }
 
   /** Persist access and modification times where the backend supports them. */
@@ -2278,15 +2303,15 @@ export class VirtualFS {
       await this.stat(normalized);
       throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
     }
-    await this.updateMetadataBatch([{ path, atime, mtime }]);
+    await this.applyMetadataUpdates([{ path, atime, mtime }], false);
   }
 
   /**
    * Apply many mode/time updates under one write lock and **one** sidecar
-   * persist. Used by `tar x` so extracting N members is not N full sidecar
-   * rewrites. A single {@link chmod}/{@link utimes} is this with one entry —
-   * still durable before return (those entry points still throw `ENOSYS` on
-   * mounts).
+   * persist. Single {@link chmod}/{@link utimes} calls instead schedule an
+   * idle flush, so callers that restore metadata one file at a time benefit
+   * without using this batch API. Those entry points still throw `ENOSYS` on
+   * mounts.
    *
    * Mount paths in a multi-path batch are **skipped** after confirming they
    * exist (missing mounts still `ENOENT`), so a mixed VFS+mount extract does
@@ -2294,6 +2319,13 @@ export class VirtualFS {
    * input / all-skipped is a no-op (no sidecar write).
    */
   async updateMetadataBatch(updates: readonly MetadataUpdate[]): Promise<void> {
+    await this.applyMetadataUpdates(updates, true);
+  }
+
+  private async applyMetadataUpdates(
+    updates: readonly MetadataUpdate[],
+    persistImmediately: boolean
+  ): Promise<void> {
     if (updates.length === 0) return;
     const prepared = updates.map((update) => this.prepareMetadataUpdate(update));
     const paths = prepared.map((update) => update.normalized);
@@ -2310,7 +2342,8 @@ export class VirtualFS {
           if (notification) notifications.push(notification);
         }
         if (notifications.length === 0) return;
-        await this.writeOpfsMetadataSidecarUnlocked();
+        if (persistImmediately) await this.writeOpfsMetadataSidecarUnlocked();
+        else this.scheduleMetadataSidecarFlush();
         this.watcher?.notify(notifications);
       })
     );

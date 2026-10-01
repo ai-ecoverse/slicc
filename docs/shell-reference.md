@@ -109,7 +109,9 @@ On the browser filesystem, `>>` serializes appends with other VFS mutations, and
 `tar x` batches mode/mtime restoration into one sidecar write via
 `VirtualFS.updateMetadataBatch` so large extracts stay linear. Mounted
 paths in that batch are skipped (unsupported); lone `chmod`/`utimes` on a
-mount still report `ENOSYS`. `ipk mamba install` batches conda archive
+mount still report `ENOSYS`. Individual `chmod`/`utimes` calls coalesce
+sidecar writes after a 100 ms idle gap; `flush()` and filesystem disposal
+persist them immediately. `ipk mamba install` batches conda archive
 symlinks via `VirtualFS.symlinkBatch` for the same reason (one sidecar
 write per package). A successful command always means its
 requested supported metadata operation was applied.
