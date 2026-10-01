@@ -287,6 +287,8 @@ class LinkSync {
 const DL_GEN = 3;
 
 export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike): Promise<number> {
+  captureBacktraces(init.env);
+
   const signals = new WasiSignals((sig) => {
     call({ op: 'proc-kill', pid: init.pid, sig });
     throw new WasiExit(128 + sig);
@@ -343,7 +345,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     if (e instanceof WasiExit) return e.code;
     if (!(e instanceof WebAssembly.RuntimeError)) throw e;
     try {
-      say(`wasm trap: ${e.message}`);
+      say(trapMessage(e, init.env));
     } catch {
       throw new Error(`${init.argv0}: wasm trap: ${e.message}`);
     }
@@ -354,7 +356,31 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
   }
 }
 
+const BACKTRACE_FRAMES = 40;
+
+export function trapMessage(
+  e: WebAssembly.RuntimeError,
+  env: Readonly<Record<string, string>>,
+  where = ''
+): string {
+  const head = `wasm trap${where}: ${e.message}`;
+  if (env.SLICC_WASM_BACKTRACE !== '1') return head;
+
+  const frames = (e.stack ?? '')
+    .split('\n')
+    .filter((line) => /^\s+at .*wasm:\/\/wasm\//.test(line))
+    .slice(0, BACKTRACE_FRAMES);
+  return frames.length ? `${head}\n${frames.join('\n')}` : head;
+}
+
+export function captureBacktraces(env: Readonly<Record<string, string>>): void {
+  if (env.SLICC_WASM_BACKTRACE !== '1') return;
+
+  Error.stackTraceLimit = Math.max(Error.stackTraceLimit ?? 0, BACKTRACE_FRAMES + 20);
+}
+
 export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike): Promise<void> {
+  captureBacktraces(init.env);
   const { transport, sys, call, say } = kernelOf(init, port);
   const { thread } = init;
   const threads = new WasiThreads(port, thread.memory, threadCap(init.env), thread.tid, thread.ids);
@@ -388,7 +414,7 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
     }
     if (e instanceof WebAssembly.RuntimeError) {
       try {
-        say(`wasm trap in thread ${thread.tid}: ${e.message}`);
+        say(trapMessage(e, init.env, ` in thread ${thread.tid}`));
       } catch {}
       port.postMessage({ type: WASM_PROCESS_EXIT, code: TRAPPED });
       return;
