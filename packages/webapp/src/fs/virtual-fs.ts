@@ -244,6 +244,13 @@ function buildBackendDescriptor(backend: MountBackend, normalizedPath: string): 
   }
 }
 
+/** Where a rename parks a destination symlink until it lands: a hidden sibling. */
+function parkedLinkPath(path: string): string {
+  const slash = path.lastIndexOf('/');
+  const nonce = Math.random().toString(36).slice(2, 10);
+  return `${path.slice(0, slash + 1)}.${path.slice(slash + 1)}.slicc-rename-${nonce}`;
+}
+
 export class VirtualFS {
   /**
    * Node-fs-promises-shaped client used by every public VirtualFS
@@ -2946,17 +2953,18 @@ export class VirtualFS {
         await this.dropSidecarConsistency();
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
-        // The link is gone only once the rename lands: a failed rename puts it back.
-        const linkTarget = replacesLink ? await this.lfs.readlink(normalizedNew) : undefined;
-        if (linkTarget !== undefined) await this.lfs.unlink(normalizedNew);
+        // The link is parked beside itself, not deleted: a failed rename moves
+        // the very same entry back (identity, times), and it is removed only
+        // once the rename landed.
+        const parked = replacesLink ? parkedLinkPath(normalizedNew) : undefined;
+        if (parked) await this.lfs.rename(normalizedNew, parked);
         try {
           await this.lfs.rename(normalizedOld, normalizedNew);
         } catch (err) {
-          if (linkTarget !== undefined) {
-            await this.lfs.symlink(linkTarget, normalizedNew).catch(() => undefined);
-          }
+          if (parked) await this.restoreParkedLink(parked, normalizedNew, err);
           throw err;
         }
+        if (parked) await this.lfs.unlink(parked).catch(() => undefined);
         await this.writeOpfsMetadataSidecarUnlocked();
       });
     } catch (err) {
@@ -2968,6 +2976,25 @@ export class VirtualFS {
     ]);
     // Update mount index if paths are under mounts
     this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+  }
+
+  /**
+   * Moves a link parked by a failed rename back to `path`. When even that
+   * fails, the link still exists at `parked`: the error says where, and why
+   * the rename failed, rather than reporting only the rename's own error.
+   */
+  private async restoreParkedLink(parked: string, path: string, cause: unknown): Promise<void> {
+    try {
+      await this.lfs.rename(parked, path);
+    } catch (restoreErr) {
+      const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
+      throw new FsError(
+        'EIO',
+        `rename failed (${why(cause)}) and the symlink it replaced could not be put back ` +
+          `(${why(restoreErr)}); it is at ${parked}`,
+        path
+      );
+    }
   }
 
   /**

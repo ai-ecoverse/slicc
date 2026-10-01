@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
+import { sameFileIdentity } from '../../src/fs/same-file-identity.js';
 
 describe('rename onto an existing symlink', () => {
   let fs: VirtualFS;
@@ -46,17 +47,59 @@ describe('rename onto an existing symlink', () => {
     ]);
   });
 
-  it('keeps the link when the rename itself fails', async () => {
+  /** The store's rename, failing for the given [from, to] pairs. */
+  function failRenames(...pairs: Array<[string, string]>) {
+    const lfs = (fs as unknown as { lfs: { rename: (a: string, b: string) => Promise<void> } }).lfs;
+    const real = lfs.rename.bind(lfs);
+    return vi.spyOn(lfs, 'rename').mockImplementation(async (from: string, to: string) => {
+      if (pairs.some(([f, t]) => from === f && (t === '*' || to === t))) {
+        throw Object.assign(new Error(`EIO: injected ${from} -> ${to}`), { code: 'EIO' });
+      }
+      return real(from, to);
+    });
+  }
+
+  it('a failed rename leaves the destination link itself, unchanged', async () => {
     await fs.symlink('/d/x', '/d/a');
     await fs.symlink('/d/y', '/d/t');
-    // The backend rename fails after the link was taken out of the way.
-    const lfs = (fs as unknown as { lfs: { rename: (a: string, b: string) => Promise<void> } }).lfs;
-    const rename = vi
-      .spyOn(lfs, 'rename')
-      .mockRejectedValueOnce(Object.assign(new Error('EIO'), { code: 'EIO' }));
-    await expect(fs.rename('/d/t', '/d/a')).rejects.toThrow();
-    rename.mockRestore();
+    const before = await fs.lstat('/d/a');
+    const spy = failRenames(['/d/t', '/d/a']);
+    await expect(fs.rename('/d/t', '/d/a')).rejects.toThrow(/injected/);
+    spy.mockRestore();
+    const after = await fs.lstat('/d/a');
+    // The same entry, not a recreated one: identity and times survive.
+    expect(sameFileIdentity(before, after)).toBe(true);
+    expect(after.mtime).toBe(before.mtime);
     expect(await fs.readlink('/d/a')).toBe('/d/x');
+    expect(await fs.readlink('/d/t')).toBe('/d/y');
+    // Nothing parked is left behind.
+    expect(
+      (await fs.readDir('/d')).map((e) => (typeof e === 'string' ? e : e.name)).sort()
+    ).toEqual(['a', 't', 'x', 'y']);
+  });
+
+  it('when the link cannot be put back either, the error says where it is', async () => {
+    await fs.symlink('/d/x', '/d/a');
+    await fs.symlink('/d/y', '/d/t');
+    // The rename fails, and so does moving the parked link back.
+    const both = failRenames(['/d/t', '/d/a']);
+    const lfs = (fs as unknown as { lfs: { rename: (a: string, b: string) => Promise<void> } }).lfs;
+    const parkedRestore = both.getMockImplementation() as (a: string, b: string) => Promise<void>;
+    both.mockImplementation(async (from: string, to: string) => {
+      if (from.includes('.slicc-rename-') && to === '/d/a') {
+        throw Object.assign(new Error('EIO: restore'), { code: 'EIO' });
+      }
+      return parkedRestore.call(lfs, from, to);
+    });
+    const err = await fs.rename('/d/t', '/d/a').then(
+      () => undefined,
+      (e: Error) => e
+    );
+    both.mockRestore();
+    expect(err?.message).toMatch(/rename.*could not be put back.*\/d\/\.a\.slicc-rename-/);
+    // The link is not lost: it sits at the path the error names.
+    const parked = /(\/d\/\.a\.slicc-rename-[a-z0-9]+)/.exec(err?.message ?? '')?.[1] as string;
+    expect(await fs.readlink(parked)).toBe('/d/x');
     expect(await fs.readlink('/d/t')).toBe('/d/y');
   });
 });
