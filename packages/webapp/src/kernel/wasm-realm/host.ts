@@ -45,6 +45,7 @@ import {
   type WasmThread,
   type WasmThreadInitMsg,
 } from './protocol.js';
+import type { PtyTable } from './pty.js';
 import { SIG, sigbit } from './signals.js';
 import { KernelSocket, type LoopbackNet } from './socket.js';
 
@@ -82,6 +83,8 @@ export interface SpawnWasmOptions {
   kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
   /** Process groups and sessions of its invocation. */
   jobs?: JobTable;
+  /** Its invocation's pseudo-terminals. */
+  ptys?: PtyTable;
   /** The loopback network its sockets live on: its owner's, shared across invocations. */
   net?: LoopbackNet;
 }
@@ -162,6 +165,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     fs: opts.fs,
     kill: opts.kill,
     jobs: opts.jobs,
+    ptys: opts.ptys,
     net: opts.net,
     // The worker takes the word after every syscall and runs the handlers.
     onPending: (sig) => void Atomics.or(header, SAB_I_SIGNALS, sigbit(sig)),

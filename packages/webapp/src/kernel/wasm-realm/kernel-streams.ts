@@ -29,6 +29,12 @@ export const O_NONBLOCK = 0o4000;
 /** A socket node's mode: S_IFSOCK, rwx for all. */
 const SOCKET_MODE = 0o140777;
 
+// musl's open(2) flags (Linux's).
+const O_CREAT = 0o100;
+const O_EXCL = 0o200;
+const O_NOCTTY = 0o400;
+const O_TRUNC = 0o1000;
+
 /** SIGPIPE's default action: a write to a pipe with no reader ends the writer. */
 const KILLED_BY_SIGPIPE = 128 + 13;
 
@@ -86,6 +92,9 @@ export interface ProcessSys {
   tcgets?(fd: number): Termios;
   tcsets?(fd: number, termios: Termios): void;
   winsize?(fd: number): [number, number];
+  /** `/dev/ptmx`: a new pseudo-terminal's master; `/dev/pts/N`: its slave (`noctty`: O_NOCTTY). */
+  openPty?(): number;
+  openPts?(n: number, noctty: boolean): number;
 }
 
 export interface StreamOps {
@@ -253,6 +262,8 @@ export class KernelStreams {
     if (typeof this.Fs.open !== 'function') return; // an FS without open(): nothing to route
     const open = this.Fs.open.bind(this.Fs);
     this.Fs.open = (path, flags, mode) => {
+      const pty = this.openPty(open, path, flags, mode);
+      if (pty) return pty;
       const stream = open(path, flags, mode);
       // Emscripten gave it one of its console terminals (`stream.tty`). Keep
       // the description (the access mode asked for) and put it on the kernel
@@ -274,6 +285,38 @@ export class KernelStreams {
       if (terminal !== undefined) this.attach(stream, terminal, true);
       return stream;
     };
+  }
+
+  /**
+   * `/dev/ptmx` and `/dev/pts/N` are the kernel's pseudo-terminals, which
+   * Emscripten's FS has no node for: a stream on its own `/dev/null` (only
+   * the description is used) put on the kernel's master or slave. A slave
+   * is a terminal. A master is none (Emscripten's isatty, which asks for a
+   * character device, says no; Linux says yes), but tcgetattr and
+   * TIOCGWINSZ on it answer for its slave, as on Linux.
+   */
+  private openPty(
+    open: NonNullable<ProcessFs['open']>,
+    path: string,
+    flags: number,
+    mode?: number
+  ): ProcessStream | undefined {
+    const pts = /^\/dev\/pts\/(\d+)$/.exec(path);
+    if (path !== '/dev/ptmx' && !pts) return undefined;
+    const { openPty, openPts } = this.sys;
+    if (!openPty || !openPts) return undefined;
+    const kfd = this.call(() =>
+      pts ? openPts(Number(pts[1]), (flags & O_NOCTTY) !== 0) : openPty()
+    ) as number;
+    let stream: ProcessStream;
+    try {
+      stream = open('/dev/null', flags & ~(O_CREAT | O_EXCL | O_TRUNC), mode);
+    } catch (e) {
+      this.sys.close(kfd);
+      throw e;
+    }
+    this.attach(stream, kfd, pts !== null);
+    return stream;
   }
 
   /** The kernel descriptor of the terminal the process's stdio is on. */
