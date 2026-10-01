@@ -4,7 +4,7 @@
  * differently, the exec generations, a forked child's descriptor table.
  * Real programs (fork, exec, bash, python): `../wasix-programs.test.ts`.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { E, OFLAGS, RIGHTS } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
 import { WasiExit, WasiHost } from '../../../../src/kernel/wasm-realm/wasi/wasi-host.js';
 import { importedMemory } from '../../../../src/kernel/wasm-realm/wasi/wasi-module.js';
@@ -236,6 +236,34 @@ describe('WASIX: spawn fd operations', () => {
       cwd: '/workspace/sub',
     });
     expect(t.kernel.opened).toEqual(['/workspace/sub/in.txt']);
+  });
+
+  it('an O_CREAT open has the kernel make the file (never clobbering it); only O_TRUNC empties', () => {
+    const t = setup();
+    const CREAT = 1;
+    const TRUNC = 8;
+    spawn(t, ops(t, [[OPEN, 2, 0, '/tmp/err.txt', CREAT]]), 1);
+    // The kernel creates it if missing, by its own live look: no write from this worker's cache.
+    expect(t.kernel.opened).toEqual(['/tmp/err.txt']);
+    expect(t.kernel.openedOpts.at(-1)).toEqual({ create: true });
+    expect(t.fs.exists('/tmp/err.txt')).toBe(false);
+    spawn(t, ops(t, [[OPEN, 1, 0, '/workspace/a.txt', CREAT | TRUNC]]), 1);
+    expect(t.kernel.openedOpts.at(-1)).toEqual({ create: true, truncate: true });
+    // Without O_CREAT a missing path is ENOENT, and nothing is opened.
+    expect(spawn(t, ops(t, [[OPEN, 2, 0, '/tmp/none.txt']]), 1)).toBe(E.NOENT);
+    expect(t.kernel.opened).toHaveLength(2);
+  });
+
+  it("drops its metadata cache after a spawn and a child's end (the child changes the VFS)", () => {
+    const t = setup();
+    const invalidate = vi.fn();
+    (t.fs as unknown as { invalidate: () => void }).invalidate = invalidate;
+    spawn(t, ops(t, []), 0);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    t.kernel.waitResult = [77, 0];
+    const pid = t.g.alloc(8);
+    t.x.proc_join(pid, 0, t.g.alloc(8));
+    expect(invalidate).toHaveBeenCalledTimes(2);
   });
 
   it('a failing action closes what earlier opens took (no leaked kernel fds)', () => {

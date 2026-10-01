@@ -26,6 +26,20 @@ function memFs(files: Record<string, string>) {
 }
 
 describe('vfsFile', () => {
+  it('O_CREAT (create) makes a missing file at the open, and never clobbers one that exists', async () => {
+    const files: Record<string, string> = { '/tmp/busy': 'another process wrote this' };
+    const { fs, writes } = memFs(files);
+    const made = vfsFile(fs, { path: '/tmp/err', flags: O_WRONLY, position: 0, create: true });
+    const kept = vfsFile(fs, { path: '/tmp/busy', flags: O_WRONLY, position: 0, create: true });
+    await made.file.seek!(0, 0); // let the open's own work settle (serialized on the node)
+    await kept.file.seek!(0, 0);
+    expect(writes).toEqual([['/tmp/err', '']]); // there before anything is written to it
+    expect(files['/tmp/busy']).toBe('another process wrote this');
+    await Promise.resolve(made.release());
+    await Promise.resolve(kept.release());
+    expect(writes).toEqual([['/tmp/err', '']]); // nothing dirty: no write-back clobbers either
+  });
+
   it('reads from the handed-over offset on, and the offset is shared by every reference', async () => {
     const { fs } = memFs({ '/s.sh': 'echo one\necho two\n' });
     const file = vfsFile(fs, { path: '/s.sh', flags: 0, position: 9 });

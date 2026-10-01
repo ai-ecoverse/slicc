@@ -26,6 +26,7 @@ import {
   KernelError,
   type KernelFdKind,
   kernelFdKind,
+  type OpenFile,
   openPipe,
   pollFile,
 } from './fd-table.js';
@@ -66,6 +67,8 @@ export type WasmSyscall =
       orphan?: boolean;
       /** Created or truncated by the open. */
       truncate?: boolean;
+      /** O_CREAT: made at the open when missing, never clobbered when it exists. */
+      create?: boolean;
     }
   /** pread(2) / pwrite(2) / ftruncate(2) of a VFS file description (else ESPIPE). */
   | { op: 'fd-pread'; fd: number; offset: number; max: number }
@@ -508,6 +511,24 @@ export class WasmProcess {
     );
   }
 
+  /** A kernel description of a VFS file, on the process's node of its path. */
+  private openVfsFile(req: Extract<FdSyscall, { op: 'fd-open-vfs' }>): OpenFile {
+    if (!this.options.fs) throw new SpawnError('ENOSYS');
+    return vfsFile(
+      this.options.fs,
+      {
+        path: req.path,
+        flags: req.flags,
+        position: req.position,
+        ...(req.contents !== undefined ? { contents: req.contents } : {}),
+        ...(req.orphan ? { orphan: true } : {}),
+        ...(req.truncate ? { truncate: true } : {}),
+        ...(req.create ? { create: true } : {}),
+      },
+      this.nodes
+    );
+  }
+
   /** Descriptor syscalls: reads and writes a caught signal can interrupt. */
   private async fdSyscall(req: FdSyscall): Promise<SyncFsResult> {
     if (isVfsSyscall(req)) return this.vfsSyscall(req);
@@ -533,22 +554,8 @@ export class WasmProcess {
       }
       case 'fd-poll':
         return { ok: true, kind: 'json', json: pollFile(this.fds.get(req.fd).file) };
-      case 'fd-open-vfs': {
-        if (!this.options.fs) throw new SpawnError('ENOSYS');
-        const file = vfsFile(
-          this.options.fs,
-          {
-            path: req.path,
-            flags: req.flags,
-            position: req.position,
-            ...(req.contents !== undefined ? { contents: req.contents } : {}),
-            ...(req.orphan ? { orphan: true } : {}),
-            ...(req.truncate ? { truncate: true } : {}),
-          },
-          this.nodes
-        );
-        return { ok: true, kind: 'json', json: this.fds.install(file, 3) };
-      }
+      case 'fd-open-vfs':
+        return { ok: true, kind: 'json', json: this.fds.install(this.openVfsFile(req), 3) };
       case 'fd-info':
         return { ok: true, kind: 'json', json: this.fdInfo(req.fd) };
       case 'fd-list':
