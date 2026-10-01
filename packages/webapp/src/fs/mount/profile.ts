@@ -1,4 +1,5 @@
 import { apiHeaders, resolveApiUrl } from '../../base/api-endpoint.js';
+import { readStoredAccounts } from '../../base/stored-accounts.js';
 
 export interface SecretStore {
   get(key: string): Promise<string | undefined>;
@@ -90,11 +91,7 @@ export async function getDefaultSecretStore(): Promise<SecretStore> {
 }
 
 export async function getDefaultImsClient(): Promise<AdobeImsClient> {
-  const { getAccounts } = await import('../../providers/account-store.js');
-  const accounts = getAccounts();
-  const adobeAccount = accounts.find(
-    (a: { providerId?: string; accessToken?: string }) => a.providerId === 'adobe'
-  );
+  const adobeAccount = readStoredAccounts().find((a) => a.providerId === 'adobe');
 
   if (!adobeAccount?.accessToken) {
     throw new ProfileNotConfiguredError(

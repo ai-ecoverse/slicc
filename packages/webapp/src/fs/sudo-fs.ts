@@ -1,4 +1,5 @@
 import { createLogger } from '../base/logger.js';
+import { sudoRefusalMessage } from '../base/sudo-refusal.js';
 import {
   applyDefaultDisposition,
   type DefaultDisposition,
@@ -9,7 +10,6 @@ import {
   type SudoersPolicy,
   sanitizeGrantPattern,
 } from '../base/sudoers.js';
-import { sudoRefusalMessage } from '../sudo/approval-timeout.js';
 import type { SudoBroker, SudoDecision, SudoKind } from '../sudo/types.js';
 import { normalizePath } from './path-utils.js';
 import { FsError } from './types.js';

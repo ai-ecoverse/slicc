@@ -4,6 +4,7 @@ import {
   readOAuthExtras as sharedReadOAuthExtras,
   writeOAuthExtras as sharedWriteOAuthExtras,
 } from '@slicc/shared-ts';
+import { ACCOUNTS_KEY, readStoredAccounts } from '../base/stored-accounts.js';
 import type { Model } from '../core/index.js';
 import { createLogger, getModel, getModels, getProviders } from '../core/index.js';
 import { resolveSecretTopology } from '../core/secret-topology.js';
@@ -44,7 +45,8 @@ const getModelDynamic = getModel as (provider: string, modelId: string) => Model
 
 const getModelsDynamic = getModels as (provider: string) => Model<Api>[];
 
-export const ACCOUNTS_KEY = 'slicc_accounts';
+export { ACCOUNTS_KEY };
+
 const MODEL_KEY = 'selected-model';
 
 const LEGACY_KEYS = [
@@ -464,21 +466,7 @@ export function getAlternativeModelProviders(excludeProviderId?: string | null):
 
 export function getAccounts(): Account[] {
   cleanLegacyKeys();
-  const raw = localStorage.getItem(ACCOUNTS_KEY);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (entry): entry is Account =>
-        entry != null &&
-        typeof entry === 'object' &&
-        typeof entry.providerId === 'string' &&
-        typeof entry.apiKey === 'string'
-    );
-  } catch {
-    return [];
-  }
+  return readStoredAccounts();
 }
 
 export function getExtraOAuthDomains(providerId: string): string[] {

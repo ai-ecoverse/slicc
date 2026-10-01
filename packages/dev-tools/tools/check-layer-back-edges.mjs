@@ -28,6 +28,8 @@ const UNRANKED_IMPORTER_RANK = LAYER_RANK.ui - 0.5;
 
 export const KERNEL_VALUE_BANNED_LAYERS = new Set(['scoops', 'fs', 'base']);
 
+export const BOTTOM_LAYERS = new Set(['fs', 'base']);
+
 export function isWebappSource(name) {
   return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name);
 }
@@ -222,15 +224,27 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
 
   const consider = (specifier, matchIndex, resolvedTarget) => {
     const queryAt = specifier.indexOf('?');
+    const bare = queryAt >= 0 ? specifier.slice(0, queryAt) : specifier;
+
+    const escapesRoot =
+      resolvedTarget === undefined && !resolve('/@root', importerDir, bare).startsWith('/@root/');
     const target =
       resolvedTarget ??
       resolve('/', importerDir, queryAt >= 0 ? specifier.slice(0, queryAt) : specifier).slice(1);
     const toLayer = stack.layerOf(target);
     const toRank = stack.layerRank[toLayer];
-    const kernelValue =
-      kernelValueBanned && toLayer === 'kernel' && !typeOnlyFromIndices.has(matchIndex);
-    if (toRank === undefined && !kernelValue) return;
-    const up = kernelValue || (toRank !== undefined && toRank > fromRank);
+    const valueImport = !typeOnlyFromIndices.has(matchIndex);
+    const kernelValue = kernelValueBanned && toLayer === 'kernel' && valueImport;
+
+    const unrankedValue =
+      stack.id === 'webapp' &&
+      BOTTOM_LAYERS.has(fromLayer) &&
+      toRank === undefined &&
+      target.includes('/') &&
+      !escapesRoot &&
+      valueImport;
+    if (toRank === undefined && !kernelValue && !unrankedValue) return;
+    const up = kernelValue || unrankedValue || (toRank !== undefined && toRank > fromRank);
     const sideways =
       isolated.has(fromLayer) &&
       fromLayer === toLayer &&
