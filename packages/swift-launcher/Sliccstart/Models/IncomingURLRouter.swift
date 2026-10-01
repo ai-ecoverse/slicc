@@ -87,10 +87,7 @@ final class IncomingURLRouter {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
         },
         activateBrowser: @escaping (String) -> Void = { appPath in
-            let bundleURL = URL(fileURLWithPath: appPath).standardizedFileURL
-            NSWorkspace.shared.runningApplications
-                .first { $0.bundleURL?.standardizedFileURL == bundleURL }?
-                .activate()
+            BrowserForegrounder().foreground(appPath: appPath)
         },
         report: @escaping (Error) -> Void = { LauncherErrorReport.report(.openIncomingUrl, $0) }
     ) {
