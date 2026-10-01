@@ -132,6 +132,14 @@ describe('renameViaFs', () => {
       expect([...fs.store.keys()]).toEqual(['/f']);
     });
 
+    it('ENOTDIR when the parent is a file, even after a native ENOENT', async () => {
+      const fs = memoryFs({ '/f': 'F', '/file': 'x' });
+      fs.rename = async () => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      };
+      await expect(renameViaFs(fs, '/f', '/file/f2')).rejects.toMatchObject({ code: 'ENOTDIR' });
+    });
+
     it('ENOTDIR when the destination parent is a file', async () => {
       const fs = memoryFs({ '/f': 'F', '/file': 'x' });
       await expect(renameViaFs(fs, '/f', '/file/f2')).rejects.toMatchObject({ code: 'ENOTDIR' });

@@ -11,8 +11,8 @@
  * O_TRUNC on a case-/NFC-equal name zeros the only copy (#3107).
  *
  * The copy only stands in where rename(2) would have succeeded: the source
- * and the destination's directory must exist, and a directory is not copied
- * (EXDEV, or the native rename's own error).
+ * and the destination's directory must exist (ENOENT / ENOTDIR), and a
+ * directory is not copied (EXDEV, or the native rename's own error).
  */
 
 export interface RenameFs {
@@ -27,11 +27,6 @@ export interface RenameFs {
 /** An error carrying a POSIX errno name, as the bridges report it. */
 function posixError(code: string, message: string): Error {
   return Object.assign(new Error(`${code}: ${message}`), { code });
-}
-
-/** The native rename's own error, if it had one, else `code`. */
-function nativeOr(native: unknown, code: string, message: string): unknown {
-  return native ?? posixError(code, message);
 }
 
 /**
@@ -67,7 +62,9 @@ export async function renameViaFs(fs: RenameFs, src: string, dest: string): Prom
   // The copy stands in for rename(2), so it keeps its contract: a missing
   // source or destination directory fails it, instead of the copy creating
   // the parent — and a directory is never read as a file (that wrote an
-  // empty file in its place, then removed the tree).
+  // empty file in its place, then removed the tree). A cause proven here is
+  // reported as itself, whatever the native rename said (a backend that
+  // cannot see a mount answers ENOENT for everything).
   const fromStat = await fs.stat(src);
   let parent: { isDirectory?: boolean };
   try {
@@ -75,10 +72,10 @@ export async function renameViaFs(fs: RenameFs, src: string, dest: string): Prom
   } catch (err) {
     // Only a missing directory is ENOENT; an EIO or a denied lookup says so.
     if ((err as { code?: unknown } | null)?.code !== 'ENOENT') throw err;
-    throw nativeOr(native, 'ENOENT', `no such directory for ${dest}`);
+    throw posixError('ENOENT', `no such directory for ${dest}`);
   }
   if (parent.isDirectory === false) {
-    throw nativeOr(native, 'ENOTDIR', `not a directory: ${parentOf(dest)}`);
+    throw posixError('ENOTDIR', `not a directory: ${parentOf(dest)}`);
   }
   if (fromStat.isDirectory) {
     // A directory is not copied. The native rename's own verdict stands
