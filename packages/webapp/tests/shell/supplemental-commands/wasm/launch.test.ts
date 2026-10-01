@@ -530,6 +530,12 @@ describe('WasmSession', () => {
     ).toEqual({ A: '1:2', B: 'plain $X {Y}', D: '11' });
   });
 
+  it('expandDefaults takes no Object.prototype member for a variable', () => {
+    expect(expandDefaults({ A: '${toString}', B: '${constructor}/x', C: 'ok' }, {})).toEqual({
+      C: 'ok',
+    });
+  });
+
   it('starts a wasm child as a process parented to its spawner', async () => {
     const ends = fakeProcesses();
     const { pm, config } = processConfig();

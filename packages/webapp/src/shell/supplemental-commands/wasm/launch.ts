@@ -90,7 +90,8 @@ export function expandDefaults(
   for (const [key, value] of Object.entries(defaults)) {
     let missing = false;
     const expanded = value.replace(ENV_REFERENCE, (_, name: string) => {
-      const set = env[name];
+      // Own variables only: `${toString}` names no environment variable.
+      const set = Object.hasOwn(env, name) ? env[name] : undefined;
       if (set === undefined) missing = true;
       return set ?? '';
     });
