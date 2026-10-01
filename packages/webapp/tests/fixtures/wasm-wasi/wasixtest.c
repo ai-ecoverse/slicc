@@ -241,6 +241,23 @@ int main(int argc, char **argv) {
     printf("longjmp back with %d\n", v);
     return 0;
   }
+  if (!strcmp(cmd, "forkjmp")) {
+    /* A setjmp taken before a fork is the child's too: perl's exit() in a
+     * forked child longjmps to the JMPENV its interpreter set up first. */
+    int v = setjmp(env);
+    if (v) {
+      printf("child longjmp back with %d\n", v);
+      fflush(stdout);
+      _exit(v);
+    }
+    pid_t pid = fork();
+    if (pid < 0) return perror("fork"), 1;
+    if (pid == 0) depth(5);
+    int status;
+    waitpid(pid, &status, 0);
+    report("forkjmp child", status);
+    return 0;
+  }
   if (!strcmp(cmd, "signal")) {
     pid_t pid = fork();
     if (pid == 0) {

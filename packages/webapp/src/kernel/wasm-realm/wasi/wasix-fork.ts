@@ -18,7 +18,8 @@
  *   into the program's snapshot struct, and rewinds at once (answering 0);
  *   longjmp unwinds, swaps those frames back in and rewinds into the setjmp,
  *   which answers the longjmp's value. As in Wasmer, longjmp does not
- *   restore stack memory.
+ *   restore stack memory. A fork's child gets the snapshots too: a jmp_buf
+ *   in its copy of memory may name one taken before the fork.
  */
 import { E } from './wasi-abi.js';
 import type { WasiForkFd } from './wasi-fds.js';
@@ -35,6 +36,24 @@ export interface WasiForkState {
   cwd: string;
   /** A threaded parent: the child's table is the kernel's copy, rebuilt from there. */
   shared?: true;
+  /**
+   * The parent's setjmp snapshots: a jmp_buf the child inherits in its copy
+   * of memory names one of them (perl's exit() longjmps to the JMPENV its
+   * interpreter set up before any fork).
+   */
+  setjmps?: WasiSetjmps;
+}
+
+/** setjmp snapshots by id, and the id the next setjmp takes. */
+export interface WasiSetjmps {
+  next: number;
+  snapshots: Array<[number, Snapshot]>;
+}
+
+/** One setjmp's unwound frames and globals. */
+interface Snapshot {
+  frames: Uint8Array;
+  globals: Array<[string, number]>;
 }
 
 interface AsyncifyExports {
@@ -72,10 +91,7 @@ export class AsyncifyDriver {
   private pending: (() => number) | undefined;
   /** What the import being rewound into answers. */
   private answer = 0;
-  private readonly snapshots = new Map<
-    number,
-    { frames: Uint8Array; globals: Array<[string, number]> }
-  >();
+  private readonly snapshots = new Map<number, Snapshot>();
   private nextSnapshot = 1;
 
   constructor(private readonly mem: WasiMemory) {}
@@ -102,8 +118,15 @@ export class AsyncifyDriver {
     return true;
   }
 
+  /** The setjmp snapshots, for a fork's child (copies: the parent goes on taking them). */
+  setjmps(): WasiSetjmps {
+    return { next: this.nextSnapshot, snapshots: [...this.snapshots] };
+  }
+
   /** The child side of a fork: the globals back, then rewind into `proc_fork` (answering 0). */
   startChild(state: WasiForkState): void {
+    for (const [id, snap] of state.setjmps?.snapshots ?? []) this.snapshots.set(id, snap);
+    this.nextSnapshot = Math.max(this.nextSnapshot, state.setjmps?.next ?? 1);
     this.restoreGlobals(state.globals);
     this.answer = 0;
     this.exports.asyncify_start_rewind?.(state.asyncifyData);

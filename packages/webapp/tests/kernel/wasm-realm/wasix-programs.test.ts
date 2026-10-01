@@ -245,6 +245,14 @@ describe('WASIX (wasixtest, C/wasix-libc)', () => {
     expect(r).toMatchObject({ code: 0, stdout: 'setjmp 0\nlongjmp back with 42\n' });
   });
 
+  it("a forked child longjmps to a setjmp its parent took before the fork (perl's exit)", async () => {
+    const r = await run('wasixtest', ['forkjmp']);
+    expect(r).toMatchObject({
+      code: 0,
+      stdout: 'child longjmp back with 42\nforkjmp child: exit 42\n',
+    });
+  });
+
   it('a child that signals itself ends WIFSIGNALED (the kernel applies the default action)', async () => {
     const r = await run('wasixtest', ['signal']);
     expect(r.stdout).toBe('killed child: signal 15\n');
