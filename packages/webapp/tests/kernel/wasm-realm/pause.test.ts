@@ -34,6 +34,26 @@ describe('pause', () => {
     expect(await p.syscall({ op: 'sig-pause' })).toMatchObject({ ok: false, errno: 'EINTR' });
   });
 
+  it("a program's interval timer wakes it whatever SIGALRM's disposition, and is no signal", async () => {
+    const timers: number[] = [];
+    const raised: number[] = [];
+    const p = new WasmProcess(1, new FdTable(), {
+      onTimer: (which) => void timers.push(which),
+      raise: (sig) => void raised.push(sig),
+    });
+    // SIGALRM neither caught nor ignored: as a signal its default action would end the process.
+    await p.syscall({ op: 'sig-mask', caught: 0, ignored: 0 });
+    await p.syscall({ op: 'proc-alarm', sig: SIG.ALRM, ms: 5, repeat: false, timer: 0 });
+    const waiting = p.syscall({ op: 'sig-pause' });
+    expect(await waiting).toMatchObject({ ok: false, errno: 'EINTR' });
+    expect(timers).toEqual([0]); // the worker runs the program's expiry
+    expect(raised).toEqual([]); // nothing was sent as SIGALRM
+    // A plain alarm (no timer) is still the signal.
+    await p.syscall({ op: 'proc-alarm', sig: SIG.ALRM, ms: 1, repeat: false });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(raised).toEqual([SIG.ALRM]);
+  });
+
   it('an ignored signal does not end it', async () => {
     const p = new WasmProcess(1, new FdTable(), {});
     await p.syscall({ op: 'sig-mask', caught: sigbit(SIG.USR2), ignored: sigbit(SIG.USR1) });

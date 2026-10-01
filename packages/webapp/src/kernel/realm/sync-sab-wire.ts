@@ -45,6 +45,12 @@ export const SAB_I_CHUNK = 4;
 export const SAB_I_OFFSET = 5;
 /** Wasm realm only: signals pending for the process (bit n = signal n), taken by the worker. */
 export const SAB_I_SIGNALS = 8;
+/**
+ * Wasm realm only: a program's interval timers that expired (bit n = timer
+ * n, ITIMER_REAL is 0), taken by the worker, which runs the program's own
+ * expiry; no signal, so the expiry does not hang on SIGALRM's disposition.
+ */
+export const SAB_I_TIMERS = 9;
 
 export const SAB_STATE_IDLE = 0;
 export const SAB_STATE_PENDING = 1;

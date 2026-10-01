@@ -334,21 +334,18 @@ export async function runWasmProcess(
   port: SabPostLike,
   deps: { evaluate?: GlueEvaluator; warn?: (message: string) => void } = {}
 ): Promise<number> {
-  // ITIMER_REAL armed through the kernel (setitimer / alarm): its SIGALRM is the timer's expiry.
-  let timerArmed = false;
   // Every syscall goes through the signal gate: dispositions out, handlers in.
   const signals = new SignalGate(
     createSyncSabTransport(init.sab, port),
     new Int32Array(init.sab, 0, SAB_HEADER_I32),
     {
       masks: () => signalMasks(module as unknown as RunningModule),
-      raise: (sig) => {
+      raise: (sig) => (module as unknown as RunningModule).sliccRaise?.(sig),
+      // A kernel-run interval timer expired: Emscripten's own expiry, which
+      // raises SIGALRM under its current disposition and re-arms an interval.
+      timer: (which) => {
         const running = module as unknown as RunningModule;
-        if (sig === SIG.ALRM && timerArmed) {
-          timerArmed = false;
-          if (running.sliccTimerFire?.(0)) return;
-        }
-        running.sliccRaise?.(sig);
+        if (!running.sliccTimerFire?.(which)) running.sliccRaise?.(SIG.ALRM);
       },
     }
   );
@@ -390,9 +387,8 @@ export async function runWasmProcess(
             // which cannot fire while the worker waits in a syscall (pause()).
             timer: {
               arm: (ms) => {
-                timerArmed = ms > 0;
                 transport.call(
-                  { op: 'proc-alarm', sig: SIG.ALRM, ms, repeat: false },
+                  { op: 'proc-alarm', sig: SIG.ALRM, ms, repeat: false, timer: 0 },
                   Number.POSITIVE_INFINITY,
                   'alarm'
                 );

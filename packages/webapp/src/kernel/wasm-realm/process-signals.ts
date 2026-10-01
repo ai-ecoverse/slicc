@@ -19,8 +19,8 @@
  */
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
-import { SAB_I_SIGNALS } from '../realm/sync-sab-wire.js';
-import { signalsIn } from './signals.js';
+import { SAB_I_SIGNALS, SAB_I_TIMERS } from '../realm/sync-sab-wire.js';
+import { SIG, sigbit, signalsIn } from './signals.js';
 
 /** The program's signal support (absent in a program linked without the toolchain's signals). */
 export interface SignalHooks {
@@ -28,6 +28,8 @@ export interface SignalHooks {
   masks(): { caught: number; ignored: number; restart: number } | null;
   /** raise(sig) in the program: its handler, or the default action. */
   raise(sig: number): void;
+  /** Interval timer `which` expired: the program's own expiry (it raises the timer's signal). */
+  timer?(which: number): void;
 }
 
 export class SignalGate {
@@ -90,10 +92,15 @@ export class SignalGate {
     this.raw.call({ op: 'sig-mask', caught, ignored }, Number.POSITIVE_INFINITY, 'sig-mask');
   }
 
-  /** Run the handlers of the signals pending now. */
+  /** Run the expired timers' expiries and the handlers of the signals pending now. */
   deliver(): void {
+    const timers = Atomics.exchange(this.header, SAB_I_TIMERS, 0);
     const pending = Atomics.exchange(this.header, SAB_I_SIGNALS, 0);
-    if (this.depth <= 1) this.lastDelivered = pending;
+    // An expired ITIMER_REAL raises SIGALRM in the program: its SA_RESTART decides a restart.
+    if (this.depth <= 1) this.lastDelivered = pending | (timers & 1 ? sigbit(SIG.ALRM) : 0);
+    for (let which = 0; which < 3; which++) {
+      if (timers & (1 << which)) this.hooks.timer?.(which);
+    }
     for (const sig of signalsIn(pending)) this.hooks.raise(sig);
   }
 }

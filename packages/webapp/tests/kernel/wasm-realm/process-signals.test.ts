@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SyncFsResult } from '../../../src/kernel/realm/sync-fs-wire.js';
 import type { SyncSabTransport } from '../../../src/kernel/realm/sync-sab-bridge.js';
-import { SAB_HEADER_I32, SAB_I_SIGNALS } from '../../../src/kernel/realm/sync-sab-wire.js';
+import {
+  SAB_HEADER_I32,
+  SAB_I_SIGNALS,
+  SAB_I_TIMERS,
+} from '../../../src/kernel/realm/sync-sab-wire.js';
 import { SignalGate } from '../../../src/kernel/wasm-realm/process-signals.js';
 import { SIG, sigbit } from '../../../src/kernel/wasm-realm/signals.js';
 
@@ -44,6 +48,22 @@ describe('SignalGate', () => {
     expect(t.call({ op: 'fd-read', fd: 0, max: 1 }, Infinity, 'x')).toEqual(ok);
     expect(hooks.masks).toHaveBeenCalledTimes(1);
     expect(calls).toEqual(['fd-write', 'fd-read']); // nothing reported
+  });
+
+  it('runs an expired timer through the program, not as a signal; SIGALRM SA_RESTART decides a restart', () => {
+    const { gate, header, raised, hooks, setOnCall } = setup({
+      caught: 0,
+      ignored: 0,
+      restart: sigbit(SIG.ALRM),
+    });
+    const fired: number[] = [];
+    Object.assign(hooks, { timer: (w: number) => void fired.push(w) });
+    setOnCall(() => Atomics.or(header, SAB_I_TIMERS, 1));
+    gate.transport().call({ op: 'sig-pause' }, Infinity, 'x');
+    expect(fired).toEqual([0]);
+    expect(raised).toEqual([]); // a kill(SIGALRM) would land in SAB_I_SIGNALS instead
+    expect(gate.restartable()).toBe(true);
+    expect(Atomics.load(header, SAB_I_TIMERS)).toBe(0);
   });
 
   it('runs the handlers of the signals pending after a call', () => {
