@@ -123,8 +123,13 @@ export interface ProcessSys {
   pread?(fd: number, max: number, at: number): Uint8Array;
   /** Whether the descriptor is a terminal. */
   isatty?(fd: number): boolean;
-  /** A new kernel fd on the controlling terminal (`/dev/tty`); ENXIO without one. */
-  openTty?(): number;
+  /** A terminal's device path (`/dev/pts/N`), when it has one. */
+  ttyName?(fd: number): string | undefined;
+  /**
+   * A new kernel fd on the controlling terminal (`/dev/tty`), or with `name`
+   * on the terminal device of that name (`/dev/tty1`); ENXIO without one.
+   */
+  openTty?(name?: string): number;
   /** A terminal's termios / window size (`[rows, cols]`). */
   tcgets?(fd: number): Termios;
   tcsets?(fd: number, termios: Termios): void;
@@ -256,6 +261,30 @@ export class KernelStreams {
     else delete stream.tty;
   }
 
+  /**
+   * Name a terminal stream after its device (`/dev/pts/N`), which `ttyname()`
+   * reads back through `/proc/self/fd`; one without a name (the panel's)
+   * keeps its path.
+   */
+  nameTerminal(stream: ProcessStream): void {
+    const kfd = stream.sliccKernelFd;
+    if (!stream.tty || kfd === undefined) return;
+    const name = this.sys.ttyName?.(kfd);
+    if (name) this.nameStream(stream, name);
+  }
+
+  /**
+   * Give a terminal stream the device path `name`, and an fstat that is
+   * `stat(name)`: musl's ttyname() reads the path back through
+   * `/proc/self/fd/N` and takes it only when the two name one file.
+   */
+  private nameStream(stream: ProcessStream, name: string): void {
+    stream.path = name;
+    if (typeof this.Fs.stat !== 'function') return;
+    // Looked up at fstat time: stdio is named before the pty paths' stat is in place.
+    stream.stream_ops = { ...stream.stream_ops, getattr: () => this.Fs.stat?.(name) ?? {} };
+  }
+
   /** Emscripten's TTY hooks, answered by the kernel's terminal. */
   private ttyOps(kfd: number): object {
     return {
@@ -322,7 +351,20 @@ export class KernelStreams {
         this.attach(stream, kfd, true);
         return stream;
       }
-      // One more reference to the descriptor its stdio is on.
+      // A terminal device by name (the panel's `/dev/tty1`, as ttyname()
+      // reports it): the kernel's, whatever session asks.
+      let named: number | undefined;
+      try {
+        named = stream.path ? this.openNamedTerminal(stream.path) : undefined;
+      } catch (e) {
+        this.Fs.closeStream(stream.fd);
+        throw e;
+      }
+      if (named !== undefined) {
+        this.attach(stream, named, true);
+        return stream;
+      }
+      // Else one more reference to the descriptor its stdio is on.
       const terminal = this.stdioTerminal();
       if (terminal !== undefined) this.attach(stream, terminal, true);
       return stream;
@@ -358,6 +400,8 @@ export class KernelStreams {
     // termios and window size with its slave's, as Linux does (so isatty is
     // true on it too).
     this.attach(stream, kfd, true);
+    // Its name is the path opened (ttyname, /proc/self/fd), not the vessel's.
+    this.nameStream(stream, path);
     return stream;
   }
 
@@ -397,6 +441,24 @@ export class KernelStreams {
         ? this.sys.openPty !== undefined
         : (this.sys.ptyNumbers?.().includes(Number(n)) ?? false);
     if (!exists) throw new this.Fs.ErrnoError(wasiErrno('ENOENT'));
+  }
+
+  /**
+   * A new kernel fd on the terminal device named `path`; undefined when the
+   * kernel has none of that name (ENXIO). Any other failure (EMFILE) is the
+   * open's.
+   */
+  private openNamedTerminal(path: string): number | undefined {
+    const { openTty } = this.sys;
+    if (!openTty) return undefined;
+    try {
+      return openTty.call(this.sys, path);
+    } catch (e) {
+      if (e instanceof SyscallError && e.code === 'ENXIO') return undefined;
+      return this.call(() => {
+        throw e;
+      });
+    }
   }
 
   /** The kernel descriptor of the terminal the process's stdio is on. */

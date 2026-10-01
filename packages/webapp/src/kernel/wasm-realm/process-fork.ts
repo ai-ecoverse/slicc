@@ -215,6 +215,7 @@ export function placeKernelStream(
   if (entry.kind === 'file') streams.attachFile(stream, entry.kernel);
   else if (entry.kind === 'socket') streams.attachSocket(stream, entry.kernel);
   else streams.attach(stream, entry.kernel, entry.kind === 'tty');
+  if (entry.kind === 'tty') streams.nameTerminal(stream);
   if (entry.kind === 'stream') {
     asFifo(stream, streams, entry.desc !== undefined ? `d${entry.desc}` : `k${entry.kernel}`);
   }

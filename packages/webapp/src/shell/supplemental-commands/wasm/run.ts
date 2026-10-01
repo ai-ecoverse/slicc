@@ -204,6 +204,9 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
   const tty: KernelTty = new KernelTty({ write: (bytes) => lease.write(bytes) }, (sig) =>
     session.signalTerminal(tty, sig)
   );
+  // Its device, as ttyname() reports it: a process of another session (GNU
+  // screen's server, reattaching) opens it by this name.
+  tty.name = '/dev/tty1';
   tty.setSize(lease.cols, lease.rows);
   lease.onInput((bytes) => tty.receive(bytes));
   lease.onResize((cols, rows) => tty.resize(cols, rows));

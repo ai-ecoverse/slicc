@@ -129,6 +129,7 @@ describe('ptySyscall', () => {
     const slave = (ptySyscall({ op: 'pty-slave-open', n, noctty: false }, ctx) as { json: number })
       .json;
     expect(ctx.fds.get(slave).file.tty).toBe(ctx.ptys.get(0).slave);
+    expect(ctx.ptys.get(0).slave.name).toBe('/dev/pts/0');
     expect(ctx.jobs.controllingTerminal(ctx.pid)).toBe(ctx.ptys.get(0).slave);
     // What /dev/pts holds: the numbers in use.
     expect(ptySyscall({ op: 'pty-list' }, ctx)).toMatchObject({ json: [0] });

@@ -128,7 +128,7 @@ export type WasmSyscall =
       orphan?: boolean;
     }
   /** open("/dev/tty"): a new descriptor on the controlling terminal (ENXIO without one). */
-  | { op: 'fd-open-tty' }
+  | { op: 'fd-open-tty'; name?: string }
   | { op: 'tty-get'; fd: number }
   | { op: 'tty-set'; fd: number; termios: Termios }
   | { op: 'tty-winsz'; fd: number }
@@ -235,6 +235,8 @@ export interface FdInfo {
   meta?: HeldMeta;
   flags?: number;
   cloexec?: true;
+  /** A terminal's device path (`ttyname()`): `/dev/pts/N`, or `/dev/ptmx` for a master. */
+  name?: string;
 }
 
 const SYSCALL_OPS: ReadonlySet<string> = new Set([
@@ -591,7 +593,12 @@ export class WasmProcess {
         }
         return { ok: true, kind: 'void' };
       case 'fd-open-tty': {
-        const tty = this.controllingTerminal();
+        // By name, a terminal device of the invocation (any process may open
+        // one, as on Linux); without, the controlling terminal (`/dev/tty`).
+        const tty =
+          req.name === undefined
+            ? this.controllingTerminal()
+            : this.options.jobs?.terminalNamed(req.name);
         if (!tty) throw new KernelError('ENXIO');
         return { ok: true, kind: 'json', json: this.fds.install(tty.file(), 3) };
       }
@@ -683,6 +690,7 @@ export class WasmProcess {
       ...(file.heldMeta ? { meta: file.heldMeta } : {}),
       ...(flags !== undefined ? { flags } : {}),
       ...(this.fds.closesOnExec(fd) ? { cloexec: true } : {}),
+      ...(file.tty?.name ? { name: file.tty.name } : file.pty ? { name: '/dev/ptmx' } : {}),
     };
   }
 

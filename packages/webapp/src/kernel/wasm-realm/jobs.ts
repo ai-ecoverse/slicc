@@ -122,6 +122,12 @@ export class JobTable {
    * The controlling terminal of `pid`'s session: null when the session has
    * none, undefined when `pid` is no process of the table.
    */
+  /** A terminal of the table's sessions by its device name (`/dev/tty1`), if one has it. */
+  terminalNamed(name: string): KernelTty | undefined {
+    const known = new Set([...this.terminals.values(), ...this.foreground.keys()]);
+    return [...known].find((tty) => tty.name === name);
+  }
+
   controllingTerminal(pid: number): KernelTty | null | undefined {
     const member = this.members.get(pid);
     return member && (this.terminals.get(member.sid) ?? null);
