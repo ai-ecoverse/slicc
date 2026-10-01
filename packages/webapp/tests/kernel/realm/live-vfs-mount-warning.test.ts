@@ -22,4 +22,11 @@ describe('mountLiveVfsDirs warnings', () => {
     expect(mounted).toEqual([]);
     expect(warnings).toEqual(['live VFS mount of /tmp failed: errno 10']);
   });
+
+  it("explains a module linked without Emscripten's FS instead of a TypeError", () => {
+    const Fs = { open: () => {} } as unknown as LiveMountFsApi;
+    expect(() => mountLiveVfsDirs(Fs, {} as SyncFsPosixBridge, ['/tmp'], () => {})).toThrow(
+      /linked without filesystem support.*-sFORCE_FILESYSTEM=1/
+    );
+  });
 });

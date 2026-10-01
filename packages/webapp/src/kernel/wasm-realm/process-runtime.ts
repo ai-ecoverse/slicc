@@ -278,11 +278,14 @@ export async function runWasmProcess(
     },
 
     preRun: [
-      (m: { FS: ProcessFs }) => {
-        trackCloseOnExec(m.FS);
+      (m: object) => {
+        if (!hasStreams(m)) return;
+        const fs = (m as RunningModule).FS;
+
+        trackCloseOnExec(fs);
         try {
-          m.FS.mkdirTree(init.cwd);
-          m.FS.chdir(init.cwd);
+          fs.mkdirTree(init.cwd);
+          fs.chdir(init.cwd);
         } catch {}
       },
     ],
@@ -291,6 +294,7 @@ export async function runWasmProcess(
   (deps.evaluate ?? evaluateGlue)(init.program.glue, module);
   await initialized;
   const running = module as unknown as RunningModule;
+  if (!hasStreams(running)) return runStdioOnly(running, init);
   const vfs = mountVfsIntoEmscripten(
     running.FS,
     {
@@ -338,6 +342,23 @@ export async function runWasmProcess(
     restartable,
   });
   try {
+    return runMain(running, init);
+  } finally {
+    vfs.flush();
+  }
+}
+
+function hasStreams(module: object): boolean {
+  return typeof ownValue<Partial<ProcessFs>>(module, 'FS')?.getStream === 'function';
+}
+
+function runStdioOnly(running: RunningModule, init: WasmProcessInitMsg): number {
+  if (init.fork) throw new Error(`${init.argv0} cannot resume a fork: it has no filesystem`);
+  return runMain(running, init);
+}
+
+function runMain(running: RunningModule, init: WasmProcessInitMsg): number {
+  try {
     if (init.fork) {
       if (!running.sliccForkChild) throw new Error(`${init.argv0} cannot resume a fork`);
       return running.sliccForkChild({ ...init.fork, pid: init.pid }) ?? 0;
@@ -348,7 +369,5 @@ export async function runWasmProcess(
     const status = (e as { status?: unknown })?.status;
     if (typeof status !== 'number') throw e;
     return status;
-  } finally {
-    vfs.flush();
   }
 }

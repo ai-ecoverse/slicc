@@ -591,6 +591,12 @@ export function mountLiveVfsDirs(
   dirs: readonly string[],
   warn: (message: string) => void
 ): { plugin: LiveVfsPlugin; mounted: string[] } {
+  if (typeof Fs.filesystems !== 'object' || !Fs.filesystems) {
+    throw new Error(
+      'the module was linked without filesystem support, so the VFS cannot be mounted ' +
+        '(link it with -sFORCE_FILESYSTEM=1)'
+    );
+  }
   const plugin = Fs.filesystems.SLICC_LIVE_FS ?? createLiveVfsPlugin(Fs);
   Fs.filesystems.SLICC_LIVE_FS = plugin;
   const mounted: string[] = [];
