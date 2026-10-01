@@ -856,6 +856,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     this.builtinCommandNames = new Set([...registeredBuiltinNames, ...customCommandNames]);
     this.staticBuiltinNames = new Set(this.builtinCommandNames); // snapshot before scripts
     this.vfsAdapter.setRegisteredCommandsFn(() => [...this.builtinCommandNames]);
+    // `/etc/passwd`'s account follows the shell's identity (a scoop's, an onboarded home).
+    this.vfsAdapter.setIdentityFn(() => ({
+      user: this.lastEnv.USER ?? 'user',
+      home: this.lastEnv.HOME ?? DEFAULT_HOME_DIR,
+    }));
 
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;

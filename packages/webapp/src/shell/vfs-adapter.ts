@@ -20,7 +20,13 @@ import * as justBash from 'just-bash';
 import type { DirEntry, MetadataUpdate, Stats, VirtualFS } from '../fs/index.js';
 import { FsError, joinPath, normalizePath, statsFromDirEntry } from '../fs/index.js';
 import { consumeCachedBinary } from './binary-cache.js';
-import { identityFile, identityFileNames, isMissing } from './identity-files.js';
+import {
+  DEFAULT_IDENTITY,
+  identityFile,
+  identityFileNames,
+  isMissing,
+  type ShellIdentity,
+} from './identity-files.js';
 import { parkReadBytes } from './request-body-provenance.js';
 
 // just-bash v3 ships `DefenseInDepthBox` from `security/index.js` (re-exported
@@ -144,6 +150,7 @@ function withIdentityDirents(dir: string, entries: DirentEntry[]): DirentEntry[]
 
 export class VfsAdapter implements IFileSystem {
   private registeredCommandsFn: (() => string[]) | null = null;
+  private identityFn: (() => ShellIdentity) | null = null;
   /**
    * Stat answers primed by the last `readdir`/`readdirWithFileTypes`, keyed
    * by normalized absolute path. Only entries whose listing carried the full
@@ -248,6 +255,19 @@ export class VfsAdapter implements IFileSystem {
    */
   setRegisteredCommandsFn(fn: () => string[]): void {
     this.registeredCommandsFn = fn;
+  }
+
+  /**
+   * Set a function that returns the shell's identity (`$USER`, `$HOME`), whose
+   * account the synthetic `/etc/passwd` and `/etc/group` describe.
+   */
+  setIdentityFn(fn: () => ShellIdentity): void {
+    this.identityFn = fn;
+  }
+
+  /** `path`'s synthetic identity file for the shell's identity ({@link identityFile}). */
+  private identityFile(normalized: string): Uint8Array | undefined {
+    return identityFile(normalized, this.identityFn?.() ?? DEFAULT_IDENTITY);
   }
 
   private getVirtualBinCommands(): string[] {
@@ -376,7 +396,7 @@ export class VfsAdapter implements IFileSystem {
     try {
       content = await this.vfs.readFile(normalized, { encoding: 'binary' });
     } catch (e) {
-      const synthetic = identityFile(normalized);
+      const synthetic = this.identityFile(normalized);
       if (synthetic && isMissing(e)) return synthetic;
       throw e;
     }
@@ -385,7 +405,7 @@ export class VfsAdapter implements IFileSystem {
 
   /** The stat of a synthetic identity file, standing in when the VFS said ENOENT. */
   private identityStat(normalized: string, err: unknown): FsStat | undefined {
-    const synthetic = identityFile(normalized);
+    const synthetic = this.identityFile(normalized);
     if (!synthetic || !isMissing(err)) return undefined;
     return {
       isFile: true,
@@ -450,7 +470,7 @@ export class VfsAdapter implements IFileSystem {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
       if (this.virtualUsrStat(normalized)) return true;
-      return (await this.vfs.exists(normalized)) || identityFile(normalized) !== undefined;
+      return (await this.vfs.exists(normalized)) || this.identityFile(normalized) !== undefined;
     });
   }
 
@@ -665,7 +685,16 @@ export class VfsAdapter implements IFileSystem {
     return this.trusted(async () => {
       const normalizedSrc = normalizePath(src);
       const normalizedDest = normalizePath(dest);
-      const stat = await this.vfs.stat(normalizedSrc);
+      let stat: Stats;
+      try {
+        stat = await this.vfs.stat(normalizedSrc);
+      } catch (e) {
+        // `/etc/passwd` / `/etc/group` the VFS lacks: copy what reading it gives.
+        const synthetic = this.identityFile(normalizedSrc);
+        if (!synthetic || !isMissing(e)) throw e;
+        await this.vfs.writeFile(normalizedDest, synthetic);
+        return;
+      }
 
       if (stat.type === 'directory') {
         if (!options?.recursive) {
@@ -690,6 +719,12 @@ export class VfsAdapter implements IFileSystem {
       } else {
         await this.vfs.copyFile(srcChild, destChild);
       }
+    }
+    // `cp -r /etc`: the synthetic identity files it lacks come along.
+    const names = new Set(entries.map((e) => e.name));
+    for (const name of identityFileNames(src)) {
+      const synthetic = names.has(name) ? undefined : this.identityFile(joinPath(src, name));
+      if (synthetic) await this.vfs.writeFile(joinPath(dest, name), synthetic);
     }
   }
 
