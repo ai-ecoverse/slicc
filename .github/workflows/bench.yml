@@ -16,9 +16,10 @@
 # runners (8 vCPU / 32 GiB, CPU always allocated, up to 30 machines, its own runner group). Its
 # image (runner-bench) brings Chrome with fonts, Node, Go, coreutils and a warm npm cache, so the
 # Chrome install below is skipped. Cloud Run sets no time limit, but may restart a machine for
-# maintenance: a shard killed that way resumes from its artifact ("Re-run failed jobs" or
-# `resume-run`). The old GCE pool (`gcp-bench-8core`, VMs deleted after 8 hours) is still
-# selectable through `runner`.
+# maintenance. The shard's artifact is uploaded only when the job ends, so a restart loses the
+# shard's unsaved runs and "Re-run failed jobs" runs them again; the 420-minute deadline cap keeps
+# that loss bounded. The old GCE pool (`gcp-bench-8core`, VMs deleted after 8 hours) is retired but
+# still selectable through `runner`.
 # `plan` and `report` take seconds to minutes and run GitHub-hosted.
 #
 # Guardrails, so a job never goes stale or runs out its time limit with nothing saved:
@@ -164,8 +165,8 @@ jobs:
           # 2 × 12 min, builds 2 × 8 min) on top of the job's setup time.
           case "$PIN_WEBAPP" in ''|true|false) PIN_MINUTES=0 ;; *) PIN_MINUTES=40 ;; esac
           # A shard job lasts up to the deadline plus 45 minutes (plus the pin budget). The cap keeps
-          # it inside the old gcp-bench-8core VMs' 8 hours, and short enough that a Cloud Run
-          # maintenance restart costs little.
+          # it inside the old gcp-bench-8core VMs' 8 hours, and bounds what a Cloud Run maintenance
+          # restart can lose (the shard's artifact is uploaded only at the end).
           MAX_DEADLINE=$((420 - PIN_MINUTES))
           if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt "$MAX_DEADLINE" ]; then
             echo "::error::deadline-minutes must be 10 to $MAX_DEADLINE, not '$DEADLINE'"; exit 1
