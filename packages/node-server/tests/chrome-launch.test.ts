@@ -175,6 +175,42 @@ describe('chrome-launch', () => {
     ]);
   });
 
+  describe('buildChromeLaunchArgs — GPU (opt-in)', () => {
+    const baseOpts = {
+      cdpPort: 9222,
+      launchUrl: 'http://localhost:5710/',
+      profile: { id: null, displayName: 'Chrome', userDataDir: '/tmp/x', extensionPath: null },
+    };
+    const webgpu = [
+      '--enable-unsafe-webgpu',
+      '--enable-features=Vulkan',
+      '--use-angle=vulkan',
+      '--ignore-gpu-blocklist',
+    ];
+
+    it('a hosted leader disables the GPU by default', () => {
+      const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
+      expect(args).toContain('--disable-gpu');
+      for (const flag of webgpu) expect(args).not.toContain(flag);
+    });
+
+    it('a hosted leader with gpu keeps the GPU and enables WebGPU over Vulkan', () => {
+      const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true, gpu: true });
+      expect(args).not.toContain('--disable-gpu');
+      for (const flag of webgpu) expect(args).toContain(flag);
+      expect(args.filter((a) => a.startsWith('--enable-features='))).toHaveLength(1);
+      // Still headless, and the launch URL stays last.
+      expect(args).toContain('--headless=new');
+      expect(args.at(-1)).toBe(baseOpts.launchUrl);
+    });
+
+    it('gpu changes nothing for a desktop launch, which never disables the GPU', () => {
+      expect(buildChromeLaunchArgs({ ...baseOpts, gpu: true })).toEqual(
+        buildChromeLaunchArgs(baseOpts)
+      );
+    });
+  });
+
   describe('buildChromeLaunchArgs — hosted mode', () => {
     const baseOpts = {
       cdpPort: 9222,
