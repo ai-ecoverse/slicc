@@ -10,14 +10,17 @@
 #   merge, report) is exercised before merge. Same-repo heads only: fork PRs get no Bedrock key.
 #
 # Shape: `plan` pins the sliccy version and lists the shards; each `bench` shard is one matrix job
-# on a self-hosted GCP runner (Cyclenerd/google-cloud-github-runner in ai-ecoverse-493315;
-# `runs-on` names its GCE instance template) that takes every Nth task (`run.mjs --shard K/N`)
-# and runs it on `leaders` leaders side by side; `report` merges the shards' out dirs
-# (merge.mjs), and publishes once. Only the shards run on GCP, on the lean gcp-bench-8core
-# template, which GCP deletes after 8 hours whatever its state, so no runner VM hangs on.
-# `plan` and `report` take seconds to minutes and run GitHub-hosted: a VM of theirs held quota
-# the shards needed, and a small-template VM started for `report` was taken by another org job
-# with the same label, leaving the report queued (2026-09-26).
+# on a self-hosted runner that takes every Nth task (`run.mjs --shard K/N`) and runs it on
+# `leaders` leaders side by side; `report` merges the shards' out dirs (merge.mjs), and publishes
+# once. Shards run on `cloud-run-bench`, a Cloud Run worker pool of ephemeral just-in-time
+# runners (8 vCPU / 32 GiB, CPU always allocated, up to 30 machines, its own runner group). Its
+# image (runner-bench) brings Chrome with fonts, Node, Go, coreutils and a warm npm cache, so the
+# Chrome install below is skipped. Cloud Run sets no time limit, but may restart a machine for
+# maintenance. The shard's artifact is uploaded only when the job ends, so a restart loses the
+# shard's unsaved runs and "Re-run failed jobs" runs them again; the 420-minute deadline cap keeps
+# that loss bounded. The old GCE pool (`gcp-bench-8core`, VMs deleted after 8 hours) is retired but
+# still selectable through `runner`.
+# `plan` and `report` take seconds to minutes and run GitHub-hosted.
 #
 # Guardrails, so a job never goes stale or runs out its time limit with nothing saved:
 # - run.mjs stops taking runs once one might not finish before `--deadline-minutes`, stops a run
@@ -82,13 +85,13 @@ on:
         description: 'Leaders per shard, side by side (1-8; about 2 vCPU each)'
         default: '4'
       runner:
-        description: 'GCE instance template the shards run on (runs-on label)'
-        default: 'gcp-bench-8core'
+        description: 'Runner label the shards run on: cloud-run-bench (Cloud Run pool) or gcp-bench-8core (old GCE pool)'
+        default: 'cloud-run-bench'
       resume-run:
         description: "Continue an earlier Benchmark run (its run id): each shard starts from that run's shard artifact. Use the same sets, tasks, models, skills, repeats and shards"
         default: ''
       deadline-minutes:
-        description: 'Minutes a shard takes new runs for, at most 420 (its job limit is this plus 45; runner VMs live 8 h)'
+        description: 'Minutes a shard takes new runs for, at most 420 (its job limit is this plus 45)'
         default: '300'
       max-task-cost:
         description: 'Dollars one run may spend before it is stopped (0: no cap)'
@@ -161,8 +164,9 @@ jobs:
           # Building a pinned commit gets its own budget (materialize-pinned-commit.mjs: npm ci
           # 2 × 12 min, builds 2 × 8 min) on top of the job's setup time.
           case "$PIN_WEBAPP" in ''|true|false) PIN_MINUTES=0 ;; *) PIN_MINUTES=40 ;; esac
-          # A shard job lasts up to the deadline plus 45 minutes (plus the pin budget), and
-          # gcp-bench-8core VMs are deleted after 8 hours: this keeps a job inside its VM's lifetime.
+          # A shard job lasts up to the deadline plus 45 minutes (plus the pin budget). The cap keeps
+          # it inside the old gcp-bench-8core VMs' 8 hours, and bounds what a Cloud Run maintenance
+          # restart can lose (the shard's artifact is uploaded only at the end).
           MAX_DEADLINE=$((420 - PIN_MINUTES))
           if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt "$MAX_DEADLINE" ]; then
             echo "::error::deadline-minutes must be 10 to $MAX_DEADLINE, not '$DEADLINE'"; exit 1
@@ -182,7 +186,7 @@ jobs:
     permissions:
       contents: read
       actions: read # resume-run downloads another run's shard artifacts
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'gcp-bench-8core' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'cloud-run-bench' }}
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
     strategy:
       fail-fast: false
