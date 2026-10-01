@@ -390,7 +390,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     if (e instanceof WasiExit) return e.code;
     if (!(e instanceof WebAssembly.RuntimeError)) throw e;
     try {
-      say(`wasm trap: ${e.message}`);
+      say(trapMessage(e, init.env));
     } catch {
       // No stderr to say it on (closed, a broken pipe): the kernel's diagnostics get it.
       throw new Error(`${init.argv0}: wasm trap: ${e.message}`);
@@ -401,6 +401,30 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     host.flushAll();
     if (stats) report(stats, sys);
   }
+}
+
+/** Frames of a trap's stack {@link trapMessage} shows at most. */
+const BACKTRACE_FRAMES = 40;
+
+/**
+ * What a trap says on stderr: `wasm trap: <message>`, and with
+ * `SLICC_WASM_BACKTRACE=1` in the program's environment the wasm frames
+ * under it, as V8 names them from the module's name section (`at
+ * Build.Step.zigProcessUpdate (wasm://…)`) — where a toolchain's panic
+ * handler (`unreachable`) came from.
+ */
+export function trapMessage(
+  e: WebAssembly.RuntimeError,
+  env: Readonly<Record<string, string>>,
+  where = ''
+): string {
+  const head = `wasm trap${where}: ${e.message}`;
+  if (env.SLICC_WASM_BACKTRACE !== '1') return head;
+  const frames = (e.stack ?? '')
+    .split('\n')
+    .filter((line) => /^\s+at /.test(line))
+    .slice(0, BACKTRACE_FRAMES);
+  return frames.length ? `${head}\n${frames.join('\n')}` : head;
 }
 
 /**
@@ -445,7 +469,7 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
     }
     if (e instanceof WebAssembly.RuntimeError) {
       try {
-        say(`wasm trap in thread ${thread.tid}: ${e.message}`);
+        say(trapMessage(e, init.env, ` in thread ${thread.tid}`));
       } catch {
         /* no stderr left */
       }
