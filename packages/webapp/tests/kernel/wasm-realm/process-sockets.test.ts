@@ -155,6 +155,47 @@ describe('createSocketKernel', () => {
     ]);
   });
 
+  it('a unix socket bound to a path is a node there; an existing path is EADDRINUSE', () => {
+    const { net, calls, Fs } = setup((req) => (req.op === 'sock-open' ? json(5) : done));
+    const created: Array<[string, number, number]> = [];
+    const unlinked: string[] = [];
+    let exists = false;
+    Object.assign(Fs, {
+      open: (path: string, flags: number, mode: number) => {
+        if (exists) throw Object.assign(new ErrnoError(20), { errno: 20 }); // EEXIST
+        created.push([path, flags, mode]);
+        return { fd: 7, path, flags, stream_ops: {} };
+      },
+      unlink: (path: string) => void unlinked.push(path),
+    });
+    const fd = net.socket('unix', false);
+    const addr = { family: 'unix' as const, path: '/tmp/screens/1.pts-0.host' };
+    expect(net.bind(fd, addr)).toBe(0);
+    expect(created).toEqual([['/tmp/screens/1.pts-0.host', 0o301, 0o755]]); // O_WRONLY|O_CREAT|O_EXCL
+    expect(calls.at(-1)).toEqual({ op: 'sock-bind', fd: 5, addr });
+    exists = true;
+    expect(net.bind(net.socket('unix', false), addr)).toBeLessThan(0); // EADDRINUSE, no kernel bind
+    expect(calls.filter((c) => c.op === 'sock-bind')).toHaveLength(1);
+    // An abstract name has no node.
+    exists = false;
+    expect(net.bind(net.socket('unix', false), { family: 'unix', path: '\0abstract' })).toBe(0);
+    expect(created).toHaveLength(1);
+    expect(unlinked).toEqual([]);
+  });
+
+  it('a kernel bind that fails removes the node it made', () => {
+    const { net, Fs } = setup((req) =>
+      req.op === 'sock-open' ? json(5) : req.op === 'sock-bind' ? fail('EADDRINUSE') : done
+    );
+    const unlinked: string[] = [];
+    Object.assign(Fs, {
+      open: (path: string, flags: number) => ({ fd: 7, path, flags, stream_ops: {} }),
+      unlink: (path: string) => void unlinked.push(path),
+    });
+    expect(net.bind(net.socket('unix', false), { family: 'unix', path: '/tmp/s' })).toBeLessThan(0);
+    expect(unlinked).toEqual(['/tmp/s']);
+  });
+
   it('connects non-blocking when the stream is O_NONBLOCK (EINPROGRESS)', () => {
     const { net, calls } = setup((req) => (req.op === 'sock-open' ? json(5) : fail('EINPROGRESS')));
     const fd = net.socket('inet', true);
