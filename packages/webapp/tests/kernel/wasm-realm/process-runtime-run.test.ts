@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const flush = vi.hoisted(() => vi.fn());
+const { flush, mount } = vi.hoisted(() => {
+  const flush = vi.fn();
+  return { flush, mount: vi.fn(() => ({ mounted: [], flush, invalidate: vi.fn() })) };
+});
 vi.mock('../../../src/kernel/realm/emscripten-vfs-hook.js', () => ({
-  mountVfsIntoEmscripten: () => ({ mounted: [], flush, invalidate: vi.fn() }),
+  mountVfsIntoEmscripten: mount,
 }));
 
 import { runWasmProcess } from '../../../src/kernel/wasm-realm/process-runtime.js';
@@ -236,5 +239,59 @@ describe('runWasmProcess', () => {
       },
     });
     await expect(run).rejects.toThrow(/cannot resume a fork/);
+  });
+
+  describe('a program linked with the minimal FS (uses no files)', () => {
+    /** Emscripten's stub: every member aborts, and there are no streams. */
+    const stubFs = () => ({ init: () => {}, open: () => {}, ErrnoError: () => {} });
+
+    it('runs main on stdio alone, without mounting the VFS', async () => {
+      mount.mockClear();
+      const module = await WebAssembly.compile(NEEDS_IMPORT);
+      const code = await runWasmProcess(init(module), port, {
+        evaluate: (_glue, m) => {
+          const fake = m as FakeModule;
+          fake.FS = stubFs();
+          fake.callMain = () => {
+            throw Object.assign(new Error('exit'), { status: 7 });
+          };
+          fake.onRuntimeInitialized();
+        },
+      });
+      expect(code).toBe(7);
+      expect(mount).not.toHaveBeenCalled();
+    });
+
+    it('runs a glue that has no FS at all', async () => {
+      const module = await WebAssembly.compile(NEEDS_IMPORT);
+      const code = await runWasmProcess(init(module), port, {
+        evaluate: (_glue, m) => {
+          const fake = m as FakeModule;
+          fake.callMain = () => 4;
+          fake.onRuntimeInitialized();
+        },
+      });
+      expect(code).toBe(4);
+    });
+
+    it('refuses to resume a fork', async () => {
+      const module = await WebAssembly.compile(NEEDS_IMPORT);
+      const fork = {
+        memory: new Uint8Array(0),
+        currData: 0,
+        forkSp: 0,
+        callStackNames: [],
+        ppid: 1,
+      };
+      const run = runWasmProcess({ ...init(module), fork }, port, {
+        evaluate: (_glue, m) => {
+          const fake = m as FakeModule;
+          fake.FS = stubFs();
+          fake.sliccForkChild = () => 0;
+          fake.onRuntimeInitialized();
+        },
+      });
+      await expect(run).rejects.toThrow(/cannot resume a fork: it has no filesystem/);
+    });
   });
 });
