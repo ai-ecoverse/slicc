@@ -103,6 +103,8 @@ export interface MetadataUpdate {
 
 /** Idle gap for coalescing individual metadata syscalls into one sidecar write. */
 const METADATA_SIDECAR_IDLE_MS = 100;
+const METADATA_SIDECAR_RETRY_MS = 1_000;
+const METADATA_SIDECAR_MAX_RETRY_MS = 30_000;
 
 /**
  * One entry for {@link VirtualFS.symlinkBatch}: create a symlink at `path`
@@ -524,6 +526,7 @@ export class VirtualFS {
         asyncCache: asyncCache !== false,
         sidecarDirty: { paths: new Set(), prefixes: new Set() },
         sidecarFlushTimer: null,
+        sidecarFlushRetryMs: METADATA_SIDECAR_RETRY_MS,
       };
       VirtualFS.opfsBackends.set(vfs.dbName, entry);
     }
@@ -638,6 +641,7 @@ export class VirtualFS {
        */
       sidecarDirty: SidecarDirtyState;
       sidecarFlushTimer: ReturnType<typeof setTimeout> | null;
+      sidecarFlushRetryMs: number;
     }
   > = new Map();
   private static async ensureRootMount(zenfs: typeof import('@zenfs/core')): Promise<void> {
@@ -1032,6 +1036,7 @@ export class VirtualFS {
       dirty.prefixes.clear();
     }
     const entry = VirtualFS.opfsBackends.get(this.dbName);
+    if (entry) entry.sidecarFlushRetryMs = METADATA_SIDECAR_RETRY_MS;
     if (entry && entry.sidecarFlushTimer !== null) {
       clearTimeout(entry.sidecarFlushTimer);
       entry.sidecarFlushTimer = null;
@@ -1039,7 +1044,7 @@ export class VirtualFS {
   }
 
   /** Coalesce successive chmod/utimes calls without losing an eventual write. */
-  private scheduleMetadataSidecarFlush(): void {
+  private scheduleMetadataSidecarFlush(delayMs = METADATA_SIDECAR_IDLE_MS): void {
     if (this.backend !== 'opfs') return;
     const entry = VirtualFS.opfsBackends.get(this.dbName);
     if (!entry) return;
@@ -1047,10 +1052,17 @@ export class VirtualFS {
     entry.sidecarFlushTimer = setTimeout(() => {
       entry.sidecarFlushTimer = null;
       void this.writeOpfsMetadataSidecar().catch((error: unknown) => {
-        // Dirty paths remain available for the next timer, flush, or dispose.
         console.warn('[virtual-fs] deferred metadata sidecar flush failed', error);
+        // The syscall already returned, so retry even if no more metadata
+        // operations arrive. A newer mutation may already have a sooner timer.
+        if (VirtualFS.opfsBackends.get(this.dbName) !== entry) return;
+        if (entry.sidecarFlushTimer !== null) return;
+        if (entry.sidecarDirty.paths.size === 0 && entry.sidecarDirty.prefixes.size === 0) return;
+        const retryMs = entry.sidecarFlushRetryMs;
+        entry.sidecarFlushRetryMs = Math.min(retryMs * 2, METADATA_SIDECAR_MAX_RETRY_MS);
+        this.scheduleMetadataSidecarFlush(retryMs);
       });
-    }, METADATA_SIDECAR_IDLE_MS);
+    }, delayMs);
   }
 
   /**

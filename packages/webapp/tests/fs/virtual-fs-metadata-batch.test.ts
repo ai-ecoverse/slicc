@@ -203,7 +203,7 @@ describe('VirtualFS.updateMetadataBatch', () => {
     }
   });
 
-  it('retains dirty metadata after a failed idle write for an explicit flush', async () => {
+  it('retries a failed idle write without another metadata syscall', async () => {
     const root = createMutableDirectoryHandle({});
     vi.stubGlobal('navigator', { storage: { getDirectory: async () => root.handle } });
     const dbName = 'metadata-batch-retry';
@@ -220,8 +220,11 @@ describe('VirtualFS.updateMetadataBatch', () => {
       await fs.chmod('/file', 0o700);
       await vi.advanceTimersByTimeAsync(100);
       expect(flushSpy).toHaveBeenCalledTimes(1);
-      await fs.flush();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
       expect(flushSpy).toHaveBeenCalledTimes(2);
+      await flushSpy.mock.results[1].value;
       const directory = await root.handle.getDirectoryHandle(dbName);
       const sidecar = await (await directory.getFileHandle('.metadata.json')).getFile();
       expect(JSON.parse(await sidecar.text()).entries['/file'].mode & 0o777).toBe(0o700);
