@@ -43,11 +43,31 @@ export const SECRET_FUNCTION =
   '() { command secret "$@" || return; local __slicc_env; ' +
   'if __slicc_env=$(command secret shell-env "$@" 2>/dev/null); then eval "$__slicc_env"; fi; return 0; }';
 
+const ENV_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+export function expandDefaults(
+  defaults: Readonly<Record<string, string>>,
+  env: Readonly<Record<string, string>>
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(defaults)) {
+    let missing = false;
+    const expanded = value.replace(ENV_REFERENCE, (_, name: string) => {
+      const set = Object.hasOwn(env, name) ? env[name] : undefined;
+      if (set === undefined) missing = true;
+      return set ?? '';
+    });
+    if (!missing) out[key] = expanded;
+  }
+  return out;
+}
+
 function withDefaults(
-  defaults: Readonly<Record<string, string>> | undefined,
+  given: Readonly<Record<string, string>> | undefined,
   env: Record<string, string>
 ): Record<string, string> {
-  if (!defaults) return env;
+  if (!given) return env;
+  const defaults = expandDefaults(given, env);
   const realmGitConfig =
     env.GIT_CONFIG_SYSTEM !== undefined &&
     isRealmDefault('GIT_CONFIG_SYSTEM', env.GIT_CONFIG_SYSTEM);

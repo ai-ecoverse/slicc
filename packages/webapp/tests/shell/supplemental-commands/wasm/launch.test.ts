@@ -14,6 +14,7 @@ import { LoopbackNet } from '../../../../src/kernel/wasm-realm/socket.js';
 import { KernelTty } from '../../../../src/kernel/wasm-realm/tty.js';
 import type { WasmCommand } from '../../../../src/shell/ipk/wasm-programs.js';
 import {
+  expandDefaults,
   installedCommands,
   isModuleFile,
   isWasiTarget,
@@ -489,6 +490,48 @@ describe('WasmSession', () => {
 
     await launch({ ...realm, GIT_CONFIG_NOSYSTEM: '1' });
     expect(spawn.mock.calls.at(-1)![0].env.GIT_CONFIG_NOSYSTEM).toBe('1');
+  });
+
+  it("expands ${NAME} in a package's env defaults from the caller's environment", async () => {
+    fakeProcesses();
+    const files = {
+      ...installed,
+      [`${PKG}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasi-zig',
+        slicc: {
+          env: { ZIG_GLOBAL_CACHE_DIR: '${HOME}/.cache/zig', ZIG_LIB_DIR: '${package}/lib' },
+          commands: { tac: { glue: 'bin/core', wasm: 'bin/core.wasm', argv0: 'tac' } },
+        },
+      }),
+    };
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    const target = await session.resolve('tac', 'tac', '/w');
+    const launch = (env: Record<string, string>) =>
+      session.launch({ ...target!, args: [], env, cwd: '/w', fds: stdio() });
+    await launch({ HOME: '/home/u' });
+    expect(spawn.mock.calls.at(-1)![0].env).toEqual({
+      HOME: '/home/u',
+      ZIG_GLOBAL_CACHE_DIR: '/home/u/.cache/zig',
+      ZIG_LIB_DIR: `${PKG}/lib`,
+    });
+
+    await launch({});
+    expect(spawn.mock.calls.at(-1)![0].env).toEqual({ ZIG_LIB_DIR: `${PKG}/lib` });
+  });
+
+  it('expandDefaults substitutes every reference and keeps other text literal', () => {
+    expect(
+      expandDefaults(
+        { A: '${X}:${Y}', B: 'plain $X {Y}', C: '${UNSET}/x', D: '${X}${X}' },
+        { X: '1', Y: '2' }
+      )
+    ).toEqual({ A: '1:2', B: 'plain $X {Y}', D: '11' });
+  });
+
+  it('expandDefaults takes no Object.prototype member for a variable', () => {
+    expect(expandDefaults({ A: '${toString}', B: '${constructor}/x', C: 'ok' }, {})).toEqual({
+      C: 'ok',
+    });
   });
 
   it('starts a wasm child as a process parented to its spawner', async () => {
