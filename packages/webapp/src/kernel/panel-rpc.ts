@@ -1596,22 +1596,6 @@ function newRequestId(): string {
 
 // ── Worker-shell consumer helper ────────────────────────────────────
 
-/**
- * Returns the bridge client published on `globalThis.__slicc_panelRpc`
- * by `kernel-worker.ts`, or null when the current realm has a real
- * DOM and should run DOM operations directly. Commands use this to
- * pick between local-DOM and bridged execution.
- */
-export function getPanelRpcClient(): PanelRpcClient | null {
-  const g = globalThis as unknown as { __slicc_panelRpc?: PanelRpcClient };
-  return g.__slicc_panelRpc ?? null;
-}
-
-/**
- * `true` when the current realm has a real DOM. False inside a
- * DedicatedWorker, irrespective of whether the bridge client is
- * published.
- */
-export function hasLocalDom(): boolean {
-  return typeof window !== 'undefined' && typeof document !== 'undefined';
-}
+// The realm probes live in `base/` so layers below `kernel/` can use them
+// without importing up (#3728); re-exported here for existing callers.
+export { getPanelRpcClient, hasLocalDom } from '../base/panel-rpc-accessor.js';

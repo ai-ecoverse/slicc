@@ -3,8 +3,7 @@
  * Float-probe ratchet (#2276 slice D): no NEW read of a float/topology probe
  * under `scoops/`, `tools/`, or `kernel/` — except `kernel/host.ts` and
  * `kernel/kernel-worker.ts`, the two composition roots where the float's
- * topology is resolved exactly once (see `docs/work-unit.md` Phase 6), and
- * `kernel/port-bridge-client.ts` (see its `EXEMPT_FILES` comment below).
+ * topology is resolved exactly once (see `docs/work-unit.md` Phase 6).
  * Privileged float detection belongs on the injected `CapabilityBroker`
  * (`work-unit/capability/`) or, for a genuine transport decision, in
  * `shell/` (which owns topology — `shell/float-topology.ts`'s own header
@@ -47,9 +46,10 @@
  *     `setExtensionDelegateId` (extension-delegate id) and the raw
  *     `__slicc_connect_mode` global property (connect-mode) are load-bearing
  *     topology FACTS with no less claim to the ban than the eight names
- *     slice A named — `kernel/port-bridge-client.ts` reads
- *     `getExtensionDelegateId()` today, unexempted, and slipped through the
- *     first cut because the name wasn't on the list at all.
+ *     slice A named — the Port/panel-RPC transport factory (then
+ *     `kernel/port-bridge-client.ts`, now `base/` since #3728) read
+ *     `getExtensionDelegateId()` unexempted and slipped through the first
+ *     cut because the name wasn't on the list at all.
  *     `__slicc_connect_mode` is a bag KEY, not an importable binding, so it
  *     is banned by a plain identifier scan (`CONNECT_MODE_IDENTIFIER`), not
  *     the import machinery above.
@@ -144,20 +144,11 @@ const SHARED_TS_PROBE_NAMES = new Set(['isChromeExtensionRealm', 'canConnectToCh
 const BANNED_TOP_DIRS = new Set(['scoops', 'tools', 'kernel']);
 /**
  * Files the ban exempts. `host.ts` and `kernel-worker.ts` are the two
- * composition roots that resolve topology exactly once at boot.
- * `port-bridge-client.ts` reads `getExtensionDelegateId()` per call as the
- * realm-aware Port/panel-RPC transport factory every kernel-side bridge
- * client shares (EXT7/EXT8) — the conceptually right home is `shell/`
- * (which owns topology), but it also imports the `PanelRpcOp` TYPE from
- * `kernel/panel-rpc.ts`, and moving it would turn that into a `shell/` →
- * `kernel/` dependency against the stack's intended direction; kept here
- * and named-exempted rather than force a back-edge to relocate it.
+ * composition roots that resolve topology exactly once at boot. (The
+ * Port/panel-RPC transport factory that once needed a third exemption now
+ * lives in `base/port-bridge-client.ts`, outside the banned zone — #3728.)
  */
-const EXEMPT_FILES = new Set([
-  'kernel/host.ts',
-  'kernel/kernel-worker.ts',
-  'kernel/port-bridge-client.ts',
-]);
+const EXEMPT_FILES = new Set(['kernel/host.ts', 'kernel/kernel-worker.ts']);
 
 /** Whether a `packages/webapp/src`-relative path is in the banned zone. */
 export function isBannedZoneFile(relPath) {

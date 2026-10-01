@@ -16,12 +16,16 @@
  * policy.
  *
  * The panel-RPC bridge always reads `{ response }` from the client result —
- * see `PanelRpcResponses` in `panel-rpc.ts`.
+ * see `PanelRpcResponses` in `kernel/panel-rpc.ts`.
+ *
+ * Lives in `base/` (not `kernel/`) so `fs/` mount transports can use it
+ * without importing up the layer stack (#3728).
  */
 
-import { createLogger } from '../base/logger.js';
-import { getExtensionDelegateId } from '../shell/proxied-fetch.js';
-import type { PanelRpcOp } from './panel-rpc.js';
+import type { PanelRpcOp } from '../kernel/panel-rpc.js';
+import { getExtensionDelegateId } from './api-endpoint.js';
+import { createLogger } from './logger.js';
+import { getPanelRpcClient } from './panel-rpc-accessor.js';
 
 /** Minimal structural view of the explicit-id `chrome.runtime` Port. */
 interface BridgePort {
@@ -166,7 +170,6 @@ export function createPortBridgeClient<
   }
 
   async function callViaPanelRpc(request: TRequest): Promise<TReply | undefined> {
-    const { getPanelRpcClient } = await import('./panel-rpc.js');
     const client = getPanelRpcClient();
     if (!client) {
       log.warn(`cannot bridge ${opts.portName} call: panel-RPC client unavailable`);

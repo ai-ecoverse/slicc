@@ -104,6 +104,46 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     ]);
   });
 
+  it('flags fs/ and base/ VALUE imports of kernel/ (#3728)', () => {
+    expect(
+      findLayerBackEdges(
+        'fs/mount-commands.ts',
+        "import { getPanelRpcClient } from '../kernel/panel-rpc.js';"
+      )
+    ).toEqual([{ line: 1, specifier: '../kernel/panel-rpc.js', from: 'fs', to: 'kernel' }]);
+    expect(
+      findLayerBackEdges(
+        'fs/mount/mount-bridge-client.ts',
+        "const m = await import('../../kernel/port-bridge-client.js');"
+      )
+    ).toEqual([
+      { line: 1, specifier: '../../kernel/port-bridge-client.js', from: 'fs', to: 'kernel' },
+    ]);
+    expect(
+      findLayerBackEdges('base/x.ts', 'const m = await import(`../kernel/${name}.js`);')
+    ).toEqual([{ line: 1, specifier: '../kernel/${name}.js', from: 'base', to: 'kernel' }]);
+  });
+
+  it('allows fs/ and base/ top-level import type { … } clauses of kernel/', () => {
+    const source = "import type { PanelRpcClient } from '../../kernel/panel-rpc.js';";
+    expect(findLayerBackEdges('fs/mount/local-mount-acquire.ts', source)).toEqual([]);
+    expect(
+      findLayerBackEdges(
+        'base/panel-rpc-accessor.ts',
+        "import type { PanelRpcClient } from '../kernel/panel-rpc.js';"
+      )
+    ).toEqual([]);
+  });
+
+  it('still ignores kernel/ value imports from shell/ and other unbanned layers', () => {
+    expect(
+      findLayerBackEdges(
+        'shell/x.ts',
+        "import { getPanelRpcClient } from '../kernel/panel-rpc.js';"
+      )
+    ).toEqual([]);
+  });
+
   it('allows a scoops/ top-level import type { … } clause of kernel/', () => {
     expect(
       findLayerBackEdges(

@@ -595,8 +595,10 @@ documented per-package layer stack. The original webapp stack is
 (e.g. `cdp/` → `scoops/`, or any layer → `ui/`). Unranked webapp
 directories (`kernel/`, `providers/`, `speech/`, …) rank just below
 `ui/`: they may import ranked layers but not `ui/`, and are never a
-back-edge target — except a `scoops/` **value** import of `kernel/`
-(#3231). Top-level `import type { … }` clauses still erase and are
+back-edge target — except a **value** import of `kernel/` from
+`scoops/` (#3231) or the rank-0 `fs/` / `base/` (#3728; zero-dependency
+helpers such as `base/panel-rpc-accessor.ts` and `base/port-bridge-client.ts`
+live there so `fs/` needs no `kernel/` value edge). Top-level `import type { … }` clauses still erase and are
 allowed. Ranking `kernel/` itself is not cheap: `cdp/`, `shell/`, and
 `core/` already value-import it.
 
@@ -645,14 +647,11 @@ ten float/topology identifiers (`FLOAT_PROBE_NAMES`: `isExtensionRealm`,
 `canConnectToChromeRuntime`, `getExtensionDelegateId`,
 `setExtensionDelegateId`), plus the raw `__slicc_connect_mode` global-bag key
 `resolveFloatTopology` reads directly, under `scoops/`, `tools/`, or
-`kernel/` — except three composition roots: `kernel/host.ts` and
+`kernel/` — except two composition roots: `kernel/host.ts` and
 `kernel/kernel-worker.ts` (each resolves the float's topology once, into a
 `CapabilityBroker` or an extension-delegate id — `docs/work-unit.md` Phase
-6), and `kernel/port-bridge-client.ts` (the extension-delegate Port/panel-RPC
-transport factory every kernel-side bridge client shares — conceptually
-`shell/`-owned, but moving it there would add a `shell/` → `kernel/`
-`PanelRpcOp` type dependency against the stack's direction, so it is a named
-exemption instead). Privileged float detection belongs on the injected
+6). The extension-delegate Port/panel-RPC transport factory lives in
+`base/port-bridge-client.ts`, outside the banned zone (#3728). Privileged float detection belongs on the injected
 broker or, for a genuine transport decision, in `shell/` (which owns
 topology).
 

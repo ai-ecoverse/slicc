@@ -24,12 +24,12 @@
  * Scoop fail-fast lives in {@link MountCommands.mountLocal}.
  */
 
+import { getPanelRpcClient, hasLocalDom } from '../base/panel-rpc-accessor.js';
 import { isExtensionRealm } from '../base/runtime-env.js';
 import {
   getToolExecutionContext,
   type ToolExecutionContext,
 } from '../base/tool-execution-context.js';
-import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { AemMountBackend } from './mount/backend-aem.js';
 import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
 import { LocalMountBackend } from './mount/backend-local.js';
