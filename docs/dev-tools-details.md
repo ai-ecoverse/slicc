@@ -596,9 +596,11 @@ documented per-package layer stack. The original webapp stack is
 directories (`kernel/`, `providers/`, `speech/`, …) rank just below
 `ui/`: they may import ranked layers but not `ui/`, and are never a
 back-edge target — except a **value** import of `kernel/` from
-`scoops/` (#3231) or the rank-0 `fs/` / `base/` (#3728; zero-dependency
-helpers such as `base/panel-rpc-accessor.ts` and `base/port-bridge-client.ts`
-live there so `fs/` needs no `kernel/` value edge). Top-level `import type { … }` clauses still erase and are
+`scoops/` (#3231), and a **value** import of ANY unranked directory from the
+rank-0 `fs/` / `base/` (#3728, #3742, #3743), which every unranked
+directory sits above. Pure helpers move down instead — e.g.
+`base/panel-rpc-accessor.ts`, `base/port-bridge-client.ts`,
+`base/sudo-refusal.ts`, `base/stored-accounts.ts`. Top-level `import type { … }` clauses still erase and are
 allowed. Ranking `kernel/` itself is not cheap: `cdp/`, `shell/`, and
 `core/` already value-import it.
 

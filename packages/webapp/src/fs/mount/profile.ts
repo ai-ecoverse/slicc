@@ -13,6 +13,7 @@
  */
 
 import { apiHeaders, resolveApiUrl } from '../../base/api-endpoint.js';
+import { readStoredAccounts } from '../../base/stored-accounts.js';
 
 /**
  * The minimal SecretStore surface this module needs. Any concrete store
@@ -120,17 +121,13 @@ export async function getDefaultSecretStore(): Promise<SecretStore> {
 
 /**
  * Get the default IMS client for the current runtime context.
- * Reads the stored Adobe OAuth account from ui/provider-settings.js via getAccounts().
+ * Reads the stored Adobe OAuth account via `base/stored-accounts.ts` (not
+ * `providers/account-store.ts`, which would be an up-stack edge from `fs/` — #3743).
  * This is a minimal v1 implementation; v2 should handle token refresh / IMS launcher delegation.
  * @throws Error if no Adobe account is found
  */
 export async function getDefaultImsClient(): Promise<AdobeImsClient> {
-  // Dynamic import to avoid circular dependencies and to keep IMS access confined to this module.
-  const { getAccounts } = await import('../../providers/account-store.js');
-  const accounts = getAccounts();
-  const adobeAccount = accounts.find(
-    (a: { providerId?: string; accessToken?: string }) => a.providerId === 'adobe'
-  );
+  const adobeAccount = readStoredAccounts().find((a) => a.providerId === 'adobe');
 
   if (!adobeAccount?.accessToken) {
     throw new ProfileNotConfiguredError(

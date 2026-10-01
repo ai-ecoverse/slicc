@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  getDefaultImsClient,
   getDefaultSecretStore,
   ProfileNotConfiguredError,
   resolveDaProfile,
@@ -157,5 +158,32 @@ describe('getDefaultSecretStore (browser) — thin-bridge URL + token', () => {
     expect(url).toBe('/api/secrets');
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers['X-Bridge-Token']).toBeUndefined();
+  });
+});
+
+describe('getDefaultImsClient (#3743: reads base/stored-accounts, not providers/)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubAccounts(accounts: unknown[]): void {
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => (key === 'slicc_accounts' ? JSON.stringify(accounts) : null),
+    });
+  }
+
+  it('returns the stored Adobe access token', async () => {
+    stubAccounts([
+      { providerId: 'anthropic', apiKey: 'k' },
+      { providerId: 'adobe', apiKey: '', accessToken: 'ims-token' },
+    ]);
+    const client = await getDefaultImsClient();
+    expect(client.identity).toBe('adobe-ims');
+    await expect(client.getBearerToken()).resolves.toBe('ims-token');
+  });
+
+  it('throws ProfileNotConfiguredError when no Adobe token is stored', async () => {
+    stubAccounts([{ providerId: 'adobe', apiKey: '' }]);
+    await expect(getDefaultImsClient()).rejects.toBeInstanceOf(ProfileNotConfiguredError);
   });
 });
