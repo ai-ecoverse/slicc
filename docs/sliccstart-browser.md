@@ -64,6 +64,16 @@ and re-runs `LauncherModel.initialize()` (update check, auto-launch) per click.
    `topBrowser()`: the user can start any browser by hand, so the leader is not
    necessarily the head of the Browsers list, and re-deriving the pick here
    would foreground the wrong app and leave the link hidden.
+   Activation goes through `Models/BrowserForegrounder.swift`: macOS 14
+   activation is cooperative, so a bare `NSRunningApplication.activate()` is
+   refused whenever Sliccstart is not frontmost (a cold start that waited for the
+   leader, or focus already moved on). It yields-and-activates while Sliccstart
+   is active, otherwise asks LaunchServices to reopen the browser — only when
+   exactly one instance of that bundle runs, since LaunchServices cannot tell
+   the SLICC profile from the user's own. With several instances it activates
+   the process whose argv (`KERN_PROCARGS2`) carries the leader's
+   `--remote-debugging-port`, and activates nothing if no single process
+   matches.
 4. With no leader, the router starts the first browser in
    `AppOrdering.orderedBrowsers(in:savedOrder:)` that is **not** already attached
    to a remote tray as a follower, and waits up to ~45s for
@@ -96,7 +106,8 @@ also has the same browser open on their normal profile, LaunchServices picks
 between the two instances non-deterministically. The CDP port only ever answers
 for the leader.
 
-Tests: `DefaultBrowserRegistrationTests`, `IncomingURLRouterTests`. The mutating
+Tests: `DefaultBrowserRegistrationTests`, `IncomingURLRouterTests`,
+`BrowserForegrounderTests`. The mutating
 `makeDefault()` is not unit-tested — it rewrites the real LaunchServices database
 and raises a modal system panel.
 
