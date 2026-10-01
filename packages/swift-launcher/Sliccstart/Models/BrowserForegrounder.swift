@@ -126,7 +126,8 @@ extension BrowserForegrounder.Services {
         var arguments: [String] = []
         while arguments.count < argc, index < bytes.count {
             let end = bytes[index...].firstIndex(of: 0) ?? bytes.count
-            arguments.append(String(decoding: bytes[index..<end], as: UTF8.self))
+            guard let argument = String(bytes: bytes[index..<end], encoding: .utf8) else { return nil }
+            arguments.append(argument)
             index = end + 1
         }
         return arguments.count == argc ? arguments : nil
