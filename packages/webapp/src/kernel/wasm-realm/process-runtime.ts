@@ -156,6 +156,9 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys & PtyKernel {
     setControllingTerminal(fd) {
       call({ op: 'pty-ctty', fd }, `pty-ctty ${fd}`);
     },
+    setPacketMode(fd, on) {
+      call({ op: 'pty-packet', fd, on }, `pty-packet ${fd}`);
+    },
     setWinsize(fd, rows, cols) {
       call({ op: 'pty-winsz-set', fd, rows, cols }, `pty-winsz-set ${fd}`);
     },

@@ -16,6 +16,9 @@
  *   reads end (end of file). Every slave descriptor closed: the master's
  *   reads fail with EIO, as on Linux, which is how screen sees a window end.
  * - The number is free again once neither side is open.
+ * - Packet mode (TIOCPKT, which screen sets on every window's master): each
+ *   read of the master starts with a status byte, here always TIOCPKT_DATA
+ *   (0) — there is no flow control to report.
  */
 
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
@@ -30,6 +33,8 @@ export class PtyPair {
   readonly slave: KernelTty;
   /** Until `unlockpt`, the slave cannot be opened. */
   locked = true;
+  /** TIOCPKT: each master read starts with a status byte. */
+  packet = false;
   private queue: Uint8Array[] = [];
   private waiters: Array<() => void> = [];
   private masterOpen = true;
@@ -90,18 +95,20 @@ export class PtyPair {
       if (this.slaveGone) throw new KernelError('EIO');
       await this.changed(signal);
     }
+    // In packet mode the status byte (TIOCPKT_DATA) takes one of the bytes asked for.
+    const status = this.packet ? 1 : 0;
     const chunks: Uint8Array[] = [];
     let n = 0;
-    while (this.queue.length > 0 && n < max) {
+    while (this.queue.length > 0 && n < max - status) {
       const next = this.queue[0] as Uint8Array;
-      const take = next.subarray(0, max - n);
+      const take = next.subarray(0, max - status - n);
       chunks.push(take);
       n += take.length;
       if (take.length < next.length) this.queue[0] = next.subarray(take.length);
       else this.queue.shift();
     }
-    const out = new Uint8Array(n);
-    let at = 0;
+    const out = new Uint8Array(status + n);
+    let at = status;
     for (const chunk of chunks) {
       out.set(chunk, at);
       at += chunk.length;
@@ -192,6 +199,7 @@ export type PtySyscall =
   | { op: 'pty-number'; fd: number }
   | { op: 'pty-lock'; fd: number; lock: boolean }
   | { op: 'pty-ctty'; fd: number }
+  | { op: 'pty-packet'; fd: number; on: boolean }
   | { op: 'pty-winsz-set'; fd: number; rows: number; cols: number };
 
 export const PTY_OPS: readonly PtySyscall['op'][] = [
@@ -200,6 +208,7 @@ export const PTY_OPS: readonly PtySyscall['op'][] = [
   'pty-number',
   'pty-lock',
   'pty-ctty',
+  'pty-packet',
   'pty-winsz-set',
 ];
 
@@ -249,9 +258,15 @@ export function ptySyscall(req: PtySyscall, ctx: PtyContext): SyncFsResult {
       return done;
     case 'pty-ctty': {
       const tty = terminalOf(ctx, req.fd);
+      // A session leader asking again for the terminal it has: nothing to do (Linux answers 0).
+      const leader = ctx.jobs?.getsid(ctx.pid, 0) === ctx.pid;
+      if (leader && ctx.jobs?.controllingTerminal(ctx.pid) === tty) return done;
       if (!ctx.jobs?.acquireTerminal(ctx.pid, tty)) throw new KernelError('EPERM');
       return done;
     }
+    case 'pty-packet':
+      masterOf(ctx, req.fd).packet = req.on;
+      return done;
     case 'pty-winsz-set':
       terminalOf(ctx, req.fd).resize(req.cols, req.rows);
       return done;

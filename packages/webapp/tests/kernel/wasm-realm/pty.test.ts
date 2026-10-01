@@ -4,6 +4,7 @@ import { JobTable } from '../../../src/kernel/wasm-realm/jobs.js';
 import {
   ptyIoctl,
   TIOCGPTN,
+  TIOCPKT,
   TIOCSCTTY,
   TIOCSPTLCK,
   TIOCSWINSZ,
@@ -90,6 +91,20 @@ describe('PtyTable / PtyPair', () => {
     expect(ptys.open().pair.index).toBe(0); // the number is reused
   });
 
+  it('packet mode: every master read starts with TIOCPKT_DATA, within the size asked for', async () => {
+    const { pair, master } = new PtyTable(() => {}).open();
+    pair.locked = false;
+    const slave = pair.openSlave();
+    pair.packet = true;
+    await write(slave, 'abc');
+    const read = master.file.read as (max: number) => Promise<Uint8Array>;
+    expect([...(await read.call(master.file, 3))]).toEqual([0, 97, 98]);
+    expect([...(await read.call(master.file, 4096))]).toEqual([0, 99]);
+    pair.packet = false;
+    await write(slave, 'd');
+    expect(await readAll(master)).toBe('d');
+  });
+
   it('ptsNumber reads /dev/pts/N only', () => {
     expect(ptsNumber('/dev/pts/12')).toBe(12);
     expect(ptsNumber('/dev/pts/x')).toBeUndefined();
@@ -127,8 +142,23 @@ describe('ptySyscall', () => {
     expect(ctx.jobs.controllingTerminal(ctx.pid)).toBeNull();
     ptySyscall({ op: 'pty-ctty', fd: slave }, ctx);
     expect(ctx.jobs.controllingTerminal(ctx.pid)).toBe(ctx.ptys.get(0).slave);
-    // It has one now: another TIOCSCTTY is EPERM.
-    expect(() => ptySyscall({ op: 'pty-ctty', fd: slave }, ctx)).toThrow(/EPERM/);
+    // The same terminal again is fine (screen's window asks after opening it without O_NOCTTY).
+    expect(ptySyscall({ op: 'pty-ctty', fd: slave }, ctx)).toEqual({ ok: true, kind: 'void' });
+    // It has one now: another terminal is EPERM.
+    const other = (ptySyscall({ op: 'pty-open' }, ctx) as { json: number }).json;
+    expect(() => ptySyscall({ op: 'pty-ctty', fd: other }, ctx)).toThrow(/EPERM/);
+  });
+
+  it('TIOCPKT sets packet mode on a master only', () => {
+    const ctx = context();
+    const master = (ptySyscall({ op: 'pty-open' }, ctx) as { json: number }).json;
+    ptySyscall({ op: 'pty-packet', fd: master, on: true }, ctx);
+    expect(ctx.ptys.get(0).packet).toBe(true);
+    ptySyscall({ op: 'pty-lock', fd: master, lock: false }, ctx);
+    const slave = (
+      ptySyscall({ op: 'pty-slave-open', n: 0, noctty: true }, ctx) as { json: number }
+    ).json;
+    expect(() => ptySyscall({ op: 'pty-packet', fd: slave, on: true }, ctx)).toThrow(/ENOTTY/);
   });
 
   it('TIOCSWINSZ on the master or the slave resizes the slave, signalling SIGWINCH', () => {
@@ -164,6 +194,7 @@ describe('ptyIoctl (an Emscripten program’s ioctl)', () => {
           if (k === 13) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
           calls.push(`ctty ${k}`);
         },
+        setPacketMode: (k, on) => void calls.push(`packet ${k} ${on}`),
         setWinsize: (k, rows, cols) => void calls.push(`winsz ${k} ${rows}x${cols}`),
       },
     });
@@ -179,6 +210,15 @@ describe('ptyIoctl (an Emscripten program’s ioctl)', () => {
     heap[4] = 0;
     expect(ioctl(5, TIOCSPTLCK, 0)).toBe(0);
     expect(calls).toEqual(['number 9', 'lock 9 false']);
+  });
+
+  it('TIOCPKT reads the mode word', () => {
+    const { heap, calls, ioctl } = setup(9);
+    heap[4] = 1;
+    expect(ioctl(5, TIOCPKT, 0)).toBe(0);
+    heap[4] = 0;
+    expect(ioctl(5, TIOCPKT, 0)).toBe(0);
+    expect(calls).toEqual(['packet 9 true', 'packet 9 false']);
   });
 
   it('TIOCSWINSZ unpacks struct winsize', () => {
