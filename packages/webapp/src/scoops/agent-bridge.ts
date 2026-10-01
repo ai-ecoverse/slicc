@@ -30,7 +30,6 @@
  */
 
 import { createLogger } from '../base/logger.js';
-import { processImageContent } from '../core/image-processor.js';
 import type { SessionStore } from '../core/session.js';
 import type { ImageContent } from '../core/types.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -855,6 +854,9 @@ async function writeAgentSessionArchive(
 async function prepareImages(
   images: readonly ImageContent[]
 ): Promise<{ images: ImageContent[] } | { error: AgentSpawnResult }> {
+  // Lazy: only a spawn with images needs the validator (and, for an oversized
+  // image, ImageMagick).
+  const { processImageContent } = await import('../core/image-processor.js');
   const prepared: ImageContent[] = [];
   for (const [i, image] of images.entries()) {
     const result = await processImageContent(image);
