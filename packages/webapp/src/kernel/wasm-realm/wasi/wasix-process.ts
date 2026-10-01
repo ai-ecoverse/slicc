@@ -127,13 +127,22 @@ export class WasixProcess {
   /** A spawn's `open` fd operation (relative to the actions' `cwd` so far): a kernel VFS description of its own. */
   private openFor(op: SpawnFdOp, cwd: string): number {
     const path = resolveFrom(cwd, op.path);
-    if (!this.host.o.fs.exists(path) && !(op.oflags & OFLAG_CREAT)) {
+    const existing = this.host.o.fs.exists(path);
+    if (!existing && !(op.oflags & OFLAG_CREAT)) {
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }
+    // Created at once, as O_CREAT does: the file is there even if the child
+    // writes nothing to it (an empty captured stderr), not only on write-back.
+    if (!existing) this.host.o.fs.writeFile(path, new Uint8Array(0));
     const flags = (op.rightsWrite ? O_RDWR : 0) | (op.append ? O_APPEND : 0);
-    return this.host.o.kernel.sys.openVfs(path, op.rightsWrite ? flags || O_WRONLY : 0, 0, {
-      ...(op.oflags & OFLAG_TRUNC ? { contents: new Uint8Array(0) } : {}),
-    });
+    // Truncated through the kernel's one node per path, shared with other opens.
+    const truncate = !existing || (op.oflags & OFLAG_TRUNC) !== 0;
+    return this.host.o.kernel.sys.openVfs(
+      path,
+      op.rightsWrite ? flags || O_WRONLY : 0,
+      0,
+      truncate ? { truncate } : {}
+    );
   }
 
   /** Start a child (posix_spawn); its pid. */

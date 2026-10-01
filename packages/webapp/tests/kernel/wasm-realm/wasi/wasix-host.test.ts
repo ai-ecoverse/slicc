@@ -238,6 +238,18 @@ describe('WASIX: spawn fd operations', () => {
     expect(t.kernel.opened).toEqual(['/workspace/sub/in.txt']);
   });
 
+  it('an O_CREAT open makes the file at once, so it exists even if the child writes nothing', () => {
+    const t = setup();
+    const CREAT = 1;
+    spawn(t, ops(t, [[OPEN, 2, 0, '/tmp/err.txt', CREAT]]), 1);
+    expect(t.fs.exists('/tmp/err.txt')).toBe(true); // an empty captured stderr is still a file
+    expect(t.fs.readFile('/tmp/err.txt')).toEqual(new Uint8Array(0));
+    expect(t.kernel.opened).toEqual(['/tmp/err.txt']);
+    // Without O_CREAT a missing path is ENOENT, and nothing is made.
+    expect(spawn(t, ops(t, [[OPEN, 2, 0, '/tmp/none.txt']]), 1)).toBe(E.NOENT);
+    expect(t.fs.exists('/tmp/none.txt')).toBe(false);
+  });
+
   it('a failing action closes what earlier opens took (no leaked kernel fds)', () => {
     const t = setup();
     const before = t.kernel.table.size;
