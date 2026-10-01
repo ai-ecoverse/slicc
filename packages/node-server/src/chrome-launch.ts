@@ -276,6 +276,8 @@ export function buildChromeLaunchArgs(options: {
   hosted?: boolean;
   /** Throwaway-profile harnesses only (`SLICC_CHROME_MOCK_KEYCHAIN=1`); see below. */
   mockKeychain?: boolean;
+  /** A hosted leader on a GPU machine (`SLICC_CHROME_GPU=1`); see below. */
+  gpu?: boolean;
 }): string[] {
   const args = [
     `--remote-debugging-port=${options.cdpPort}`,
@@ -361,13 +363,21 @@ export function buildChromeLaunchArgs(options: {
     // private address is not a secret worth hiding behind mDNS. A literal host
     // candidate lets pion connect directly. The relay fallback is what dies
     // when TURN rejects CreatePermission.
-    args.push(
-      '--headless=new',
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--font-render-hinting=none'
-    );
+    args.push('--headless=new', '--no-sandbox', '--disable-dev-shm-usage');
+    // A container has no GPU, so a hosted leader turns it off, unless it runs on a GPU machine
+    // (the cloud-run-gpu pool's L4): then WebGPU over Vulkan lets a page run models such as kev
+    // on the GPU. Verified 2026-10-01 with headless Chrome 154 on that pool.
+    if (options.gpu) {
+      args.push(
+        '--enable-unsafe-webgpu',
+        '--enable-features=Vulkan',
+        '--use-angle=vulkan',
+        '--ignore-gpu-blocklist'
+      );
+    } else {
+      args.push('--disable-gpu');
+    }
+    args.push('--font-render-hinting=none');
   }
 
   args.push(options.launchUrl);

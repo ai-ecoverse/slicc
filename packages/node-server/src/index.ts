@@ -627,6 +627,7 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
     profile: chromeProfile,
     hosted: RUNTIME_FLAGS.hosted,
     mockKeychain: process.env.SLICC_CHROME_MOCK_KEYCHAIN === '1',
+    gpu: process.env.SLICC_CHROME_GPU === '1',
   });
   if (RUNTIME_FLAGS.hosted) {
     // Chrome rewrites /proc/cmdline after startup, so this line is the record
