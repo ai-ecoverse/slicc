@@ -122,9 +122,9 @@ function validCommandName(name: string): boolean {
   return /^[A-Za-z0-9._+-]+$/.test(name) && name !== '.' && name !== '..';
 }
 
-function manifestArgs(raw: unknown): string[] | undefined {
+function manifestArgs(pkgDir: string, raw: unknown): string[] | undefined {
   return Array.isArray(raw) && raw.every((arg) => typeof arg === 'string') && raw.length > 0
-    ? raw
+    ? raw.map((arg) => arg.replaceAll('${package}', pkgDir))
     : undefined;
 }
 
@@ -155,7 +155,7 @@ function commandFromEntry(
   const glue = abi === 'wasi' ? wasm : insidePackage(pkgDir, raw.glue);
   if (!abi || !glue || !wasm) return undefined;
   const argv0 = typeof raw.argv0 === 'string' && raw.argv0 ? raw.argv0 : command;
-  const args = manifestArgs(raw.args);
+  const args = manifestArgs(pkgDir, raw.args);
   const env = { ...packageEnv, ...manifestEnv(pkgDir, raw.env) };
   return {
     name: command,
