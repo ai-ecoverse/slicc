@@ -16,6 +16,7 @@ import {
 } from '../../../../src/kernel/wasm-realm/wasi/wasi-files.js';
 import { importedMemory } from '../../../../src/kernel/wasm-realm/wasi/wasi-module.js';
 import {
+  captureBacktraces,
   trapMessage,
   unsupportedImport,
 } from '../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js';
@@ -270,6 +271,31 @@ describe('trapMessage', () => {
 
   it('is the message alone by default', () => {
     expect(trapMessage(trap(), {})).toBe('wasm trap: unreachable');
+  });
+
+  it("shows the program's wasm frames, not the runtime's JS ones under them", () => {
+    const e = trap();
+    e.stack += [
+      '',
+      '    at runWasiProcess (http://localhost/assets/wasi-runtime-X.js:1:2000)',
+      '    at async http://localhost/assets/process-worker-Y.js:1:300',
+    ].join('\n');
+    const lines = trapMessage(e, { SLICC_WASM_BACKTRACE: '1' }).split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines.slice(1).every((line) => line.includes('wasm://wasm/'))).toBe(true);
+  });
+
+  it('captureBacktraces raises the stack limit only when asked', () => {
+    const before = Error.stackTraceLimit;
+    try {
+      Error.stackTraceLimit = 10;
+      captureBacktraces({});
+      expect(Error.stackTraceLimit).toBe(10);
+      captureBacktraces({ SLICC_WASM_BACKTRACE: '1' });
+      expect(Error.stackTraceLimit).toBeGreaterThanOrEqual(40);
+    } finally {
+      Error.stackTraceLimit = before;
+    }
   });
 
   it('adds the wasm frames with SLICC_WASM_BACKTRACE=1, naming a thread', () => {

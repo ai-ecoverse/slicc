@@ -331,6 +331,7 @@ class LinkSync {
 const DL_GEN = 3;
 
 export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike): Promise<number> {
+  captureBacktraces(init.env);
   // A WASIX program's handlers run at syscall boundaries; without one, its
   // default action is the kernel's (raised again, now reported uncaught).
   const signals = new WasiSignals((sig) => {
@@ -420,11 +421,25 @@ export function trapMessage(
 ): string {
   const head = `wasm trap${where}: ${e.message}`;
   if (env.SLICC_WASM_BACKTRACE !== '1') return head;
+  // The program's frames only: under them the stack goes on into the
+  // runtime's own JS (runWasiProcess, the worker).
   const frames = (e.stack ?? '')
     .split('\n')
-    .filter((line) => /^\s+at /.test(line))
+    .filter((line) => /^\s+at .*wasm:\/\/wasm\//.test(line))
     .slice(0, BACKTRACE_FRAMES);
   return frames.length ? `${head}\n${frames.join('\n')}` : head;
+}
+
+/**
+ * With `SLICC_WASM_BACKTRACE=1`, let V8 record enough frames for
+ * {@link trapMessage}: it captures only `Error.stackTraceLimit` (10 by
+ * default) when the trap happens. The worker runs this one program, so the
+ * global is its own.
+ */
+export function captureBacktraces(env: Readonly<Record<string, string>>): void {
+  if (env.SLICC_WASM_BACKTRACE !== '1') return;
+  // The runtime's own frames sit under the program's: room for both.
+  Error.stackTraceLimit = Math.max(Error.stackTraceLimit ?? 0, BACKTRACE_FRAMES + 20);
 }
 
 /**
@@ -435,6 +450,7 @@ export function trapMessage(
  * any thread ends every thread.
  */
 export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike): Promise<void> {
+  captureBacktraces(init.env);
   const { transport, sys, call, say } = kernelOf(init, port);
   const { thread } = init;
   const threads = new WasiThreads(port, thread.memory, threadCap(init.env), thread.tid, thread.ids);
