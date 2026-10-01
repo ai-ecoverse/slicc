@@ -54,6 +54,11 @@ export interface VfsFileOptions {
   orphan?: boolean;
   /** Created or truncated by the open: empty, whatever the path held. */
   truncate?: boolean;
+  /**
+   * O_CREAT: the file is made at the open when the path is missing, as on
+   * Linux, and left as it is when it exists (only `truncate` empties it).
+   */
+  create?: boolean;
 }
 
 /** How soon a written node writes itself back, at the least. */
@@ -86,6 +91,8 @@ export class VfsNode {
   private writeBackCost = 0;
   /** Descriptions on it. */
   opens = 0;
+  /** The path held no file when it was first read (what `materialize` makes). */
+  private missing = false;
 
   constructor(
     private readonly fs: VfsFileFs,
@@ -111,10 +118,19 @@ export class VfsNode {
         this.data = await this.fs.readFileBuffer(this.path);
       } catch {
         this.data = new Uint8Array(0); // created, or gone since: start empty
+        this.missing = true;
       }
       this.length = this.data.length;
     }
     return this.data;
+  }
+
+  /** Put the file on the VFS now if the path is missing (O_CREAT); never touch one that exists. */
+  async materialize(): Promise<void> {
+    await this.load();
+    if (!this.missing || this.orphaned) return;
+    this.missing = false;
+    await this.fs.writeFile(this.path, this.data?.slice(0, this.length) ?? new Uint8Array(0));
   }
 
   async size(): Promise<number> {
@@ -252,6 +268,7 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
     nodes && opts.contents === undefined && !opts.orphan
       ? nodes.open(opts.path)
       : new VfsNode(fs, opts.path, opts.contents, opts.orphan === true);
+  if (opts.create) void node.serial(() => node.materialize());
   if (opts.truncate) void node.serial(() => node.truncate(0));
   let offset = opts.position;
   const serial = <T>(op: () => Promise<T>) => node.serial(op);

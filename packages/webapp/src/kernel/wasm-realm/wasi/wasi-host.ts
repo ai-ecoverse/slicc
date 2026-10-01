@@ -59,7 +59,8 @@ export interface WasiHostOptions {
   /** Its parent's pid (getppid); absent: 1. */
   ppid?: number;
   kernel: WasiKernel;
-  fs: SyncFsPosixBridge;
+  /** The VFS, metadata cached (`invalidate` drops it: other processes change files too). */
+  fs: SyncFsPosixBridge & { invalidate?(): void };
   /** Kernel fds beyond 0-2 the process starts with, and how the kernel backs them. */
   inherited?: ReadonlyArray<{ fd: number; kind?: KernelFdKind; flags?: number }>;
   /**

@@ -127,22 +127,18 @@ export class WasixProcess {
   /** A spawn's `open` fd operation (relative to the actions' `cwd` so far): a kernel VFS description of its own. */
   private openFor(op: SpawnFdOp, cwd: string): number {
     const path = resolveFrom(cwd, op.path);
-    const existing = this.host.o.fs.exists(path);
-    if (!existing && !(op.oflags & OFLAG_CREAT)) {
+    const create = (op.oflags & OFLAG_CREAT) !== 0;
+    if (!create && !this.host.o.fs.exists(path)) {
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }
-    // Created at once, as O_CREAT does: the file is there even if the child
-    // writes nothing to it (an empty captured stderr), not only on write-back.
-    if (!existing) this.host.o.fs.writeFile(path, new Uint8Array(0));
     const flags = (op.rightsWrite ? O_RDWR : 0) | (op.append ? O_APPEND : 0);
-    // Truncated through the kernel's one node per path, shared with other opens.
-    const truncate = !existing || (op.oflags & OFLAG_TRUNC) !== 0;
-    return this.host.o.kernel.sys.openVfs(
-      path,
-      op.rightsWrite ? flags || O_WRONLY : 0,
-      0,
-      truncate ? { truncate } : {}
-    );
+    // O_CREAT: the kernel makes the file at the open if (by its own, live
+    // look) it is missing, so it is there even if the child writes nothing,
+    // and never clobbers one another process just made. Only O_TRUNC empties.
+    return this.host.o.kernel.sys.openVfs(path, op.rightsWrite ? flags || O_WRONLY : 0, 0, {
+      ...(create ? { create } : {}),
+      ...(op.oflags & OFLAG_TRUNC ? { truncate: true } : {}),
+    });
   }
 
   /** Start a child (posix_spawn); its pid. */
@@ -160,6 +156,8 @@ export class WasixProcess {
       }) as number;
     } finally {
       for (const kfd of opened) this.host.o.kernel.sys.close(kfd);
+      // What its opens created, and what it goes on to write, is the VFS's now.
+      this.host.o.fs.invalidate?.();
     }
   }
 
@@ -185,6 +183,8 @@ export class WasixProcess {
       number,
     ];
     if (child === 0) return; // WNOHANG and nothing yet: tag Nothing
+    // A child that ended changed the VFS behind this process's metadata cache.
+    this.host.o.fs.invalidate?.();
     v.setUint8(pidPtr, 1);
     v.setUint32(pidPtr + 4, child, true);
     const sig = status & 0x7f;
