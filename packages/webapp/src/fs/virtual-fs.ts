@@ -156,6 +156,15 @@ function buildBackendDescriptor(backend: MountBackend, normalizedPath: string): 
   }
 }
 
+function displacedByRename(
+  dest: string | undefined,
+  source: string | undefined
+): 'link' | 'dir' | undefined {
+  if (dest === 'symlink' && source !== 'directory') return 'link';
+  if (dest === 'directory' && source === 'directory') return 'dir';
+  return undefined;
+}
+
 function parkedLinkCandidate(path: string): string {
   const slash = path.lastIndexOf('/');
   const nonce = Math.random().toString(36).slice(2, 10);
@@ -2083,28 +2092,14 @@ export class VirtualFS {
       } catch {}
     }
 
-    const replacesLink = newStat?.type === 'symlink' && entryType !== 'directory';
+    const displaced = displacedByRename(newStat?.type, entryType);
+    if (displaced) this.refuseMountedDisplacement(normalizedNew);
     try {
       await this.withWriteLock(async () => {
         await this.dropSidecarConsistency();
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
-
-        const parked = replacesLink ? await this.freeParkedLinkPath(normalizedNew) : undefined;
-
-        if (parked) this.markSidecarDirty(parked);
-        if (parked) await this.lfs.rename(normalizedNew, parked);
-        try {
-          await this.lfs.rename(normalizedOld, normalizedNew);
-        } catch (err) {
-          try {
-            if (parked) await this.restoreParkedLink(parked, normalizedNew, err);
-          } finally {
-            await this.writeOpfsMetadataSidecarUnlocked().catch(() => undefined);
-          }
-          throw err;
-        }
-        if (parked) await this.lfs.unlink(parked).catch(() => undefined);
+        await this.storeRenameReplacing(normalizedOld, normalizedNew, displaced);
         await this.writeOpfsMetadataSidecarUnlocked();
       });
     } catch (err) {
@@ -2116,6 +2111,41 @@ export class VirtualFS {
     ]);
 
     this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+  }
+
+  private refuseMountedDisplacement(path: string): void {
+    const mount = this.findMount(path);
+    if (!mount) return;
+    const code = mount.relParts.length === 0 ? 'EBUSY' : 'EXDEV';
+    throw new FsError(code, 'rename onto a mounted entry', path);
+  }
+
+  private async storeRenameReplacing(
+    from: string,
+    to: string,
+    displaced: 'link' | 'dir' | undefined
+  ): Promise<void> {
+    if (displaced === 'dir' && (await this.lfs.readdir(to)).length > 0) {
+      throw new FsError('ENOTEMPTY', 'directory not empty', to);
+    }
+    const parked = displaced ? await this.freeParkedLinkPath(to) : undefined;
+
+    if (parked) this.markSidecarDirty(parked);
+    if (parked) await this.lfs.rename(to, parked);
+    try {
+      await this.lfs.rename(from, to);
+    } catch (err) {
+      try {
+        if (parked) await this.restoreParkedLink(parked, to, err);
+      } finally {
+        await this.writeOpfsMetadataSidecarUnlocked().catch(() => undefined);
+      }
+      throw err;
+    }
+    if (parked) {
+      const drop = displaced === 'dir' ? this.lfs.rmdir(parked) : this.lfs.unlink(parked);
+      await drop.catch(() => undefined);
+    }
   }
 
   private async freeParkedLinkPath(path: string): Promise<string> {
@@ -2138,7 +2168,7 @@ export class VirtualFS {
       const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
       throw new FsError(
         'EIO',
-        `rename failed (${why(cause)}) and the symlink it replaced could not be put back ` +
+        `rename failed (${why(cause)}) and the entry it replaced could not be put back ` +
           `(${why(restoreErr)}); it is at ${parked}`,
         path
       );

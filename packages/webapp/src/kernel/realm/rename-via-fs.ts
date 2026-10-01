@@ -2,6 +2,8 @@ export interface RenameFs {
   rename?: (a: string, b: string) => Promise<void>;
   mv?: (a: string, b: string) => Promise<void>;
   stat: (path: string) => Promise<{ identity?: string; isDirectory?: boolean }>;
+
+  lstat?: (path: string) => Promise<{ isDirectory?: boolean; isSymbolicLink?: boolean }>;
   readFileBuffer: (path: string) => Promise<Uint8Array>;
   writeFile: (path: string, content: Uint8Array | string) => Promise<void>;
   rm: (path: string, opts?: { recursive?: boolean }) => Promise<void>;
@@ -27,6 +29,19 @@ function parentOf(path: string): string {
   return slash <= 0 ? '/' : path.slice(0, slash);
 }
 
+async function statIfPresent(
+  fs: RenameFs,
+  path: string,
+  entry: boolean
+): Promise<{ identity?: string; isDirectory?: boolean; isSymbolicLink?: boolean } | undefined> {
+  try {
+    return entry && fs.lstat ? await fs.lstat(path) : await fs.stat(path);
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code === 'ENOENT') return undefined;
+    throw err;
+  }
+}
+
 export async function renameViaFs(fs: RenameFs, src: string, dest: string): Promise<void> {
   if (src === dest) return;
   const native = await nativeRename(fs, src, dest);
@@ -48,11 +63,14 @@ export async function renameViaFs(fs: RenameFs, src: string, dest: string): Prom
     if (native && code !== 'ENOENT') throw native;
     throw posixError('EXDEV', `cannot move directory ${src} to ${dest}`);
   }
-  try {
-    const toStat = await fs.stat(dest);
-    if (fromStat.identity && fromStat.identity === toStat.identity) return;
-  } catch {}
+  const toStat = await statIfPresent(fs, dest, false);
+  if (toStat && fromStat.identity && fromStat.identity === toStat.identity) return;
+
+  const toEntry = fs.lstat ? await statIfPresent(fs, dest, true) : toStat;
+  if (toEntry?.isDirectory) throw posixError('EISDIR', `is a directory: ${dest}`);
   const content = await fs.readFileBuffer(src);
+
+  if (toEntry?.isSymbolicLink) await fs.rm(dest);
   await fs.writeFile(dest, content);
   await fs.rm(src, { recursive: true });
 }
