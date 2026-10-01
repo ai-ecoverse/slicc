@@ -1107,11 +1107,4 @@ function newRequestId(): string {
   return `prpc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-export function getPanelRpcClient(): PanelRpcClient | null {
-  const g = globalThis as unknown as { __slicc_panelRpc?: PanelRpcClient };
-  return g.__slicc_panelRpc ?? null;
-}
-
-export function hasLocalDom(): boolean {
-  return typeof window !== 'undefined' && typeof document !== 'undefined';
-}
+export { getPanelRpcClient, hasLocalDom } from '../base/panel-rpc-accessor.js';

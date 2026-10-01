@@ -40,11 +40,7 @@ const SHARED_TS_PROBE_NAMES = new Set(['isChromeExtensionRealm', 'canConnectToCh
 
 const BANNED_TOP_DIRS = new Set(['scoops', 'tools', 'kernel']);
 
-const EXEMPT_FILES = new Set([
-  'kernel/host.ts',
-  'kernel/kernel-worker.ts',
-  'kernel/port-bridge-client.ts',
-]);
+const EXEMPT_FILES = new Set(['kernel/host.ts', 'kernel/kernel-worker.ts']);
 
 export function isBannedZoneFile(relPath) {
   return BANNED_TOP_DIRS.has(relPath.split('/')[0]) && !EXEMPT_FILES.has(relPath);

@@ -117,6 +117,8 @@ export interface WasmTarget {
   module: string;
   argv0: string;
 
+  prefixArgs?: readonly string[];
+
   defaults?: Readonly<Record<string, string>>;
 }
 
@@ -493,6 +495,7 @@ export class WasmSession {
           glue: command.glue,
           module: command.wasm,
           argv0: command.argv0,
+          ...(command.args ? { prefixArgs: command.args } : {}),
           defaults: command.env,
         };
       }
@@ -581,7 +584,12 @@ export class WasmSession {
     return {
       target,
       file: interp,
-      args: [...(arg ? [arg] : []), command ? script : req.file, ...req.argv.slice(1)],
+      args: [
+        ...(found.prefixArgs ?? []),
+        ...(arg ? [arg] : []),
+        command ? script : req.file,
+        ...req.argv.slice(1),
+      ],
     };
   }
 
@@ -589,7 +597,11 @@ export class WasmSession {
     return async (req, fds) => {
       const direct = await this.resolve(req.file, req.argv[0] ?? req.file, req.cwd);
       const run = direct
-        ? { target: direct, file: req.file, args: req.argv.slice(1) }
+        ? {
+            target: direct,
+            file: req.file,
+            args: [...(direct.prefixArgs ?? []), ...req.argv.slice(1)],
+          }
         : await this.interpreted(req);
       if (!run) {
         if (!(await this.shellRuns(req))) {

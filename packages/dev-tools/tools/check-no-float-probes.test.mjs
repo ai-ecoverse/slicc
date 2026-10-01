@@ -54,7 +54,6 @@ describe('check-no-float-probes: isBannedZoneFile', () => {
     expect(isBannedZoneFile('kernel/telemetry.ts')).toBe(true);
     expect(isBannedZoneFile('kernel/host.ts')).toBe(false);
     expect(isBannedZoneFile('kernel/kernel-worker.ts')).toBe(false);
-    expect(isBannedZoneFile('kernel/port-bridge-client.ts')).toBe(false);
   });
 
   it('allows every other layer, including shell/ (which owns topology)', () => {
@@ -62,6 +61,7 @@ describe('check-no-float-probes: isBannedZoneFile', () => {
     expect(isBannedZoneFile('ui/main.ts')).toBe(false);
     expect(isBannedZoneFile('core/secret-topology.ts')).toBe(false);
     expect(isBannedZoneFile('base/api-endpoint.ts')).toBe(false);
+    expect(isBannedZoneFile('base/port-bridge-client.ts')).toBe(false);
   });
 });
 
@@ -388,9 +388,7 @@ describe('check-no-float-probes: end-to-end over the real tree', () => {
     expect(discoveredAliasNames(aliases)).toContain('resolveSecretTopology');
   });
 
-  it('kernel/port-bridge-client.ts and kernel/kernel-worker.ts are exempt, not clean by accident', () => {
-    const portBridge = readFileSync(resolve(scanRoot, 'kernel/port-bridge-client.ts'), 'utf8');
-    expect(portBridge).toContain('getExtensionDelegateId');
+  it('kernel/kernel-worker.ts is exempt, not clean by accident', () => {
     const kernelWorker = readFileSync(resolve(scanRoot, 'kernel/kernel-worker.ts'), 'utf8');
     expect(kernelWorker).toContain('setExtensionDelegateId');
   });

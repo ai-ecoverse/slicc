@@ -1,4 +1,4 @@
-import { createPortBridgeClient } from '../kernel/port-bridge-client.js';
+import { createPortBridgeClient } from '../base/port-bridge-client.js';
 
 const CALL_TIMEOUT_MS = 10_000;
 

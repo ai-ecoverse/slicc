@@ -187,6 +187,24 @@ describe('WasmSession', () => {
     expect(await session.resolve('sed', 'sed', '/w')).toBeUndefined();
   });
 
+  it('prepends fixed arguments when a child spawns an installed command', async () => {
+    fakeProcesses();
+    const files = {
+      ...installed,
+      [`${PKG}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-gnu',
+        slicc: {
+          commands: { tac: { glue: 'bin/core', wasm: 'bin/core.wasm', args: ['-S', 'tac'] } },
+        },
+      }),
+    };
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    await parentSpawner(session);
+    const parent = spawn.mock.calls.at(-1)![0];
+    await parent.spawner({ file: 'tac', argv: ['tac', '--version'], env: {}, cwd: '/w' }, stdio());
+    expect(spawn.mock.calls.at(-1)![0].args).toEqual(['-S', 'tac', '--version']);
+  });
+
   it("puts every invocation of one owner on that owner's loopback network", async () => {
     fakeProcesses();
     const launch = async (config: ConstructorParameters<typeof WasmSession>[1]) => {

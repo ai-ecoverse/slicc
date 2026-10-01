@@ -473,6 +473,22 @@ describe('wasm command', () => {
       expect(compile.mock.calls[0][1]).toBe(`${pkg}/lib/coreutils.wasm`);
     });
 
+    it('prepends manifest arguments to a bare installed command', async () => {
+      const files = {
+        ...installed,
+        [`${pkg}/package.json`]: JSON.stringify({
+          name: '@ai-ecoverse/wasm-gnu',
+          slicc: {
+            commands: {
+              tac: { glue: 'bin/coreutils', wasm: 'lib/coreutils.wasm', args: ['-S', 'tac'] },
+            },
+          },
+        }),
+      };
+      await runWasmCommand(['tac', '--version'], ctx(files));
+      expect(spawn.mock.calls[0][0].args).toEqual(['-S', 'tac', '--version']);
+    });
+
     it('prefers a file of that name in the working directory', async () => {
       await runWasmCommand(['sed'], ctx({ ...installed, '/w/sed': 'LOCAL', '/w/sed.wasm': 'W' }));
       expect(spawn.mock.calls[0][0].program.glue).toBe('LOCAL');

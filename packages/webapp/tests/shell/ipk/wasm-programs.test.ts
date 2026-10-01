@@ -86,6 +86,20 @@ describe('commandsFromManifest', () => {
     ]);
   });
 
+  it('accepts only string arrays as fixed command arguments', () => {
+    const commands = commandsFromManifest(dir, {
+      slicc: {
+        abi: 'wasi',
+        commands: {
+          gem: { wasm: 'bin/ruby.wasm', args: ['-S', 'gem'] },
+          bad: { wasm: 'bin/ruby.wasm', args: ['-S', 42] },
+        },
+      },
+    });
+    expect(commands[0]?.args).toEqual(['-S', 'gem']);
+    expect(commands[1]).not.toHaveProperty('args');
+  });
+
   it('drops commands that escape the package, have bad names, or miss a path', () => {
     const commands = commandsFromManifest(dir, {
       slicc: {

@@ -26,6 +26,8 @@ export const LAYER_RANK = {
 
 const UNRANKED_IMPORTER_RANK = LAYER_RANK.ui - 0.5;
 
+export const KERNEL_VALUE_BANNED_LAYERS = new Set(['scoops', 'fs', 'base']);
+
 export function isWebappSource(name) {
   return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name);
 }
@@ -210,7 +212,8 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   const stripped = stripComments(source);
   const isolated = stack.isolatedLayers;
   const typeOnlyFromIndices = new Set();
-  if (stack.id === 'webapp' && fromLayer === 'scoops') {
+  const kernelValueBanned = stack.id === 'webapp' && KERNEL_VALUE_BANNED_LAYERS.has(fromLayer);
+  if (kernelValueBanned) {
     for (const tm of stripped.matchAll(TYPE_ONLY_NAMED_CLAUSE_RE)) {
       const idx = typeOnlyFromKeywordIndex(tm);
       if (idx >= 0) typeOnlyFromIndices.add(idx);
@@ -224,13 +227,10 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
       resolve('/', importerDir, queryAt >= 0 ? specifier.slice(0, queryAt) : specifier).slice(1);
     const toLayer = stack.layerOf(target);
     const toRank = stack.layerRank[toLayer];
-    const scoopsKernelValue =
-      stack.id === 'webapp' &&
-      fromLayer === 'scoops' &&
-      toLayer === 'kernel' &&
-      !typeOnlyFromIndices.has(matchIndex);
-    if (toRank === undefined && !scoopsKernelValue) return;
-    const up = scoopsKernelValue || (toRank !== undefined && toRank > fromRank);
+    const kernelValue =
+      kernelValueBanned && toLayer === 'kernel' && !typeOnlyFromIndices.has(matchIndex);
+    if (toRank === undefined && !kernelValue) return;
+    const up = kernelValue || (toRank !== undefined && toRank > fromRank);
     const sideways =
       isolated.has(fromLayer) &&
       fromLayer === toLayer &&
@@ -246,11 +246,7 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   for (const m of stripped.matchAll(BACKTICK_IMPORT_RE)) {
     const raw = m[1];
     if (raw.includes('${')) {
-      if (
-        stack.id === 'webapp' &&
-        fromLayer === 'scoops' &&
-        kernelSegmentFollowsInterpolation(raw)
-      ) {
+      if (kernelValueBanned && kernelSegmentFollowsInterpolation(raw)) {
         consider(raw, m.index, 'kernel/__interp__.js');
         continue;
       }
@@ -265,6 +261,11 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
       continue;
     }
     consider(raw, m.index);
+  }
+
+  for (const m of stripped.matchAll(CONCAT_CALL_ARGS_RE)) {
+    const joined = [...m[1].matchAll(QUOTED_SEGMENT_RE)].map((seg) => seg[1]).join('');
+    if (/^\.\.?\//.test(joined)) consider(joined, m.index);
   }
   return hits;
 }

@@ -293,6 +293,7 @@ async function resolveInstalled(
     argv0: call.argv0 ?? command.argv0,
     module: call.module ?? command.wasm,
     program: command.glue,
+    args: [...(command.args ?? []), ...call.args],
     defaults: command.env,
   };
 }

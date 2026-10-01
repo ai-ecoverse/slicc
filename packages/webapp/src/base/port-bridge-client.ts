@@ -1,6 +1,7 @@
-import { createLogger } from '../base/logger.js';
-import { getExtensionDelegateId } from '../shell/proxied-fetch.js';
-import type { PanelRpcOp } from './panel-rpc.js';
+import type { PanelRpcOp } from '../kernel/panel-rpc.js';
+import { getExtensionDelegateId } from './api-endpoint.js';
+import { createLogger } from './logger.js';
+import { getPanelRpcClient } from './panel-rpc-accessor.js';
 
 interface BridgePort {
   onMessage: { addListener: (fn: (msg: unknown) => void) => void };
@@ -125,7 +126,6 @@ export function createPortBridgeClient<
   }
 
   async function callViaPanelRpc(request: TRequest): Promise<TReply | undefined> {
-    const { getPanelRpcClient } = await import('./panel-rpc.js');
     const client = getPanelRpcClient();
     if (!client) {
       log.warn(`cannot bridge ${opts.portName} call: panel-RPC client unavailable`);

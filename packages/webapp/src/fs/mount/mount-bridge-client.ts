@@ -1,5 +1,5 @@
 import type { SignAndForwardReply } from '@slicc/shared-ts';
-import { createPortBridgeClient } from '../../kernel/port-bridge-client.js';
+import { createPortBridgeClient } from '../../base/port-bridge-client.js';
 import { FsError } from '../types.js';
 
 export type MountSignAndForwardType = 'mount.s3-sign-and-forward' | 'mount.da-sign-and-forward';
