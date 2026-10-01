@@ -124,6 +124,27 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     ).toEqual([{ line: 1, specifier: '../kernel/${name}.js', from: 'base', to: 'kernel' }]);
   });
 
+  it('flags a +-concatenated import()/require() of kernel/ from fs/ and base/ (#3728)', () => {
+    expect(
+      findLayerBackEdges(
+        'fs/mount-commands.ts',
+        "const m = await import('../' + 'kernel/panel-rpc.js');"
+      )
+    ).toEqual([{ line: 1, specifier: '../kernel/panel-rpc.js', from: 'fs', to: 'kernel' }]);
+    expect(
+      findLayerBackEdges('base/x.ts', "const m = require('../ker' + \"nel/\" + 'messages.js');")
+    ).toEqual([{ line: 1, specifier: '../kernel/messages.js', from: 'base', to: 'kernel' }]);
+    expect(
+      findLayerBackEdges('fs/x.ts', "const m = await import('../' + 'base/logger.js');")
+    ).toEqual([]);
+  });
+
+  it('flags a +-concatenated up-stack import between ranked layers', () => {
+    expect(
+      findLayerBackEdges('cdp/x.ts', "const m = await import('../' + 'scoops/orchestrator.js');")
+    ).toEqual([{ line: 1, specifier: '../scoops/orchestrator.js', from: 'cdp', to: 'scoops' }]);
+  });
+
   it('allows fs/ and base/ top-level import type { … } clauses of kernel/', () => {
     const source = "import type { PanelRpcClient } from '../../kernel/panel-rpc.js';";
     expect(findLayerBackEdges('fs/mount/local-mount-acquire.ts', source)).toEqual([]);

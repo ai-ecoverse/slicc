@@ -10,9 +10,10 @@ import type { PanelRpcClient } from '../kernel/panel-rpc.js';
 
 /**
  * Returns the bridge client published on `globalThis.__slicc_panelRpc`
- * by `kernel-worker.ts`, or null when the current realm has a real
- * DOM and should run DOM operations directly. Commands use this to
- * pick between local-DOM and bridged execution.
+ * by `kernel-worker.ts`, or null when none is published. Null is NOT a
+ * realm signal: page realms never publish one, but a worker also returns
+ * null before (or without) publication. Pair with `hasLocalDom()` to pick
+ * local-DOM execution, and treat "no DOM and no client" as unavailable.
  */
 export function getPanelRpcClient(): PanelRpcClient | null {
   const g = globalThis as unknown as { __slicc_panelRpc?: PanelRpcClient };

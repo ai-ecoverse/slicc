@@ -346,8 +346,9 @@ function kernelSegmentFollowsInterpolation(raw) {
  *
  * On the webapp stack, a value import of kernel/ from scoops/, fs/, or base/
  * is a back-edge even though kernel/ is unranked (#3231, #3728). Top-level `import type { … } from`
- * clauses still erase and are allowed. Quoted specifiers and static
- * template-literal `import(\`…\`)` are both scanned (#3237 P2).
+ * clauses still erase and are allowed. Quoted specifiers, static
+ * template-literal `import(\`…\`)` (#3237 P2), and `+`-concatenated
+ * literal `import()`/`require()` specifiers (#3728) are all scanned.
  */
 export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   const fromLayer = stack.layerOf(importerRel);
@@ -406,6 +407,12 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
       continue;
     }
     consider(raw, m.index);
+  }
+  // `import('../' + 'kernel/x.js')` — a `+`-joined literal specifier is the
+  // same edge in disguise (#3728 review; same shape as findWebappEscapes).
+  for (const m of stripped.matchAll(CONCAT_CALL_ARGS_RE)) {
+    const joined = [...m[1].matchAll(QUOTED_SEGMENT_RE)].map((seg) => seg[1]).join('');
+    if (/^\.\.?\//.test(joined)) consider(joined, m.index);
   }
   return hits;
 }
