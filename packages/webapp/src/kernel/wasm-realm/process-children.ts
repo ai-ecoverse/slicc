@@ -78,6 +78,8 @@ export interface ProcessKernel {
   fork(state: ForkState): number;
   /** kill(2): 0, or a negative WASI errno (ESRCH, EINVAL). 0 and negative pids name groups. */
   kill(pid: number, sig: number): number;
+  /** pause(2): blocks until a caught signal arrives; always -EINTR. */
+  pause(): number;
   /** setpgid(2) / setsid(2): 0 / the new session, or a negative WASI errno. */
   setpgid(pid: number, pgid: number): number;
   setsid(): number;
@@ -318,6 +320,9 @@ export function createProcessKernel(deps: ProcessKernelDeps): ProcessKernel {
       if (!r.ok) return -wasiErrno(r.errno);
       deps.afterChild();
       return r.kind === 'json' ? (r.json as [number, number])[1] : 0;
+    },
+    pause() {
+      return status(call({ op: 'sig-pause' }, 'pause'));
     },
     kill(pid, sig) {
       // Itself: raise in place. A group (0, or a negative pid) is the kernel's to signal.
