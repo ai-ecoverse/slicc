@@ -159,6 +159,7 @@ export type WasmSyscall =
   | { op: 'tty-pgrp-get'; fd: number }
   | { op: 'tty-pgrp-set'; fd: number; pgrp: number }
   | { op: 'sig-mask'; caught: number; ignored: number }
+  | { op: 'sig-pause' }
   | SocketSyscall
   | PtySyscall;
 
@@ -279,6 +280,7 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'tty-pgrp-get',
   'tty-pgrp-set',
   'sig-mask',
+  'sig-pause',
   ...SOCKET_OPS,
   ...PTY_OPS,
 ]);
@@ -841,9 +843,23 @@ export class WasmProcess {
         this.caught = req.caught;
         this.ignored = req.ignored;
         return { ok: true, kind: 'void' };
+      case 'sig-pause':
+        return this.pause();
       case 'proc-captured':
         return { ok: true, kind: 'bytes', bytes: this.children.captured(req.pid, req.slot) };
     }
+  }
+
+  /**
+   * pause(2): sleep until a caught signal is pending, which ends the call
+   * with EINTR (the worker then runs the handler). An ignored signal, or one
+   * whose default action ends the process, does not return it.
+   */
+  private pause(): Promise<never> {
+    const signal = this.blockingSignal();
+    return new Promise<never>((_, reject) => {
+      signal.addEventListener('abort', () => reject(new KernelError('EINTR')), { once: true });
+    });
   }
 
   /** What a WASIX process linked (libraries loaded, table slots handed out), for its threads to replay. */
