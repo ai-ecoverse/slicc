@@ -163,5 +163,33 @@ describe('renameViaFs', () => {
       await renameViaFs(fs, '/a', '/b');
       expect(fs.moved).toBe('/a->/b');
     });
+
+    it('calls the native rename once, never its mv alias after it threw', async () => {
+      const fs = memoryFs({ '/a': 'x' });
+      const calls: string[] = [];
+      fs.rename = async () => {
+        calls.push('rename');
+        throw Object.assign(new Error('EIO: persist'), { code: 'EIO' });
+      };
+      fs.mv = async () => {
+        calls.push('mv');
+      };
+      await renameViaFs(fs, '/a', '/b');
+      expect(calls).toEqual(['rename']);
+    });
+
+    it("reports a failed parent lookup's own error, not a missing directory", async () => {
+      const fs = memoryFs({ '/f': 'F' }, ['/d']);
+      const stat = fs.stat.bind(fs);
+      fs.stat = async (path) => {
+        if (path === '/d') throw Object.assign(new Error('EIO: offline'), { code: 'EIO' });
+        return stat(path);
+      };
+      fs.rename = async () => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      };
+      await expect(renameViaFs(fs, '/f', '/d/f')).rejects.toMatchObject({ code: 'EIO' });
+      expect([...fs.store.keys()]).toEqual(['/f']);
+    });
   });
 });

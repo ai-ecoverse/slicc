@@ -35,25 +35,24 @@ function nativeOr(native: unknown, code: string, message: string): unknown {
 }
 
 /**
- * The native rename, or mv: undefined when one renamed, else the first error
- * (or null when the handle has neither). Called on `fs`: a VirtualFS method
- * needs its `this`.
+ * The native rename (or, without one, mv): undefined when it renamed, else
+ * its error (null when the handle has neither). Called once: VfsAdapter's
+ * `rename` is its `mv`, and a retry after a throw that already moved the
+ * entry (a persist failing after the store renamed) would hide that error.
+ * Called on `fs`: a VirtualFS method needs its `this`.
  */
 async function nativeRename(fs: RenameFs, src: string, dest: string): Promise<unknown> {
-  let first: unknown = null;
-  for (const fn of [fs.rename, fs.mv]) {
-    if (!fn) continue;
-    try {
-      await fn.call(fs, src, dest);
-      return undefined;
-    } catch (err) {
-      // VirtualFS.rename on a picker/S3/DA/AEM mount has no native rename and
-      // LightningFS cannot see the subtree — the historical contract is
-      // "throw, caller copy+deletes". Kept, to report if the copy may not run.
-      first ??= err;
-    }
+  const fn = fs.rename ?? fs.mv;
+  if (!fn) return null;
+  try {
+    await fn.call(fs, src, dest);
+    return undefined;
+  } catch (err) {
+    // VirtualFS.rename on a picker/S3/DA/AEM mount has no native rename and
+    // LightningFS cannot see the subtree — the historical contract is
+    // "throw, caller copy+deletes". Kept, to report if the copy may not run.
+    return err;
   }
-  return first;
 }
 
 function parentOf(path: string): string {
@@ -73,7 +72,9 @@ export async function renameViaFs(fs: RenameFs, src: string, dest: string): Prom
   let parent: { isDirectory?: boolean };
   try {
     parent = await fs.stat(parentOf(dest));
-  } catch {
+  } catch (err) {
+    // Only a missing directory is ENOENT; an EIO or a denied lookup says so.
+    if ((err as { code?: unknown } | null)?.code !== 'ENOENT') throw err;
     throw nativeOr(native, 'ENOENT', `no such directory for ${dest}`);
   }
   if (parent.isDirectory === false) {
