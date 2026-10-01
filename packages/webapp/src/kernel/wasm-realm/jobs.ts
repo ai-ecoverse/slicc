@@ -166,6 +166,17 @@ export class JobTable {
     this.foreground.set(tty, pgid);
   }
 
+  /**
+   * A pseudo-terminal's signals (SIGHUP, SIGWINCH, ^C typed through its
+   * master): only to a foreground group it was given (a session took it as
+   * its terminal, or tcsetpgrp). A pty nobody owns signals nobody, never the
+   * invocation's leader.
+   */
+  signalOwnedForeground(tty: KernelTty, sig: number): void {
+    const pgid = this.foreground.get(tty);
+    if (pgid !== undefined) this.killGroup(pgid, sig);
+  }
+
   /** Where the terminal's signals go (^C, ^Z, SIGWINCH): its foreground group. */
   signalForeground(tty: KernelTty, fallback: number, sig: number): void {
     this.killGroup(this.tcgetpgrp(tty, fallback), sig);

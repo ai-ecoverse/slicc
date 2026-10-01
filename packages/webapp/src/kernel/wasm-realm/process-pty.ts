@@ -14,7 +14,6 @@ import { wasiErrno } from './wasi-errno.js';
 export const TIOCGPTN = 0x80045430;
 export const TIOCSPTLCK = 0x40045431;
 export const TIOCSCTTY = 0x540e;
-export const TIOCGWINSZ = 0x5413;
 export const TIOCSWINSZ = 0x5414;
 
 /** The kernel calls behind them, on kernel descriptors. */
@@ -27,8 +26,6 @@ export interface PtyKernel {
   setControllingTerminal(kfd: number): void;
   /** TIOCSWINSZ, on a terminal or a master. */
   setWinsize(kfd: number, rows: number, cols: number): void;
-  /** TIOCGWINSZ (`[rows, cols]`), on a terminal or a master. */
-  winsize?(kfd: number): [number, number];
 }
 
 export interface PtyIoctlDeps {
@@ -53,18 +50,15 @@ export function ptyIoctl(ioctl: GlueSyscall, deps: PtyIoctlDeps): GlueSyscall {
       request !== TIOCGPTN &&
       request !== TIOCSPTLCK &&
       request !== TIOCSCTTY &&
-      request !== TIOCSWINSZ &&
-      request !== TIOCGWINSZ
+      request !== TIOCSWINSZ
     ) {
+      // termios and TIOCGWINSZ: the glue's terminal hooks, which the kernel answers.
       return ioctl(fd, op, varargs);
     }
     const stream = deps.fs()?.getStream(fd);
     const kfd = (stream as { sliccKernelFd?: number } | undefined)?.sliccKernelFd;
-    // Not on a kernel descriptor, or the glue's own terminal handles it: the glue answers.
+    // Not on a kernel descriptor: the glue answers.
     if (kfd === undefined) return ioctl(fd, op, varargs);
-    if (request === TIOCGWINSZ && (stream as { tty?: unknown }).tty) {
-      return ioctl(fd, op, varargs);
-    }
     const heap = deps.heap();
     if (!heap) return -wasiErrno('EFAULT');
     const argp = (heap[varargs >> 2] ?? 0) >>> 0;
@@ -93,16 +87,10 @@ function answer(
     case TIOCSCTTY:
       kernel.setControllingTerminal(kfd);
       return 0;
-    case TIOCSWINSZ: {
-      // struct winsize { unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel; }
+    default: {
+      // TIOCSWINSZ: struct winsize { unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel; }
       const word = heap[argp >> 2] ?? 0;
       kernel.setWinsize(kfd, word & 0xffff, (word >>> 16) & 0xffff);
-      return 0;
-    }
-    default: {
-      const [rows, cols] = kernel.winsize?.(kfd) ?? [24, 80];
-      heap[argp >> 2] = (rows & 0xffff) | ((cols & 0xffff) << 16);
-      heap[(argp >> 2) + 1] = 0;
       return 0;
     }
   }

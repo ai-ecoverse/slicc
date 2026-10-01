@@ -61,9 +61,8 @@ describe('pseudo-terminals (Emscripten program)', () => {
     expect(stderr).toBe('');
     expect(stdout).toBe(
       [
-        // Emscripten's isatty asks for a character device, which a master is
-        // not here (Linux says yes; nothing depends on it).
-        'ptsname /dev/pts/0 isatty-master 0',
+        'ptsname /dev/pts/0 isatty-master 1',
+        'tcgetattr-master 0 icanon 1',
         'isatty-slave 1',
         'winsize 33 99',
         'slave read 6 [typed]',

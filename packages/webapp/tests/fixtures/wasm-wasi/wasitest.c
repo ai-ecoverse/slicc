@@ -14,6 +14,7 @@
 #include <unistd.h>
 #ifdef __EMSCRIPTEN__
 #include <sys/ioctl.h>
+#include <termios.h>
 #endif
 
 static int fail(const char *what) {
@@ -117,6 +118,9 @@ static int pty(void) {
   if (grantpt(m) || unlockpt(m)) return perror("unlockpt"), 1;
   const char *name = ptsname(m);
   printf("ptsname %s isatty-master %d\n", name ? name : "(null)", isatty(m));
+  struct termios t;
+  int tc = tcgetattr(m, &t); /* a master's termios is its slave's */
+  printf("tcgetattr-master %d icanon %d\n", tc, tc == 0 && (t.c_lflag & ICANON) != 0);
   int s = open(name, O_RDWR | O_NOCTTY);
   if (s < 0) return perror("open slave"), 1;
   printf("isatty-slave %d\n", isatty(s));

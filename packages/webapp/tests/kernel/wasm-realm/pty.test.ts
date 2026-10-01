@@ -4,7 +4,6 @@ import { JobTable } from '../../../src/kernel/wasm-realm/jobs.js';
 import {
   ptyIoctl,
   TIOCGPTN,
-  TIOCGWINSZ,
   TIOCSCTTY,
   TIOCSPTLCK,
   TIOCSWINSZ,
@@ -54,6 +53,26 @@ describe('PtyTable / PtyPair', () => {
     expect(await pending).toBe('');
     expect(await readAll(slave)).toBe('');
     expect(signals).toEqual([SIG.HUP]);
+    // Nobody reads it any more: a write fails instead of vanishing.
+    await expect(write(slave, 'lost\n')).rejects.toMatchObject({ code: 'EIO' });
+  });
+
+  it("an unowned pty's signals reach nobody, never the invocation's leader", async () => {
+    const jobs = new JobTable();
+    const got: number[] = [];
+    jobs.add(1, undefined, (sig) => got.push(sig));
+    const ptys = new PtyTable((tty, sig) => jobs.signalOwnedForeground(tty, sig));
+    const { pair, master } = ptys.open();
+    pair.locked = false;
+    pair.openSlave(); // O_NOCTTY-style: no session took it
+    pair.slave.resize(100, 30);
+    await master.release();
+    expect(got).toEqual([]);
+    // Once a session owns it, its foreground group hears them.
+    const owned = ptys.open().pair;
+    jobs.acquireTerminal(1, owned.slave);
+    owned.slave.resize(90, 20);
+    expect(got).toEqual([SIG.WINCH]);
   });
 
   it('the last slave descriptor closed: the master reads EIO; both closed frees the number', async () => {
@@ -146,7 +165,6 @@ describe('ptyIoctl (an Emscripten program’s ioctl)', () => {
           calls.push(`ctty ${k}`);
         },
         setWinsize: (k, rows, cols) => void calls.push(`winsz ${k} ${rows}x${cols}`),
-        winsize: () => [25, 81],
       },
     });
     // varargs at word 0 points at the argument at byte 16 (word 4).
@@ -163,20 +181,18 @@ describe('ptyIoctl (an Emscripten program’s ioctl)', () => {
     expect(calls).toEqual(['number 9', 'lock 9 false']);
   });
 
-  it('TIOCSWINSZ unpacks struct winsize; TIOCGWINSZ on a master packs it', () => {
+  it('TIOCSWINSZ unpacks struct winsize', () => {
     const { heap, calls, ioctl } = setup(9);
     heap[4] = 40 | (132 << 16);
     expect(ioctl(5, TIOCSWINSZ, 0)).toBe(0);
     expect(calls).toEqual(['winsz 9 40x132']);
-    expect(ioctl(5, TIOCGWINSZ, 0)).toBe(0);
-    expect([heap[4] & 0xffff, (heap[4] ?? 0) >>> 16]).toEqual([25, 81]);
   });
 
-  it("leaves the glue's own requests, a terminal's TIOCGWINSZ and non-kernel streams to it", () => {
+  it("leaves termios, TIOCGWINSZ (the glue's terminal hooks) and non-kernel streams to the glue", () => {
     const { calls, ioctl } = setup(9, true);
     ioctl(5, 0x5401, 0); // TCGETS
-    ioctl(5, TIOCGWINSZ, 0); // Emscripten's terminal answers it
-    expect(calls).toEqual(['glue 5 21505', `glue 5 ${TIOCGWINSZ}`]);
+    ioctl(5, 0x5413, 0); // TIOCGWINSZ
+    expect(calls).toEqual(['glue 5 21505', 'glue 5 21523']);
     const plain = setup(undefined);
     plain.ioctl(5, TIOCGPTN | 0, 0);
     expect(plain.calls).toEqual([`glue 5 ${TIOCGPTN}`]);

@@ -290,10 +290,7 @@ export class KernelStreams {
   /**
    * `/dev/ptmx` and `/dev/pts/N` are the kernel's pseudo-terminals, which
    * Emscripten's FS has no node for: a stream on its own `/dev/null` (only
-   * the description is used) put on the kernel's master or slave. A slave
-   * is a terminal. A master is none (Emscripten's isatty, which asks for a
-   * character device, says no; Linux says yes), but tcgetattr and
-   * TIOCGWINSZ on it answer for its slave, as on Linux.
+   * the description is used) put on the kernel's master or slave.
    */
   private openPty(
     open: NonNullable<ProcessFs['open']>,
@@ -315,7 +312,10 @@ export class KernelStreams {
       this.sys.close(kfd);
       throw e;
     }
-    this.attach(stream, kfd, pts !== null);
+    // Both ends get Emscripten's terminal hooks: the kernel answers a master's
+    // termios and window size with its slave's, as Linux does (so isatty is
+    // true on it too).
+    this.attach(stream, kfd, true);
     return stream;
   }
 

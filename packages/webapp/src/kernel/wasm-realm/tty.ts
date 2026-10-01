@@ -148,6 +148,8 @@ export class KernelTty {
     return new OpenFile({
       read: (max, signal) => this.read(max, signal),
       write: async (bytes) => {
+        // Nobody reads a hung-up terminal (a pseudo-terminal whose master closed).
+        if (this.hungUp) throw new KernelError('EIO');
         this.output(bytes);
         return bytes.length;
       },

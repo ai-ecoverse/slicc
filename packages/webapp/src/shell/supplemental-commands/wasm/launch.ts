@@ -395,8 +395,8 @@ export class WasmSession {
   private installed: Promise<Map<string, WasmCommand>> | undefined;
   /** Process groups and sessions of the invocation's wasm processes (job control). */
   private readonly jobs = new JobTable();
-  /** The invocation's pseudo-terminals: their signals go to their foreground groups. */
-  private readonly ptys = new PtyTable((tty, sig) => this.signalTerminal(tty, sig));
+  /** The invocation's pseudo-terminals: their signals go to the foreground group each was given. */
+  private readonly ptys = new PtyTable((tty, sig) => this.jobs.signalOwnedForeground(tty, sig));
   /** The invocation's first process: the terminal's foreground until a program picks one. */
   private leader: number | undefined;
   /**
