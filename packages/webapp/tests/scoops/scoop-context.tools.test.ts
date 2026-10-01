@@ -148,6 +148,47 @@ describe('ScoopContext active tool surface', () => {
     expect(toolNames).not.toContain('find');
   });
 
+  // `sudo_request` must ask through the same wired broker as the shell and FS
+  // gates; otherwise it would bypass `--no-escalate` and the escalation tally.
+  it('routes sudo_request through the wired broker (no-escalate refuses; the tally counts)', async () => {
+    const sudoManager = {
+      getBroker: vi.fn(() => ({ requestApproval: vi.fn() })),
+      getPolicy: vi.fn(() => ({ rules: [] })),
+      getPolicyForScoop: vi.fn(() => ({ rules: [] })),
+      getShellConfig: vi.fn(() => ({
+        getPolicy: () => null,
+        broker: { requestApproval: vi.fn() },
+      })),
+    };
+    const onSudoRequest = vi.fn(async () => ({ decision: 'allow' as const }));
+    const scoop = { ...testScoop, config: { escalate: false } };
+    const ctx = new ScoopContext(
+      scoop,
+      { ...createMockCallbacks(), onSudoRequest },
+      createMockFs() as any,
+      undefined,
+      undefined,
+      'cone',
+      undefined,
+      sudoManager as any
+    );
+
+    await ctx.init();
+
+    const calls = mocks.createScoopManagementTools.mock.calls as unknown as unknown[][];
+    const config = calls[0]?.[0] as {
+      onSudoRequest: (r: {
+        kind: string;
+        detail: string;
+      }) => Promise<{ decision: string; note?: string }>;
+    };
+    const decision = await config.onSudoRequest({ kind: 'command', detail: 'playwright-cli open' });
+    expect(decision.decision).toBe('deny');
+    expect(decision.note).toMatch(/--no-escalate/);
+    expect(onSudoRequest).not.toHaveBeenCalled();
+    expect(ctx.getEscalations()).toEqual({ asked: 1, allowed: 0, denied: 1 });
+  });
+
   // The tool asks a human for a credential; the masked value it gets back has to
   // land in the SAME shell the agent's `bash` runs in, or `$NAME` never resolves.
   it('wires request_secret to the scoop shell env with the unit label as requester', async () => {

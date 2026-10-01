@@ -1,10 +1,12 @@
-import type { Command } from 'just-bash';
+import { uint8ToBase64 } from '@slicc/shared-ts';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from '../../base/thinking-level.js';
 import { normalizePath } from '../../fs/path-utils.js';
 import type { ImplementedWorkspaceMode } from '../../work-unit/workspace-mode.js';
 import { parseWorkspaceMode } from '../../work-unit/workspace-mode.js';
+import { detectMimeType } from './shared.js';
 
 const log = createLogger('agent-command');
 
@@ -17,6 +19,17 @@ const log = createLogger('agent-command');
 interface JsonSchemaObject {
   type?: string;
   [keyword: string]: unknown;
+}
+
+/**
+ * A prompt image, restated from pi-ai's `ImageContent` (`core/types.ts`) for
+ * the same layering reason as {@link JsonSchemaObject}.
+ */
+interface ImageContent {
+  type: 'image';
+  /** Base64 of the file's raw bytes. */
+  data: string;
+  mimeType: string;
 }
 
 /** Options forwarded to the orchestrator bridge. */
@@ -65,7 +78,14 @@ interface AgentSpawnOptions {
    * at parse time before the bridge is called.
    */
   workspaceMode?: ImplementedWorkspaceMode;
+  /** `--image` files, read and base64-encoded; the bridge validates and resizes them. */
+  images?: ImageContent[];
+  /** `false` for `--no-escalate`: the scoop's sudo requests are refused, not escalated. */
+  escalate?: boolean;
 }
+
+/** Most `--image` flags one call accepts. */
+const MAX_IMAGES = 8;
 
 /** Options accepted by {@link createAgentCommand}. */
 export interface AgentCommandOptions {
@@ -160,6 +180,20 @@ Options:
                           "Background Command" lick, so a slow or stuck command
                           never wedges an unsupervised run. Use 0 to detach
                           every command immediately. Must be >= 0.
+  --image <path>          Attach an image (PNG, JPEG, GIF or WebP) to the
+                          prompt, so the scoop can see it without being
+                          allowed a command to open it. Repeatable, up to 8;
+                          --image=<path> also works. Relative paths resolve
+                          against the current shell's cwd. A missing file, a
+                          non-image, or a ninth image exits 1 before anything
+                          is spawned. Large images are resized to the model's
+                          limits.
+  --no-escalate           Hold the scoop to its grant. Normally a command not
+                          in <allowed-commands>, or a write outside its
+                          writable paths, asks the invoking cone for approval;
+                          with this flag it is refused at once and the scoop
+                          is told it is not permitted for this call. Nothing
+                          reaches the cone or the user.
   --persist-session       Write the spawned agent's full session transcript to
                           /sessions/agent-<name>-<timestamp>.md (durable —
                           survives a new chat) for later human analysis.
@@ -177,6 +211,7 @@ Examples:
   agent --read-only /workspace/,/shared/assets/ . "*" "review the docs"
   agent --workspace-mode private . "*" "work only in this directory"
   agent --background-after 60 . "*" "run the slow build and report"
+  agent --no-escalate --image shot.png . ls "what does this page show?"
 `;
 
 interface ParsedArgs {
@@ -191,6 +226,8 @@ interface ParsedArgs {
   structuredOutputSchema?: JsonSchemaObject;
   persistSession?: boolean;
   workspaceMode?: ImplementedWorkspaceMode;
+  imagePaths?: string[];
+  noEscalate?: boolean;
   error?: string;
 }
 
@@ -302,6 +339,8 @@ interface ParseState {
   schemaOut?: JsonSchemaObject;
   persistSession?: boolean;
   workspaceMode?: ImplementedWorkspaceMode;
+  imagePaths: string[];
+  noEscalate: boolean;
 }
 
 type FlagHandler = (
@@ -372,6 +411,16 @@ const FLAG_HANDLERS: Record<string, FlagHandler> = {
     state.persistSession = false;
     return { consumed: 1 };
   },
+  '--image': (flag, args, i, state) => {
+    const result = parseFlagWithValue(flag, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    state.imagePaths.push(result.value);
+    return { consumed: result.consumed };
+  },
+  '--no-escalate': (_flag, _args, _i, state) => {
+    state.noEscalate = true;
+    return { consumed: 1 };
+  },
 };
 
 /** Process one argument. Returns error or null and consumed count. */
@@ -383,6 +432,13 @@ function processArg(
 ): { error?: string; consumed: number } {
   if (state.positionals.length === 2) {
     state.positionals.push(arg);
+    return { consumed: 1 };
+  }
+
+  if (arg.startsWith('--image=')) {
+    const path = arg.slice('--image='.length);
+    if (path === '') return { error: 'agent: --image requires a non-empty value', consumed: 0 };
+    state.imagePaths.push(path);
     return { consumed: 1 };
   }
 
@@ -435,6 +491,8 @@ function parseArgs(args: string[]): ParsedArgs {
   const state: ParseState = {
     positionals: [],
     help: false,
+    imagePaths: [],
+    noEscalate: false,
   };
 
   let i = 0;
@@ -450,6 +508,12 @@ function parseArgs(args: string[]): ParsedArgs {
   }
   if ('error' in validation) {
     return { help: false, error: validation.error };
+  }
+  if (state.imagePaths.length > MAX_IMAGES) {
+    return {
+      help: false,
+      error: `agent: too many images (${state.imagePaths.length}); --image accepts at most ${MAX_IMAGES}`,
+    };
   }
 
   const positionals = validation as {
@@ -470,6 +534,8 @@ function parseArgs(args: string[]): ParsedArgs {
     structuredOutputSchema: state.schemaOut,
     persistSession: state.persistSession,
     workspaceMode: state.workspaceMode,
+    imagePaths: state.imagePaths,
+    noEscalate: state.noEscalate,
   };
 }
 
@@ -492,6 +558,56 @@ function resolveCwd(cwdArg: string, ctxCwd: string): string {
   }
   const base = ctxCwd.length > 0 ? ctxCwd : '/';
   return normalizePath(`${base}/${cwdArg}`);
+}
+
+/**
+ * The image type from its leading bytes — PNG, JPEG, GIF or WebP, the formats
+ * the model APIs take. A file extension is not trusted: a mislabelled file
+ * would only fail later, inside the spawned run.
+ */
+function sniffImageMime(bytes: Uint8Array): string | null {
+  const ascii = (from: number, to: number) => String.fromCharCode(...bytes.subarray(from, to));
+  if (bytes.length >= 8 && bytes[0] === 0x89 && ascii(1, 8) === 'PNG\r\n\x1a\n') {
+    return 'image/png';
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (bytes.length >= 6 && (ascii(0, 6) === 'GIF87a' || ascii(0, 6) === 'GIF89a')) {
+    return 'image/gif';
+  }
+  if (bytes.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  return null;
+}
+
+/**
+ * Read each `--image` file as raw bytes (never through a UTF-8 string) and
+ * base64 it for the prompt. Fails on the first missing or non-image file.
+ */
+async function readImages(
+  fs: CommandContext['fs'],
+  paths: readonly string[],
+  ctxCwd: string
+): Promise<{ images: ImageContent[] } | { error: string }> {
+  const images: ImageContent[] = [];
+  for (const path of paths) {
+    let bytes: Uint8Array;
+    try {
+      bytes = await fs.readFileBuffer(resolveCwd(path, ctxCwd));
+    } catch {
+      return { error: `agent: --image: file not found: ${path}\n` };
+    }
+    const mimeType = sniffImageMime(bytes);
+    if (mimeType === null) {
+      return {
+        error: `agent: --image: unsupported image type (${detectMimeType(path)}): ${path} — use PNG, JPEG, GIF or WebP\n`,
+      };
+    }
+    images.push({ type: 'image', data: uint8ToBase64(bytes), mimeType });
+  }
+  return { images };
 }
 
 function parseAllowedCommands(raw: string): string[] {
@@ -592,6 +708,9 @@ function buildSpawnOptions(
   if (parsed.workspaceMode !== undefined) {
     spawnOptions.workspaceMode = parsed.workspaceMode;
   }
+  if (parsed.noEscalate) {
+    spawnOptions.escalate = false;
+  }
   if (ctx.cwd && ctx.cwd.length > 0) {
     spawnOptions.invokingCwd = ctx.cwd;
   }
@@ -670,6 +789,13 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
       return { stdout: '', stderr: writableError, exitCode: 1 };
     }
 
+    let images: ImageContent[] | undefined;
+    if (parsed.imagePaths !== undefined && parsed.imagePaths.length > 0) {
+      const read = await readImages(ctx.fs, parsed.imagePaths, ctx.cwd);
+      if ('error' in read) return { stdout: '', stderr: read.error, exitCode: 1 };
+      images = read.images;
+    }
+
     const bridge = getBridge();
     if (!bridge) {
       return { stdout: '', stderr: 'agent: orchestrator bridge not available\n', exitCode: 1 };
@@ -683,6 +809,7 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
       ctx,
       getParentJid
     );
+    if (images !== undefined) spawnOptions.images = images;
 
     // `runSpawn` calls `bridge.spawn` synchronously before its first await, so
     // spawn-start is still reached promptly (no extra microtask before spawn).

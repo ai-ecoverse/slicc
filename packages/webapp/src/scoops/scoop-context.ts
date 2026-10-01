@@ -56,7 +56,7 @@ import type { RestrictedFS } from '../fs/restricted-fs.js';
 import type { Process, ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
 import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
-import type { TurnGuestGate } from '../sudo/types.js';
+import type { EscalationCounts, TurnGuestGate } from '../sudo/types.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { conversationIdentityFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
@@ -134,6 +134,12 @@ export class ScoopContext {
   private didStreamDeltas = false;
   private promptStreamErrorMessage: string | null = null;
   private unsubscribe: (() => void) | null = null;
+  /**
+   * Sudo requests this unit raised, tallied by the broker `buildSudoWiring`
+   * wraps. Owned here so it outlives a re-init and the cost tracker can read
+   * it next to the usage (`cost --json` `escalations`).
+   */
+  private readonly escalations: EscalationCounts = { asked: 0, allowed: 0, denied: 0 };
   /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
   private promptAbortController: AbortController | null = null;
   /** Armed by {@link stop} and cleared when the turn actually settles. */
@@ -376,6 +382,7 @@ export class ScoopContext {
         callbacks: this.callbacks,
         sessions: this.sessions,
         sudoManager: this.sudoManager,
+        escalations: this.escalations,
         capabilityBroker: this.capabilityBroker,
         processManager: this.processManager,
         processOwner: this.owner,
@@ -927,6 +934,11 @@ export class ScoopContext {
   /** Get the agent's current in-memory messages (for diagnostics). */
   getAgentMessages(): AgentMessage[] {
     return this.agent?.state?.messages ? structuredClone(this.agent.state.messages) : [];
+  }
+
+  /** A copy of this unit's sudo tally (see {@link escalations}). */
+  getEscalations(): EscalationCounts {
+    return { ...this.escalations };
   }
 
   /**

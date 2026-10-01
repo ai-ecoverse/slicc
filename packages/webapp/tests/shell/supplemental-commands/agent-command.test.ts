@@ -15,6 +15,8 @@ interface SpawnArgs {
   structuredOutputSchema?: Record<string, unknown>;
   persistSession?: boolean;
   workspaceMode?: string;
+  images?: Array<{ type: string; data: string; mimeType: string }>;
+  escalate?: boolean;
 }
 
 interface SpawnResult {
@@ -34,6 +36,8 @@ interface MockFsOptions {
    * the terminal-shell case where `VfsAdapter` wraps a plain `VirtualFS`.
    */
   canWrite?: (path: string) => boolean;
+  /** Files `readFileBuffer` serves, by absolute path; anything else is ENOENT. */
+  files?: Record<string, Uint8Array>;
 }
 
 function createMockCtx(cwd = '/home', fsOptions: MockFsOptions = {}) {
@@ -55,6 +59,11 @@ function createMockCtx(cwd = '/home', fsOptions: MockFsOptions = {}) {
         mtime: new Date(0),
       })),
     canWrite: fsOptions.canWrite ?? (() => true),
+    readFileBuffer: async (path: string) => {
+      const bytes = fsOptions.files?.[path];
+      if (!bytes) throw new Error(`ENOENT: ${path}`);
+      return bytes;
+    },
   };
   return createCommandContext({
     fs: fs as unknown as IFileSystem,
@@ -1343,6 +1352,157 @@ describe('agent command', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toMatch(/--persist-session/);
       expect(result.stdout).toMatch(/--no-persist-session/);
+    });
+  });
+
+  describe('--image flag', () => {
+    // Real magic bytes, plus bytes >= 0x80 that a UTF-8 round trip would mangle.
+    const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0x80]);
+    const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xc3, 0x28]);
+    const GIF = new TextEncoder().encode('GIF89a\u0001');
+    const WEBP = Uint8Array.from([
+      ...new TextEncoder().encode('RIFF'),
+      4,
+      0,
+      0,
+      0,
+      ...new TextEncoder().encode('WEBPVP8 '),
+    ]);
+    const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
+
+    function spyBridge() {
+      const spawn = vi.fn((_args: SpawnArgs) => ({ finalText: 'ok', exitCode: 0 }));
+      installBridge(spawn);
+      return spawn;
+    }
+
+    it('forwards each image as ImageContent with the sniffed MIME and the raw bytes in base64', async () => {
+      const spawn = spyBridge();
+      const files = {
+        '/home/shot.png': PNG,
+        '/abs/photo.jpg': JPEG,
+        '/home/a.gif': GIF,
+        // The extension lies; the bytes decide.
+        '/home/b.png': WEBP,
+      };
+      const result = await createAgentCommand().execute(
+        [
+          '--image',
+          'shot.png',
+          '--image=/abs/photo.jpg',
+          '--image',
+          'a.gif',
+          '--image',
+          'b.png',
+          '.',
+          'open',
+          'look',
+        ],
+        createMockCtx('/home', { files })
+      );
+      expect(result.exitCode).toBe(0);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(spawn.mock.calls[0][0].images).toEqual([
+        { type: 'image', data: b64(PNG), mimeType: 'image/png' },
+        { type: 'image', data: b64(JPEG), mimeType: 'image/jpeg' },
+        { type: 'image', data: b64(GIF), mimeType: 'image/gif' },
+        { type: 'image', data: b64(WEBP), mimeType: 'image/webp' },
+      ]);
+    });
+
+    it('does not send images when no --image is given', async () => {
+      const spawn = spyBridge();
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].images).toBeUndefined();
+    });
+
+    it('exits 1 on a missing file without spawning', async () => {
+      const spawn = spyBridge();
+      const result = await createAgentCommand().execute(
+        ['--image', 'nope.png', '.', '*', 'p'],
+        createMockCtx('/home', { files: {} })
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--image: file not found: nope\.png/);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('exits 1 on a file that is not a supported image without spawning', async () => {
+      const spawn = spyBridge();
+      const result = await createAgentCommand().execute(
+        ['--image', 'notes.txt', '.', '*', 'p'],
+        createMockCtx('/home', { files: { '/home/notes.txt': new TextEncoder().encode('hello') } })
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/unsupported image type \(text\/plain\): notes\.txt/);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('exits 1 on more than 8 images without reading or spawning', async () => {
+      const spawn = spyBridge();
+      const args = Array.from({ length: 9 }, () => ['--image', 'shot.png']).flat();
+      const result = await createAgentCommand().execute(
+        [...args, '.', '*', 'p'],
+        createMockCtx('/home', { files: { '/home/shot.png': PNG } })
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/too many images \(9\); --image accepts at most 8/);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('accepts exactly 8 images', async () => {
+      const spawn = spyBridge();
+      const args = Array.from({ length: 8 }, () => ['--image', 'shot.png']).flat();
+      const result = await createAgentCommand().execute(
+        [...args, '.', '*', 'p'],
+        createMockCtx('/home', { files: { '/home/shot.png': PNG } })
+      );
+      expect(result.exitCode).toBe(0);
+      expect(spawn.mock.calls[0][0].images).toHaveLength(8);
+    });
+
+    it('errors on --image without a value and on an empty --image=', async () => {
+      const spawn = spyBridge();
+      const a = await createAgentCommand().execute(['.', '*', 'p', '--image'], createMockCtx());
+      const b = await createAgentCommand().execute(['--image=', '.', '*', 'p'], createMockCtx());
+      expect(a.exitCode).toBe(1);
+      expect(a.stderr).toMatch(/--image requires a value/);
+      expect(b.exitCode).toBe(1);
+      expect(b.stderr).toMatch(/--image requires a non-empty value/);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('documents --image in --help', async () => {
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.stdout).toMatch(/--image <path>/);
+    });
+  });
+
+  describe('--no-escalate flag', () => {
+    it('forwards escalate: false', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['--no-escalate', '.', 'open', 'p'], createMockCtx());
+      expect(captured?.escalate).toBe(false);
+    });
+
+    it('leaves escalate unset without the flag', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', 'open', 'p'], createMockCtx());
+      expect(captured).toBeDefined();
+      expect(captured && 'escalate' in captured).toBe(false);
+    });
+
+    it('documents --no-escalate in --help', async () => {
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.stdout).toMatch(/--no-escalate/);
     });
   });
 });

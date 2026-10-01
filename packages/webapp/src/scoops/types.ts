@@ -314,6 +314,12 @@ export interface ScoopConfig {
    */
   canCreateChildren?: boolean;
   /**
+   * `false` refuses every sudo request this scoop raises on the spot instead
+   * of escalating it to the cone (`agent --no-escalate`): `allowedCommands`
+   * and the writable paths become a hard boundary. Absent means escalate.
+   */
+  escalate?: boolean;
+  /**
    * JSON Schema to enforce on the scoop's final output. When set,
    * a `StructuredOutput` tool is injected so the agent must return
    * its result in the specified schema shape.

@@ -81,7 +81,7 @@ Never drop when:
 `agent` is a shell command that spawns a one-shot sub-scoop, feeds it a prompt, blocks until the agent loop completes, and prints the final message on stdout. Runs from any bash context (terminal, `feed_scoop` prompt, `.jsh` script, dip lick handler, sprinkle button handler).
 
 ```
-agent <cwd> <allowed-commands> <prompt> [--model <id>] [--workspace-mode <mode>] [--read-only <paths>] [--background-after <s>]
+agent <cwd> <allowed-commands> <prompt> [--model <id>] [--workspace-mode <mode>] [--read-only <paths>] [--background-after <s>] [--image <path>]... [--no-escalate]
 ```
 
 - `<cwd>` — sole writable prefix (plus `/shared/`, the scoop's scratch folder, and `/tmp/` — the whole shared scratch tree, so a scoop can always reach its `$TMPDIR`). Relative paths resolve against the caller's cwd.
@@ -91,6 +91,8 @@ agent <cwd> <allowed-commands> <prompt> [--model <id>] [--workspace-mode <mode>]
 - `--workspace-mode` — isolation policy. Default `shared-readonly` is today's sandbox (parent workspace visible, cwd + `/shared/` + scratch writable, mounts readable). `private` is an isolated sandbox: own cwd/scratch only — no parent workspace, no implicit `/shared/`, mounts are **not** auto-visible. `snapshot` and `shared-live` are not implemented and exit 1.
 - `--read-only` — pure-replace list of read-only paths. Default: the **owning cone's** workspace (plus `/workspace/skills/`) and the invoking shell's cwd. When replacing it, name your own cone's workspace — a literal `/workspace/` is the primary cone's, not yours. Under `--workspace-mode private` the default visible list is empty.
 - `--background-after <seconds>` — how long the spawned scoop's `bash` waits for a command before detaching it and moving on (default 600). Nobody can cancel a spawned scoop's turn, so a command that never returns would otherwise burn the whole run on one call; a detached command reports its exit code back to that scoop as a `Background Command` lick. `0` detaches every command immediately.
+- `--image <path>` — attach an image (PNG, JPEG, GIF, WebP) to the prompt; repeatable, at most 8 (`--image=<path>` works too). The scoop sees it directly, so it does not need a command like `open` just to look at a screenshot. A missing file, a non-image, or a ninth image exits 1 before anything is spawned.
+- `--no-escalate` — `<allowed-commands>` and the writable paths become a hard boundary. Without it, an unlisted command or an out-of-bounds write asks **you** (the invoking cone) for approval; with it the request is refused on the spot and the scoop is told it is not permitted for this call. Use it whenever the scoop should only think about what it was handed — a decider looking at a screenshot should not be able to start driving the browser through your approvals.
 
 **Critical property: no handoff.** Ephemeral scoops do NOT notify the cone on completion. Running `agent` from a non-cone shell does not trigger an unsolicited cone turn. The caller gets the result on stdout, nothing else. This makes `agent` the right choice for cheap, predictable interactions inside dips and sprinkles where you don't want the cone or owning scoop woken up.
 
@@ -283,7 +285,7 @@ workaround. Say what would make it acceptable, if anything would.
 
 ## Inspecting delegation cost
 
-Run `cost` to inspect spend for the cone and currently live scoops. The table labels each row's source, and `--json` returns the same live-only scope for scripts as `{"budget": <window|null>, "scoops": [ ... ]}` — read the rows from `.scoops`. The Model column (JSON `model`) is the model that unit is running now — its provider-qualified pin, the id half of `models`' "Currently using" line (a provider-less legacy pin yields to the latest turn when they differ) — not whichever model took the most turns. JSON `models` lists each distinct model once: a bare id and a region- or version-qualified id of the same model are one entry (a suffixed variant such as `-fast` is not), and the entry for the model in use now keeps that current spelling.
+Run `cost` to inspect spend for the cone and currently live scoops. The table labels each row's source, and `--json` returns the same live-only scope for scripts as `{"budget": <window|null>, "scoops": [ ... ]}` — read the rows from `.scoops`. The Model column (JSON `model`) is the model that unit is running now — its provider-qualified pin, the id half of `models`' "Currently using" line (a provider-less legacy pin yields to the latest turn when they differ) — not whichever model took the most turns. JSON `models` lists each distinct model once: a bare id and a region- or version-qualified id of the same model are one entry (a suffixed variant such as `-fast` is not), and the entry for the model in use now keeps that current spelling. Each JSON row also carries `escalations: { asked, allowed, denied }` — the sudo requests that unit raised (folded `agent` children included); `allowed > 0` means the unit leaned on an approval.
 
 On a provider billing against a rolling allowance (rather than per token), `cost` leads with that budget: percent USED of the window and when it resets. That number, not the dollar total, is what says whether long runs will finish — the allowance is shared, so it can be most of the way gone before this session has cost a cent.
 

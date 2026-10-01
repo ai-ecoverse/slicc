@@ -30,7 +30,9 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import { processImageContent } from '../core/image-processor.js';
 import type { SessionStore } from '../core/session.js';
+import type { ImageContent } from '../core/types.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
 // Legal down-edge (`scoops/` → `git/`) for the staged-rewrite merge.
@@ -162,6 +164,19 @@ export interface AgentSpawnOptions {
    * result in the specified schema shape.
    */
   structuredOutputSchema?: JsonSchemaObject;
+  /**
+   * Images attached to the prompt (`agent --image`), so a scoop can look at a
+   * screenshot without being granted a command to open it. Validated and
+   * resized to the API limits before the scoop is registered; an image that
+   * cannot be used fails the spawn.
+   */
+  images?: ImageContent[];
+  /**
+   * `false` (`agent --no-escalate`): every sudo request the scoop raises —
+   * an unlisted command, a write outside its paths, `sudo_request` — is
+   * refused on the spot instead of escalating to the cone. Absent → escalate.
+   */
+  escalate?: boolean;
   /**
    * Announce completion to the cone on the `scoop-notify` lick channel.
    * Defaults to `false`: a one-shot `agent` call is synchronous for its
@@ -833,6 +848,25 @@ async function writeAgentSessionArchive(
 }
 
 /**
+ * Validate and resize prompt images to the API limits. `processImageContent`
+ * answers an image it cannot use with a text placeholder; that is an error
+ * here, before any scoop exists, rather than a prompt missing its picture.
+ */
+async function prepareImages(
+  images: readonly ImageContent[]
+): Promise<{ images: ImageContent[] } | { error: AgentSpawnResult }> {
+  const prepared: ImageContent[] = [];
+  for (const [i, image] of images.entries()) {
+    const result = await processImageContent(image);
+    if (result.type !== 'image') {
+      return { error: { finalText: `agent: image ${i + 1}: ${result.text}`, exitCode: 1 } };
+    }
+    prepared.push(result);
+  }
+  return { images: prepared };
+}
+
+/**
  * Build the scoop config from spawn options and resolved settings.
  */
 function buildScoopConfig(
@@ -875,6 +909,9 @@ function buildScoopConfig(
   }
   if (options.structuredOutputSchema !== undefined) {
     scoopConfig.structuredOutputSchema = options.structuredOutputSchema;
+  }
+  if (options.escalate === false) {
+    scoopConfig.escalate = false;
   }
 
   return scoopConfig;
@@ -921,9 +958,10 @@ async function runScoopAndCaptureOutput(
   jid: string,
   prompt: string,
   structuredOutputSchema: JsonSchemaObject | undefined,
-  observerState: ReturnType<typeof registerScoopObserver>
+  observerState: ReturnType<typeof registerScoopObserver>,
+  images: ImageContent[] = []
 ): Promise<AgentSpawnResult | null> {
-  await orchestrator.sendPrompt(jid, prompt, 'agent', 'agent');
+  await orchestrator.sendPrompt(jid, prompt, 'agent', 'agent', images);
 
   if (observerState.scoopError !== null) {
     return { finalText: observerState.scoopError, exitCode: 1 };
@@ -1083,7 +1121,8 @@ async function runScoopToOutcomeInner(
       jid,
       options.prompt,
       options.structuredOutputSchema,
-      observerHandle
+      observerHandle,
+      options.images
     );
     if (options.signal?.aborted) {
       return { finalText: 'agent: aborted', exitCode: 1 };
@@ -1119,9 +1158,16 @@ export function createAgentBridge(
     resolveModel: deps.resolveModel ?? defaultResolveModel,
   };
 
-  async function spawn(options: AgentSpawnOptions): Promise<AgentSpawnResult> {
+  async function spawn(requested: AgentSpawnOptions): Promise<AgentSpawnResult> {
+    let options = requested;
     const validation = validateSpawnOptions(options, ctx.resolveModel);
     if ('error' in validation) return validation.error;
+    // Awaited only when there are images, so a plain spawn keeps its timing.
+    if (options.images?.length) {
+      const prepared = await prepareImages(options.images);
+      if ('error' in prepared) return prepared.error;
+      options = { ...options, images: prepared.images };
+    }
 
     const parentModel = resolveParentModelSelection(ctx.orchestrator, options.parentJid);
     const effectiveModelId = validation.resolvedModelId ?? parentModel?.modelId ?? '';
