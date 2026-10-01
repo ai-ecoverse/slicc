@@ -66,7 +66,10 @@ Contract test: `packages/swift-launcher/macos-permissions.test.mjs`.
    leader, or focus already moved on). It yields-and-activates while Sliccstart
    is active, otherwise asks LaunchServices to reopen the browser — only when
    exactly one instance of that bundle runs, since LaunchServices cannot tell
-   the SLICC profile from the user's own.
+   the SLICC profile from the user's own. With several instances it activates
+   the process whose argv (`KERN_PROCARGS2`) carries the leader's
+   `--remote-debugging-port`, and activates nothing if no single process
+   matches.
 4. With no leader, the router starts the first browser in
    `AppOrdering.orderedBrowsers(in:savedOrder:)` that is **not** already attached
    to a remote tray as a follower, and waits up to ~45s for

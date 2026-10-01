@@ -284,7 +284,7 @@ final class IncomingURLRouterTests: XCTestCase {
             orderedBrowsers: { ordered },
             send: { request in try await transport.send(request) },
             sleep: { _ in await process.tick() },
-            activateBrowser: { appPath in transport.recordActivation(appPath) },
+            activateBrowser: { leader in transport.recordActivation(leader.appPath) },
             report: report
         )
     }
