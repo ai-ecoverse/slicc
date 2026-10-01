@@ -44,7 +44,11 @@ Contract test: `packages/swift-launcher/macos-permissions.test.mjs`.
 ### Routing an incoming link
 
 `Models/IncomingURLRouter.swift`, driven by
-`SliccstartAppDelegate.application(_:open:)`:
+`SliccstartAppDelegate.application(_:open:)`. The launcher's `WindowGroup`
+declares `.handlesExternalEvents(matching: [])`: without it SwiftUI also opens a
+new launcher window for every routed link, which steals focus from the browser
+and re-runs `LauncherModel.initialize()` (update check, auto-launch) per click.
+`initialize()` is idempotent for the same reason — a later window only rescans, and one opened during `updateRuntime()` leaves the rescan to the update.
 
 1. `openableSchemes` keeps `http`, `https`, and `file` (the HTML documents the
    bundle claims) and drops everything else — `javascript:`, `data:`, and app

@@ -133,6 +133,10 @@ struct SliccstartApp: App {
                 .optelAutoInstrument(appID: optelAppID)
         }
         .defaultSize(width: 340, height: 100)
+        // Links routed to us as the default browser go to the delegate's
+        // `application(_:open:)`. Without this, SwiftUI also opens a fresh
+        // launcher window per link, and each one re-runs `initialize()`.
+        .handlesExternalEvents(matching: [])
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
         .commands {

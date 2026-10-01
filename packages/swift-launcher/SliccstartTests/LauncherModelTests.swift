@@ -772,6 +772,107 @@ final class LauncherModelTests: XCTestCase {
     }
 }
 
+// MARK: - Startup idempotence
+
+extension LauncherModelTests {
+    /// Every launcher window runs `initialize()` from its `.task`. A second
+    /// window — historically one per link routed to us as the default browser
+    /// — must not repeat the update check (burning GitHub's anonymous rate
+    /// limit) or the startup auto-launch.
+    func testASecondInitializeOnlyRescans() async throws {
+        let process = RecordingProcess()
+        var scans = 0
+        var checks = 0
+        let model = makeModel(
+            process: process,
+            scan: { _ in
+                scans += 1
+                return [self.target("Chrome", bundleId: "com.google.Chrome")]
+            },
+            isBundledBuild: true,
+            startupLaunchEnabled: true,
+            updateChecking: .init(
+                check: { onDone, _ in
+                    checks += 1
+                    onDone()
+                }, isUpdateReady: { false })
+        )
+
+        await model.initialize()
+        for _ in 0..<10 where model.updateCheckStatus == .checking { await Task.yield() }
+        XCTAssertTrue(model.updateCheckStatus.allowsRetry, "precondition: a re-check would not be suppressed")
+
+        await model.initialize()
+
+        XCTAssertEqual(checks, 1)
+        XCTAssertEqual(process.standaloneLaunches, ["Chrome"])
+        XCTAssertEqual(scans, 2, "a reopened window still refreshes the app list")
+    }
+
+    func testAFailedBootstrapIsRetriedByTheNextInitialize() async {
+        struct Boom: Error {}
+        let bootstrapper = FailingBootstrapper(error: Boom())
+        let model = makeModel(installation: .notInstalled, bootstrapper: bootstrapper)
+
+        await model.initialize()
+        await model.initialize()
+
+        XCTAssertEqual(bootstrapper.bootstrapCalls, 2)
+        XCTAssertFalse(model.isReady)
+    }
+
+    func testOverlappingInitializeCallsRunStartupOnce() async {
+        let process = RecordingProcess()
+        let bootstrapper = GatedBootstrapper()
+        var checks = 0
+        let model = makeModel(
+            process: process,
+            scan: { _ in [self.target("Chrome", bundleId: "com.google.Chrome")] },
+            installation: .notInstalled,
+            isBundledBuild: true,
+            startupLaunchEnabled: true,
+            updateChecking: .init(check: { _, _ in checks += 1 }, isUpdateReady: { false }),
+            bootstrapper: bootstrapper
+        )
+
+        let first = Task { await model.initialize() }
+        await bootstrapper.waitUntilSuspended()
+        await model.initialize()
+        bootstrapper.release()
+        await first.value
+
+        XCTAssertEqual(bootstrapper.bootstrapCalls, 1)
+        XCTAssertEqual(checks, 1)
+        XCTAssertEqual(process.standaloneLaunches, ["Chrome"])
+    }
+
+    func testInitializeDuringARuntimeUpdateDoesNotRepeatStartup() async {
+        let process = RecordingProcess()
+        let bootstrapper = GatedBootstrapper()
+        var checks = 0
+        let model = makeModel(
+            process: process,
+            scan: { _ in [self.target("Chrome", bundleId: "com.google.Chrome")] },
+            isBundledBuild: true,
+            startupLaunchEnabled: true,
+            updateChecking: .init(check: { _, _ in checks += 1 }, isUpdateReady: { false }),
+            bootstrapper: bootstrapper
+        )
+        await model.initialize()
+
+        let update = Task { await model.updateRuntime() }
+        await bootstrapper.waitUntilSuspended()
+        XCTAssertFalse(model.isReady, "precondition: the update clears isReady")
+        await model.initialize()
+        bootstrapper.release()
+        await update.value
+
+        XCTAssertEqual(checks, 1)
+        XCTAssertEqual(process.standaloneLaunches, ["Chrome"])
+        XCTAssertTrue(model.isReady)
+    }
+}
+
 // MARK: - Stubs
 
 /// Records what the model asked the process to do instead of launching
@@ -854,6 +955,31 @@ private final class FailingBootstrapper: SliccBootstrapper {
 
     override func update(sliccDir: String = SliccBootstrapper.defaultSliccDir) async throws {
         throw error
+    }
+}
+
+/// Suspends `bootstrap()`/`update()` until the test calls `release()`, so a
+/// second `initialize()` can be issued while the first is in flight.
+private final class GatedBootstrapper: SliccBootstrapper {
+    private(set) var bootstrapCalls = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    override func bootstrap(sliccDir: String = SliccBootstrapper.defaultSliccDir) async throws {
+        bootstrapCalls += 1
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    override func update(sliccDir: String = SliccBootstrapper.defaultSliccDir) async throws {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func waitUntilSuspended() async {
+        while continuation == nil { await Task.yield() }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 
