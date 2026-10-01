@@ -276,6 +276,10 @@ filesystem is `SLICC_LIVE_FS`: every top-level VFS dir plus `/tmp` is mounted
 read and write back on the last `close()`. Because the backing store is
 `ctx.fs` itself, mounts (local / S3 / DA / hostfs) work with plain `open()`
 and the same path ACLs and sudo gate apply.
+`os.mkdir(path, 0o700)` (and `os.makedirs`, `tempfile.mkdtemp`) creates the
+directory with the mode asked for, masked with a fixed umask of 022 — `0o777`
+gives 0755. `os.umask()` does not change that mask, and the shell's `umask`
+does not reach Python.
 
 `subprocess` (`run`, `check_output`, `Popen`, `os.system`, `os.popen`) runs
 the child through that bridge's exec channel — a shell command, not a fork.
