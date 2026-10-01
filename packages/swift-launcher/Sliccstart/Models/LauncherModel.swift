@@ -61,6 +61,10 @@ final class LauncherModel {
 
     var targets: [AppTarget] = []
     var isReady = false
+    @ObservationIgnored private var isInitializing = false
+    
+    
+    @ObservationIgnored private var hasInitialized = false
     var alertMessage: String?
     var showAlert = false
     var showDebugBuildDialog = false
@@ -114,7 +118,22 @@ final class LauncherModel {
 
     
     
+    
+    
+    
+    
+    
+    
+    
     func initialize() async {
+        if hasInitialized {
+            if isReady { rescan() }
+            return
+        }
+        guard !isInitializing else { return }
+        isInitializing = true
+        defer { isInitializing = false }
+
         let sliccDir = process.resolvedSliccDir
         let status = checkInstallation(sliccDir)
         if status != .installed && status != .needsBuild {
@@ -142,6 +161,7 @@ final class LauncherModel {
         }
 
         isReady = true
+        hasInitialized = true
 
         
         
@@ -330,7 +350,8 @@ final class LauncherModel {
                     log.error("checkForUpdates: failed: \(String(describing: error), privacy: .public)")
                     
                     
-                    if status != .upToDate {
+                    
+                    if status != .upToDate, !status.isRateLimited {
                         LauncherErrorReport.report(.updateCheck, error)
                     }
                     self.updateCheckStatus = status

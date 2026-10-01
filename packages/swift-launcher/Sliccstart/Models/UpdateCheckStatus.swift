@@ -19,6 +19,10 @@ enum UpdateCheckStatus: Equatable {
     
     
     case translocated
+    
+    
+    
+    case rateLimited(until: Date)
     case failed(String)
 
     
@@ -34,6 +38,9 @@ enum UpdateCheckStatus: Equatable {
         }
         if isReadOnlyVolumeError(error) {
             return .translocated
+        }
+        if let limited = error as? GitHubRateLimitedError {
+            return .rateLimited(until: limited.retryAfter)
         }
         return .failed(message(for: error))
     }
@@ -68,6 +75,8 @@ enum UpdateCheckStatus: Equatable {
             return "No Installable Update"
         case .translocated:
             return "Move to Applications to Update"
+        case .rateLimited:
+            return "Update Check Rate-Limited"
         case .failed:
             return "Update Check Failed"
         }
@@ -84,9 +93,18 @@ enum UpdateCheckStatus: Equatable {
             return "The newest releases ship no macOS launcher build yet. Click to check again."
         case .translocated:
             return "Sliccstart is running from a temporary, read-only location. Move it to your Applications folder and relaunch, then click to try again."
+        case .rateLimited(let until):
+            let time = until.formatted(date: .omitted, time: .shortened)
+            return "GitHub's API limit for your network is used up until \(time). "
+                + "Shared networks such as a VPN exhaust it quickly; setting GH_TOKEN raises the limit."
         case .failed(let message):
             return "\(message) Click to try again."
         }
+    }
+
+    var isRateLimited: Bool {
+        if case .rateLimited = self { return true }
+        return false
     }
 
     

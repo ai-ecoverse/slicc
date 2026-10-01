@@ -308,7 +308,8 @@ final class AppListViewRenderTests: XCTestCase {
 
     func testUpdateFooterRendersEveryCheckStatus() {
         let statuses: [UpdateCheckStatus] = [
-            .idle, .checking, .upToDate, .noInstallableRelease, .translocated, .failed("network down"),
+            .idle, .checking, .upToDate, .noInstallableRelease, .translocated,
+            .rateLimited(until: Date(timeIntervalSince1970: 0)), .failed("network down"),
         ]
         var digests: [String: String] = [:]
         for status in statuses {

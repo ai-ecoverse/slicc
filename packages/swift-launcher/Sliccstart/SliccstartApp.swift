@@ -133,6 +133,10 @@ struct SliccstartApp: App {
                 .optelAutoInstrument(appID: optelAppID)
         }
         .defaultSize(width: 340, height: 100)
+        
+        
+        
+        .handlesExternalEvents(matching: [])
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
         .commands {

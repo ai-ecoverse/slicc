@@ -58,6 +58,7 @@ final class UpdateCheckStatusTests: XCTestCase {
             .upToDate,
             .noInstallableRelease,
             .translocated,
+            .rateLimited(until: Date(timeIntervalSince1970: 0)),
             .failed("nope"),
         ].map(\.buttonTitle)
         XCTAssertEqual(Set(titles).count, titles.count)
