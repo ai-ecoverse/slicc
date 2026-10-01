@@ -1,6 +1,8 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
+import { createDirectoryHandle } from './fsa-test-helpers.js';
 
 /** Names in `dir`, sorted. */
 async function names(fs: VirtualFS, dir: string): Promise<string[]> {
@@ -56,5 +58,15 @@ describe('rename of a directory onto a directory', () => {
     await fs.writeFile('/c/file', 'x');
     await expect(fs.rename('/c/file', '/c/dst')).rejects.toMatchObject({ code: 'EISDIR' });
     await expect(fs.rename('/c/src', '/c/file')).rejects.toMatchObject({ code: 'ENOTDIR' });
+  });
+
+  it("refuses to replace a mount's root (EBUSY): the store sees only its empty placeholder", async () => {
+    await fs.mount(
+      '/c/mnt',
+      LocalMountBackend.fromHandle(createDirectoryHandle({ inside: 'I' }), { mountId: 'm' })
+    );
+    await expect(fs.rename('/c/src', '/c/mnt')).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(await fs.readFile('/c/mnt/inside', { encoding: 'utf-8' })).toBe('I');
+    expect(await names(fs, '/c/src')).toEqual(['f']);
   });
 });

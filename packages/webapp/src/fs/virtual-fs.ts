@@ -3001,6 +3001,7 @@ export class VirtualFS {
     // backend replaces only a regular file (a symlink there is EISDIR), so
     // `ln -sf` / `mv -f` onto a link failed. The link goes first.
     const displaced = displacedByRename(newStat?.type, entryType);
+    if (displaced) this.refuseMountedDisplacement(normalizedNew);
     try {
       // Mutation, prefix marks, and eager persist share ONE critical
       // section, matching rm/symlink: marking after an unlocked rename
@@ -3027,6 +3028,19 @@ export class VirtualFS {
     ]);
     // Update mount index if paths are under mounts
     this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+  }
+
+  /**
+   * A mount's entry is its backend's: the store sees only the mount root's
+   * placeholder (empty, whatever the mount holds), so parking it would
+   * shadow the mount. EBUSY for the root, EXDEV inside; same-backend renames
+   * went to the backend before this.
+   */
+  private refuseMountedDisplacement(path: string): void {
+    const mount = this.findMount(path);
+    if (!mount) return;
+    const code = mount.relParts.length === 0 ? 'EBUSY' : 'EXDEV';
+    throw new FsError(code, 'rename onto a mounted entry', path);
   }
 
   /**
