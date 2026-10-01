@@ -244,6 +244,16 @@ function buildBackendDescriptor(backend: MountBackend, normalizedPath: string): 
   }
 }
 
+/** Where a rename may park a destination symlink until it lands: a hidden sibling. */
+function parkedLinkCandidate(path: string): string {
+  const slash = path.lastIndexOf('/');
+  const nonce = Math.random().toString(36).slice(2, 10);
+  return `${path.slice(0, slash + 1)}.${path.slice(slash + 1)}.slicc-rename-${nonce}`;
+}
+
+/** Tries before {@link VirtualFS.freeParkedLinkPath} gives up on a free name. */
+const PARK_ATTEMPTS = 8;
+
 export class VirtualFS {
   /**
    * Node-fs-promises-shaped client used by every public VirtualFS
@@ -2946,17 +2956,28 @@ export class VirtualFS {
         await this.dropSidecarConsistency();
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
-        // The link is gone only once the rename lands: a failed rename puts it back.
-        const linkTarget = replacesLink ? await this.lfs.readlink(normalizedNew) : undefined;
-        if (linkTarget !== undefined) await this.lfs.unlink(normalizedNew);
+        // The link is parked beside itself, not deleted: a failed rename moves
+        // the very same entry back (identity, times), and it is removed only
+        // once the rename landed.
+        const parked = replacesLink ? await this.freeParkedLinkPath(normalizedNew) : undefined;
+        // Dirty before it exists, so whichever way the rename ends, the
+        // sidecar records the parked path: gone, or holding the link.
+        if (parked) this.markSidecarDirty(parked);
+        if (parked) await this.lfs.rename(normalizedNew, parked);
         try {
           await this.lfs.rename(normalizedOld, normalizedNew);
         } catch (err) {
-          if (linkTarget !== undefined) {
-            await this.lfs.symlink(linkTarget, normalizedNew).catch(() => undefined);
+          try {
+            if (parked) await this.restoreParkedLink(parked, normalizedNew, err);
+          } finally {
+            // Persist what the failure left (the link back, or still parked);
+            // a write that fails keeps the marks for the next flush, and must
+            // not mask the error that explains the state.
+            await this.writeOpfsMetadataSidecarUnlocked().catch(() => undefined);
           }
           throw err;
         }
+        if (parked) await this.lfs.unlink(parked).catch(() => undefined);
         await this.writeOpfsMetadataSidecarUnlocked();
       });
     } catch (err) {
@@ -2968,6 +2989,43 @@ export class VirtualFS {
     ]);
     // Update mount index if paths are under mounts
     this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+  }
+
+  /**
+   * A parking name beside `path` that nothing holds. Called under the write
+   * lock, so no VFS writer can take the name between the check and the move;
+   * a store `rename` replaces its destination, so a taken name is never used.
+   */
+  private async freeParkedLinkPath(path: string): Promise<string> {
+    for (let i = 0; i < PARK_ATTEMPTS; i++) {
+      const candidate = parkedLinkCandidate(path);
+      try {
+        await this.lfs.lstat(candidate);
+      } catch (err) {
+        if ((err as { code?: unknown })?.code === 'ENOENT') return candidate;
+        throw err;
+      }
+    }
+    throw new FsError('EEXIST', 'no free name to park the symlink at during rename', path);
+  }
+
+  /**
+   * Moves a link parked by a failed rename back to `path`. When even that
+   * fails, the link still exists at `parked`: the error says where, and why
+   * the rename failed, rather than reporting only the rename's own error.
+   */
+  private async restoreParkedLink(parked: string, path: string, cause: unknown): Promise<void> {
+    try {
+      await this.lfs.rename(parked, path);
+    } catch (restoreErr) {
+      const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
+      throw new FsError(
+        'EIO',
+        `rename failed (${why(cause)}) and the symlink it replaced could not be put back ` +
+          `(${why(restoreErr)}); it is at ${parked}`,
+        path
+      );
+    }
   }
 
   /**
