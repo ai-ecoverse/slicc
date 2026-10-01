@@ -308,13 +308,14 @@ final class AppListViewRenderTests: XCTestCase {
 
     func testUpdateFooterRendersEveryCheckStatus() {
         let statuses: [UpdateCheckStatus] = [
-            .idle, .checking, .upToDate, .noInstallableRelease, .translocated, .failed("network down"),
+            .idle, .checking, .upToDate, .noInstallableRelease, .translocated,
+            .rateLimited(until: Date(timeIntervalSince1970: 0)), .failed("network down"),
         ]
         var digests: [String: String] = [:]
         for status in statuses {
             digests[status.buttonTitle] = digestOf(makeView(targets: [], updateCheckStatus: status))
         }
-        // Six distinct titles must produce six distinct footers.
+        // Every distinct title must produce a distinct footer.
         XCTAssertEqual(Set(digests.values).count, statuses.count, "\(digests.keys)")
     }
 

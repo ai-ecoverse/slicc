@@ -23,9 +23,11 @@ enum GitHubRateLimit {
     /// - `retry-after` on a 403/429 wins (secondary limits).
     /// - `x-ratelimit-remaining: 0` waits for `x-ratelimit-reset` — also on a
     ///   success, so the walk stops before it earns a 403.
-    /// - A 429, or an exhausted 403 without a reset, waits `minimumBackoff`.
+    /// - A 429, an exhausted 403 without a reset, or a 403 whose body names a
+    ///   rate limit (secondary limits may send neither header) waits
+    ///   `minimumBackoff`.
     /// - A 403 with no rate-limit signal is a real "forbidden", not a limit.
-    static func blockedUntil(_ response: HTTPURLResponse, now: Date) -> Date? {
+    static func blockedUntil(_ response: HTTPURLResponse, body: Data = Data(), now: Date) -> Date? {
         let isLimitStatus = response.statusCode == 403 || response.statusCode == 429
         if isLimitStatus, let seconds = header(response, "Retry-After").flatMap(TimeInterval.init) {
             return now.addingTimeInterval(max(seconds, 0))
@@ -37,10 +39,18 @@ enum GitHubRateLimit {
         if exhausted, let reset, reset > now {
             return reset
         }
-        if response.statusCode == 429 || (isLimitStatus && exhausted) {
+        if response.statusCode == 429 || (isLimitStatus && (exhausted || bodyNamesRateLimit(body))) {
             return now.addingTimeInterval(minimumBackoff)
         }
         return nil
+    }
+
+    /// GitHub's limit errors say so in `message`, e.g. "API rate limit
+    /// exceeded" or "You have exceeded a secondary rate limit".
+    private static func bodyNamesRateLimit(_ body: Data) -> Bool {
+        struct ErrorBody: Decodable { let message: String? }
+        let message = (try? JSONDecoder().decode(ErrorBody.self, from: body))?.message
+        return message?.range(of: "rate limit", options: .caseInsensitive) != nil
     }
 
     private static func header(_ response: HTTPURLResponse, _ name: String) -> String? {
@@ -62,8 +72,10 @@ final class GitHubRateLimitGate: @unchecked Sendable {
         }
     }
 
+    /// Keeps the furthest deadline: overlapping checks can finish out of
+    /// order, and an earlier reset must not shorten a longer wait.
     func record(_ until: Date?) {
         guard let until else { return }
-        lock.withLock { blockedUntil = until }
+        lock.withLock { blockedUntil = max(blockedUntil ?? until, until) }
     }
 }

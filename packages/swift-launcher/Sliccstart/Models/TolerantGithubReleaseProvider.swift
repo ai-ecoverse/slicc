@@ -96,7 +96,7 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
             }
             request = request.applyOrOriginal(proxy: proxy)
             let (data, httpResponse) = try await fetchPage(request)
-            let blockedUntil = GitHubRateLimit.blockedUntil(httpResponse, now: now())
+            let blockedUntil = GitHubRateLimit.blockedUntil(httpResponse, body: data, now: now())
             rateLimitGate.record(blockedUntil)
             guard (200..<300).contains(httpResponse.statusCode) else {
                 if let blockedUntil {

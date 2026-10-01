@@ -49,6 +49,31 @@ final class GitHubRateLimitTests: XCTestCase {
         XCTAssertNil(GitHubRateLimit.blockedUntil(response(403, ["x-ratelimit-remaining": "12"]), now: now))
     }
 
+    func testASecondaryLimitNamedOnlyInTheBodyWaitsAMinute() {
+        let body = Data(#"{"message":"You have exceeded a secondary rate limit. Please wait."}"#.utf8)
+        XCTAssertEqual(
+            GitHubRateLimit.blockedUntil(response(403, ["x-ratelimit-remaining": "42"]), body: body, now: now),
+            now.addingTimeInterval(GitHubRateLimit.minimumBackoff)
+        )
+    }
+
+    func testAForbiddenBodyWithoutARateLimitIsNotALimit() {
+        let body = Data(#"{"message":"Resource not accessible by integration"}"#.utf8)
+        XCTAssertNil(GitHubRateLimit.blockedUntil(response(403), body: body, now: now))
+        XCTAssertNil(GitHubRateLimit.blockedUntil(response(403), body: Data("rate limit".utf8), now: now))
+    }
+
+    func testTheGateKeepsTheFurthestDeadline() {
+        let gate = GitHubRateLimitGate()
+        let later = now.addingTimeInterval(600)
+        gate.record(later)
+        gate.record(now.addingTimeInterval(60))
+        XCTAssertThrowsError(try gate.check(now: now.addingTimeInterval(120))) { error in
+            XCTAssertEqual(error as? GitHubRateLimitedError, GitHubRateLimitedError(retryAfter: later))
+        }
+        XCTAssertNoThrow(try gate.check(now: later))
+    }
+
     func testASuccessWithBudgetLeftImposesNoWait() {
         let headers = ["x-ratelimit-remaining": "59", "x-ratelimit-reset": "1700003600"]
         XCTAssertNil(GitHubRateLimit.blockedUntil(response(200, headers), now: now))
@@ -161,6 +186,26 @@ final class GitHubRateLimitTests: XCTestCase {
             XCTFail("Expected the gate to refuse a request GitHub would reject")
         } catch {
             XCTAssertEqual(error as? GitHubRateLimitedError, GitHubRateLimitedError(retryAfter: reset))
+        }
+        XCTAssertEqual(responder.calls, 1)
+    }
+
+    func testASecondaryLimitBodyThrowsAndGates() async {
+        let responder = Responder(
+            status: 403,
+            headers: ["x-ratelimit-remaining": "42"],
+            body: #"{"message":"You have exceeded a secondary rate limit."}"#
+        )
+        let sut = provider(responder, gate: GitHubRateLimitGate(), clock: Clock(now))
+        let expected = GitHubRateLimitedError(retryAfter: now.addingTimeInterval(GitHubRateLimit.minimumBackoff))
+
+        for _ in 0..<2 {
+            do {
+                _ = try await fetch(sut)
+                XCTFail("Expected a rate-limit error")
+            } catch {
+                XCTAssertEqual(error as? GitHubRateLimitedError, expected)
+            }
         }
         XCTAssertEqual(responder.calls, 1)
     }
