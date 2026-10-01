@@ -92,7 +92,7 @@ export function createPySubprocessModule(hooks: PySubprocessHooks): {
   };
 }
 
-export const PYTHON_SUBPROCESS_SHIM = String.raw`
+export const PYTHON_SUBPROCESS_SHIM = `
 def __slicc_install_subprocess():
     import errno, io, itertools, json, os, subprocess, sys
     import _slicc_proc

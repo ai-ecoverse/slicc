@@ -70,6 +70,10 @@ export interface MetadataUpdate {
   mtime?: Date;
 }
 
+const METADATA_SIDECAR_IDLE_MS = 100;
+const METADATA_SIDECAR_RETRY_MS = 1_000;
+const METADATA_SIDECAR_MAX_RETRY_MS = 30_000;
+
 export interface SymlinkCreate {
   target: string;
   path: string;
@@ -311,6 +315,8 @@ export class VirtualFS {
         refs: 0,
         asyncCache: asyncCache !== false,
         sidecarDirty: { paths: new Set(), prefixes: new Set() },
+        sidecarFlushTimer: null,
+        sidecarFlushRetryMs: METADATA_SIDECAR_RETRY_MS,
       };
       VirtualFS.opfsBackends.set(vfs.dbName, entry);
     }
@@ -367,6 +373,8 @@ export class VirtualFS {
       asyncCache: boolean;
 
       sidecarDirty: SidecarDirtyState;
+      sidecarFlushTimer: ReturnType<typeof setTimeout> | null;
+      sidecarFlushRetryMs: number;
     }
   > = new Map();
   private static async ensureRootMount(zenfs: typeof import('@zenfs/core')): Promise<void> {
@@ -624,6 +632,32 @@ export class VirtualFS {
       dirty.paths.clear();
       dirty.prefixes.clear();
     }
+    const entry = VirtualFS.opfsBackends.get(this.dbName);
+    if (entry) entry.sidecarFlushRetryMs = METADATA_SIDECAR_RETRY_MS;
+    if (entry && entry.sidecarFlushTimer !== null) {
+      clearTimeout(entry.sidecarFlushTimer);
+      entry.sidecarFlushTimer = null;
+    }
+  }
+
+  private scheduleMetadataSidecarFlush(delayMs = METADATA_SIDECAR_IDLE_MS): void {
+    if (this.backend !== 'opfs') return;
+    const entry = VirtualFS.opfsBackends.get(this.dbName);
+    if (!entry) return;
+    if (entry.sidecarFlushTimer !== null) clearTimeout(entry.sidecarFlushTimer);
+    entry.sidecarFlushTimer = setTimeout(() => {
+      entry.sidecarFlushTimer = null;
+      void this.writeOpfsMetadataSidecar().catch((error: unknown) => {
+        console.warn('[virtual-fs] deferred metadata sidecar flush failed', error);
+
+        if (VirtualFS.opfsBackends.get(this.dbName) !== entry) return;
+        if (entry.sidecarFlushTimer !== null) return;
+        if (entry.sidecarDirty.paths.size === 0 && entry.sidecarDirty.prefixes.size === 0) return;
+        const retryMs = entry.sidecarFlushRetryMs;
+        entry.sidecarFlushRetryMs = Math.min(retryMs * 2, METADATA_SIDECAR_MAX_RETRY_MS);
+        this.scheduleMetadataSidecarFlush(retryMs);
+      });
+    }, delayMs);
   }
 
   private async auditDirtyKindFlips(
@@ -1530,7 +1564,7 @@ export class VirtualFS {
       await this.stat(normalized);
       throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
     }
-    await this.updateMetadataBatch([{ path, mode }]);
+    await this.applyMetadataUpdates([{ path, mode }], false);
   }
 
   async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
@@ -1539,10 +1573,17 @@ export class VirtualFS {
       await this.stat(normalized);
       throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
     }
-    await this.updateMetadataBatch([{ path, atime, mtime }]);
+    await this.applyMetadataUpdates([{ path, atime, mtime }], false);
   }
 
   async updateMetadataBatch(updates: readonly MetadataUpdate[]): Promise<void> {
+    await this.applyMetadataUpdates(updates, true);
+  }
+
+  private async applyMetadataUpdates(
+    updates: readonly MetadataUpdate[],
+    persistImmediately: boolean
+  ): Promise<void> {
     if (updates.length === 0) return;
     const prepared = updates.map((update) => this.prepareMetadataUpdate(update));
     const paths = prepared.map((update) => update.normalized);
@@ -1559,7 +1600,8 @@ export class VirtualFS {
           if (notification) notifications.push(notification);
         }
         if (notifications.length === 0) return;
-        await this.writeOpfsMetadataSidecarUnlocked();
+        if (persistImmediately) await this.writeOpfsMetadataSidecarUnlocked();
+        else this.scheduleMetadataSidecarFlush();
         this.watcher?.notify(notifications);
       })
     );
