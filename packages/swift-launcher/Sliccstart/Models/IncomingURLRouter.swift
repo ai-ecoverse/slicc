@@ -70,7 +70,7 @@ final class IncomingURLRouter {
     private let orderedBrowsers: () -> [AppTarget]
     private let send: (URLRequest) async throws -> (Int, Data)
     private let sleep: (TimeInterval) async -> Void
-    private let activateBrowser: (String) -> Void
+    private let activateBrowser: (LeaderBrowserEndpoint) -> Void
     private let report: (Error) -> Void
 
     private var pending: [URL] = []
@@ -86,11 +86,8 @@ final class IncomingURLRouter {
         sleep: @escaping (TimeInterval) async -> Void = { seconds in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
         },
-        activateBrowser: @escaping (String) -> Void = { appPath in
-            let bundleURL = URL(fileURLWithPath: appPath).standardizedFileURL
-            NSWorkspace.shared.runningApplications
-                .first { $0.bundleURL?.standardizedFileURL == bundleURL }?
-                .activate()
+        activateBrowser: @escaping (LeaderBrowserEndpoint) -> Void = { leader in
+            BrowserForegrounder().foreground(leader)
         },
         report: @escaping (Error) -> Void = { LauncherErrorReport.report(.openIncomingUrl, $0) }
     ) {
@@ -136,7 +133,7 @@ final class IncomingURLRouter {
         
         
         
-        activateBrowser(leader.appPath)
+        activateBrowser(leader)
     }
 
     static func openableURLs(from urls: [URL]) -> [URL] {
