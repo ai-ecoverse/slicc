@@ -31,6 +31,28 @@ function nodeNeedsRef(role: string, name: string): boolean {
   return !!name || REF_ROLES.includes(role);
 }
 
+/**
+ * Turn the injected aria-snapshot `description` (comma-separated tokens such as
+ * `checked`, `collapsed`, `level=2`) into Playwright aria-snapshot state attrs
+ * placed after `[ref=…]`. `collapsed` becomes `[expanded=false]` to match the
+ * official notation; unknown tokens are passed through as `[token]`.
+ */
+export function formatAriaStates(description: string | undefined): string {
+  if (!description) return '';
+  const parts: string[] = [];
+  for (const raw of description
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    if (raw === 'collapsed') {
+      parts.push('[expanded=false]');
+      continue;
+    }
+    parts.push(`[${raw}]`);
+  }
+  return parts.length > 0 ? ` ${parts.join(' ')}` : '';
+}
+
 /** Build the CSS selector recorded for a ref, given its role and accessible name. */
 function buildRefSelector(role: string, name: string): string {
   const escapedName = escapeCssAttr(name);
@@ -85,6 +107,9 @@ export function renderNode(
   let line = `${indent}- ${role}`;
   if (name) line += ` "${escapeYaml(name)}"`;
   if (ref) line += ` [ref=${ref}]`;
+  // States after ref (before `: "value"`) so parsers that stop at `[ref=eN]`
+  // still find the ref; meep-meep / intent tools rely on that order (#3766).
+  line += formatAriaStates(node.description);
   if (value) line += `: "${escapeYaml(value)}"`;
   lines.push(line);
 
