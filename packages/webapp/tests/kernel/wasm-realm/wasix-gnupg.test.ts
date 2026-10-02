@@ -239,6 +239,8 @@ describe.skipIf(!READY)('GnuPG in the wasm realm (real programs)', () => {
         'gpg -q -d /tmp/enc.asc'
     );
     expect(r.err).toMatch(/Good signature from "Realm Test <realm@slicc\.test>"/);
+    // The realm user owns ~/.gnupg (wasix-sysroot >= 2025.9.30-15 reports st_uid 1000).
+    expect(r.err).not.toMatch(/unsafe ownership/);
     expect(r.code).toBe(0);
     expect(r.out).toBe('secret text\n');
   }, 180_000);
