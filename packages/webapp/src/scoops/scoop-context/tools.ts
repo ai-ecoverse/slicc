@@ -19,8 +19,9 @@ import {
   createMemoryWriteTool,
   createRequestSecretTool,
 } from '../../tools/index.js';
-import type { BashJobProcess } from '../../tools/types.js';
+import type { BashJobProcess, ToolDefinition } from '../../tools/types.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
+import { effectiveToolSurface } from '../agent-tool-surface.js';
 import type { ScoopContextCallbacks } from '../scoop-context.js';
 import {
   createScoopManagementTools,
@@ -84,7 +85,36 @@ function buildGuestToolGate(deps: ScoopToolsDeps): ToolAdapterGateConfig {
   };
 }
 
+async function buildReducedTools(deps: ScoopToolsDeps) {
+  const schema = deps.scoop.config?.structuredOutputSchema;
+  if (effectiveToolSurface(deps.scoop.config) !== 'output' || !schema) {
+    return adaptToolList(deps, []);
+  }
+  const { createStructuredOutputTool } = await import('../structured-output-tool.js');
+  return adaptToolList(deps, [createStructuredOutputTool(schema, deps.onStructuredOutput)]);
+}
+
+function adaptToolList(deps: ScoopToolsDeps, legacyTools: ToolDefinition[]) {
+  const secretsConfig = { scrubToolResult: getToolResultScrubber() };
+  const gateConfig = buildGuestToolGate(deps);
+  return deps.processManager
+    ? adaptTools(
+        legacyTools,
+        {
+          processManager: deps.processManager,
+          owner: deps.processOwner,
+          getParentPid: deps.getTurnPid,
+        },
+        secretsConfig,
+        gateConfig
+      )
+    : adaptTools(legacyTools, undefined, secretsConfig, gateConfig);
+}
+
 export async function buildScoopTools(deps: ScoopToolsDeps) {
+  if (effectiveToolSurface(deps.scoop.config) !== 'full') {
+    return buildReducedTools(deps);
+  }
   const { scoop, unit, callbacks } = deps;
   const scoopManagementToolsConfig: ScoopManagementToolsConfig = {
     scoop,

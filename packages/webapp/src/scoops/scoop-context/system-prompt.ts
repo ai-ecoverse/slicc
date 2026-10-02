@@ -1,6 +1,32 @@
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
+import { MINIMAL_AGENT_SYSTEM_PROMPT, withSafetyTrailer } from '../agent-prompt-text.js';
 import { formatSkillsForPrompt, type Skill } from '../skills.js';
 import type { RegisteredScoop } from '../types.js';
+
+function promptPlaces(
+  stable: boolean,
+  scoop: RegisteredScoop,
+  workspace: { root: string; memoryPath: string },
+  isRoot: boolean
+): {
+  assistantName: string;
+  workspaceShown: string;
+  homeShown: string;
+  memoryPathShown: string;
+  memoryHeading: string;
+} {
+  const assistantName = scoop.config?.assistantName || (stable ? 'agent' : scoop.assistantLabel);
+  const memoryKind = isRoot ? 'CONE' : 'SCOOP';
+  return {
+    assistantName,
+    workspaceShown: stable ? 'the working directory named in the user message' : workspace.root,
+    homeShown: stable
+      ? 'your private scratch directory (named in the user message)'
+      : `/scoops/${scoop.folder}/`,
+    memoryPathShown: stable ? 'CLAUDE.md in your private scratch directory' : workspace.memoryPath,
+    memoryHeading: stable ? `${memoryKind} MEMORY` : `${memoryKind} MEMORY (${scoop.name})`,
+  };
+}
 
 export function buildScoopSystemPrompt(
   scoop: RegisteredScoop,
@@ -9,10 +35,19 @@ export function buildScoopSystemPrompt(
   scoopMemory: string,
   skills: Skill[]
 ): string {
-  const assistantName = scoop.config?.assistantName || scoop.assistantLabel;
+  if (scoop.config?.systemPromptOverride !== undefined) {
+    return withSafetyTrailer(scoop.config.systemPromptOverride);
+  }
+  if (scoop.config?.minimalSystemPrompt) {
+    return withSafetyTrailer(MINIMAL_AGENT_SYSTEM_PROMPT);
+  }
+
+  const stable = scoop.config?.cacheStablePrompt === true;
 
   const isRoot = unit.display.role === 'primary';
   const { policy, workspace } = unit;
+  const places = promptPlaces(stable, scoop, workspace, isRoot);
+  const { assistantName, workspaceShown, homeShown, memoryPathShown, memoryHeading } = places;
 
   const basePrompt = `# ${assistantName}
 
@@ -21,7 +56,7 @@ You are ${assistantName}, ${isRoot ? 'the main assistant (cone)' : 'a scoop assi
 ## Your Capabilities
 
 You have access to:
-- A virtual filesystem at ${workspace.root} (your working directory)
+- A virtual filesystem at ${workspaceShown} (your working directory)
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
 - Use shell commands like \`rg\`, \`grep\`, and \`find\` through the bash tool for search
@@ -43,7 +78,7 @@ ${policy.canWriteSharedMemory ? '- **update_global_memory**: Update the global C
 - **list_scoops**: See the scoops in your subtree
 - **scoop_scoop**: Create a child scoop (a grandchild of the cone)
 - **feed_scoop** / **drop_scoop** / **scoop_wait**: Manage those children
-- Your workspace stays restricted: /scoops/${scoop.folder}/
+- Your workspace stays restricted: ${homeShown}
 `
 }
 ## Delegating to Scoops
@@ -60,7 +95,7 @@ prompted again when they are done, and you can decide whether to inspect the sav
 `
     : `
 You are a scoop with restricted filesystem access:
-- Your workspace: /scoops/${scoop.folder}/
+- Your workspace: ${homeShown}
 - Shared directory: /shared/ (read-write for all scoops)
 - Stay focused on your assigned tasks.
 `
@@ -70,7 +105,7 @@ You are a scoop with restricted filesystem access:
 
 Your memory is organized hierarchically:
 - **Global memory** (/shared/CLAUDE.md): Read by all scoops, ${policy.canWriteSharedMemory ? 'use update_global_memory tool to modify it' : 'read-only for you'}
-- **${isRoot ? 'Cone' : 'Scoop'} memory** (${workspace.memoryPath}): Your private memory
+- **${isRoot ? 'Cone' : 'Scoop'} memory** (${memoryPathShown}): Your private memory
 
 When you learn something important:
 - Use your memory for context-specific notes. Write it ONLY with the memory_write tool (pass \`edits\` for a small change, \`content\` for a rewrite): it enforces the memory budget and its result reports the remaining room, so never follow it with \`wc -c\`. write_file, edit and shell redirections are refused on memory files.
@@ -104,11 +139,11 @@ ${globalMemory}
 ---`;
   }
 
-  if (scoopMemory) {
+  if (scoopMemory && !stable) {
     fullPrompt += `
 
 ---
-${isRoot ? 'CONE' : 'SCOOP'} MEMORY (${scoop.name}):
+${memoryHeading}:
 ${scoopMemory}
 ---`;
   }
@@ -118,5 +153,5 @@ ${scoopMemory}
     fullPrompt += skillsSection;
   }
 
-  return fullPrompt;
+  return stable ? withSafetyTrailer(fullPrompt) : fullPrompt;
 }

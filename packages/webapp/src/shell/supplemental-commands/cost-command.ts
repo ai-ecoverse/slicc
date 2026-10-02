@@ -49,6 +49,14 @@ export interface ScoopCostData {
   lastActivity?: number;
 
   activeTimeMs?: number;
+
+  calls?: Array<{
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cost: number;
+  }>;
 }
 
 type SessionCostsProvider = (scope: SessionCostScope) => ScoopCostData[] | Promise<ScoopCostData[]>;
@@ -164,6 +172,11 @@ refusals of an \`agent --no-escalate\` run. Folded \`agent\` children add
 theirs to the parent's row; frozen sessions report zeros.
 
 JSON shape: { "budget": <window|null>, "scoops": [ ... ] }
+
+Each live or dropped row's \`calls\` array has one entry per assistant turn
+(folded \`agent\` children included): \`{ input, output, cacheRead, cacheWrite, cost }\`.
+A one-decision \`agent\` call is one entry. A tool-using call is one entry per
+model round. \`cost\` on an entry is that turn's total dollars.
 `;
 }
 

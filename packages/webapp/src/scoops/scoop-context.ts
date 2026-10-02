@@ -263,6 +263,11 @@ export class ScoopContext {
     return { captured: this.structuredOutputCaptured, value: this.structuredOutputValue };
   }
 
+  resetStructuredOutput(): void {
+    this.structuredOutputCaptured = false;
+    this.structuredOutputValue = undefined;
+  }
+
   get isBusy(): boolean {
     return this.isProcessing || (this.agent?.state?.isStreaming ?? false);
   }

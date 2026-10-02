@@ -99,6 +99,16 @@ export interface ScoopConfig {
   escalate?: boolean;
 
   structuredOutputSchema?: JsonSchemaObject;
+
+  systemPromptOverride?: string;
+
+  minimalSystemPrompt?: boolean;
+
+  cacheStablePrompt?: boolean;
+
+  promptCwd?: string;
+
+  toolSurface?: 'auto' | 'full' | 'output';
 }
 
 export interface ChannelMessage {

@@ -21,6 +21,16 @@ import {
   parseWorkspaceMode,
 } from '../work-unit/workspace-mode.js';
 import { AGENT_ADJECTIVES, AGENT_FLAVORS } from './agent-names.js';
+import {
+  AGENT_SESSION_IDLE_MS,
+  type AgentCallUsage,
+  cacheStableUserPrompt,
+  classifySession,
+  sessionExpired,
+  sessionFingerprint,
+  sessionIdError,
+  sumAssistantUsage,
+} from './agent-session.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
@@ -91,12 +101,29 @@ export interface AgentSpawnOptions {
   backgroundAfterSeconds?: number;
 
   signal?: AbortSignal;
+
+  systemPrompt?: string;
+
+  minimalSystemPrompt?: boolean;
+
+  toolSurface?: 'auto' | 'full' | 'output';
+
+  cacheStablePrompt?: boolean;
+
+  session?: string;
+
+  resumeOnly?: boolean;
 }
 
 export interface AgentSpawnResult {
   finalText: string;
 
   exitCode: number;
+
+  sessionId?: string;
+  sessionStatus?: 'created' | 'resumed';
+
+  usage?: AgentCallUsage;
 }
 
 export interface AgentBridge {
@@ -109,6 +136,8 @@ export interface AgentBridgeDeps {
   generateUid?: () => string;
 
   resolveModel?: (modelId: string) => ScoopModelResolution;
+
+  now?: () => number;
 }
 
 export const AGENT_BRIDGE_GLOBAL_KEY = '__slicc_agent';
@@ -117,6 +146,19 @@ type AgentBridgeGlobal = typeof globalThis & {
   [AGENT_BRIDGE_GLOBAL_KEY]?: AgentBridge;
 };
 
+interface LiveAgentSession {
+  id: string;
+  jid: string;
+  folder: string;
+  nameToken: string;
+  scratchFolder: string;
+  fingerprint: string;
+  lastUsed: number;
+  busy: boolean;
+
+  idleTimer?: ReturnType<typeof setTimeout>;
+}
+
 interface BridgeContext {
   orchestrator: Orchestrator;
   sharedFs: VirtualFS;
@@ -124,6 +166,11 @@ interface BridgeContext {
   generateName: () => string;
   generateUid: () => string;
   resolveModel: (modelId: string) => ScoopModelResolution;
+
+  sessions: Map<string, LiveAgentSession>;
+
+  pendingSessions: Set<string>;
+  now: () => number;
 }
 
 function pickFreshNameToken(ctx: BridgeContext): string {
@@ -236,6 +283,9 @@ function validateSpawnOptions(
   const pathError = validateBookkeepingPaths(options);
   if (pathError) return pathError;
 
+  const decisionError = validateDecisionOptions(options);
+  if (decisionError) return decisionError;
+
   const requestedName = options.name;
   if (requestedName !== undefined && !isValidAgentName(requestedName)) {
     return {
@@ -246,6 +296,48 @@ function validateSpawnOptions(
     };
   }
 
+  return validatePositiveLimits(options, resolvedModelId, resolvedProviderId);
+}
+
+function validateDecisionOptions(options: AgentSpawnOptions): { error: AgentSpawnResult } | null {
+  const surface = options.toolSurface;
+  if (surface !== undefined && surface !== 'auto' && surface !== 'full' && surface !== 'output') {
+    return {
+      error: {
+        finalText: 'agent: --tools must be one of: auto, full, output',
+        exitCode: 1,
+      },
+    };
+  }
+  if (surface === 'output' && options.structuredOutputSchema === undefined) {
+    return {
+      error: { finalText: 'agent: --tools output requires a schema', exitCode: 1 },
+    };
+  }
+  if (options.systemPrompt !== undefined && options.systemPrompt.trim() === '') {
+    return {
+      error: { finalText: 'agent: --system-prompt requires a non-empty value', exitCode: 1 },
+    };
+  }
+  if (options.resumeOnly === true && options.session === undefined) {
+    return {
+      error: { finalText: 'agent: --resume requires a session id', exitCode: 1 },
+    };
+  }
+  if (options.session !== undefined) {
+    const idError = sessionIdError(options.session);
+    if (idError) return { error: { finalText: idError, exitCode: 1 } };
+  }
+  return null;
+}
+
+function validatePositiveLimits(
+  options: AgentSpawnOptions,
+  resolvedModelId: string | undefined,
+  resolvedProviderId: string | undefined
+):
+  | { error: AgentSpawnResult }
+  | { resolvedModelId: string | undefined; resolvedProviderId: string | undefined } {
   for (const [name, value] of [
     ['maxTurns', options.maxTurns],
     ['maxWallClockMs', options.maxWallClockMs],
@@ -548,6 +640,20 @@ function buildScoopConfig(
   if (options.escalate === false) {
     scoopConfig.escalate = false;
   }
+  if (options.systemPrompt !== undefined) {
+    scoopConfig.systemPromptOverride = options.systemPrompt;
+  }
+  if (options.minimalSystemPrompt === true) {
+    scoopConfig.minimalSystemPrompt = true;
+  }
+  if (options.toolSurface !== undefined) {
+    scoopConfig.toolSurface = options.toolSurface;
+  }
+  if (options.cacheStablePrompt === true) {
+    scoopConfig.cacheStablePrompt = true;
+    scoopConfig.promptCwd = options.cwd;
+    scoopConfig.assistantName = 'agent';
+  }
 
   return scoopConfig;
 }
@@ -581,6 +687,32 @@ function registerScoopObserver(orchestrator: Orchestrator, jid: string) {
   return state;
 }
 
+interface TranscriptMessage {
+  role: string;
+  content?: readonly unknown[];
+}
+
+function structuredOutputFromTurn(messages: readonly TranscriptMessage[]): unknown {
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (typeof block !== 'object' || block === null) continue;
+      const part = block as { type?: string; name?: string; arguments?: unknown };
+      if (part.type === 'toolCall' && part.name === 'StructuredOutput') return part.arguments;
+    }
+  }
+  return undefined;
+}
+
+function messagesAddedSince(
+  orchestrator: Orchestrator,
+  jid: string,
+  start: number
+): readonly TranscriptMessage[] {
+  const messages = orchestrator.getScoopContext(jid)?.getAgentMessages?.() ?? [];
+  return messages.slice(start) as readonly TranscriptMessage[];
+}
+
 async function runScoopAndCaptureOutput(
   orchestrator: Orchestrator,
   jid: string,
@@ -589,6 +721,11 @@ async function runScoopAndCaptureOutput(
   observerState: ReturnType<typeof registerScoopObserver>,
   images: ImageContent[] = []
 ): Promise<AgentSpawnResult | null> {
+  const messageStart = orchestrator.getScoopContext(jid)?.getAgentMessages?.().length ?? 0;
+
+  if (structuredOutputSchema) {
+    orchestrator.getScoopContext(jid)?.resetStructuredOutput?.();
+  }
   await orchestrator.sendPrompt(jid, prompt, 'agent', 'agent', images);
 
   if (observerState.scoopError !== null) {
@@ -596,6 +733,12 @@ async function runScoopAndCaptureOutput(
   }
 
   if (structuredOutputSchema) {
+    const fresh = (): unknown =>
+      structuredOutputFromTurn(messagesAddedSince(orchestrator, jid, messageStart));
+    const fromTurn = fresh();
+    if (fromTurn !== undefined) {
+      return { finalText: JSON.stringify(fromTurn), exitCode: 0 };
+    }
     const ctxRef = orchestrator.getScoopContext(jid);
     let so = ctxRef?.getStructuredOutput?.();
     for (let nudge = 0; nudge < 2 && !so?.captured; nudge++) {
@@ -608,6 +751,10 @@ async function runScoopAndCaptureOutput(
 
       if (observerState.scoopError !== null) {
         return { finalText: observerState.scoopError, exitCode: 1 };
+      }
+      const nudged = fresh();
+      if (nudged !== undefined) {
+        return { finalText: JSON.stringify(nudged), exitCode: 0 };
       }
       so = ctxRef?.getStructuredOutput?.();
     }
@@ -734,6 +881,223 @@ async function runScoopToOutcomeInner(
   }
 }
 
+interface UsageMessageSource {
+  getAgentMessages?: () => readonly {
+    role: string;
+    usage?: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      cost?: { total: number };
+    };
+  }[];
+}
+
+function usageForCall(ctx: BridgeContext, jid: string, start: number): AgentCallUsage | undefined {
+  const scoopCtx = ctx.orchestrator.getScoopContext(jid) as UsageMessageSource | undefined;
+  if (!scoopCtx || typeof scoopCtx.getAgentMessages !== 'function') return undefined;
+  return sumAssistantUsage(scoopCtx.getAgentMessages(), start);
+}
+
+function withSessionMeta(
+  outcome: AgentSpawnResult,
+  sessionId: string,
+  sessionStatus: 'created' | 'resumed',
+  usage: AgentCallUsage | undefined
+): AgentSpawnResult {
+  return {
+    ...outcome,
+    sessionId,
+    sessionStatus,
+    ...(usage ? { usage } : {}),
+  };
+}
+
+function fingerprintOf(
+  options: AgentSpawnOptions,
+  modelId: string,
+  modelProviderId: string | undefined,
+  thinkingLevel: ThinkingLevel | undefined
+): string {
+  return sessionFingerprint({
+    cwd: options.cwd,
+    allowedCommands: options.allowedCommands,
+    modelId: modelId || undefined,
+    modelProviderId,
+    thinkingLevel,
+    visiblePaths: options.visiblePaths,
+    writablePaths: grantedWritablePaths(options),
+    invokingCwd: options.invokingCwd,
+    workspaceMode: options.workspaceMode,
+    structuredOutputSchema: options.structuredOutputSchema,
+    escalate: options.escalate,
+    systemPrompt: options.systemPrompt,
+    minimalSystemPrompt: options.minimalSystemPrompt,
+    toolSurface: options.toolSurface,
+    backgroundAfterSeconds: options.backgroundAfterSeconds,
+    parentJid: options.parentJid,
+    cacheStablePrompt: options.cacheStablePrompt,
+  });
+}
+
+function clearIdleTimer(live: LiveAgentSession): void {
+  if (live.idleTimer === undefined) return;
+  clearTimeout(live.idleTimer);
+  live.idleTimer = undefined;
+}
+
+function armIdleTimer(ctx: BridgeContext, live: LiveAgentSession): void {
+  clearIdleTimer(live);
+  const elapsed = ctx.now() - live.lastUsed;
+  const remaining = AGENT_SESSION_IDLE_MS - elapsed + 1;
+  const delay = live.busy ? AGENT_SESSION_IDLE_MS : Math.max(1, remaining);
+  const timer = setTimeout(() => {
+    void reclaimIfIdle(ctx, live.id);
+  }, delay);
+  if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
+    timer.unref();
+  }
+  live.idleTimer = timer;
+}
+
+async function reclaimIfIdle(ctx: BridgeContext, id: string): Promise<void> {
+  const live = ctx.sessions.get(id);
+  if (!live) return;
+  if (live.busy || !sessionExpired(live.lastUsed, ctx.now())) {
+    armIdleTimer(ctx, live);
+    return;
+  }
+  await dropLiveSession(ctx, live);
+}
+
+function idleSessionsExcept(ctx: BridgeContext, keepId: string | undefined): LiveAgentSession[] {
+  const now = ctx.now();
+  const due: LiveAgentSession[] = [];
+  for (const live of ctx.sessions.values()) {
+    if (live.id === keepId || live.busy) continue;
+    if (sessionExpired(live.lastUsed, now)) due.push(live);
+  }
+  return due;
+}
+
+async function dropLiveSession(ctx: BridgeContext, live: LiveAgentSession): Promise<void> {
+  clearIdleTimer(live);
+  ctx.sessions.delete(live.id);
+  await cleanupScoop(ctx, live.jid, live.folder, live.scratchFolder);
+}
+
+async function resumeNamedSession(
+  ctx: BridgeContext,
+  options: AgentSpawnOptions,
+  live: LiveAgentSession
+): Promise<AgentSpawnResult> {
+  live.busy = true;
+  const observerHandle = registerScoopObserver(ctx.orchestrator, live.jid);
+  const onAbort = (): void => {
+    try {
+      ctx.orchestrator.stopScoop(live.jid);
+    } catch (err) {
+      log.warn('stopScoop on abort failed', { jid: live.jid, error: errText(err) });
+    }
+  };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) {
+    options.signal.removeEventListener('abort', onAbort);
+    observerHandle.unsubscribe?.();
+    await dropLiveSession(ctx, live);
+    return { finalText: 'agent: aborted before start', exitCode: 1 };
+  }
+  const before = messageCount(ctx, live.jid);
+  let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
+  try {
+    const result = await runScoopAndCaptureOutput(
+      ctx.orchestrator,
+      live.jid,
+      options.prompt,
+      options.structuredOutputSchema,
+      observerHandle,
+      options.images
+    );
+    if (options.signal?.aborted) {
+      outcome = { finalText: 'agent: aborted', exitCode: 1 };
+    } else if (result) {
+      outcome = result;
+    } else {
+      outcome = { finalText: observerHandle.scoopError ?? '', exitCode: 1 };
+    }
+  } catch (err) {
+    outcome = { finalText: observerHandle.scoopError ?? errText(err), exitCode: 1 };
+  } finally {
+    options.signal?.removeEventListener('abort', onAbort);
+    observerHandle.unsubscribe?.();
+  }
+  const alive = ctx.orchestrator.getScoops().some((s) => s.jid === live.jid);
+  if (options.signal?.aborted || !alive) {
+    await dropLiveSession(ctx, live);
+    return outcome;
+  }
+  await writeAgentSessionArchive(ctx, options, live.jid, live.nameToken, outcome);
+  live.busy = false;
+  live.lastUsed = ctx.now();
+  armIdleTimer(ctx, live);
+  const usage = before === undefined ? undefined : usageForCall(ctx, live.jid, before);
+  return withSessionMeta(outcome, live.id, 'resumed', usage);
+}
+
+function messageCount(ctx: BridgeContext, jid: string): number | undefined {
+  const scoopCtx = ctx.orchestrator.getScoopContext(jid) as UsageMessageSource | undefined;
+  if (!scoopCtx || typeof scoopCtx.getAgentMessages !== 'function') return undefined;
+  return scoopCtx.getAgentMessages().length;
+}
+
+type NamedSessionOpen = { kind: 'done'; result: AgentSpawnResult } | { kind: 'create' };
+
+async function openNamedSession(
+  ctx: BridgeContext,
+  options: AgentSpawnOptions,
+  fingerprint: string
+): Promise<NamedSessionOpen> {
+  const id = options.session ?? '';
+  if (ctx.pendingSessions.has(id)) {
+    return {
+      kind: 'done',
+      result: { finalText: `agent: session ${id} is already running`, exitCode: 1 },
+    };
+  }
+  const existing = ctx.sessions.get(id);
+  const action = classifySession(
+    existing && {
+      fingerprint: existing.fingerprint,
+      lastUsed: existing.lastUsed,
+      busy: existing.busy,
+    },
+    fingerprint,
+    ctx.now(),
+    options.resumeOnly === true,
+    id
+  );
+  if (action.action === 'error') {
+    if (existing && action.finalText === `agent: session expired: ${id}`) {
+      ctx.pendingSessions.add(id);
+      try {
+        await dropLiveSession(ctx, existing);
+      } finally {
+        ctx.pendingSessions.delete(id);
+      }
+    }
+    return { kind: 'done', result: { finalText: action.finalText, exitCode: action.exitCode } };
+  }
+  if (action.action === 'resume' && existing) {
+    return { kind: 'done', result: await resumeNamedSession(ctx, options, existing) };
+  }
+  ctx.pendingSessions.add(id);
+  if (existing && action.action === 'create' && action.drop) {
+    await dropLiveSession(ctx, existing);
+  }
+  return { kind: 'create' };
+}
+
 export function createAgentBridge(
   orchestrator: Orchestrator,
   sharedFs: VirtualFS,
@@ -747,6 +1111,9 @@ export function createAgentBridge(
     generateName: deps.generateName ?? defaultGenerateName,
     generateUid: deps.generateUid ?? defaultGenerateUid,
     resolveModel: deps.resolveModel ?? defaultResolveModel,
+    sessions: new Map(),
+    pendingSessions: new Set(),
+    now: deps.now ?? Date.now,
   };
 
   async function spawn(requested: AgentSpawnOptions): Promise<AgentSpawnResult> {
@@ -773,80 +1140,201 @@ export function createAgentBridge(
       resolveParentThinkingLevel(ctx.orchestrator, options.parentJid) ??
       undefined;
 
-    const nameToken = options.name !== undefined ? options.name : pickFreshNameToken(ctx);
-    const folder = `agent-${nameToken}`;
-    const jid = `agent_${tokenToJid(nameToken)}`;
-
-    const liveJids = new Set(ctx.orchestrator.getScoops().map((s) => s.jid));
-    if (options.name !== undefined && liveJids.has(jid)) {
-      return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${nameToken}`, exitCode: 1 };
+    const prefixFingerprint = fingerprintOf(
+      options,
+      effectiveModelId,
+      effectiveModelProviderId,
+      effectiveThinkingLevel
+    );
+    const due = idleSessionsExcept(ctx, options.session);
+    if (due.length > 0) {
+      for (const live of due) await dropLiveSession(ctx, live);
+    }
+    let creatingSession = false;
+    if (options.session !== undefined) {
+      const opened = await openNamedSession(ctx, options, prefixFingerprint);
+      if (opened.kind === 'done') return opened.result;
+      creatingSession = true;
     }
 
-    const rival = (options.exclusiveWith ?? []).find((n) => liveJids.has(`agent_${tokenToJid(n)}`));
-    if (rival !== undefined) {
-      return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${rival}`, exitCode: 1 };
-    }
-    const scratchFolder = `/scoops/${folder}`;
-
-    const parentJid = options.parentJid ?? rootsOf(ctx.orchestrator.getScoops())[0]?.jid ?? null;
-    const scoopConfig = buildScoopConfig(
+    return launchNewAgentScoop(ctx, {
       options,
       effectiveModelId,
       effectiveModelProviderId,
       effectiveThinkingLevel,
-      scratchFolder,
-      resolveOwnerVisibleRoots(ctx.orchestrator, parentJid)
-    );
-
-    const scoop: RegisteredScoop = {
-      jid,
-      name: folder,
-      folder,
-      requiresTrigger: false,
-      assistantLabel: folder,
-      addedAt: new Date().toISOString(),
-      config: scoopConfig,
-      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
-      notifyOnComplete: options.notifyOnComplete === true,
-      parentJid,
-
-      ...(options.outcomeReceiptPath ? { outcomeReceiptPath: options.outcomeReceiptPath } : {}),
-    };
-
-    const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
-
-    const onAbort = (): void => {
-      try {
-        ctx.orchestrator.stopScoop(jid);
-      } catch (err) {
-        log.warn('stopScoop on abort failed', { jid, error: errText(err) });
-      }
-    };
-
-    options.signal?.addEventListener('abort', onAbort, { once: true });
-    if (options.signal?.aborted) {
-      options.signal.removeEventListener('abort', onAbort);
-      observerHandle.unsubscribe?.();
-      return { finalText: 'agent: aborted before start', exitCode: 1 };
-    }
-
-    let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
-    try {
-      const finished = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
-      outcome = finished.outcome;
-
-      await maybeNotifyPassOutcome(ctx, options, jid, finished);
-      return outcome;
-    } finally {
-      options.signal?.removeEventListener('abort', onAbort);
-      observerHandle.unsubscribe?.();
-
-      await writeAgentSessionArchive(ctx, options, jid, nameToken, outcome);
-      await cleanupScoop(ctx, jid, folder, scratchFolder);
-    }
+      prefixFingerprint,
+      creatingSession,
+    });
   }
 
   return { spawn };
+}
+interface LaunchArgs {
+  options: AgentSpawnOptions;
+  effectiveModelId: string;
+  effectiveModelProviderId: string | undefined;
+  effectiveThinkingLevel: ThinkingLevel | undefined;
+  prefixFingerprint: string;
+  creatingSession: boolean;
+}
+
+function keepFinishedSession(
+  ctx: BridgeContext,
+  kept: {
+    options: AgentSpawnOptions;
+    creatingSession: boolean;
+    jid: string;
+    folder: string;
+    nameToken: string;
+    scratchFolder: string;
+    prefixFingerprint: string;
+    outcome: AgentSpawnResult;
+    usage: AgentCallUsage | undefined;
+  }
+): { outcome: AgentSpawnResult; keepLive: boolean } {
+  const { options, outcome, usage } = kept;
+  if (!(kept.creatingSession && options.session !== undefined)) {
+    return { outcome: usage ? { ...outcome, usage } : outcome, keepLive: false };
+  }
+  const alive = ctx.orchestrator.getScoops().some((s) => s.jid === kept.jid);
+  if (!alive || options.signal?.aborted === true) {
+    return { outcome, keepLive: false };
+  }
+  ctx.sessions.set(options.session, {
+    id: options.session,
+    jid: kept.jid,
+    folder: kept.folder,
+    nameToken: kept.nameToken,
+    scratchFolder: kept.scratchFolder,
+    fingerprint: kept.prefixFingerprint,
+    lastUsed: ctx.now(),
+    busy: false,
+  });
+  const stored = ctx.sessions.get(options.session);
+  if (stored) armIdleTimer(ctx, stored);
+  return {
+    outcome: withSessionMeta(outcome, options.session, 'created', usage),
+    keepLive: true,
+  };
+}
+
+async function launchNewAgentScoop(
+  ctx: BridgeContext,
+  launch: LaunchArgs
+): Promise<AgentSpawnResult> {
+  let options = launch.options;
+  const {
+    effectiveModelId,
+    effectiveModelProviderId,
+    effectiveThinkingLevel,
+    prefixFingerprint,
+    creatingSession,
+  } = launch;
+  const nameToken =
+    creatingSession || options.name === undefined ? pickFreshNameToken(ctx) : options.name;
+  const folder = `agent-${nameToken}`;
+  const jid = `agent_${tokenToJid(nameToken)}`;
+
+  const liveJids = new Set(ctx.orchestrator.getScoops().map((s) => s.jid));
+  if (!creatingSession && options.name !== undefined && liveJids.has(jid)) {
+    return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${nameToken}`, exitCode: 1 };
+  }
+
+  const rival = (options.exclusiveWith ?? []).find((n) => liveJids.has(`agent_${tokenToJid(n)}`));
+  if (rival !== undefined) {
+    if (creatingSession && options.session !== undefined)
+      ctx.pendingSessions.delete(options.session);
+    return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${rival}`, exitCode: 1 };
+  }
+  const scratchFolder = `/scoops/${folder}`;
+
+  if (options.cacheStablePrompt) {
+    options = {
+      ...options,
+      prompt: cacheStableUserPrompt(options.prompt, options.cwd, scratchFolder),
+    };
+  }
+
+  const parentJid = options.parentJid ?? rootsOf(ctx.orchestrator.getScoops())[0]?.jid ?? null;
+  const scoopConfig = buildScoopConfig(
+    options,
+    effectiveModelId,
+    effectiveModelProviderId,
+    effectiveThinkingLevel,
+    scratchFolder,
+    resolveOwnerVisibleRoots(ctx.orchestrator, parentJid)
+  );
+
+  const scoop: RegisteredScoop = {
+    jid,
+    name: folder,
+    folder,
+    requiresTrigger: false,
+    assistantLabel: folder,
+    addedAt: new Date().toISOString(),
+    config: scoopConfig,
+    configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    notifyOnComplete: options.notifyOnComplete === true,
+    parentJid,
+
+    ...(options.outcomeReceiptPath ? { outcomeReceiptPath: options.outcomeReceiptPath } : {}),
+  };
+
+  const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
+
+  const onAbort = (): void => {
+    try {
+      ctx.orchestrator.stopScoop(jid);
+    } catch (err) {
+      log.warn('stopScoop on abort failed', { jid, error: errText(err) });
+    }
+  };
+
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) {
+    options.signal.removeEventListener('abort', onAbort);
+    observerHandle.unsubscribe?.();
+    if (creatingSession && options.session !== undefined) {
+      ctx.pendingSessions.delete(options.session);
+    }
+    return { finalText: 'agent: aborted before start', exitCode: 1 };
+  }
+
+  let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
+  let keepLive = false;
+  try {
+    const before = messageCount(ctx, jid) ?? 0;
+    const finished = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
+    outcome = finished.outcome;
+
+    await maybeNotifyPassOutcome(ctx, options, jid, finished);
+    const usage = usageForCall(ctx, jid, before);
+    const kept = keepFinishedSession(ctx, {
+      options,
+      creatingSession,
+      jid,
+      folder,
+      nameToken,
+      scratchFolder,
+      prefixFingerprint,
+      outcome,
+      usage,
+    });
+    outcome = kept.outcome;
+    keepLive = kept.keepLive;
+    return outcome;
+  } finally {
+    options.signal?.removeEventListener('abort', onAbort);
+    observerHandle.unsubscribe?.();
+
+    await writeAgentSessionArchive(ctx, options, jid, nameToken, outcome);
+    if (creatingSession && options.session !== undefined) {
+      ctx.pendingSessions.delete(options.session);
+    }
+    if (!keepLive) {
+      await cleanupScoop(ctx, jid, folder, scratchFolder);
+    }
+  }
 }
 
 export function publishAgentBridge(
@@ -899,6 +1387,12 @@ function normalizeRwPrefix(path: string): string {
 function resolvedWorkspaceMode(raw: WorkspaceIsolationMode | undefined): ImplementedWorkspaceMode {
   const parsed = parseWorkspaceMode(raw);
   return parsed.ok ? parsed.mode : DEFAULT_CHILD_WORKSPACE_MODE;
+}
+
+function grantedWritablePaths(options: AgentSpawnOptions): string[] {
+  const cwdPrefix = normalizeRwPrefix(options.cwd);
+  const mode = resolvedWorkspaceMode(options.workspaceMode);
+  return resolveWritablePaths(options.writablePaths, cwdPrefix, mode);
 }
 
 function resolveWritablePaths(

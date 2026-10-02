@@ -8,6 +8,7 @@ import {
   BURN_RATE_RECENT_WEIGHT,
   BURN_RATE_RECENT_WINDOW_MS,
   BURN_RATE_SESSION_WEIGHT,
+  buildScoopCost,
   ScoopCostTracker,
 } from '../../src/scoops/scoop-cost-tracker.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
@@ -774,6 +775,25 @@ describe('ScoopCostTracker', () => {
     expect(result[0].cacheRead).toBe(2000);
     expect(result[0].cacheWrite).toBe(1000);
     expect(result[0].cost).toBeCloseTo(0.018, 4);
+  });
+
+  it('lists one calls entry per assistant turn, including cache fields', () => {
+    const scoop = createMockScoop('scoop1', 'Cached Scoop');
+    const messages = [
+      createAssistantMessage('claude-opus-4-6', 1000, 500, 2000, 1000, 0.01, 0.005, 0.001, 0.002),
+      createAssistantMessage('claude-opus-4-6', 3, 1, 9, 0, 0, 0, 0, 0),
+    ];
+    const row = buildScoopCost(scoop, createMockContext(messages));
+    expect(row?.calls).toEqual([
+      {
+        input: 1000,
+        output: 500,
+        cacheRead: 2000,
+        cacheWrite: 1000,
+        cost: expect.closeTo(0.018, 10),
+      },
+      { input: 3, output: 1, cacheRead: 9, cacheWrite: 0, cost: 0 },
+    ]);
   });
 
   it('clears dropped messages on reset', () => {

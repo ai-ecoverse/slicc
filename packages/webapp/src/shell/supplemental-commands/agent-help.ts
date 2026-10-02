@@ -82,6 +82,43 @@ Options:
                           is told it is not permitted for this call. Nothing
                           reaches the cone or the user, and stored "Always"
                           grants do not apply either.
+  --minimal               Replace the skills essay with a short decision
+                          prompt. A safety trailer (untrusted page text, no
+                          escalation, stay inside the grant) is always
+                          appended. Sandbox flags are unchanged.
+  --system-prompt <text>  Use <text> as the system prompt instead of the
+                          essay. The same safety trailer is appended. Empty
+                          text is an error. A value that starts with '-' is
+                          rejected as a flag; use --system-prompt-file or
+                          --system-prompt=<text>.
+  --system-prompt-file <path>
+                          Read the system prompt from a file (max 64 KiB).
+                          Mutually exclusive with --system-prompt.
+  --tools <auto|full|output>
+                          auto (default): when <allowed-commands> is only
+                          true, false, or : AND a schema is set, the scoop
+                          gets StructuredOutput and nothing else. A no-op
+                          allow-list without a schema gets no tools. '*' or
+                          any real command keeps the full tool set.
+                          full: always the full set. output: StructuredOutput
+                          only, and it requires a schema.
+  --session <id>          Keep the scoop and append later calls that pass the
+                          same id and the same sandbox, model, and prompt
+                          options. The id is [A-Za-z0-9][A-Za-z0-9._:-]{0,63}.
+                          Prints agent-session: <id> created on stderr the
+                          first time, and resumed after. An idle session
+                          (30 minutes) is dropped and the next --session
+                          starts over (created).
+  --resume <id>           Like --session, but a missing id exits 2 with
+                          "agent: session not found", and an idle-expired id
+                          exits 2 with "agent: session expired" (the old scoop
+                          is dropped). A sandbox or model mismatch exits 1
+                          and does not rebuild the session. Do not combine
+                          with --session.
+  --usage                 Print agent-usage JSON (input, output, cacheRead,
+                          cacheWrite, cost) on stderr for this call.
+                          A named session prints that line without this flag.
+                          Stdout stays the answer.
   --persist-session       Write the spawned agent's full session transcript to
                           /sessions/agent-<name>-<timestamp>.md (durable —
                           survives a new chat) for later human analysis.
@@ -100,4 +137,6 @@ Examples:
   agent --workspace-mode private . "*" "work only in this directory"
   agent --background-after 60 . "*" "run the slow build and report"
   agent --no-escalate --image shot.png . ls "what does this page show?"
+  agent --minimal --session decider . true "Reply with the single word OK."
+  agent --resume decider . true "Same session, next decision."
 `;
