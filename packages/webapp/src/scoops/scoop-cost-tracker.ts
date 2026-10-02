@@ -231,6 +231,13 @@ export function buildScoopCost(
     firstActivity,
     lastActivity,
     activeTimeMs,
+    calls: assistantMsgs.map((msg) => ({
+      input: msg.usage.input,
+      output: msg.usage.output,
+      cacheRead: msg.usage.cacheRead,
+      cacheWrite: msg.usage.cacheWrite,
+      cost: msg.usage.cost.total,
+    })),
   };
 }
 

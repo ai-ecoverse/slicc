@@ -637,6 +637,56 @@ describe("require('sliccy:agent') — callable + non-throwing .spawn", () => {
     expect(out.stdout).toContain('spawn.finalText=""');
   });
 
+  it('session opts build --session and the callable returns the envelope', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx(
+      {
+        stdout: '{"ok":true}\n',
+        stderr:
+          'agent-session: meep-decider created\nagent-usage: {"input":1,"output":1,"cacheRead":2,"cacheWrite":3,"cost":0.01}\n',
+      },
+      calls
+    );
+    const code = `
+      const agent = require('sliccy:agent');
+      const r = await agent('OK', {
+        minimal: true,
+        session: 'meep-decider',
+        tools: 'auto',
+        systemPrompt: 'Decide.',
+        schema: { type: 'object' },
+        escalate: false,
+        allowedCommands: 'true',
+      });
+      console.log(JSON.stringify(r));
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(argvOf(calls[0])).toEqual([
+      'agent',
+      '--schema-b64',
+      argvOf(calls[0])[2],
+      '--no-escalate',
+      '--minimal',
+      '--system-prompt=Decide.',
+      '--tools',
+      'auto',
+      '--session',
+      'meep-decider',
+      '/workspace',
+      'true',
+      'OK',
+    ]);
+    expect(out.stdout.trim()).toBe(
+      JSON.stringify({
+        output: { ok: true },
+        sessionId: 'meep-decider',
+        sessionStatus: 'created',
+        usage: { input: 1, output: 1, cacheRead: 2, cacheWrite: 3, cost: 0.01 },
+      })
+    );
+  });
+
   it('invalid JSON with schema → callable rejects with a helpful message', async () => {
     const calls: ExecCall[] = [];
     const ctx = makeAgentCtx({ stdout: 'not json at all\n', exitCode: 0 }, calls);

@@ -148,6 +148,23 @@ describe('ScoopContext active tool surface', () => {
     expect(toolNames).not.toContain('find');
   });
 
+  it('registers only StructuredOutput when the allow-list is a no-op and a schema is set', async () => {
+    const scoop = {
+      ...testScoop,
+      config: {
+        toolSurface: 'auto' as const,
+        allowedCommands: ['true'],
+        structuredOutputSchema: { type: 'object' },
+      },
+    };
+    const ctx = new ScoopContext(scoop, createMockCallbacks(), createMockFs() as any);
+    await ctx.init();
+    const toolNames = mocks.agentCtorCalls[0].initialState.tools.map(
+      (tool: { name: string }) => tool.name
+    );
+    expect(toolNames).toEqual(['StructuredOutput']);
+  });
+
   // The run ends on the first StructuredOutput; a second call (same batch, or
   // a model that ignores the end) must not replace the captured value.
   it('keeps the first StructuredOutput capture', async () => {

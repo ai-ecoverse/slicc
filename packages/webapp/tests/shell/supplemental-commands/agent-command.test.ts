@@ -973,7 +973,8 @@ describe('agent command', () => {
           order.push('execute-resolved');
           return r;
         });
-      // Let the spawn microtask run
+      // Stat, then the prepare helper's return, then spawn. Two turns cover both.
+      await Promise.resolve();
       await Promise.resolve();
       expect(order).toContain('spawn-start');
       expect(order).not.toContain('execute-resolved');
@@ -999,6 +1000,10 @@ describe('agent command', () => {
         // ctx.cwd is always forwarded so the bridge can choose whether
         // to union it into visiblePaths.
         invokingCwd: '/home',
+        // Every `agent` call asks for a cache-stable prompt and the auto
+        // tool surface. Internal bridge callers do not.
+        cacheStablePrompt: true,
+        toolSurface: 'auto',
       });
     });
 
@@ -1503,6 +1508,100 @@ describe('agent command', () => {
     it('documents --no-escalate in --help', async () => {
       const result = await createAgentCommand().execute(['--help'], createMockCtx());
       expect(result.stdout).toMatch(/--no-escalate/);
+    });
+  });
+
+  describe('cheap decision calls', () => {
+    it('forwards a minimal named session and prints machine lines on stderr', async () => {
+      const spawn = vi.fn().mockResolvedValue({
+        finalText: 'OK',
+        exitCode: 0,
+        sessionId: 'decider',
+        sessionStatus: 'created',
+        usage: { input: 1, output: 1, cacheRead: 2, cacheWrite: 3, cost: 0.01 },
+      });
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(
+        ['--minimal', '--session', 'decider', '.', 'true', 'OK'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('OK\n');
+      expect(result.stderr).toBe(
+        'agent-session: decider created\nagent-usage: {"input":1,"output":1,"cacheRead":2,"cacheWrite":3,"cost":0.01}\n'
+      );
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        cacheStablePrompt: true,
+        toolSurface: 'auto',
+        minimalSystemPrompt: true,
+        session: 'decider',
+        allowedCommands: ['true'],
+        prompt: 'OK',
+      });
+    });
+
+    it('forwards --resume as resume-only and keeps a non-zero exit', async () => {
+      const spawn = vi.fn().mockResolvedValue({
+        finalText: 'agent: session not found: decider',
+        exitCode: 2,
+      });
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(
+        ['--resume', 'decider', '.', 'true', 'OK'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('agent: session not found: decider');
+      expect(spawn.mock.calls[0][0]).toMatchObject({ session: 'decider', resumeOnly: true });
+    });
+
+    it('rejects --tools output without a schema, and both session flags', async () => {
+      const spawn = vi.fn();
+      installBridge(spawn);
+      const output = await createAgentCommand().execute(
+        ['--tools', 'output', '.', 'true', 'OK'],
+        createMockCtx()
+      );
+      expect(output.exitCode).toBe(1);
+      expect(output.stderr).toContain('--tools output requires a schema');
+      const both = await createAgentCommand().execute(
+        ['--session', 'a', '--resume', 'b', '.', 'true', 'OK'],
+        createMockCtx()
+      );
+      expect(both.stderr).toContain('pass only one of --session and --resume');
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('reads --system-prompt-file only when that flag is set', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'OK', exitCode: 0 });
+      installBridge(spawn);
+      const ctx = createMockCtx('/home', {
+        files: { '/home/prompt.txt': new TextEncoder().encode('Decide.\n') },
+      });
+      const result = await createAgentCommand().execute(
+        ['--system-prompt-file', 'prompt.txt', '.', '*', 'go'],
+        ctx
+      );
+      expect(result.exitCode).toBe(0);
+      expect(spawn.mock.calls[0][0]).toMatchObject({ systemPrompt: 'Decide.\n' });
+    });
+
+    it('prints usage without a session when --usage is set', async () => {
+      const spawn = vi.fn().mockResolvedValue({
+        finalText: 'OK',
+        exitCode: 0,
+        usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 4, cost: 0 },
+      });
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(
+        ['--usage', '.', '*', 'OK'],
+        createMockCtx()
+      );
+      expect(result.stdout).toBe('OK\n');
+      expect(result.stderr).toBe(
+        'agent-usage: {"input":1,"output":0,"cacheRead":0,"cacheWrite":4,"cost":0}\n'
+      );
     });
   });
 });

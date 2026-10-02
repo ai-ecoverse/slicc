@@ -1,4 +1,4 @@
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from '../../base/thinking-level.js';
@@ -70,6 +70,21 @@ interface AgentSpawnOptions {
   images?: ImageContent[];
   /** `false` for `--no-escalate`: the scoop's sudo requests are refused, not escalated. */
   escalate?: boolean;
+  /** Replace the scoop system prompt. The bridge still appends a safety trailer. */
+  systemPrompt?: string;
+  /** Short stable prompt. The bridge ignores it when `systemPrompt` is set. */
+  minimalSystemPrompt?: boolean;
+  /** `auto` drops unused tools. `full` keeps today's set. `output` is StructuredOutput only. */
+  toolSurface?: 'auto' | 'full' | 'output';
+  /**
+   * The `agent` command always sets this so identical one-shots share a
+   * prompt-cache prefix. Internal bridge callers leave it unset.
+   */
+  cacheStablePrompt?: boolean;
+  /** Named session to create or resume. */
+  session?: string;
+  /** Fail when `session` is missing or idle-expired instead of starting over. */
+  resumeOnly?: boolean;
 }
 
 /** Most `--image` flags one call accepts. */
@@ -92,6 +107,15 @@ export interface AgentCommandOptions {
 interface AgentSpawnResult {
   finalText?: string | null;
   exitCode: number;
+  sessionId?: string;
+  sessionStatus?: 'created' | 'resumed';
+  usage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cost: number;
+  };
 }
 
 /** The minimal contract exposed by the orchestrator bridge. */
@@ -113,8 +137,18 @@ interface ParsedArgs {
   workspaceMode?: ImplementedWorkspaceMode;
   imagePaths?: string[];
   noEscalate?: boolean;
+  systemPrompt?: string;
+  systemPromptFile?: string;
+  minimal?: boolean;
+  toolSurface?: 'auto' | 'full' | 'output';
+  session?: string;
+  resumeOnly?: boolean;
+  reportUsage?: boolean;
   error?: string;
 }
+
+/** Cap for `--system-prompt-file`. A decision prompt does not need more. */
+const MAX_SYSTEM_PROMPT_BYTES = 64 * 1024;
 
 /** Parse a flag with value. Returns error or { value, consumed } on success. */
 function parseFlagWithValue(
@@ -226,6 +260,13 @@ interface ParseState {
   workspaceMode?: ImplementedWorkspaceMode;
   imagePaths: string[];
   noEscalate: boolean;
+  systemPrompt?: string;
+  systemPromptFile?: string;
+  minimal: boolean;
+  toolSurface?: 'auto' | 'full' | 'output';
+  session?: string;
+  resumeOnly: boolean;
+  reportUsage: boolean;
 }
 
 type FlagHandler = (
@@ -306,6 +347,66 @@ const FLAG_HANDLERS: Record<string, FlagHandler> = {
     state.noEscalate = true;
     return { consumed: 1 };
   },
+  '--minimal': (_flag, _args, _i, state) => {
+    state.minimal = true;
+    return { consumed: 1 };
+  },
+  '--usage': (_flag, _args, _i, state) => {
+    state.reportUsage = true;
+    return { consumed: 1 };
+  },
+  '--system-prompt': (flag, args, i, state) => {
+    if (state.systemPromptFile !== undefined || state.systemPrompt !== undefined) {
+      return {
+        error: 'agent: pass only one of --system-prompt and --system-prompt-file',
+        consumed: 0,
+      };
+    }
+    const result = parseFlagWithValue(flag, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    state.systemPrompt = result.value;
+    return { consumed: result.consumed };
+  },
+  '--system-prompt-file': (flag, args, i, state) => {
+    if (state.systemPromptFile !== undefined || state.systemPrompt !== undefined) {
+      return {
+        error: 'agent: pass only one of --system-prompt and --system-prompt-file',
+        consumed: 0,
+      };
+    }
+    const result = parseFlagWithValue(flag, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    state.systemPromptFile = result.value;
+    return { consumed: result.consumed };
+  },
+  '--tools': (flag, args, i, state) => {
+    const result = parseFlagWithValue(flag, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    if (result.value !== 'auto' && result.value !== 'full' && result.value !== 'output') {
+      return { error: 'agent: --tools must be one of: auto, full, output', consumed: 0 };
+    }
+    state.toolSurface = result.value;
+    return { consumed: result.consumed };
+  },
+  '--session': (flag, args, i, state) => {
+    if (state.resumeOnly) {
+      return { error: 'agent: pass only one of --session and --resume', consumed: 0 };
+    }
+    const result = parseFlagWithValue(flag, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    state.session = result.value;
+    return { consumed: result.consumed };
+  },
+  '--resume': (flag, args, i, state) => {
+    if (state.session !== undefined || state.resumeOnly) {
+      return { error: 'agent: pass only one of --session and --resume', consumed: 0 };
+    }
+    const result = parseFlagWithValue(flag, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    state.session = result.value;
+    state.resumeOnly = true;
+    return { consumed: result.consumed };
+  },
 };
 
 /** Process one argument. Returns error or null and consumed count. */
@@ -324,6 +425,21 @@ function processArg(
     const path = arg.slice('--image='.length);
     if (path === '') return { error: 'agent: --image requires a non-empty value', consumed: 0 };
     state.imagePaths.push(path);
+    return { consumed: 1 };
+  }
+
+  // Equals form so a prompt that starts with `-` is not read as a flag.
+  if (arg.startsWith('--system-prompt=')) {
+    if (state.systemPromptFile !== undefined || state.systemPrompt !== undefined) {
+      return {
+        error: 'agent: pass only one of --system-prompt and --system-prompt-file',
+        consumed: 0,
+      };
+    }
+    const value = arg.slice('--system-prompt='.length);
+    if (value === '')
+      return { error: 'agent: --system-prompt requires a non-empty value', consumed: 0 };
+    state.systemPrompt = value;
     return { consumed: 1 };
   }
 
@@ -378,6 +494,9 @@ function parseArgs(args: string[]): ParsedArgs {
     help: false,
     imagePaths: [],
     noEscalate: false,
+    minimal: false,
+    resumeOnly: false,
+    reportUsage: false,
   };
 
   let i = 0;
@@ -400,6 +519,15 @@ function parseArgs(args: string[]): ParsedArgs {
       error: `agent: too many images (${state.imagePaths.length}); --image accepts at most ${MAX_IMAGES}`,
     };
   }
+  if (state.systemPrompt !== undefined && state.systemPrompt.trim() === '') {
+    return { help: false, error: 'agent: --system-prompt requires a non-empty value' };
+  }
+  if (state.toolSurface === 'output' && state.schemaOut === undefined) {
+    return { help: false, error: 'agent: --tools output requires a schema' };
+  }
+  if (state.session !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(state.session)) {
+    return { help: false, error: `agent: invalid session id '${state.session}'` };
+  }
 
   const positionals = validation as {
     cwd: string;
@@ -421,6 +549,13 @@ function parseArgs(args: string[]): ParsedArgs {
     workspaceMode: state.workspaceMode,
     imagePaths: state.imagePaths,
     noEscalate: state.noEscalate,
+    systemPrompt: state.systemPrompt,
+    systemPromptFile: state.systemPromptFile,
+    minimal: state.minimal,
+    toolSurface: state.toolSurface,
+    session: state.session,
+    resumeOnly: state.resumeOnly,
+    reportUsage: state.reportUsage,
   };
 }
 
@@ -546,6 +681,22 @@ function buildSpawnOptions(
   if (parsed.noEscalate) {
     spawnOptions.escalate = false;
   }
+  // Always: identical one-shots share a cache prefix, and a no-op allow-list
+  // plus a schema does not pay for tools the call cannot use.
+  spawnOptions.cacheStablePrompt = true;
+  spawnOptions.toolSurface = parsed.toolSurface ?? 'auto';
+  if (parsed.systemPrompt !== undefined) {
+    spawnOptions.systemPrompt = parsed.systemPrompt;
+  }
+  if (parsed.minimal) {
+    spawnOptions.minimalSystemPrompt = true;
+  }
+  if (parsed.session !== undefined) {
+    spawnOptions.session = parsed.session;
+  }
+  if (parsed.resumeOnly) {
+    spawnOptions.resumeOnly = true;
+  }
   if (ctx.cwd && ctx.cwd.length > 0) {
     spawnOptions.invokingCwd = ctx.cwd;
   }
@@ -600,78 +751,149 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
       return { stdout: '', stderr: `${parsed.error}\n`, exitCode: 1 };
     }
 
-    const cwdArg = parsed.cwd ?? '';
-    if (cwdArg === '') {
-      return { stdout: '', stderr: 'agent: <cwd> must not be empty\n', exitCode: 1 };
-    }
+    const prepared = await prepareAgentInvocation(parsed, ctx, getParentJid);
+    if ('error' in prepared) return prepared.error;
 
-    const resolvedCwd = resolveCwd(cwdArg, ctx.cwd);
-    const allowedCommands = parseAllowedCommands(parsed.allowedCommandsRaw ?? '');
-    const prompt = parsed.prompt ?? '';
-
-    let cwdStat: { isDirectory: boolean } | null = null;
-    let cwdMissing = false;
-    try {
-      cwdStat = await ctx.fs.stat(resolvedCwd);
-    } catch {
-      cwdMissing = true;
-    }
-    const cwdError = cwdValidationError(cwdStat, cwdMissing, cwdArg);
-    if (cwdError) {
-      return { stdout: '', stderr: cwdError, exitCode: 1 };
-    }
-
-    const writableError = checkCwdWritable(ctx.fs, resolvedCwd, cwdArg);
-    if (writableError) {
-      return { stdout: '', stderr: writableError, exitCode: 1 };
-    }
-
-    let images: ImageContent[] | undefined;
-    if (parsed.imagePaths !== undefined && parsed.imagePaths.length > 0) {
-      // Loaded only for `--image`: keeps the sniff/encode path off the boot graph.
-      const { readImages } = await import('./agent-images.js');
-      const read = await readImages(
-        ctx.fs,
-        parsed.imagePaths.map((arg) => ({ arg, path: resolveCwd(arg, ctx.cwd) }))
-      );
-      if ('error' in read) return { stdout: '', stderr: read.error, exitCode: 1 };
-      images = read.images;
-    }
-
-    const bridge = getBridge();
-    if (!bridge) {
-      return { stdout: '', stderr: 'agent: orchestrator bridge not available\n', exitCode: 1 };
-    }
-
-    const spawnOptions = buildSpawnOptions(
-      parsed,
-      resolvedCwd,
-      allowedCommands,
-      prompt,
-      ctx,
-      getParentJid
-    );
-    if (images !== undefined) spawnOptions.images = images;
-
+    const reportMachine = parsed.reportUsage || parsed.session !== undefined;
     // `runSpawn` calls `bridge.spawn` synchronously before its first await, so
     // spawn-start is still reached promptly (no extra microtask before spawn).
-    return runSpawn(bridge, spawnOptions);
+    return runSpawn(prepared.bridge, prepared.spawnOptions, reportMachine);
   });
+}
+
+/**
+ * Stat the cwd, load images and a prompt file, and build the bridge options.
+ * Returns before `runSpawn`, so a plain call still reaches `bridge.spawn`
+ * with no extra await inside `runSpawn`.
+ */
+async function prepareAgentInvocation(
+  parsed: ParsedArgs,
+  ctx: CommandContext,
+  getParentJid: (() => string | undefined) | undefined
+): Promise<
+  | { error: { stdout: string; stderr: string; exitCode: number } }
+  | { bridge: AgentBridge; spawnOptions: AgentSpawnOptions }
+> {
+  const cwdArg = parsed.cwd ?? '';
+  if (cwdArg === '') {
+    return { error: { stdout: '', stderr: 'agent: <cwd> must not be empty\n', exitCode: 1 } };
+  }
+
+  const resolvedCwd = resolveCwd(cwdArg, ctx.cwd);
+  const allowedCommands = parseAllowedCommands(parsed.allowedCommandsRaw ?? '');
+  const prompt = parsed.prompt ?? '';
+
+  let cwdStat: { isDirectory: boolean } | null = null;
+  let cwdMissing = false;
+  try {
+    cwdStat = await ctx.fs.stat(resolvedCwd);
+  } catch {
+    cwdMissing = true;
+  }
+  const cwdError = cwdValidationError(cwdStat, cwdMissing, cwdArg);
+  if (cwdError) {
+    return { error: { stdout: '', stderr: cwdError, exitCode: 1 } };
+  }
+
+  const writableError = checkCwdWritable(ctx.fs, resolvedCwd, cwdArg);
+  if (writableError) {
+    return { error: { stdout: '', stderr: writableError, exitCode: 1 } };
+  }
+
+  let images: ImageContent[] | undefined;
+  if (parsed.imagePaths !== undefined && parsed.imagePaths.length > 0) {
+    // Loaded only for `--image`: keeps the sniff/encode path off the boot graph.
+    const { readImages } = await import('./agent-images.js');
+    const read = await readImages(
+      ctx.fs,
+      parsed.imagePaths.map((arg) => ({ arg, path: resolveCwd(arg, ctx.cwd) }))
+    );
+    if ('error' in read) {
+      return { error: { stdout: '', stderr: read.error, exitCode: 1 } };
+    }
+    images = read.images;
+  }
+
+  const bridge = getBridge();
+  if (!bridge) {
+    return {
+      error: { stdout: '', stderr: 'agent: orchestrator bridge not available\n', exitCode: 1 },
+    };
+  }
+
+  const spawnOptions = buildSpawnOptions(
+    parsed,
+    resolvedCwd,
+    allowedCommands,
+    prompt,
+    ctx,
+    getParentJid
+  );
+  if (images !== undefined) spawnOptions.images = images;
+
+  // Read only when the flag is set, and before `runSpawn`.
+  if (parsed.systemPromptFile !== undefined) {
+    const loaded = await readSystemPromptFile(ctx.fs, resolveCwd(parsed.systemPromptFile, ctx.cwd));
+    if ('error' in loaded) {
+      return { error: { stdout: '', stderr: `${loaded.error}\n`, exitCode: 1 } };
+    }
+    spawnOptions.systemPrompt = loaded.text;
+  }
+
+  return { bridge, spawnOptions };
+}
+
+/** Load `--system-prompt-file`. Empty and oversized files are errors. */
+async function readSystemPromptFile(
+  fs: { readFileBuffer: (path: string) => Promise<Uint8Array> },
+  path: string
+): Promise<{ text: string } | { error: string }> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await fs.readFileBuffer(path);
+  } catch {
+    return { error: `agent: system prompt file not found: ${path}` };
+  }
+  if (bytes.byteLength > MAX_SYSTEM_PROMPT_BYTES) {
+    return { error: `agent: system prompt file exceeds ${MAX_SYSTEM_PROMPT_BYTES} bytes` };
+  }
+  const text = new TextDecoder().decode(bytes);
+  if (text.trim() === '') return { error: 'agent: --system-prompt requires a non-empty value' };
+  return { text };
+}
+
+/**
+ * Stderr machine lines. Stdout stays the answer so a schema JSON parse is
+ * unchanged. Printed only when the caller asked (`--usage`) or named a session.
+ */
+function machineTrailer(result: AgentSpawnResult, reportMachine: boolean): string {
+  if (!reportMachine) return '';
+  const lines: string[] = [];
+  if (result.sessionId && result.sessionStatus) {
+    lines.push(`agent-session: ${result.sessionId} ${result.sessionStatus}`);
+  }
+  if (result.usage) {
+    lines.push(`agent-usage: ${JSON.stringify(result.usage)}`);
+  }
+  if (lines.length === 0) return '';
+  return `${lines.join('\n')}\n`;
 }
 
 /** Await the bridge spawn and map its result/throw to a command result. */
 async function runSpawn(
   bridge: AgentBridge,
-  spawnOptions: AgentSpawnOptions
+  spawnOptions: AgentSpawnOptions,
+  reportMachine: boolean
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
     const result = await bridge.spawn(spawnOptions);
     const exitCode = typeof result?.exitCode === 'number' ? result.exitCode : 0;
     const finalText = result?.finalText;
+    const trailer = machineTrailer(result ?? { exitCode }, reportMachine);
     if (exitCode === 0) {
-      return { stdout: formatForStdout(finalText), stderr: '', exitCode: 0 };
+      return { stdout: formatForStdout(finalText), stderr: trailer, exitCode: 0 };
     }
-    return { stdout: '', stderr: formatForStderr(finalText), exitCode };
+    return { stdout: '', stderr: `${formatForStderr(finalText)}${trailer}`, exitCode };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error('agent bridge threw', err);

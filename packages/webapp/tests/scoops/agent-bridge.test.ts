@@ -2604,3 +2604,152 @@ describe('createAgentBridge — mergeOnSuccess + outcome receipts', () => {
     expect(registerCalls).toHaveLength(0);
   });
 });
+
+describe('createAgentBridge — named sessions', () => {
+  function usage(input: number, cacheRead: number, cacheWrite: number) {
+    return {
+      role: 'assistant' as const,
+      usage: {
+        input,
+        output: 1,
+        cacheRead,
+        cacheWrite,
+        cost: { total: input / 1000 },
+      },
+    };
+  }
+
+  function harness(now: () => number = () => 1_000) {
+    const mock = makeMockOrchestrator();
+    const messages: ReturnType<typeof usage>[] = [];
+    (mock.orchestrator as unknown as { getScoopContext: () => unknown }).getScoopContext = () => ({
+      getAgentMessages: () => messages,
+    });
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(mock.orchestrator, fs, null, {
+      generateName: () => 'quiet-vanilla',
+      now,
+      resolveModel: (id) => pinned(id),
+    });
+    mock.scripts.set('agent_quiet_vanilla', (obs) => {
+      messages.push(usage(messages.length + 1, 10, 1));
+      obs.onSendMessage?.('OK');
+    });
+    return { ...mock, bridge, messages };
+  }
+
+  const sessionOpts = {
+    ...BASE_OPTS,
+    session: 'decider',
+    cacheStablePrompt: true,
+    toolSurface: 'auto' as const,
+    allowedCommands: ['true'],
+    persistSession: false as const,
+  };
+
+  it('creates a session, then resumes it without a second scoop', async () => {
+    const { bridge, registerCalls, unregisterCalls, sendPromptCalls, messages } = harness();
+    const created = await bridge.spawn(sessionOpts);
+    expect(created).toMatchObject({
+      exitCode: 0,
+      finalText: 'OK',
+      sessionId: 'decider',
+      sessionStatus: 'created',
+      usage: { input: 1, cacheRead: 10, cacheWrite: 1 },
+    });
+    expect(registerCalls).toHaveLength(1);
+    expect(unregisterCalls).toHaveLength(0);
+    expect(sendPromptCalls[0].prompt).toContain(
+      'Private scratch directory: /scoops/agent-quiet-vanilla'
+    );
+    expect(registerCalls[0].config).toMatchObject({
+      cacheStablePrompt: true,
+      assistantName: 'agent',
+      toolSurface: 'auto',
+      promptCwd: '/workspace',
+    });
+
+    const resumed = await bridge.spawn({ ...sessionOpts, prompt: 'next' });
+    expect(resumed).toMatchObject({
+      exitCode: 0,
+      sessionId: 'decider',
+      sessionStatus: 'resumed',
+      usage: { input: 2, cacheRead: 10, cacheWrite: 1 },
+    });
+    expect(registerCalls).toHaveLength(1);
+    expect(sendPromptCalls[1].prompt).toBe('next');
+    expect(messages).toHaveLength(2);
+  });
+
+  it('resume of a missing id exits 2 and registers nothing', async () => {
+    const { bridge, registerCalls } = harness();
+    const result = await bridge.spawn({ ...sessionOpts, resumeOnly: true });
+    expect(result).toEqual({
+      finalText: 'agent: session not found: decider',
+      exitCode: 2,
+    });
+    expect(registerCalls).toHaveLength(0);
+  });
+
+  it('a mismatched resume exits 1 and leaves the scoop registered', async () => {
+    const { bridge, unregisterCalls } = harness();
+    await bridge.spawn(sessionOpts);
+    const result = await bridge.spawn({
+      ...sessionOpts,
+      modelId: 'claude-haiku-4-5',
+      resumeOnly: true,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toBe('agent: session decider does not match this call');
+    expect(unregisterCalls).toHaveLength(0);
+  });
+
+  it('an expired --resume drops the scoop and exits 2', async () => {
+    let now = 1_000;
+    const { bridge, unregisterCalls } = harness(() => now);
+    await bridge.spawn(sessionOpts);
+    now += 30 * 60 * 1000 + 1;
+    const result = await bridge.spawn({ ...sessionOpts, resumeOnly: true });
+    expect(result).toMatchObject({
+      exitCode: 2,
+      finalText: 'agent: session expired: decider',
+    });
+    expect(unregisterCalls).toEqual(['agent_quiet_vanilla']);
+  });
+
+  it('an expired --session starts over and reports created', async () => {
+    let now = 1_000;
+    const { bridge, registerCalls } = harness(() => now);
+    await bridge.spawn(sessionOpts);
+    now += 30 * 60 * 1000 + 1;
+    const again = await bridge.spawn(sessionOpts);
+    expect(again.sessionStatus).toBe('created');
+    expect(registerCalls).toHaveLength(2);
+  });
+
+  it('rejects a second call while the session is still running', async () => {
+    const mock = makeMockOrchestrator();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mock.scripts.set('agent_quiet_vanilla', async (obs) => {
+      await gate;
+      obs.onSendMessage?.('OK');
+    });
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(mock.orchestrator, fs, null, {
+      generateName: () => 'quiet-vanilla',
+    });
+    const first = bridge.spawn(sessionOpts);
+    await Promise.resolve();
+    const second = await bridge.spawn({ ...sessionOpts, prompt: 'other' });
+    expect(second).toMatchObject({
+      exitCode: 1,
+      finalText: 'agent: session decider is already running',
+    });
+    release();
+    const created = await first;
+    expect(created.sessionStatus).toBe('created');
+  });
+});
