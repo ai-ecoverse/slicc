@@ -8,9 +8,12 @@
  * Preopens, the one layout Zig, Go and wasi-libc all resolve correctly:
  * fd 3 is `.` (the cwd — Zig's std takes fd 3 as its cwd, wasi-libc resolves
  * relative paths through `.`), then one absolute preopen per top-level VFS
- * directory. `/` itself is never one: wasi-libc lets it shadow `.`. Go takes
- * its cwd from `$PWD`. An absolute path on any directory fd resolves from
- * the VFS root (Zig hands absolute paths to fd 3): the process's fs token
+ * directory, and the shell's synthetic `/usr` and `/bin` (the command
+ * registry, which `/` does not list), so a program that searches `$PATH`
+ * itself (cargo finding `cargo`) sees `/usr/bin/<command>`. `/` itself is
+ * never one: wasi-libc lets it shadow `.`. Go takes its cwd from `$PWD`.
+ * An absolute path on any directory fd resolves from the VFS root (Zig
+ * hands absolute paths to fd 3): the process's fs token
  * bounds what it can reach, so WASI rights add nothing and every descriptor
  * carries them all.
  */
@@ -27,6 +30,9 @@ import {
   type WasiEntry,
   WasiError,
 } from './wasi-files.js';
+
+/** Directories the shell synthesizes without listing them at `/`: the command registry. */
+const SYNTHETIC_DIRS = ['usr', 'bin'];
 
 /** The kernel as the WASI host calls it. */
 export interface WasiKernel {
@@ -119,7 +125,8 @@ export class WasiFds {
       return out;
     }
     // `/dev` always: wasi-libc reaches `/dev/null` & co. only through a preopen.
-    for (const name of [...new Set([...names, 'dev'])].sort()) {
+    // `/usr` and `/bin` when they stat as directories (the synthetic command registry).
+    for (const name of [...new Set([...names, 'dev', ...SYNTHETIC_DIRS])].sort()) {
       const path = `/${name}`;
       if (path === '/dev') {
         out.push({ type: 'dir', path, preopen: path });

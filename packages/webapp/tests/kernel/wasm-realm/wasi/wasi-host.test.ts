@@ -106,6 +106,24 @@ describe('WasiHost: preopens and start-up', () => {
     expect(names).toEqual(['.', '/dev', '/tmp', '/workspace']);
   });
 
+  it("preopens the shell's synthetic /usr and /bin, which / does not list", () => {
+    const fs = new FakeFs().dir('/usr').dir('/usr/bin').file('/usr/bin/cargo', '#!/bin/sh\n');
+    const listing = fs.readdir.bind(fs);
+    // The command registry: it stats as a directory but is not in the root's listing.
+    fs.readdir = (p: string) => (p === '/' ? listing(p).filter((n) => n !== 'usr') : listing(p));
+    const { call, g } = setup({ fs });
+    const names: string[] = [];
+    for (let fd = 3; ; fd++) {
+      const out = g.alloc(8);
+      if (call('fd_prestat_get', fd, out) !== E.SUCCESS) break;
+      const len = g.u32(out + 4);
+      const buf = g.alloc(len);
+      call('fd_prestat_dir_name', fd, buf, len);
+      names.push(g.read(buf, len));
+    }
+    expect(names).toEqual(['.', '/dev', '/tmp', '/usr', '/workspace']); // no /bin here: it does not stat
+  });
+
   it('reserves the preopens’ numbers in the kernel, and moves an inherited fd out of their way', () => {
     const { kernel, read } = setup({ inherited: [3] });
     expect(kernel.table.get(3)?.kind).toBe('held');
