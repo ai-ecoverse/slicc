@@ -13,6 +13,7 @@ import {
   SAB_HEADER_BYTES,
   SAB_HEADER_I32,
   SAB_I_SIGNALS,
+  SAB_I_TIMERS,
 } from '../realm/sync-sab-wire.js';
 import type { ChildForker, ChildSpawner } from './children.js';
 import { type FdTable, kernelFdKind, type OpenFile } from './fd-table.js';
@@ -146,7 +147,9 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     net: opts.net,
 
     onPending: (sig) => void Atomics.or(header, SAB_I_SIGNALS, sigbit(sig)),
-    hasPending: () => Atomics.load(header, SAB_I_SIGNALS) !== 0,
+    onTimer: (which) => void Atomics.or(header, SAB_I_TIMERS, 1 << which),
+    hasPending: () =>
+      Atomics.load(header, SAB_I_SIGNALS) !== 0 || Atomics.load(header, SAB_I_TIMERS) !== 0,
     ...(opts.program.abi === 'wasi'
       ? { pendingBits: () => Atomics.load(header, SAB_I_SIGNALS) }
       : {}),

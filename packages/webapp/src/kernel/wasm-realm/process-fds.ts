@@ -56,6 +56,8 @@ export interface GlueSyscalls {
   accept4?: GlueSyscall;
 
   ioctl?: GlueSyscall;
+
+  setitimer?: GlueSyscall;
 }
 
 export interface CloexecDeps {
@@ -64,6 +66,8 @@ export interface CloexecDeps {
   heap(): Int32Array | undefined;
 
   pty?: PtyKernel;
+
+  timer?: { arm(ms: number): void };
 }
 
 function marker(deps: CloexecDeps): (fd: number, on: boolean) => void {
@@ -129,13 +133,15 @@ const IMPORT_NAMES: Readonly<Record<SyscallName, string>> = {
   socket: '__syscall_socket',
   accept4: '__syscall_accept4',
   ioctl: '__syscall_ioctl',
+  setitimer: '_setitimer_js',
 };
 
 function wrapperFactories(
   deps: CloexecDeps
 ): Partial<Record<SyscallName, (syscall: GlueSyscall) => GlueSyscall>> {
-  const { pty } = deps;
+  const { pty, timer } = deps;
   return {
+    ...(timer ? { setitimer: (f: GlueSyscall) => kernelTimer(f, timer) } : {}),
     fcntl: (f) => cloexecFcntl(f, deps),
     pipe2: (f) => cloexecPipe2(f, deps),
 
@@ -145,6 +151,14 @@ function wrapperFactories(
     ...(pty
       ? { ioctl: (f: GlueSyscall) => ptyIoctl(f, { fs: deps.fs, heap: deps.heap, kernel: pty }) }
       : {}),
+  };
+}
+
+function kernelTimer(setitimer: GlueSyscall, timer: { arm(ms: number): void }): GlueSyscall {
+  return (which, ms) => {
+    if (which !== 0) return setitimer(which, ms);
+    timer.arm(ms ?? 0);
+    return 0;
   };
 }
 

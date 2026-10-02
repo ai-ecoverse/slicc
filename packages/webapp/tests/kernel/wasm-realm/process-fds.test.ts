@@ -240,6 +240,27 @@ describe('wrapCloexecSyscalls', () => {
     expect(env.__syscall_dup).toBe(other);
   });
 
+  it("puts ITIMER_REAL on the kernel's clock and leaves the other timers to the glue", () => {
+    const setitimer = vi.fn((_which: number, _ms: number) => 0);
+    const armed: number[] = [];
+    const env = { _setitimer_js: setitimer };
+    wrapCloexecSyscalls(
+      { env } as unknown as WebAssembly.Imports,
+      { setitimer },
+      {
+        fs: () => undefined,
+        heap: () => undefined,
+        timer: { arm: (ms) => void armed.push(ms) },
+      }
+    );
+    expect(env._setitimer_js(0, 1500)).toBe(0);
+    expect(env._setitimer_js(0, 0)).toBe(0);
+    expect(armed).toEqual([1500, 0]);
+    expect(setitimer).not.toHaveBeenCalled();
+    env._setitimer_js(1, 10);
+    expect(setitimer).toHaveBeenCalledWith(1, 10);
+  });
+
   it('leaves the rest of the import object, and a glue without them, alone', () => {
     const { table, other } = setup();
     expect(table.f).toBe(other);

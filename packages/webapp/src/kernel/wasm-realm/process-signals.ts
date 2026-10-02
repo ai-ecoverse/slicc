@@ -1,12 +1,14 @@
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import type { SyncSabTransport } from '../realm/sync-sab-bridge.js';
-import { SAB_I_SIGNALS } from '../realm/sync-sab-wire.js';
-import { signalsIn } from './signals.js';
+import { SAB_I_SIGNALS, SAB_I_TIMERS } from '../realm/sync-sab-wire.js';
+import { SIG, sigbit, signalsIn } from './signals.js';
 
 export interface SignalHooks {
   masks(): { caught: number; ignored: number; restart: number } | null;
 
   raise(sig: number): void;
+
+  timer?(which: number): void;
 }
 
 export class SignalGate {
@@ -65,8 +67,13 @@ export class SignalGate {
   }
 
   deliver(): void {
+    const timers = Atomics.exchange(this.header, SAB_I_TIMERS, 0);
     const pending = Atomics.exchange(this.header, SAB_I_SIGNALS, 0);
-    if (this.depth <= 1) this.lastDelivered = pending;
+
+    if (this.depth <= 1) this.lastDelivered = pending | (timers & 1 ? sigbit(SIG.ALRM) : 0);
+    for (let which = 0; which < 3; which++) {
+      if (timers & (1 << which)) this.hooks.timer?.(which);
+    }
     for (const sig of signalsIn(pending)) this.hooks.raise(sig);
   }
 }

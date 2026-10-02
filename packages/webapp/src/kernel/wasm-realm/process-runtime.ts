@@ -38,6 +38,7 @@ import { SignalGate } from './process-signals.js';
 import { createSocketKernel } from './process-sockets.js';
 import type { ForkState, InheritedFd, WasmProcessInitMsg } from './protocol.js';
 import { ownByRealmUser } from './realm-user.js';
+import { SIG } from './signals.js';
 import type { Termios } from './tty.js';
 
 export {
@@ -184,6 +185,8 @@ interface RunningModule {
 
   sliccRaise?: (sig: number) => void;
 
+  sliccTimerFire?: (which: number) => boolean;
+
   sliccKernel?: ProcessKernel;
 
   sliccSyscalls?: GlueSyscalls;
@@ -215,6 +218,7 @@ const GLUE_TRAILER = [
   "  socket: typeof ___syscall_socket === 'function' ? ___syscall_socket : undefined,",
   "  accept4: typeof ___syscall_accept4 === 'function' ? ___syscall_accept4 : undefined,",
   "  ioctl: typeof ___syscall_ioctl === 'function' ? ___syscall_ioctl : undefined,",
+  "  setitimer: typeof __setitimer_js === 'function' ? __setitimer_js : undefined,",
   '};',
 
   'const __sliccUp = () =>',
@@ -225,6 +229,12 @@ const GLUE_TRAILER = [
 
   "Module.sliccSigMask ??= (w) => (__sliccUp() && typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
   "Module.sliccRaise ??= (sig) => { if (__sliccUp() && typeof _slicc_raise === 'function') _slicc_raise(sig); };",
+
+  'Module.sliccTimerFire ??= (which) => {',
+  "  if (!__sliccUp() || typeof __emscripten_timeout !== 'function') return false;",
+  "  __emscripten_timeout(which, typeof _emscripten_get_now === 'function' ? _emscripten_get_now() : performance.now());",
+  '  return true;',
+  '};',
 
   "if (typeof SliccFork !== 'undefined' && !SliccFork.balancesKeepalive && typeof runtimeKeepalivePop === 'function') {",
   '  let __sliccForking = SliccFork.forking === true;',
@@ -275,6 +285,11 @@ export async function runWasmProcess(
     {
       masks: () => signalMasks(module as unknown as RunningModule),
       raise: (sig) => (module as unknown as RunningModule).sliccRaise?.(sig),
+
+      timer: (which) => {
+        const running = module as unknown as RunningModule;
+        if (!running.sliccTimerFire?.(which)) running.sliccRaise?.(SIG.ALRM);
+      },
     }
   );
   const transport = signals.transport();
@@ -307,6 +322,16 @@ export async function runWasmProcess(
             fs: () => ownValue<ProcessFs>(module, 'FS'),
             heap: () => (memory ? new Int32Array(memory.buffer) : undefined),
             pty: sys,
+
+            timer: {
+              arm: (ms) => {
+                transport.call(
+                  { op: 'proc-alarm', sig: SIG.ALRM, ms, repeat: false, timer: 0 },
+                  Number.POSITIVE_INFINITY,
+                  'alarm'
+                );
+              },
+            },
           });
           return WebAssembly.instantiate(init.program.module, imports);
         })

@@ -75,7 +75,15 @@ export type WasmSyscall =
   | { op: 'fd-cloexec'; fd: number; on: boolean }
   | { op: 'fd-list' }
   | { op: 'dl-log'; append?: LinkRecord; from: number }
-  | { op: 'proc-alarm'; sig: number; ms: number; firstMs?: number; repeat: boolean }
+  | {
+      op: 'proc-alarm';
+      sig: number;
+      ms: number;
+      firstMs?: number;
+      repeat: boolean;
+
+      timer?: number;
+    }
   | { op: 'fd-renumber'; from: number; to: number; keep?: boolean }
   | {
       op: 'fd-promote';
@@ -264,6 +272,8 @@ export interface WasmProcessOptions {
   kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
 
   onPending?: (sig: number) => void;
+
+  onTimer?: (which: number) => void;
 
   hasPending?: () => boolean;
 
@@ -743,7 +753,7 @@ export class WasmProcess {
         if (req.append) this.dlLog.push(req.append);
         return { ok: true, kind: 'json', json: this.dlLog.slice(req.from) };
       case 'proc-alarm':
-        this.setAlarm(req.sig, req.firstMs ?? req.ms, req.repeat ? req.ms : 0);
+        this.setAlarm(req.sig, req.firstMs ?? req.ms, req.repeat ? req.ms : 0, req.timer);
         return { ok: true, kind: 'void' };
       case 'sig-mask':
         this.caught = req.caught;
@@ -768,16 +778,24 @@ export class WasmProcess {
   private alarm: ReturnType<typeof setTimeout> | undefined;
   private alarmEvery: ReturnType<typeof setInterval> | undefined;
 
-  private setAlarm(sig: number, first: number, every: number): void {
+  private setAlarm(sig: number, first: number, every: number, timer?: number): void {
     if (!isSignal(sig)) throw new KernelError('EINVAL');
     this.clearAlarm();
     if (first <= 0) return;
-    const fire = () => this.options.raise?.(sig);
+    const fire =
+      timer === undefined ? () => this.options.raise?.(sig) : () => this.timerExpired(timer);
     this.alarm = setTimeout(() => {
       this.alarm = undefined;
       fire();
       if (every > 0) this.alarmEvery = setInterval(fire, every);
     }, first);
+  }
+
+  private timerExpired(which: number): void {
+    this.options.onTimer?.(which);
+    const blocked = this.interrupt;
+    this.interrupt = new AbortController();
+    blocked.abort();
   }
 
   private clearAlarm(): void {
