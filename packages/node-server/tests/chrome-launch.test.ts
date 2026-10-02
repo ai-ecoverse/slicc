@@ -186,6 +186,8 @@ describe('chrome-launch', () => {
       '--enable-features=Vulkan',
       '--use-angle=vulkan',
       '--ignore-gpu-blocklist',
+      // Without it, headless Vulkan init fails and WebGPU is SwiftShader (2026-10-02).
+      '--disable-vulkan-surface',
     ];
 
     it('a hosted leader disables the GPU by default', () => {
