@@ -25,7 +25,7 @@ import {
   type SyncSabTransport,
 } from '../realm/sync-sab-bridge.js';
 import { SAB_HEADER_I32, type SyncSabRequestBody } from '../realm/sync-sab-wire.js';
-import type { PollState } from './fd-table.js';
+import type { DeviceMeta, PollState } from './fd-table.js';
 import {
   KernelStreams,
   type ProcessFs,
@@ -180,7 +180,37 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys & PtyKernel {
  * number (one the process started with beyond 0-2), backed as its kind says.
  */
 export function wireKernelFd(Fs: ProcessFs, streams: KernelStreams, entry: InheritedFd): void {
-  placeKernelStream(Fs, streams, { ...entry, kernel: entry.fd });
+  if (entry.device && openDevice(Fs, entry.fd, entry.device)) return;
+  // A device the module's FS lacks (Emscripten has no /dev/zero) reads through the kernel.
+  placeKernelStream(Fs, streams, {
+    ...entry,
+    kind: entry.device ? 'stream' : entry.kind,
+    kernel: entry.fd,
+  });
+}
+
+const O_RDONLY = 0;
+const O_WRONLY = 1;
+const O_RDWR = 2;
+
+/**
+ * An inherited device opened as the module's own at `fd`, for the side it
+ * was opened for: a character device to fstat, seeking as one, EBADF on the
+ * other side. The kernel keeps its number taken. False when the FS lacks it.
+ */
+function openDevice(Fs: ProcessFs, fd: number, meta: DeviceMeta): boolean {
+  const flags = meta.access === 'read' ? O_RDONLY : meta.access === 'write' ? O_WRONLY : O_RDWR;
+  let stream: ProcessStream;
+  try {
+    stream = Fs.open(`/dev/${meta.device}`, flags);
+  } catch {
+    return false;
+  }
+  if (stream.fd !== fd) {
+    Fs.dupStream(stream, fd);
+    Fs.closeStream(stream.fd);
+  }
+  return true;
 }
 
 /** Point fds 0, 1, 2 of the module's FS at the kernel descriptors of the same numbers. */

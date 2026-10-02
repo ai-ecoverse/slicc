@@ -12,7 +12,7 @@
  * - A **device** is `/dev/null`, `/dev/zero` or `/dev/urandom`, answered here.
  */
 import type { SyncFsBridgeStat, SyncFsPosixBridge } from '../../realm/sync-fs-xhr-bridge.js';
-import type { KernelFdKind } from '../fd-table.js';
+import type { DeviceAccess, KernelFdKind } from '../fd-table.js';
 
 export class WasiError extends Error {
   constructor(readonly code: string) {
@@ -187,7 +187,12 @@ export type WasiEntry =
       preopen?: string;
       listing?: DirListing;
     }
-  | { type: 'device'; device: 'null' | 'zero' | 'urandom' };
+  | {
+      type: 'device';
+      device: 'null' | 'zero' | 'urandom';
+      /** Opened for one side only (an inherited O_RDONLY / O_WRONLY device); absent: both. */
+      access?: DeviceAccess;
+    };
 
 /** Normalize an absolute path: no `.`, `..` or empty segments; never above `/`. */
 export function normalize(path: string): string {

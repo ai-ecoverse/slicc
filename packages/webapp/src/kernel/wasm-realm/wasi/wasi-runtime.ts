@@ -367,7 +367,12 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
       : fork
         ? { forked: { fds: fork.fds, cloexec: fork.cloexec } }
         : {
-            inherited: (init.fds ?? []).map((f) => ({ fd: f.fd, kind: f.kind, flags: f.flags })),
+            inherited: (init.fds ?? []).map((f) => ({
+              fd: f.fd,
+              kind: f.kind,
+              flags: f.flags,
+              ...(f.device ? { device: f.device } : {}),
+            })),
           }),
   });
   if (threads) {

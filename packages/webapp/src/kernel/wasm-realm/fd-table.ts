@@ -106,13 +106,26 @@ export interface KernelFile {
   held?: true;
   /**
    * What a held number stands for in its worker (a WASI directory or
-   * device), so another thread of the process can open it too.
+   * device), so another thread of the process can open it too; on a
+   * description that is not held, the device it is ({@link deviceFile}).
    */
   heldMeta?: HeldMeta;
 }
 
 /** A WASI worker-held descriptor, as the kernel keeps it for the process's other threads. */
-export type HeldMeta = { dir: string; preopen?: string } | { device: 'null' | 'zero' | 'urandom' };
+export type HeldMeta = { dir: string; preopen?: string } | DeviceMeta;
+
+/** A device descriptor: which device, and the side it was opened for (absent: both). */
+export interface DeviceMeta {
+  device: KernelDevice;
+  access?: DeviceAccess;
+}
+
+/** A device opened O_RDONLY (`read`) or O_WRONLY (`write`). */
+export type DeviceAccess = 'read' | 'write';
+
+/** A device the kernel can stand in for: `/dev/null`, `/dev/zero`, `/dev/urandom` (and `/dev/random`). */
+export type KernelDevice = 'null' | 'zero' | 'urandom';
 
 /** A description's readiness: its own answer, or ready in whatever direction it serves. */
 export function pollFile(file: KernelFile): PollState {
@@ -204,6 +217,33 @@ export function nullFile(): OpenFile {
   });
 }
 
+/**
+ * A device as a kernel description (a child inherits it): reads per `device`,
+ * writes vanish, only on the side `access` allows (EBADF on the other); it
+ * seeks to 0, as a device does. Its `heldMeta` says what it is, so a child
+ * (and another thread) sees a character device, not a pipe.
+ */
+export function deviceFile(device: KernelDevice, access?: DeviceAccess): OpenFile {
+  const read = async (max: number): Promise<Uint8Array> => {
+    if (device === 'null') return new Uint8Array(0);
+    const out = new Uint8Array(max);
+    if (device === 'urandom') {
+      // getRandomValues fills at most 65536 bytes per call.
+      for (let at = 0; at < max; at += 65536) {
+        crypto.getRandomValues(out.subarray(at, Math.min(max, at + 65536)));
+      }
+    }
+    return out;
+  };
+  return new OpenFile({
+    ...(access !== 'write' ? { read } : {}),
+    ...(access !== 'read' ? { write: async (bytes: Uint8Array) => bytes.length } : {}),
+    seek: async () => 0,
+    heldMeta: { device, ...(access ? { access } : {}) },
+    close: () => {},
+  });
+}
+
 /** A number a WASI program's worker holds a descriptor under (see {@link KernelFile.held}). */
 export function heldFile(meta?: HeldMeta): OpenFile {
   return new OpenFile({ held: true, ...(meta ? { heldMeta: meta } : {}), close: () => {} });
@@ -211,13 +251,15 @@ export function heldFile(meta?: HeldMeta): OpenFile {
 
 /**
  * How a process's runtime backs a kernel descriptor: a terminal, a seekable
- * VFS file, a socket, a stream, or one its worker holds itself.
+ * VFS file, a socket, a stream, one its worker holds itself, or a device
+ * (`/dev/null` & co., which a runtime opens as its own).
  */
-export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket' | 'held';
+export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket' | 'held' | 'device';
 
 /** The kind of a descriptor that is no socket (the host tells sockets apart). */
 export function kernelFdKind(file: KernelFile): Exclude<KernelFdKind, 'socket'> {
   if (file.held) return 'held';
+  if (file.heldMeta && 'device' in file.heldMeta) return 'device';
   if (file.tty) return 'tty';
   return file.seek ? 'file' : 'stream';
 }

@@ -19,11 +19,13 @@
  * the child opens at the same numbers ({@link placeKernelStream}).
  */
 import type { InheritedSlot } from './children.js';
+import type { DeviceAccess, KernelDevice } from './fd-table.js';
 import type { KernelStreams, ProcessFs, ProcessStream, ProcessSys } from './kernel-streams.js';
 import { closesOnExec, O_CLOEXEC, setCloseOnExec } from './process-fds.js';
 import type { ForkStream, KernelStreamEntry } from './protocol.js';
 
 const O_RDWR = 0o2;
+const O_ACCMODE = 0o3;
 const O_CREAT = 0o100;
 const O_EXCL = 0o200;
 const O_TRUNC = 0o1000;
@@ -117,12 +119,24 @@ function kernelEntry(stream: ProcessStream, kernel: number): ForkStream {
   return { fd: stream.fd, kernel, kind, ...cloexec };
 }
 
+/** O_RDONLY / O_WRONLY as a device's access (O_RDWR: both, no entry). */
+const ACCESS: Readonly<Record<number, DeviceAccess>> = { 0: 'read', 1: 'write' };
+
+/** The devices a child gets a kernel description of its own for, by the path the program opened. */
+const DEVICES: Readonly<Record<string, KernelDevice>> = {
+  '/dev/null': 'null',
+  '/dev/zero': 'zero',
+  '/dev/urandom': 'urandom',
+  '/dev/random': 'urandom',
+};
+
 /**
  * The fds beyond 0-2 a child the program spawns or execs inherits, at the
  * same numbers: each one not close-on-exec, then `actions` (posix_spawn's
  * file actions on fds beyond 2: `[target, source]`, source -1 closes). A VFS
- * file is handed to the kernel first; a device or a file of the program's own
- * memory FS has no kernel descriptor and stays behind.
+ * file is handed to the kernel first; a device (`/dev/null`, `/dev/zero`,
+ * `/dev/urandom`) goes as the kernel's own; a file of the program's own memory
+ * FS has no kernel descriptor and stays behind.
  */
 export function describeInherited(
   Fs: ProcessFs,
@@ -151,11 +165,22 @@ export function describeInherited(
   const out: InheritedSlot[] = [];
   for (const [fd, stream] of slots) {
     promote(stream);
-    if (stream.sliccKernelFd === undefined) continue;
-    const flags = stream.sliccKernelSocket ? { flags: stream.flags } : {};
-    out.push({ fd, kernel: stream.sliccKernelFd, ...flags });
+    const slot = inheritedSlot(fd, stream);
+    if (slot) out.push(slot);
   }
   return out;
+}
+
+/** What a child gets at `fd` for `stream`: its kernel descriptor, a device of its own, or nothing. */
+function inheritedSlot(fd: number, stream: ProcessStream): InheritedSlot | undefined {
+  if (stream.sliccKernelFd === undefined) {
+    const device = stream.path === undefined ? undefined : DEVICES[stream.path];
+    if (!device) return undefined;
+    const access = ACCESS[stream.flags & O_ACCMODE];
+    return { fd, device, ...(access ? { access } : {}) };
+  }
+  const flags = stream.sliccKernelSocket ? { flags: stream.flags } : {};
+  return { fd, kernel: stream.sliccKernelFd, ...flags };
 }
 
 /** Move `stream` to exactly `fd`. */

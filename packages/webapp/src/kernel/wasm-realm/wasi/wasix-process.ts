@@ -108,7 +108,7 @@ export class WasixProcess {
     });
     const inherit: InheritedSlot[] = [
       ...[...map].filter(([fd]) => fd > 2).map(([fd, kernel]) => ({ fd, kernel })),
-      ...[...nulls].filter((fd) => fd > 2).map((fd) => ({ fd, null: true as const })),
+      ...[...nulls].filter((fd) => fd > 2).map((fd) => ({ fd, device: 'null' as const })),
     ];
     return { stdio, inherit, cwd, opened };
   }
