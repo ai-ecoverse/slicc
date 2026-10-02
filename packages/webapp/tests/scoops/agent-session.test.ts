@@ -36,6 +36,10 @@ describe('agent sessions', () => {
     expect(sessionFingerprint({ ...base, allowedCommands: [' true '] })).toBe(
       sessionFingerprint({ ...base, allowedCommands: ['true'] })
     );
+    expect(sessionFingerprint({ ...base, writablePaths: ['/b/', '/a/'] })).toBe(
+      sessionFingerprint({ ...base, writablePaths: ['/a/', '/b/'] })
+    );
+    expect(sessionFingerprint({ ...base, writablePaths: ['/knowledge/'] })).not.toBe(off);
   });
 
   it('classifies create, resume, expiry, mismatch, and a busy session', () => {

@@ -98,7 +98,7 @@ agent <cwd> <allowed-commands> <prompt> [--model <id>] [--workspace-mode <mode>]
 - `--session <id>` — keep the scoop and append the next call with the same id, model, sandbox, and prompt options, so the system prompt is a cache read. Stderr prints `agent-session: <id> created` or `resumed`, plus `agent-usage` for that call. Stdout stays the answer. An idle session (30 minutes) is replaced on the next `--session` (`created` again). `--resume <id>` fails instead (exit 2, `session not found` or `session expired`). A mismatched call exits 1 and leaves the session as it was. Do not pass both.
 - `--usage` — print this call's `{input, output, cacheRead, cacheWrite, cost}` on stderr. A named session prints it without the flag.
 
-Identical one-shots already share a cache-stable system prompt: the scratch folder is named in the user message, not the prefix. `cost --json` lists each assistant turn under `calls`.
+Identical one-shots share a cache-stable system prompt: the scratch folder is named in the user message, and the seeded per-scoop memory file (folder and creation time) stays out of the prefix. `cost --json` lists each assistant turn under `calls`.
 
 **Critical property: no handoff.** Ephemeral scoops do NOT notify the cone on completion. Running `agent` from a non-cone shell does not trigger an unsolicited cone turn. The caller gets the result on stdout, nothing else. This makes `agent` the right choice for cheap, predictable interactions inside dips and sprinkles where you don't want the cone or owning scoop woken up.
 

@@ -2752,4 +2752,75 @@ describe('createAgentBridge — named sessions', () => {
     const created = await first;
     expect(created.sessionStatus).toBe('created');
   });
+
+  it('rejects a resume whose writable grant differs and leaves the scoop', async () => {
+    const { bridge, unregisterCalls } = harness();
+    await bridge.spawn(sessionOpts);
+    const result = await bridge.spawn({
+      ...sessionOpts,
+      writablePaths: ['/knowledge/'],
+      resumeOnly: true,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toBe('agent: session decider does not match this call');
+    expect(unregisterCalls).toHaveLength(0);
+  });
+
+  it('drops an idle session when a later call uses a different id', async () => {
+    let now = 1_000;
+    const { bridge, unregisterCalls, registerCalls } = harness(() => now);
+    await bridge.spawn(sessionOpts);
+    now += 30 * 60 * 1000 + 1;
+    const again = await bridge.spawn({ ...sessionOpts, session: 'other' });
+    expect(again.sessionStatus).toBe('created');
+    expect(unregisterCalls).toEqual(['agent_quiet_vanilla']);
+    expect(registerCalls).toHaveLength(2);
+  });
+
+  it('returns each resumed call’s own StructuredOutput', async () => {
+    const messages: Array<{ role: string; content: unknown[] }> = [];
+    // Mirrors ScoopContext: the first capture of a turn sticks until reset.
+    let captured = false;
+    let latched: unknown;
+    const mock = makeMockOrchestrator();
+    (mock.orchestrator as unknown as { getScoopContext: () => unknown }).getScoopContext = () => ({
+      getAgentMessages: () => messages,
+      resetStructuredOutput: () => {
+        captured = false;
+        latched = undefined;
+      },
+      getStructuredOutput: () => ({ captured, value: latched }),
+    });
+    const { fs } = makeMockSharedFs();
+    const sessionBridge = createAgentBridge(mock.orchestrator, fs, null, {
+      generateName: () => 'quiet-vanilla',
+      resolveModel: (id) => pinned(id),
+    });
+    mock.scripts.set('agent_quiet_vanilla', () => {
+      const prompt = mock.sendPromptCalls.at(-1)?.prompt ?? '';
+      const color = /color (\w+)/.exec(prompt)?.[1] ?? 'missing';
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'toolCall', name: 'StructuredOutput', arguments: { color } }],
+      });
+      // The real tool ignores a second capture. Leave the latch on the first
+      // value unless the bridge cleared it for this turn.
+      if (!captured) {
+        captured = true;
+        latched = { color };
+      }
+    });
+    const schema = { type: 'object' as const };
+    const answers: unknown[] = [];
+    for (const color of ['red', 'green', 'blue']) {
+      const result = await sessionBridge.spawn({
+        ...sessionOpts,
+        structuredOutputSchema: schema,
+        prompt: `Answer with the color ${color}.`,
+      });
+      expect(result.exitCode).toBe(0);
+      answers.push(JSON.parse(result.finalText));
+    }
+    expect(answers).toEqual([{ color: 'red' }, { color: 'green' }, { color: 'blue' }]);
+  });
 });

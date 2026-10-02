@@ -18,6 +18,8 @@ describe('buildScoopSystemPrompt cache stability', () => {
     expect(a).not.toContain('agent-quiet-vanilla');
     expect(a).not.toContain('agent-loud-chocolate');
     expect(a).toContain('named in the user message');
+    expect(a).toContain('global');
+    expect(a).not.toContain('local');
     expect(a).toContain(AGENT_SAFETY_TRAILER);
     expect(a).toContain('# agent');
   });
@@ -27,6 +29,7 @@ describe('buildScoopSystemPrompt cache stability', () => {
     const b = promptFor('agent-loud-chocolate', {});
     expect(a).not.toBe(b);
     expect(a).toContain('/scoops/agent-quiet-vanilla/');
+    expect(a).toContain('local');
     expect(a).not.toContain(AGENT_SAFETY_TRAILER);
   });
 

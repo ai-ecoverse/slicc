@@ -973,10 +973,11 @@ describe('agent command', () => {
           order.push('execute-resolved');
           return r;
         });
-      // Stat, then the prepare helper's return, then spawn. Two turns cover both.
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(order).toContain('spawn-start');
+      // The command body is a dynamic import (a macrotask on first load),
+      // then a cwd stat, then spawn. Spawn still starts before execute resolves.
+      await vi.waitFor(() => {
+        expect(order).toContain('spawn-start');
+      });
       expect(order).not.toContain('execute-resolved');
       resolveSpawn({ finalText: 'done', exitCode: 0 });
       const result = await exec;

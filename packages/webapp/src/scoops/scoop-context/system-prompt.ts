@@ -166,8 +166,10 @@ ${globalMemory}
 ---`;
   }
 
-  // Add scoop memory
-  if (scoopMemory) {
+  // A cache-stable prompt leaves this out. The seeded file names the
+  // scratch folder and a creation timestamp, so including it makes every
+  // one-shot a different prefix. The file is still on disk.
+  if (scoopMemory && !stable) {
     fullPrompt += `
 
 ---

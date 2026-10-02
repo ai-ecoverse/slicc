@@ -25,6 +25,8 @@ export interface SessionFingerprintInput {
   modelProviderId?: string;
   thinkingLevel?: string;
   visiblePaths?: readonly string[];
+  /** Normalized writable prefixes. Scratch and `/tmp/` are not included. */
+  writablePaths?: readonly string[];
   invokingCwd?: string;
   workspaceMode?: string;
   structuredOutputSchema?: unknown;
@@ -49,6 +51,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     modelProviderId: input.modelProviderId ?? null,
     thinkingLevel: input.thinkingLevel ?? null,
     visiblePaths: input.visiblePaths ? [...input.visiblePaths] : null,
+    writablePaths: input.writablePaths ? [...input.writablePaths].sort() : null,
     invokingCwd: input.invokingCwd ?? null,
     workspaceMode: input.workspaceMode ?? null,
     structuredOutputSchema: input.structuredOutputSchema ?? null,

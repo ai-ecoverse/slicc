@@ -53,9 +53,11 @@ import {
 } from '../work-unit/workspace-mode.js';
 import { AGENT_ADJECTIVES, AGENT_FLAVORS } from './agent-names.js';
 import {
+  AGENT_SESSION_IDLE_MS,
   type AgentCallUsage,
   cacheStableUserPrompt,
   classifySession,
+  sessionExpired,
   sessionFingerprint,
   sessionIdError,
   sumAssistantUsage,
@@ -420,6 +422,8 @@ interface LiveAgentSession {
   fingerprint: string;
   lastUsed: number;
   busy: boolean;
+  /** Fires once the idle TTL passes, so an unused id does not live forever. */
+  idleTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** Context for bridge spawn helpers - closed over by the factory. */
@@ -1082,6 +1086,36 @@ function registerScoopObserver(orchestrator: Orchestrator, jid: string) {
   return state;
 }
 
+interface TranscriptMessage {
+  role: string;
+  content?: readonly unknown[];
+}
+
+/**
+ * First StructuredOutput arguments in `messages`. A resumed scoop's latch
+ * still holds the previous turn, so the result has to come from this call.
+ */
+function structuredOutputFromTurn(messages: readonly TranscriptMessage[]): unknown {
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (typeof block !== 'object' || block === null) continue;
+      const part = block as { type?: string; name?: string; arguments?: unknown };
+      if (part.type === 'toolCall' && part.name === 'StructuredOutput') return part.arguments;
+    }
+  }
+  return undefined;
+}
+
+function messagesAddedSince(
+  orchestrator: Orchestrator,
+  jid: string,
+  start: number
+): readonly TranscriptMessage[] {
+  const messages = orchestrator.getScoopContext(jid)?.getAgentMessages?.() ?? [];
+  return messages.slice(start) as readonly TranscriptMessage[];
+}
+
 /**
  * Prompt scoop and optionally nudge for structured output.
  */
@@ -1093,6 +1127,13 @@ async function runScoopAndCaptureOutput(
   observerState: ReturnType<typeof registerScoopObserver>,
   images: ImageContent[] = []
 ): Promise<AgentSpawnResult | null> {
+  const messageStart = orchestrator.getScoopContext(jid)?.getAgentMessages?.().length ?? 0;
+  // The latch keeps the first capture for the life of the scoop. Clear it so
+  // this turn can record a new one; the return value still prefers the tool
+  // call appended during this call.
+  if (structuredOutputSchema) {
+    orchestrator.getScoopContext(jid)?.resetStructuredOutput?.();
+  }
   await orchestrator.sendPrompt(jid, prompt, 'agent', 'agent', images);
 
   if (observerState.scoopError !== null) {
@@ -1100,6 +1141,12 @@ async function runScoopAndCaptureOutput(
   }
 
   if (structuredOutputSchema) {
+    const fresh = (): unknown =>
+      structuredOutputFromTurn(messagesAddedSince(orchestrator, jid, messageStart));
+    const fromTurn = fresh();
+    if (fromTurn !== undefined) {
+      return { finalText: JSON.stringify(fromTurn), exitCode: 0 };
+    }
     const ctxRef = orchestrator.getScoopContext(jid);
     let so = ctxRef?.getStructuredOutput?.();
     for (let nudge = 0; nudge < 2 && !so?.captured; nudge++) {
@@ -1113,6 +1160,10 @@ async function runScoopAndCaptureOutput(
       // 5xx, capability shim) instead of masking it as "did not produce output".
       if (observerState.scoopError !== null) {
         return { finalText: observerState.scoopError, exitCode: 1 };
+      }
+      const nudged = fresh();
+      if (nudged !== undefined) {
+        return { finalText: JSON.stringify(nudged), exitCode: 0 };
       }
       so = ctxRef?.getStructuredOutput?.();
     }
@@ -1314,6 +1365,7 @@ function fingerprintOf(
     modelProviderId,
     thinkingLevel,
     visiblePaths: options.visiblePaths,
+    writablePaths: grantedWritablePaths(options),
     invokingCwd: options.invokingCwd,
     workspaceMode: options.workspaceMode,
     structuredOutputSchema: options.structuredOutputSchema,
@@ -1327,7 +1379,53 @@ function fingerprintOf(
   });
 }
 
+function clearIdleTimer(live: LiveAgentSession): void {
+  if (live.idleTimer === undefined) return;
+  clearTimeout(live.idleTimer);
+  live.idleTimer = undefined;
+}
+
+/** Drop this id when its idle TTL passes, including when no later call names it. */
+function armIdleTimer(ctx: BridgeContext, live: LiveAgentSession): void {
+  clearIdleTimer(live);
+  const elapsed = ctx.now() - live.lastUsed;
+  const remaining = AGENT_SESSION_IDLE_MS - elapsed + 1;
+  const delay = live.busy ? AGENT_SESSION_IDLE_MS : Math.max(1, remaining);
+  const timer = setTimeout(() => {
+    void reclaimIfIdle(ctx, live.id);
+  }, delay);
+  if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
+    timer.unref();
+  }
+  live.idleTimer = timer;
+}
+
+async function reclaimIfIdle(ctx: BridgeContext, id: string): Promise<void> {
+  const live = ctx.sessions.get(id);
+  if (!live) return;
+  if (live.busy || !sessionExpired(live.lastUsed, ctx.now())) {
+    armIdleTimer(ctx, live);
+    return;
+  }
+  await dropLiveSession(ctx, live);
+}
+
+/**
+ * Idle sessions other than `keepId`. The id this call is about stays, so
+ * `--resume` can still report expiry. Empty means the caller does not await.
+ */
+function idleSessionsExcept(ctx: BridgeContext, keepId: string | undefined): LiveAgentSession[] {
+  const now = ctx.now();
+  const due: LiveAgentSession[] = [];
+  for (const live of ctx.sessions.values()) {
+    if (live.id === keepId || live.busy) continue;
+    if (sessionExpired(live.lastUsed, now)) due.push(live);
+  }
+  return due;
+}
+
 async function dropLiveSession(ctx: BridgeContext, live: LiveAgentSession): Promise<void> {
+  clearIdleTimer(live);
   ctx.sessions.delete(live.id);
   await cleanupScoop(ctx, live.jid, live.folder, live.scratchFolder);
 }
@@ -1389,6 +1487,7 @@ async function resumeNamedSession(
   await writeAgentSessionArchive(ctx, options, live.jid, live.nameToken, outcome);
   live.busy = false;
   live.lastUsed = ctx.now();
+  armIdleTimer(ctx, live);
   const usage = before === undefined ? undefined : usageForCall(ctx, live.jid, before);
   return withSessionMeta(outcome, live.id, 'resumed', usage);
 }
@@ -1505,6 +1604,10 @@ export function createAgentBridge(
       effectiveModelProviderId,
       effectiveThinkingLevel
     );
+    const due = idleSessionsExcept(ctx, options.session);
+    if (due.length > 0) {
+      for (const live of due) await dropLiveSession(ctx, live);
+    }
     let creatingSession = false;
     if (options.session !== undefined) {
       const opened = await openNamedSession(ctx, options, prefixFingerprint);
@@ -1569,6 +1672,8 @@ function keepFinishedSession(
     lastUsed: ctx.now(),
     busy: false,
   });
+  const stored = ctx.sessions.get(options.session);
+  if (stored) armIdleTimer(ctx, stored);
   return {
     outcome: withSessionMeta(outcome, options.session, 'created', usage),
     keepLive: true,
@@ -1813,6 +1918,13 @@ function normalizeRwPrefix(path: string): string {
 function resolvedWorkspaceMode(raw: WorkspaceIsolationMode | undefined): ImplementedWorkspaceMode {
   const parsed = parseWorkspaceMode(raw);
   return parsed.ok ? parsed.mode : DEFAULT_CHILD_WORKSPACE_MODE;
+}
+
+/** Writable grant a resume must match. Scratch and `/tmp/` are added later. */
+function grantedWritablePaths(options: AgentSpawnOptions): string[] {
+  const cwdPrefix = normalizeRwPrefix(options.cwd);
+  const mode = resolvedWorkspaceMode(options.workspaceMode);
+  return resolveWritablePaths(options.writablePaths, cwdPrefix, mode);
 }
 
 function resolveWritablePaths(

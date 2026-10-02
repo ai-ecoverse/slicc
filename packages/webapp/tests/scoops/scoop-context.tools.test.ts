@@ -189,6 +189,24 @@ describe('ScoopContext active tool surface', () => {
     expect(ctx.getStructuredOutput()).toEqual({ captured: true, value: { action: 'first' } });
   });
 
+  it('clears StructuredOutput so the next turn can capture a new value', async () => {
+    const scoop = {
+      ...testScoop,
+      config: { structuredOutputSchema: { type: 'object' } },
+    };
+    const ctx = new ScoopContext(scoop, createMockCallbacks(), createMockFs() as any);
+    await ctx.init();
+    const options = mocks.agentCtorCalls[0];
+    const tool = options.initialState.tools.find(
+      (t: { name: string }) => t.name === 'StructuredOutput'
+    ) as { execute: (input: unknown) => Promise<unknown> };
+    await tool.execute({ action: 'first' });
+    ctx.resetStructuredOutput();
+    expect(ctx.getStructuredOutput().captured).toBe(false);
+    await tool.execute({ action: 'second' });
+    expect(ctx.getStructuredOutput()).toEqual({ captured: true, value: { action: 'second' } });
+  });
+
   it('does not lock in a failed StructuredOutput call, so the valid retry is kept', async () => {
     const scoop = {
       ...testScoop,
