@@ -54,6 +54,7 @@ import { SignalGate } from './process-signals.js';
 import { createSocketKernel } from './process-sockets.js';
 import type { ForkState, InheritedFd, WasmProcessInitMsg } from './protocol.js';
 import { ownByRealmUser } from './realm-user.js';
+import { SIG } from './signals.js';
 import type { Termios } from './tty.js';
 
 export {
@@ -205,6 +206,8 @@ interface RunningModule {
   sliccSigMask?: (which: number) => number;
   /** raise(sig) in the program. */
   sliccRaise?: (sig: number) => void;
+  /** Emscripten's expiry of interval timer `which` (raises its signal, re-arms); false without one. */
+  sliccTimerFire?: (which: number) => boolean;
   /** posix_spawn / waitpid for the toolchain's libc shims. */
   sliccKernel?: ProcessKernel;
   /** The glue's own fcntl, pipe2, … (the trailer hands them over to be wrapped). */
@@ -249,6 +252,7 @@ const GLUE_TRAILER = [
   "  socket: typeof ___syscall_socket === 'function' ? ___syscall_socket : undefined,",
   "  accept4: typeof ___syscall_accept4 === 'function' ? ___syscall_accept4 : undefined,",
   "  ioctl: typeof ___syscall_ioctl === 'function' ? ___syscall_ioctl : undefined,",
+  "  setitimer: typeof __setitimer_js === 'function' ? __setitimer_js : undefined,",
   '};',
   // The toolchain's SIGPIPE disposition query (exported once instantiated).
   // Only while the runtime is up: an assertions build (-O0) aborts on an
@@ -263,6 +267,13 @@ const GLUE_TRAILER = [
   // The toolchain's signal support (slicc_signals.c): dispositions and raise().
   "Module.sliccSigMask ??= (w) => (__sliccUp() && typeof _slicc_sig_mask === 'function' ? _slicc_sig_mask(w) : -1);",
   "Module.sliccRaise ??= (sig) => { if (__sliccUp() && typeof _slicc_raise === 'function') _slicc_raise(sig); };",
+  // An interval timer the kernel ran (setitimer / alarm): Emscripten's own
+  // expiry, which raises its signal and re-arms a repeating timer.
+  'Module.sliccTimerFire ??= (which) => {',
+  "  if (!__sliccUp() || typeof __emscripten_timeout !== 'function') return false;",
+  "  __emscripten_timeout(which, typeof _emscripten_get_now === 'function' ? _emscripten_get_now() : performance.now());",
+  '  return true;',
+  '};',
   // The fork emulation (slicc-fork.js) rewinds past Asyncify's doRewind, so
   // the keepalive each fork's unwind pushed was never popped: after one fork,
   // exit() skipped exitRuntime, and with it the atexit handlers (git's wait
@@ -330,6 +341,12 @@ export async function runWasmProcess(
     {
       masks: () => signalMasks(module as unknown as RunningModule),
       raise: (sig) => (module as unknown as RunningModule).sliccRaise?.(sig),
+      // A kernel-run interval timer expired: Emscripten's own expiry, which
+      // raises SIGALRM under its current disposition and re-arms an interval.
+      timer: (which) => {
+        const running = module as unknown as RunningModule;
+        if (!running.sliccTimerFire?.(which)) running.sliccRaise?.(SIG.ALRM);
+      },
     }
   );
   const transport = signals.transport();
@@ -366,6 +383,17 @@ export async function runWasmProcess(
             fs: () => ownValue<ProcessFs>(module, 'FS'),
             heap: () => (memory ? new Int32Array(memory.buffer) : undefined),
             pty: sys,
+            // ITIMER_REAL on the kernel's clock: Emscripten's own is a setTimeout,
+            // which cannot fire while the worker waits in a syscall (pause()).
+            timer: {
+              arm: (ms) => {
+                transport.call(
+                  { op: 'proc-alarm', sig: SIG.ALRM, ms, repeat: false, timer: 0 },
+                  Number.POSITIVE_INFINITY,
+                  'alarm'
+                );
+              },
+            },
           });
           return WebAssembly.instantiate(init.program.module, imports);
         })

@@ -106,7 +106,15 @@ export type WasmSyscall =
    * setitimer(2) / alarm(2): raise `sig` in `firstMs` (default `ms`; 0:
    * cancel), then every `ms` if `repeat`.
    */
-  | { op: 'proc-alarm'; sig: number; ms: number; firstMs?: number; repeat: boolean }
+  | {
+      op: 'proc-alarm';
+      sig: number;
+      ms: number;
+      firstMs?: number;
+      repeat: boolean;
+      /** A program's interval timer `which`: its expiry is posted (`onTimer`), not `sig`. */
+      timer?: number;
+    }
   /**
    * WASI fd_renumber: `to` becomes `from`'s description (what was at `to`
    * closes), `from` closes — unless `keep` (WASIX's, which is dup2).
@@ -313,6 +321,8 @@ export interface WasmProcessOptions {
   kill?: (pid: number, sig: number) => boolean | Promise<boolean>;
   /** A caught signal is pending: publish it where the worker looks after each syscall. */
   onPending?: (sig: number) => void;
+  /** Interval timer `which` expired: publish it where the worker looks after each syscall. */
+  onTimer?: (which: number) => void;
   /** Whether a published signal still waits for the worker (it interrupts the next blocking call). */
   hasPending?: () => boolean;
   /**
@@ -857,7 +867,7 @@ export class WasmProcess {
         if (req.append) this.dlLog.push(req.append);
         return { ok: true, kind: 'json', json: this.dlLog.slice(req.from) };
       case 'proc-alarm':
-        this.setAlarm(req.sig, req.firstMs ?? req.ms, req.repeat ? req.ms : 0);
+        this.setAlarm(req.sig, req.firstMs ?? req.ms, req.repeat ? req.ms : 0, req.timer);
         return { ok: true, kind: 'void' };
       case 'sig-mask':
         this.caught = req.caught;
@@ -890,16 +900,29 @@ export class WasmProcess {
   private alarmEvery: ReturnType<typeof setInterval> | undefined;
 
   /** Raise `sig` in `first` ms (0: cancel), then every `every` ms (0: once). */
-  private setAlarm(sig: number, first: number, every: number): void {
+  private setAlarm(sig: number, first: number, every: number, timer?: number): void {
     if (!isSignal(sig)) throw new KernelError('EINVAL');
     this.clearAlarm();
     if (first <= 0) return;
-    const fire = () => this.options.raise?.(sig);
+    const fire =
+      timer === undefined ? () => this.options.raise?.(sig) : () => this.timerExpired(timer);
     this.alarm = setTimeout(() => {
       this.alarm = undefined;
       fire();
       if (every > 0) this.alarmEvery = setInterval(fire, every);
     }, first);
+  }
+
+  /**
+   * A program's interval timer ran out: the worker runs its expiry (which
+   * raises the signal under its current disposition and re-arms an
+   * interval), and a call it is blocked in returns EINTR so it can, now.
+   */
+  private timerExpired(which: number): void {
+    this.options.onTimer?.(which);
+    const blocked = this.interrupt;
+    this.interrupt = new AbortController();
+    blocked.abort();
   }
 
   private clearAlarm(): void {
