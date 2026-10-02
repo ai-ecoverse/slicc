@@ -3,6 +3,7 @@
  * dblclick, hover, select, check, uncheck, drag.
  */
 
+import { keyEventParams, pressKeyParams } from '../keyboard.js';
 import {
   CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
   parseRef,
@@ -24,8 +25,9 @@ function parseModifiersBitmask(modifiersFlag: string | undefined): number {
 
 /** Send Enter keyDown+keyUp via CDP (used by --submit on type/fill). */
 async function sendEnterKey(page: TabHandle): Promise<void> {
-  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter' });
-  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter' });
+  const [keyDown, keyUp] = pressKeyParams('Enter');
+  await page.send('Input.dispatchKeyEvent', keyDown);
+  await page.send('Input.dispatchKeyEvent', keyUp);
 }
 
 /** Verify the filled value and apply React native-setter fallback if needed (backendNodeId path). */
@@ -274,9 +276,10 @@ export const pressHandler: PlaywrightHandler = async ({ browser, positional, fla
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
+  const [keyDown, keyUp] = pressKeyParams(key);
   await onTab(tab.targetId, async ({ sessionId, transport }) => {
-    await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId);
-    await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId);
+    await transport.send('Input.dispatchKeyEvent', keyDown, sessionId);
+    await transport.send('Input.dispatchKeyEvent', keyUp, sessionId);
   });
   return { stdout: `Pressed ${key}\n`, stderr: '', exitCode: 0 };
 };
@@ -290,8 +293,9 @@ export const keydownHandler: PlaywrightHandler = async ({ browser, positional, f
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
+  const params = keyEventParams(key, 'keyDown');
   await onTab(tab.targetId, async ({ sessionId, transport }) => {
-    await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId);
+    await transport.send('Input.dispatchKeyEvent', params, sessionId);
   });
   return { stdout: `Key ${key} down\n`, stderr: '', exitCode: 0 };
 };
@@ -305,8 +309,9 @@ export const keyupHandler: PlaywrightHandler = async ({ browser, positional, fla
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
+  const params = keyEventParams(key, 'keyUp');
   await onTab(tab.targetId, async ({ sessionId, transport }) => {
-    await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId);
+    await transport.send('Input.dispatchKeyEvent', params, sessionId);
   });
   return { stdout: `Key ${key} up\n`, stderr: '', exitCode: 0 };
 };

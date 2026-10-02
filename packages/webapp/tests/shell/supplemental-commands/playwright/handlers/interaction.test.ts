@@ -212,6 +212,24 @@ describe('clickHandler', () => {
   });
 });
 
+/** Full Enter keyDown payload — bare `{ key: 'Enter' }` does not submit forms. */
+const ENTER_KEY_DOWN = {
+  type: 'keyDown' as const,
+  key: 'Enter',
+  code: 'Enter',
+  windowsVirtualKeyCode: 13,
+  nativeVirtualKeyCode: 13,
+  text: '\r',
+  unmodifiedText: '\r',
+};
+const ENTER_KEY_UP = {
+  type: 'keyUp' as const,
+  key: 'Enter',
+  code: 'Enter',
+  windowsVirtualKeyCode: 13,
+  nativeVirtualKeyCode: 13,
+};
+
 describe('keyboard + type handlers', () => {
   it('types text and submits with Enter', async () => {
     const { browser, spies } = makeBrowser();
@@ -224,22 +242,37 @@ describe('keyboard + type handlers', () => {
     );
     expect(result.stdout).toBe('Typed: hello world\n');
     expect(spies.type).toHaveBeenCalledWith('hello world');
-    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', {
-      type: 'keyDown',
-      key: 'Enter',
-    });
-    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: 'Enter',
-    });
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', ENTER_KEY_DOWN);
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', ENTER_KEY_UP);
   });
 
-  it('press dispatches keyDown + keyUp', async () => {
+  it('press Enter sends text and keyCode so forms can submit', async () => {
+    const { browser, spies } = makeBrowser();
+    const result = await pressHandler(
+      createHandlerCtx({ browser, positional: ['Enter'], flags: { tab: TAB } })
+    );
+    expect(result.stdout).toBe('Pressed Enter\n');
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', ENTER_KEY_DOWN, 'session-1');
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', ENTER_KEY_UP, 'session-1');
+  });
+
+  it('press dispatches keyDown + keyUp with key codes for Escape', async () => {
     const { browser, spies } = makeBrowser();
     const result = await pressHandler(
       createHandlerCtx({ browser, positional: ['Escape'], flags: { tab: TAB } })
     );
     expect(result.stdout).toBe('Pressed Escape\n');
+    expect(spies.send).toHaveBeenCalledWith(
+      'Input.dispatchKeyEvent',
+      {
+        type: 'keyDown',
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27,
+        nativeVirtualKeyCode: 27,
+      },
+      'session-1'
+    );
     expect(spies.send).toHaveBeenCalledTimes(2);
   });
 
@@ -248,6 +281,19 @@ describe('keyboard + type handlers', () => {
     await keydownHandler(createHandlerCtx({ browser, positional: ['A'], flags: { tab: TAB } }));
     await keyupHandler(createHandlerCtx({ browser, positional: ['A'], flags: { tab: TAB } }));
     expect(spies.send).toHaveBeenCalledTimes(2);
+    expect(spies.send).toHaveBeenCalledWith(
+      'Input.dispatchKeyEvent',
+      {
+        type: 'keyDown',
+        key: 'A',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        nativeVirtualKeyCode: 65,
+        text: 'A',
+        unmodifiedText: 'A',
+      },
+      'session-1'
+    );
   });
 });
 
@@ -273,15 +319,9 @@ describe('fillHandler', () => {
       'Runtime.callFunctionOn',
       expect.objectContaining({ arguments: [{ value: 'secret value' }] })
     );
-    // --submit dispatches Enter keyDown + keyUp.
-    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', {
-      type: 'keyDown',
-      key: 'Enter',
-    });
-    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: 'Enter',
-    });
+    // --submit dispatches Enter with text/keyCode so Chrome submits the form.
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', ENTER_KEY_DOWN);
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', ENTER_KEY_UP);
     expect(state.snapshots.has(TAB)).toBe(false);
   });
 
