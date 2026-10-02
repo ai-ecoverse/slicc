@@ -268,6 +268,14 @@ export class WasiFds {
       .sort((a, b) => a - b);
   }
 
+  /** The descriptors known to be terminals (a `/dev/tty` the program opened), lowest first. */
+  terminals(): number[] {
+    return [...this.table]
+      .filter(([, e]) => e.type === 'kernel' && e.kind === 'tty')
+      .map(([fd]) => fd)
+      .sort((a, b) => a - b);
+  }
+
   /** A kernel descriptor the kernel just made (an accepted connection), at its number. */
   adopt(fd: number, kind: KernelFdKind, nonblock: boolean): void {
     this.table.set(fd, { type: 'kernel', kind, nonblock, append: false });

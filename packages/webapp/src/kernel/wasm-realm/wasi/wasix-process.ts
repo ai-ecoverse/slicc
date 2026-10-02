@@ -91,24 +91,12 @@ export class WasixProcess {
     const { fds } = this.host;
     fds.promoteFiles();
     const map = fds.inheritable();
+    // Slots an action pointed at /dev/null.
+    const nulls = new Set<number>();
     const opened: number[] = [];
     let cwd = this.host.cwd;
     try {
-      for (const op of ops) {
-        if (op.cmd === 'close') map.delete(op.fd);
-        else if (op.cmd === 'dup2') {
-          // A close-on-exec source still dups (dup2 clears the flag on the copy).
-          const src =
-            map.get(op.srcFd) ?? (fds.find(op.srcFd)?.type === 'kernel' ? op.srcFd : undefined);
-          if (src === undefined) throw Object.assign(new Error('EBADF'), { code: 'EBADF' });
-          map.set(op.fd, src);
-        } else if (op.cmd === 'open') {
-          const kfd = this.openFor(op, cwd);
-          opened.push(kfd);
-          map.set(op.fd, kfd);
-        } else if (op.cmd === 'chdir') cwd = resolveFrom(cwd, op.path);
-        else cwd = fds.dir(op.fd).path;
-      }
+      for (const op of ops) cwd = this.applyFdOp(op, { map, nulls, opened }, cwd);
     } catch (e) {
       // The spawn fails: what its earlier opens took goes back.
       for (const kfd of opened) this.host.o.kernel.sys.close(kfd);
@@ -122,6 +110,45 @@ export class WasixProcess {
       .filter(([fd]) => fd > 2)
       .map(([fd, kernel]) => ({ fd, kernel }));
     return { stdio, inherit, cwd, opened };
+  }
+
+  /** One spawn fd operation on the child's slots (fd → kernel fd); the actions' cwd after it. */
+  private applyFdOp(
+    op: SpawnFdOp,
+    slots: { map: Map<number, number>; nulls: Set<number>; opened: number[] },
+    cwd: string
+  ): string {
+    const { map, nulls, opened } = slots;
+    const { fds } = this.host;
+    const point = (fd: number, kfd: number | undefined) => {
+      // undefined: /dev/null, which is no VFS file (a stdio slot without a descriptor is the child's /dev/null).
+      if (kfd === undefined) {
+        map.delete(fd);
+        nulls.add(fd);
+      } else {
+        map.set(fd, kfd);
+        nulls.delete(fd);
+      }
+    };
+    if (op.cmd === 'close') {
+      map.delete(op.fd);
+      nulls.delete(op.fd);
+    } else if (op.cmd === 'dup2' && nulls.has(op.srcFd)) point(op.fd, undefined);
+    else if (op.cmd === 'dup2') {
+      // A close-on-exec source still dups (dup2 clears the flag on the copy).
+      const src =
+        map.get(op.srcFd) ?? (fds.find(op.srcFd)?.type === 'kernel' ? op.srcFd : undefined);
+      if (src === undefined) throw Object.assign(new Error('EBADF'), { code: 'EBADF' });
+      point(op.fd, src);
+    } else if (op.cmd === 'open' && resolveFrom(cwd, op.path) === '/dev/null') {
+      point(op.fd, undefined);
+    } else if (op.cmd === 'open') {
+      const kfd = this.openFor(op, cwd);
+      opened.push(kfd);
+      point(op.fd, kfd);
+    } else if (op.cmd === 'chdir') return resolveFrom(cwd, op.path);
+    else return fds.dir(op.fd).path;
+    return cwd;
   }
 
   /** A spawn's `open` fd operation (relative to the actions' `cwd` so far): a kernel VFS description of its own. */
