@@ -481,13 +481,17 @@ export class WasixHost {
     };
   }
 
-  /** The first of fds 0-2 that is a terminal, if any. */
+  /**
+   * The terminal `tty_get` / `tty_set` mean (they name no fd): the first of
+   * fds 0-2 that is one, else one the program opened itself — gpg, its stdio
+   * piped by git, prompts on `/dev/tty` and turns its echo off there.
+   */
   private ttyFd(): number | undefined {
     for (const fd of [0, 1, 2]) {
       const e = this.host.fds.find(fd);
       if (e?.type === 'kernel' && this.host.fds.kind(fd, e) === 'tty') return fd;
     }
-    return undefined;
+    return this.host.fds.terminals().find((fd) => fd > 2);
   }
 
   /** tty_get: `__wasi_tty_t` (cols, rows, width, height, the stdio ttys, echo, line buffering). */
