@@ -13,7 +13,7 @@
  *                        spawn `fdtest probe` on an inherited socketpair end
  *   fdtest devices       /dev/null and /dev/urandom beyond fd 2, then spawn
  *                        `fdtest readdev` on them
- *   fdtest readdev FD... what a read of 4 bytes from each FD gives
+ *   fdtest readdev FD... per FD: a 4-byte read, fstat, and a write (EBADF on O_RDONLY)
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -194,9 +194,16 @@ static int readdev(int argc, char **argv) {
     int fd = atoi(argv[i]);
     unsigned char buf[4];
     ssize_t n = read(fd, buf, sizeof buf);
-    if (n < 0) printf("fd %d: %s\n", fd, errno == EBADF ? "closed" : strerror(errno));
-    else if (n == 0) printf("fd %d: eof\n", fd);
-    else printf("fd %d: %zd bytes\n", fd, n);
+    if (n < 0) {
+      printf("fd %d: %s\n", fd, errno == EBADF ? "closed" : strerror(errno));
+      continue;
+    }
+    struct stat st;
+    const char *kind = fstat(fd, &st) ? "?" : S_ISCHR(st.st_mode) ? "chr" : "not chr";
+    ssize_t w = write(fd, "x", 1); /* every fd here was opened O_RDONLY */
+    const char *wrote = w < 0 && errno == EBADF ? "write EBADF" : "write ok";
+    if (n == 0) printf("fd %d: eof, %s, %s\n", fd, kind, wrote);
+    else printf("fd %d: %zd bytes, %s, %s\n", fd, n, kind, wrote);
   }
   fflush(stdout);
   return 0;

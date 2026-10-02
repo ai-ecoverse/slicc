@@ -14,7 +14,7 @@
  * call that opens one.
  */
 import type { SyncFsBridgeStat, SyncFsPosixBridge } from '../../realm/sync-fs-xhr-bridge.js';
-import type { KernelFdKind } from '../fd-table.js';
+import type { DeviceMeta, KernelFdKind } from '../fd-table.js';
 import {
   CLOCK,
   E,
@@ -62,7 +62,12 @@ export interface WasiHostOptions {
   /** The VFS, metadata cached (`invalidate` drops it: other processes change files too). */
   fs: SyncFsPosixBridge & { invalidate?(): void };
   /** Kernel fds beyond 0-2 the process starts with, and how the kernel backs them. */
-  inherited?: ReadonlyArray<{ fd: number; kind?: KernelFdKind; flags?: number }>;
+  inherited?: ReadonlyArray<{
+    fd: number;
+    kind?: KernelFdKind;
+    flags?: number;
+    device?: DeviceMeta;
+  }>;
   /**
    * A thread of a threaded process, or a forked child of one: the table is
    * the kernel's, shared through these ids (see `WasiFds.share`).
@@ -118,6 +123,7 @@ function kernelFiletype(kind: string): { filetype: number; seeks: boolean } {
   switch (kind) {
     // wasi-libc's isatty(): a character device without seek / tell rights.
     case 'tty':
+    case 'device':
       return { filetype: FILETYPE.CHARACTER_DEVICE, seeks: false };
     case 'socket':
       return { filetype: FILETYPE.SOCKET_STREAM, seeks: false };
@@ -509,7 +515,10 @@ export class WasiHost {
         throw err;
       }
     }
-    if (e.type === 'device') return data.length;
+    if (e.type === 'device') {
+      if (e.access === 'read') throw new WasiError('EBADF');
+      return data.length;
+    }
     return this.file(fd, 'write').write(data);
   }
 
@@ -519,6 +528,7 @@ export class WasiHost {
       return this.o.kernel.sys.read(fd, Math.min(max, MAX_READ), { nonblock: e.nonblock });
     }
     if (e.type === 'device') {
+      if (e.access === 'write') throw new WasiError('EBADF');
       if (e.device === 'null') return new Uint8Array(0);
       const out = new Uint8Array(Math.min(max, 65536));
       return e.device === 'zero' ? out : crypto.getRandomValues(out);

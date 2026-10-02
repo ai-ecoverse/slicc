@@ -19,9 +19,9 @@
  */
 import {
   bytesSource,
+  type DeviceMeta,
   deviceFile,
   FdTable,
-  type KernelDevice,
   type KernelErrno,
   KernelError,
   nullFile,
@@ -40,12 +40,12 @@ export type ChildStdio =
 /**
  * A program fd beyond 0-2 the child inherits: the parent's kernel descriptor
  * `kernel`, and for a socket its status flags (O_NONBLOCK) — or a device
- * (`/dev/null`, `/dev/zero`, `/dev/urandom`), which the parent holds no kernel
- * descriptor for, as a description of its own.
+ * (`/dev/null`, `/dev/zero`, `/dev/urandom`) the parent holds no kernel
+ * descriptor for, as a description of its own on the side it was opened for.
  */
 export type InheritedSlot =
   | { fd: number; kernel: number; flags?: number }
-  | { fd: number; device: KernelDevice };
+  | ({ fd: number } & DeviceMeta);
 
 export interface ChildSpawnRequest {
   /** The program: a name or a path, as the parent passed it. */
@@ -187,7 +187,7 @@ export class ChildTable {
       for (const slot of inherit) {
         if (slot.fd <= 2) continue;
         if ('device' in slot) {
-          fds.installAt(slot.fd, deviceFile(slot.device));
+          fds.installAt(slot.fd, deviceFile(slot.device, slot.access));
           continue;
         }
         fds.installAt(slot.fd, this.parentFds.get(slot.kernel).retain());

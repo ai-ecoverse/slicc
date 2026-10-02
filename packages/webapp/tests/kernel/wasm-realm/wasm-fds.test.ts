@@ -81,11 +81,13 @@ describe('wasm-realm descriptors (real C programs)', () => {
     );
   }, 30_000);
 
-  it('hands a spawned child /dev/null and /dev/urandom beyond fd 2 as devices, not closed fds', async () => {
+  it('hands a spawned child /dev/null and /dev/urandom beyond fd 2 as character devices, read-only as opened', async () => {
     const run = await runFdtest(['devices']);
     expect(run.stderr).toBe('');
     expect(run.code).toBe(0);
-    expect(run.stdout).toBe('fd 50: eof\nfd 51: 4 bytes\nreaddev exited 0\n');
+    expect(run.stdout).toBe(
+      'fd 50: eof, chr, write EBADF\nfd 51: 4 bytes, chr, write EBADF\nreaddev exited 0\n'
+    );
   }, 30_000);
 
   it('opens /dev/fd/N as a dup of its own fd N', async () => {

@@ -8,7 +8,7 @@
  * blocking round trip over the Atomics/SAB bridge on the same port
  * (`sync-sab-req` / `sync-sab-next`, see `realm/sync-sab-wire.ts`).
  */
-import type { KernelFdKind } from './fd-table.js';
+import type { DeviceMeta, KernelFdKind } from './fd-table.js';
 import type { ImportedMemory } from './wasi/wasi-module.js';
 import type { WasiForkState } from './wasi/wasix-fork.js';
 
@@ -96,6 +96,8 @@ export type ForkStream = KernelStreamEntry | { fd: number; path: string; flags: 
 export interface InheritedFd {
   fd: number;
   kind: KernelFdKind;
+  /** A `device` kind's device and access: the runtime opens it as its own. */
+  device?: DeviceMeta;
   /** A socket's status flags (O_NONBLOCK), which its stream keeps. */
   flags?: number;
   cloexec?: boolean;
