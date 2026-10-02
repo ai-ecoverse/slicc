@@ -662,30 +662,88 @@ function isDestroyedContextError(err: unknown): boolean {
   );
 }
 
-function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number> {
-  const index = new Map<string, number>();
-  for (const n of nodes) {
+function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number[]> {
+  const index = new Map<string, number[]>();
+  const pushNode = (n: CdpPayload): void => {
     const backendNodeId = typeof n['backendDOMNodeId'] === 'number' ? n['backendDOMNodeId'] : null;
-    if (backendNodeId === null) continue;
+    if (backendNodeId === null) return;
     const roleObj = n['role'] as CdpPayload | undefined;
     const nameObj = n['name'] as CdpPayload | undefined;
     const role = typeof roleObj?.['value'] === 'string' ? roleObj['value'].toLowerCase() : '';
     const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
-    if (!role) continue;
+    if (!role) return;
     const key = axIndexKey(role, name);
-    if (!index.has(key)) index.set(key, backendNodeId);
-  }
+    const list = index.get(key);
+    if (list) list.push(backendNodeId);
+    else index.set(key, [backendNodeId]);
+  };
+
+  const ordered = walkAxNodesInHierarchyOrder(nodes);
+  for (const n of ordered) pushNode(n);
   return index;
+}
+
+function walkAxNodesInHierarchyOrder(nodes: Array<CdpPayload>): Array<CdpPayload> {
+  const hasChildIds = nodes.some(
+    (n) => Array.isArray(n['childIds']) && (n['childIds'] as unknown[]).length > 0
+  );
+  if (!hasChildIds) return nodes;
+
+  const byId = new Map<string, CdpPayload>();
+  const childOf = new Set<string>();
+  for (const n of nodes) {
+    const id = n['nodeId'];
+    if (id === undefined || id === null) continue;
+    byId.set(String(id), n);
+    const childIds = n['childIds'];
+    if (Array.isArray(childIds)) {
+      for (const cid of childIds) childOf.add(String(cid));
+    }
+  }
+
+  const ordered: CdpPayload[] = [];
+  const seen = new Set<string>();
+  const visit = (n: CdpPayload): void => {
+    const id = n['nodeId'];
+    const key = id === undefined || id === null ? '' : String(id);
+    if (key) {
+      if (seen.has(key)) return;
+      seen.add(key);
+    }
+    ordered.push(n);
+    const childIds = n['childIds'];
+    if (!Array.isArray(childIds)) return;
+    for (const cid of childIds) {
+      const child = byId.get(String(cid));
+      if (child) visit(child);
+    }
+  };
+
+  for (const n of nodes) {
+    const id = n['nodeId'];
+    if (id === undefined || id === null) continue;
+    if (!childOf.has(String(id))) visit(n);
+  }
+
+  for (const n of nodes) {
+    const id = n['nodeId'];
+    const key = id === undefined || id === null ? '' : String(id);
+    if (!key || !seen.has(key)) ordered.push(n);
+  }
+  return ordered;
 }
 
 function axIndexKey(role: string, name: string): string {
   return `${role.toLowerCase()}|${name.replace(/\s+/g, ' ').trim()}`;
 }
 
-function annotateTreeWithBackendNodeIds(node: AccessibilityNode, index: Map<string, number>): void {
+function annotateTreeWithBackendNodeIds(
+  node: AccessibilityNode,
+  index: Map<string, number[]>
+): void {
   const key = axIndexKey(node.role, node.name);
-  const id = index.get(key);
-  if (id !== undefined) node.backendNodeId = id;
+  const list = index.get(key);
+  if (list && list.length > 0) node.backendNodeId = list.shift();
   if (node.children) {
     for (const child of node.children) annotateTreeWithBackendNodeIds(child, index);
   }

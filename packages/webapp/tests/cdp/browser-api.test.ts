@@ -1551,6 +1551,106 @@ describe('BrowserAPI', () => {
       expect(tree.children![0].backendNodeId).toBe(2719);
       expect(tree.children![1].backendNodeId).toBe(2800);
     });
+
+    it('joins same-named elements to distinct backendNodeIds in document order', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({
+          result: {
+            type: 'object',
+            value: {
+              role: 'RootWebArea',
+              name: 'Drug Wars',
+              children: [
+                { role: 'button', name: 'BUY' },
+                { role: 'button', name: 'BUY' },
+                { role: 'button', name: 'BUY' },
+              ],
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          nodes: [
+            {
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 101,
+            },
+            {
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 102,
+            },
+            {
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 103,
+            },
+          ],
+        });
+
+      const tree = await page.getAccessibilityTree();
+      expect(tree.children!.map((c) => c.backendNodeId)).toEqual([101, 102, 103]);
+    });
+
+    it('joins same-named nodes in aria-owns AX hierarchy order, not flat DOM order', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({
+          result: {
+            type: 'object',
+            value: {
+              role: 'RootWebArea',
+              name: 'Owns',
+              children: [
+                {
+                  role: 'group',
+                  name: 'Owner',
+                  children: [
+                    { role: 'button', name: 'BUY' },
+                    { role: 'button', name: 'BUY' },
+                  ],
+                },
+              ],
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          nodes: [
+            {
+              nodeId: '1',
+              role: { value: 'RootWebArea' },
+              name: { value: 'Owns' },
+              childIds: ['2'],
+            },
+            {
+              nodeId: '2',
+              role: { value: 'group' },
+              name: { value: 'Owner' },
+              childIds: ['4', '3'],
+              backendDOMNodeId: 90,
+            },
+            {
+              nodeId: '3',
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 101,
+              childIds: [],
+            },
+            {
+              nodeId: '4',
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 102,
+              childIds: [],
+            },
+          ],
+        });
+
+      const tree = await page.getAccessibilityTree();
+      const buys = tree.children![0].children!;
+      expect(buys.map((c) => c.backendNodeId)).toEqual([102, 101]);
+    });
   });
 
   describe('viewport override persistence', () => {

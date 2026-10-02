@@ -175,6 +175,59 @@ describe('snapshot --boxes', () => {
     expect(transportSend).toHaveBeenCalledWith('DOM.resolveNode', { backendNodeId: 102 });
   });
 
+  it('annotates three same-named buttons with distinct boxes', async () => {
+    const buySnapshot = [
+      'Page URL: https://x',
+      'Page Title: Drug Wars',
+      '',
+      '- rootwebarea "Drug Wars"',
+      '  - button "BUY" [ref=e1]',
+      '  - button "BUY" [ref=e2]',
+      '  - button "BUY" [ref=e3]',
+    ].join('\n');
+    vi.mocked(takeSnapshot).mockResolvedValue({
+      snapshot: {
+        url: 'https://x',
+        title: 'Drug Wars',
+        content: buySnapshot,
+        timestamp: 0,
+        refToSelector: new Map(),
+        refToBackendNodeId: new Map([
+          ['e1', 101],
+          ['e2', 102],
+          ['e3', 103],
+        ]),
+        refToFrameId: new Map(),
+      },
+      output: buySnapshot,
+    });
+    const rects: Record<number, number[]> = {
+      101: [924, 212, 45, 32],
+      102: [924, 263, 45, 32],
+      103: [924, 314, 45, 32],
+    };
+    let resolvedBackendId = 0;
+    const { browser } = makeBrowser({
+      transportSend: (method, params) => {
+        if (method === 'DOM.resolveNode') {
+          resolvedBackendId = params?.['backendNodeId'] as number;
+          return { object: { objectId: `obj-${resolvedBackendId}` } };
+        }
+        if (method === 'Runtime.callFunctionOn') {
+          return { result: { value: rects[resolvedBackendId] } };
+        }
+        return {};
+      },
+    });
+    const result = await snapshotHandler(
+      createHandlerCtx({ browser, flags: { tab: TAB, boxes: 'true' } })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('[ref=e1] [box=924,212,45,32]');
+    expect(result.stdout).toContain('[ref=e2] [box=924,263,45,32]');
+    expect(result.stdout).toContain('[ref=e3] [box=924,314,45,32]');
+  });
+
   it('rejects --boxes with --frame', async () => {
     mockTakeSnapshot();
     const { browser } = makeBrowser();
