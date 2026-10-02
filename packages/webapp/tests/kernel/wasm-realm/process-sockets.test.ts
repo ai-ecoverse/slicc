@@ -248,7 +248,7 @@ describe('createSocketKernel', () => {
       fd: 9,
       kernel: 9,
       kind: 'socket',
-      flags: slots[0]!.flags,
+      flags: 'flags' in slots[0]! ? slots[0].flags : undefined,
     });
     expect(child.fd).toBe(9);
     expect(child.sliccKernelSocket).toBe(true);

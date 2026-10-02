@@ -75,23 +75,12 @@ export class WasixProcess {
     const { fds } = this.host;
     fds.promoteFiles();
     const map = fds.inheritable();
+
+    const nulls = new Set<number>();
     const opened: number[] = [];
     let cwd = this.host.cwd;
     try {
-      for (const op of ops) {
-        if (op.cmd === 'close') map.delete(op.fd);
-        else if (op.cmd === 'dup2') {
-          const src =
-            map.get(op.srcFd) ?? (fds.find(op.srcFd)?.type === 'kernel' ? op.srcFd : undefined);
-          if (src === undefined) throw Object.assign(new Error('EBADF'), { code: 'EBADF' });
-          map.set(op.fd, src);
-        } else if (op.cmd === 'open') {
-          const kfd = this.openFor(op, cwd);
-          opened.push(kfd);
-          map.set(op.fd, kfd);
-        } else if (op.cmd === 'chdir') cwd = resolveFrom(cwd, op.path);
-        else cwd = fds.dir(op.fd).path;
-      }
+      for (const op of ops) cwd = this.applyFdOp(op, { map, nulls, opened }, cwd);
     } catch (e) {
       for (const kfd of opened) this.host.o.kernel.sys.close(kfd);
       throw e;
@@ -100,10 +89,47 @@ export class WasixProcess {
       const k = map.get(fd);
       return k === undefined ? { none: true } : { fd: k };
     });
-    const inherit: InheritedSlot[] = [...map]
-      .filter(([fd]) => fd > 2)
-      .map(([fd, kernel]) => ({ fd, kernel }));
+    const inherit: InheritedSlot[] = [
+      ...[...map].filter(([fd]) => fd > 2).map(([fd, kernel]) => ({ fd, kernel })),
+      ...[...nulls].filter((fd) => fd > 2).map((fd) => ({ fd, null: true as const })),
+    ];
     return { stdio, inherit, cwd, opened };
+  }
+
+  private applyFdOp(
+    op: SpawnFdOp,
+    slots: { map: Map<number, number>; nulls: Set<number>; opened: number[] },
+    cwd: string
+  ): string {
+    const { map, nulls, opened } = slots;
+    const { fds } = this.host;
+    const point = (fd: number, kfd: number | undefined) => {
+      if (kfd === undefined) {
+        map.delete(fd);
+        nulls.add(fd);
+      } else {
+        map.set(fd, kfd);
+        nulls.delete(fd);
+      }
+    };
+    if (op.cmd === 'close') {
+      map.delete(op.fd);
+      nulls.delete(op.fd);
+    } else if (op.cmd === 'dup2' && nulls.has(op.srcFd)) point(op.fd, undefined);
+    else if (op.cmd === 'dup2') {
+      const src =
+        map.get(op.srcFd) ?? (fds.find(op.srcFd)?.type === 'kernel' ? op.srcFd : undefined);
+      if (src === undefined) throw Object.assign(new Error('EBADF'), { code: 'EBADF' });
+      point(op.fd, src);
+    } else if (op.cmd === 'open' && resolveFrom(cwd, op.path) === '/dev/null') {
+      point(op.fd, undefined);
+    } else if (op.cmd === 'open') {
+      const kfd = this.openFor(op, cwd);
+      opened.push(kfd);
+      point(op.fd, kfd);
+    } else if (op.cmd === 'chdir') return resolveFrom(cwd, op.path);
+    else return fds.dir(op.fd).path;
+    return cwd;
   }
 
   private openFor(op: SpawnFdOp, cwd: string): number {

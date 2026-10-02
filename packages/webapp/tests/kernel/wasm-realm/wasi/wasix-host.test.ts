@@ -245,6 +245,32 @@ describe('WASIX: spawn fd operations', () => {
     expect(t.kernel.opened).toHaveLength(2);
   });
 
+  it('an open of /dev/null (no VFS file) gives the slot a null descriptor; a dup2 of it too', () => {
+    const t = setup();
+    spawn(
+      t,
+      ops(t, [
+        [OPEN, 0, 0, '/dev/null'],
+        [OPEN, 1, 0, '/dev/null', 1],
+        [DUP2, 2, 1],
+      ]),
+      3
+    );
+    expect(t.kernel.opened).toEqual([]);
+    expect(t.kernel.calls.find((c) => c.op === 'proc-spawn')).toMatchObject({
+      stdio: [{ none: true }, { none: true }, { none: true }],
+    });
+  });
+
+  it('a /dev/null open beyond stdio is inherited as a null slot, not dropped', () => {
+    const t = setup();
+    spawn(t, ops(t, [[OPEN, 5, 0, '/dev/null']]), 1);
+    expect(t.kernel.opened).toEqual([]);
+    expect(t.kernel.calls.find((c) => c.op === 'proc-spawn')).toMatchObject({
+      inherit: [{ fd: 5, null: true }],
+    });
+  });
+
   it("drops its metadata cache after a spawn and a child's end (the child changes the VFS)", () => {
     const t = setup();
     const invalidate = vi.fn();
@@ -284,6 +310,32 @@ describe('WASIX: dup2 onto a free number', () => {
     expect(t.kernel.out(1)).toBe('via ten\n');
     expect(t.preview1.fd_close(1)).toBe(E.SUCCESS);
     expect(t.write(10, 'still\n')).toBe(E.SUCCESS);
+  });
+});
+
+describe('WASIX: tty_get / tty_set', () => {
+  it("without a terminal on 0-2, they mean one the program opened (gpg's /dev/tty under git)", () => {
+    const t = setup();
+    t.kernel.tty = true;
+    const ECHO = 0o10;
+    const ICANON = 0o2;
+    let termios = { c_iflag: 0, c_oflag: 0, c_cflag: 0, c_lflag: ECHO | ICANON, c_cc: [] };
+    const set: Array<[number, number]> = [];
+    Object.assign(t.kernel.sys, {
+      tcgets: () => termios,
+      tcsets: (fd: number, next: typeof termios) => {
+        set.push([fd, next.c_lflag]);
+        termios = next;
+      },
+      winsize: () => [24, 80],
+    });
+    const tty = t.open('/dev/tty');
+    const at = t.g.alloc(24);
+    expect(t.x.tty_get(at)).toBe(E.SUCCESS);
+    expect(t.g.view.getUint8(at + 19)).toBe(1);
+    t.g.view.setUint8(at + 19, 0);
+    expect(t.x.tty_set(at)).toBe(E.SUCCESS);
+    expect(set).toEqual([[tty, ICANON]]);
   });
 });
 

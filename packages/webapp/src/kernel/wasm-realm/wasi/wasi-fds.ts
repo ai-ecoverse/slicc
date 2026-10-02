@@ -213,6 +213,17 @@ export class WasiFds {
       .sort((a, b) => a - b);
   }
 
+  terminals(): number[] {
+    const fds = this.shared
+      ? (this.kernel.call({ op: 'fd-list' }) as Array<FdInfo & { fd: number }>)
+          .filter((info) => info.tty)
+          .map((info) => info.fd)
+      : [...this.table]
+          .filter(([, e]) => e.type === 'kernel' && e.kind === 'tty')
+          .map(([fd]) => fd);
+    return fds.sort((a, b) => a - b);
+  }
+
   adopt(fd: number, kind: KernelFdKind, nonblock: boolean): void {
     this.table.set(fd, { type: 'kernel', kind, nonblock, append: false });
     if (this.shared && nonblock) this.publishFlags(fd, { nonblock, append: false });

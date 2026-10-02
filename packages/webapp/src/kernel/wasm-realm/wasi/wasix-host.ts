@@ -436,7 +436,7 @@ export class WasixHost {
       const e = this.host.fds.find(fd);
       if (e?.type === 'kernel' && this.host.fds.kind(fd, e) === 'tty') return fd;
     }
-    return undefined;
+    return this.host.fds.terminals().find((fd) => fd > 2);
   }
 
   private ttyGet(ptr: number): void {
