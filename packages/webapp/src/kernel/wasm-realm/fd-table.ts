@@ -79,7 +79,16 @@ export interface KernelFile {
   heldMeta?: HeldMeta;
 }
 
-export type HeldMeta = { dir: string; preopen?: string } | { device: 'null' | 'zero' | 'urandom' };
+export type HeldMeta = { dir: string; preopen?: string } | DeviceMeta;
+
+export interface DeviceMeta {
+  device: KernelDevice;
+  access?: DeviceAccess;
+}
+
+export type DeviceAccess = 'read' | 'write';
+
+export type KernelDevice = 'null' | 'zero' | 'urandom';
 
 export function pollFile(file: KernelFile): PollState {
   return file.poll?.() ?? { readable: !!file.read, writable: !!file.write, hangup: false };
@@ -165,14 +174,35 @@ export function nullFile(): OpenFile {
   });
 }
 
+export function deviceFile(device: KernelDevice, access?: DeviceAccess): OpenFile {
+  const read = async (max: number): Promise<Uint8Array> => {
+    if (device === 'null') return new Uint8Array(0);
+    const out = new Uint8Array(max);
+    if (device === 'urandom') {
+      for (let at = 0; at < max; at += 65536) {
+        crypto.getRandomValues(out.subarray(at, Math.min(max, at + 65536)));
+      }
+    }
+    return out;
+  };
+  return new OpenFile({
+    ...(access !== 'write' ? { read } : {}),
+    ...(access !== 'read' ? { write: async (bytes: Uint8Array) => bytes.length } : {}),
+    seek: async () => 0,
+    heldMeta: { device, ...(access ? { access } : {}) },
+    close: () => {},
+  });
+}
+
 export function heldFile(meta?: HeldMeta): OpenFile {
   return new OpenFile({ held: true, ...(meta ? { heldMeta: meta } : {}), close: () => {} });
 }
 
-export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket' | 'held';
+export type KernelFdKind = 'tty' | 'stream' | 'file' | 'socket' | 'held' | 'device';
 
 export function kernelFdKind(file: KernelFile): Exclude<KernelFdKind, 'socket'> {
   if (file.held) return 'held';
+  if (file.heldMeta && 'device' in file.heldMeta) return 'device';
   if (file.tty) return 'tty';
   return file.seek ? 'file' : 'stream';
 }

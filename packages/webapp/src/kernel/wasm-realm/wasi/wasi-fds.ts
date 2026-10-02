@@ -1,5 +1,5 @@
 import type { SyncFsBridgeStat, SyncFsPosixBridge } from '../../realm/sync-fs-xhr-bridge.js';
-import type { HeldMeta, KernelFdKind } from '../fd-table.js';
+import type { DeviceAccess, DeviceMeta, HeldMeta, KernelFdKind } from '../fd-table.js';
 import type { ProcessSys } from '../kernel-streams.js';
 import type { FdInfo, WasmSyscall } from '../process.js';
 import { FDFLAGS, OFLAGS, RIGHTS } from './wasi-abi.js';
@@ -30,7 +30,7 @@ const O_APPEND = 0o2000;
 export type WasiForkFd =
   | { fd: number; type: 'kernel'; nonblock: boolean; append: boolean }
   | { fd: number; type: 'dir'; path: string; preopen?: string }
-  | { fd: number; type: 'device'; device: 'null' | 'zero' | 'urandom' };
+  | { fd: number; type: 'device'; device: 'null' | 'zero' | 'urandom'; access?: DeviceAccess };
 
 const DEVICES: Readonly<Record<string, Device>> = {
   '/dev/null': 'null',
@@ -65,16 +65,25 @@ export class WasiFds {
 
   setup(
     cwd: string,
-    inherited: ReadonlyArray<{ fd: number; kind?: KernelFdKind; flags?: number }>
+    inherited: ReadonlyArray<{
+      fd: number;
+      kind?: KernelFdKind;
+      flags?: number;
+      device?: DeviceMeta;
+    }>
   ): void {
     for (const fd of [0, 1, 2]) this.table.set(fd, kernelEntry());
     const preopens = this.preopens(cwd);
     const top = 3 + preopens.length;
-    for (const { fd, kind, flags } of inherited) {
+    for (const { fd, kind, flags, device } of inherited) {
       let at = fd;
       if (fd < top) {
         at = this.kernel.call({ op: 'fd-dup', fd, min: top }) as number;
         this.kernel.sys.close(fd);
+      }
+      if (device) {
+        this.table.set(at, deviceEntry(device));
+        continue;
       }
 
       const nonblock = ((flags ?? 0) & O_NONBLOCK) !== 0;
@@ -336,7 +345,7 @@ export class WasiFds {
         out.push({ fd, type: 'kernel', nonblock: e.nonblock, append: e.append });
       else if (e.type === 'dir')
         out.push({ fd, type: 'dir', path: e.path, ...(e.preopen ? { preopen: e.preopen } : {}) });
-      else if (e.type === 'device') out.push({ fd, type: 'device', device: e.device });
+      else if (e.type === 'device') out.push({ fd, ...deviceEntry(e) });
     }
     return out;
   }
@@ -352,7 +361,7 @@ export class WasiFds {
           path: f.path,
           ...(f.preopen ? { preopen: f.preopen } : {}),
         });
-      else this.table.set(f.fd, { type: 'device', device: f.device });
+      else this.table.set(f.fd, deviceEntry(f));
     }
     for (const fd of cloexec) this.cloexec.add(fd);
   }
@@ -565,9 +574,13 @@ function kernelEntry(): Extract<WasiEntry, { type: 'kernel' }> {
 
 const GEN = 2;
 
+function deviceEntry(meta: DeviceMeta): Extract<WasiEntry, { type: 'device' }> {
+  return { type: 'device', device: meta.device, ...(meta.access ? { access: meta.access } : {}) };
+}
+
 function metaOf(e: WasiEntry): HeldMeta | undefined {
   if (e.type === 'dir') return { dir: e.path, ...(e.preopen ? { preopen: e.preopen } : {}) };
-  if (e.type === 'device') return { device: e.device };
+  if (e.type === 'device') return { device: e.device, ...(e.access ? { access: e.access } : {}) };
   return undefined;
 }
 
@@ -579,7 +592,7 @@ function entryOf(info: FdInfo): WasiEntry | undefined {
       ...(info.meta.preopen ? { preopen: info.meta.preopen } : {}),
     };
   }
-  if (info.meta && 'device' in info.meta) return { type: 'device', device: info.meta.device };
+  if (info.meta && 'device' in info.meta) return deviceEntry(info.meta);
   if (info.kind === 'held') return undefined;
   return {
     type: 'kernel',

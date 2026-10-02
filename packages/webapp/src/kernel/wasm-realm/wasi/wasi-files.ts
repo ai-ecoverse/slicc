@@ -1,5 +1,5 @@
 import type { SyncFsBridgeStat, SyncFsPosixBridge } from '../../realm/sync-fs-xhr-bridge.js';
-import type { KernelFdKind } from '../fd-table.js';
+import type { DeviceAccess, KernelFdKind } from '../fd-table.js';
 
 export class WasiError extends Error {
   constructor(readonly code: string) {
@@ -164,7 +164,12 @@ export type WasiEntry =
       preopen?: string;
       listing?: DirListing;
     }
-  | { type: 'device'; device: 'null' | 'zero' | 'urandom' };
+  | {
+      type: 'device';
+      device: 'null' | 'zero' | 'urandom';
+
+      access?: DeviceAccess;
+    };
 
 export function normalize(path: string): string {
   const out: string[] = [];

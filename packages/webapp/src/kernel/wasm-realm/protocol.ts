@@ -1,4 +1,4 @@
-import type { KernelFdKind } from './fd-table.js';
+import type { DeviceMeta, KernelFdKind } from './fd-table.js';
 import type { ImportedMemory } from './wasi/wasi-module.js';
 import type { WasiForkState } from './wasi/wasix-fork.js';
 
@@ -57,6 +57,8 @@ export type ForkStream = KernelStreamEntry | { fd: number; path: string; flags: 
 export interface InheritedFd {
   fd: number;
   kind: KernelFdKind;
+
+  device?: DeviceMeta;
 
   flags?: number;
   cloexec?: boolean;

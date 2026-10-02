@@ -1,9 +1,11 @@
 import type { InheritedSlot } from './children.js';
+import type { DeviceAccess, KernelDevice } from './fd-table.js';
 import type { KernelStreams, ProcessFs, ProcessStream, ProcessSys } from './kernel-streams.js';
 import { closesOnExec, O_CLOEXEC, setCloseOnExec } from './process-fds.js';
 import type { ForkStream, KernelStreamEntry } from './protocol.js';
 
 const O_RDWR = 0o2;
+const O_ACCMODE = 0o3;
 const O_CREAT = 0o100;
 const O_EXCL = 0o200;
 const O_TRUNC = 0o1000;
@@ -80,6 +82,15 @@ function kernelEntry(stream: ProcessStream, kernel: number): ForkStream {
   return { fd: stream.fd, kernel, kind, ...cloexec };
 }
 
+const ACCESS: Readonly<Record<number, DeviceAccess>> = { 0: 'read', 1: 'write' };
+
+const DEVICES: Readonly<Record<string, KernelDevice>> = {
+  '/dev/null': 'null',
+  '/dev/zero': 'zero',
+  '/dev/urandom': 'urandom',
+  '/dev/random': 'urandom',
+};
+
 export function describeInherited(
   Fs: ProcessFs,
   sys: ProcessSys,
@@ -105,11 +116,21 @@ export function describeInherited(
   const out: InheritedSlot[] = [];
   for (const [fd, stream] of slots) {
     promote(stream);
-    if (stream.sliccKernelFd === undefined) continue;
-    const flags = stream.sliccKernelSocket ? { flags: stream.flags } : {};
-    out.push({ fd, kernel: stream.sliccKernelFd, ...flags });
+    const slot = inheritedSlot(fd, stream);
+    if (slot) out.push(slot);
   }
   return out;
+}
+
+function inheritedSlot(fd: number, stream: ProcessStream): InheritedSlot | undefined {
+  if (stream.sliccKernelFd === undefined) {
+    const device = stream.path === undefined ? undefined : DEVICES[stream.path];
+    if (!device) return undefined;
+    const access = ACCESS[stream.flags & O_ACCMODE];
+    return { fd, device, ...(access ? { access } : {}) };
+  }
+  const flags = stream.sliccKernelSocket ? { flags: stream.flags } : {};
+  return { fd, kernel: stream.sliccKernelFd, ...flags };
 }
 
 function place(Fs: ProcessFs, stream: ProcessStream, fd: number): ProcessStream {

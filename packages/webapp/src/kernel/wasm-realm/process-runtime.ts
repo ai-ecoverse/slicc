@@ -9,7 +9,7 @@ import {
   type SyncSabTransport,
 } from '../realm/sync-sab-bridge.js';
 import { SAB_HEADER_I32, type SyncSabRequestBody } from '../realm/sync-sab-wire.js';
-import type { PollState } from './fd-table.js';
+import type { DeviceMeta, PollState } from './fd-table.js';
 import {
   KernelStreams,
   type ProcessFs,
@@ -160,7 +160,32 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys & PtyKernel {
 }
 
 export function wireKernelFd(Fs: ProcessFs, streams: KernelStreams, entry: InheritedFd): void {
-  placeKernelStream(Fs, streams, { ...entry, kernel: entry.fd });
+  if (entry.device && openDevice(Fs, entry.fd, entry.device)) return;
+
+  placeKernelStream(Fs, streams, {
+    ...entry,
+    kind: entry.device ? 'stream' : entry.kind,
+    kernel: entry.fd,
+  });
+}
+
+const O_RDONLY = 0;
+const O_WRONLY = 1;
+const O_RDWR = 2;
+
+function openDevice(Fs: ProcessFs, fd: number, meta: DeviceMeta): boolean {
+  const flags = meta.access === 'read' ? O_RDONLY : meta.access === 'write' ? O_WRONLY : O_RDWR;
+  let stream: ProcessStream;
+  try {
+    stream = Fs.open(`/dev/${meta.device}`, flags);
+  } catch {
+    return false;
+  }
+  if (stream.fd !== fd) {
+    Fs.dupStream(stream, fd);
+    Fs.closeStream(stream.fd);
+  }
+  return true;
 }
 
 export function wireKernelStdio(Fs: ProcessFs, streams: KernelStreams): void {

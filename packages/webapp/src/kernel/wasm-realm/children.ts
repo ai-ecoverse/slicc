@@ -1,5 +1,7 @@
 import {
   bytesSource,
+  type DeviceMeta,
+  deviceFile,
   FdTable,
   type KernelErrno,
   KernelError,
@@ -17,7 +19,7 @@ export type ChildStdio =
 
 export type InheritedSlot =
   | { fd: number; kernel: number; flags?: number }
-  | { fd: number; null: true };
+  | ({ fd: number } & DeviceMeta);
 
 export interface ChildSpawnRequest {
   file: string;
@@ -139,8 +141,8 @@ export class ChildTable {
 
       for (const slot of inherit) {
         if (slot.fd <= 2) continue;
-        if ('null' in slot) {
-          fds.installAt(slot.fd, nullFile());
+        if ('device' in slot) {
+          fds.installAt(slot.fd, deviceFile(slot.device, slot.access));
           continue;
         }
         fds.installAt(slot.fd, this.parentFds.get(slot.kernel).retain());

@@ -267,7 +267,7 @@ describe('WASIX: spawn fd operations', () => {
     spawn(t, ops(t, [[OPEN, 5, 0, '/dev/null']]), 1);
     expect(t.kernel.opened).toEqual([]);
     expect(t.kernel.calls.find((c) => c.op === 'proc-spawn')).toMatchObject({
-      inherit: [{ fd: 5, null: true }],
+      inherit: [{ fd: 5, device: 'null' }],
     });
   });
 

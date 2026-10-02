@@ -81,6 +81,38 @@ function setup(
   return { kernel, fs, host, g, call, open, write, read, path };
 }
 
+describe('WasiHost: an inherited device', () => {
+  it('is a character device on the side it was opened for (a write to O_RDONLY is EBADF)', () => {
+    const kernel = new FakeKernel();
+    kernel.add(40, 'stream');
+    const host = new WasiHost({
+      args: ['prog'],
+      env: {},
+      cwd: '/workspace',
+      pid: 9,
+      kernel,
+      fs: new FakeFs().dir('/workspace'),
+      inherited: [{ fd: 40, kind: 'device', device: { device: 'urandom', access: 'read' } }],
+    });
+    const g = new Guest();
+    host.mem.bind(g.memory);
+    const imports = host.imports() as Record<string, (...a: Array<number | bigint>) => number>;
+    const stat = g.alloc(SIZE.FILESTAT);
+    expect(imports.fd_filestat_get(40, stat)).toBe(E.SUCCESS);
+    expect(g.view.getUint8(stat + 16)).toBe(FILETYPE.CHARACTER_DEVICE);
+    const fdstat = g.alloc(24);
+    expect(imports.fd_fdstat_get(40, fdstat)).toBe(E.SUCCESS);
+    expect(g.view.getUint8(fdstat)).toBe(FILETYPE.CHARACTER_DEVICE);
+    const [iov, n] = g.iov(8);
+    const out = g.alloc(4);
+    expect(imports.fd_read(40, iov, n, out)).toBe(E.SUCCESS);
+    expect(g.u32(out)).toBe(8);
+    const [wiov, wn] = g.iov('x');
+    expect(imports.fd_write(40, wiov, wn, g.alloc(4))).toBe(E.BADF);
+    expect(kernel.calls.filter((c) => c.op === 'fd-read' || c.op === 'fd-write')).toEqual([]);
+  });
+});
+
 describe('WasiHost: preopens and start-up', () => {
   it('fd 3 is `.` (the cwd), then /dev and each top-level directory; EBADF after them', () => {
     const { call, g } = setup();

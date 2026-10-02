@@ -14,6 +14,7 @@ import {
 } from '../../../src/kernel/realm/sync-sab-wire.js';
 import {
   bytesSource,
+  deviceFile,
   FdTable,
   heldFile,
   nullFile,
@@ -337,5 +338,15 @@ describe('inheritedFds', () => {
     fds.installAt(3, heldFile());
     fds.installAt(4, nullFile());
     expect(inheritedFds(fds).map((f) => f.fd)).toEqual([4]);
+  });
+
+  it('names a device and its access, so the runtime opens it as its own (a character device)', () => {
+    const fds = new FdTable();
+    fds.installAt(5, deviceFile('urandom', 'read'));
+    fds.installAt(6, deviceFile('null'));
+    expect(inheritedFds(fds)).toEqual([
+      { fd: 5, kind: 'device', device: { device: 'urandom', access: 'read' } },
+      { fd: 6, kind: 'device', device: { device: 'null' } },
+    ]);
   });
 });

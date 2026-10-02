@@ -11,6 +11,9 @@
  *   fdtest devfd         /dev/fd/N, /proc/self/fd/N and /dev/stdout in one process
  *   fdtest sockets       SOCK_CLOEXEC on socket, socketpair and accept4, then
  *                        spawn `fdtest probe` on an inherited socketpair end
+ *   fdtest devices       /dev/null and /dev/urandom beyond fd 2, then spawn
+ *                        `fdtest readdev` on them
+ *   fdtest readdev FD... per FD: a 4-byte read, fstat, and a write (EBADF on O_RDONLY)
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -186,11 +189,51 @@ static int sockets(void) {
   return spawn_probe(NULL, probe, 4);
 }
 
+static int readdev(int argc, char **argv) {
+  for (int i = 0; i < argc; i++) {
+    int fd = atoi(argv[i]);
+    unsigned char buf[4];
+    ssize_t n = read(fd, buf, sizeof buf);
+    if (n < 0) {
+      printf("fd %d: %s\n", fd, errno == EBADF ? "closed" : strerror(errno));
+      continue;
+    }
+    struct stat st;
+    const char *kind = fstat(fd, &st) ? "?" : S_ISCHR(st.st_mode) ? "chr" : "not chr";
+    ssize_t w = write(fd, "x", 1); /* every fd here was opened O_RDONLY */
+    const char *wrote = w < 0 && errno == EBADF ? "write EBADF" : "write ok";
+    if (n == 0) printf("fd %d: eof, %s, %s\n", fd, kind, wrote);
+    else printf("fd %d: %zd bytes, %s, %s\n", fd, n, kind, wrote);
+  }
+  fflush(stdout);
+  return 0;
+}
+
+static int devices(void) {
+  int null_fd = open("/dev/null", O_RDONLY);
+  int random_fd = open("/dev/urandom", O_RDONLY);
+  if (null_fd < 0 || random_fd < 0) return fail("open");
+  if (dup2(null_fd, 50) != 50 || dup2(random_fd, 51) != 51) return fail("dup2");
+  char *argv[] = {"fdtest", "readdev", "50", "51", NULL};
+  pid_t pid;
+  int err = posix_spawn(&pid, "fdtest", NULL, NULL, argv, environ);
+  if (err) {
+    errno = err;
+    return fail("posix_spawn");
+  }
+  int status = 0;
+  if (waitpid(pid, &status, 0) != pid) return fail("waitpid");
+  printf("readdev exited %d\n", WEXITSTATUS(status));
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc >= 2 && !strcmp(argv[1], "inherit")) return inherit();
   if (argc >= 3 && !strcmp(argv[1], "probe")) return probe(argc - 2, argv + 2);
   if (argc >= 2 && !strcmp(argv[1], "devfd")) return devfd();
   if (argc >= 2 && !strcmp(argv[1], "sockets")) return sockets();
-  fprintf(stderr, "usage: fdtest inherit | probe FD... | devfd | sockets\n");
+  if (argc >= 2 && !strcmp(argv[1], "devices")) return devices();
+  if (argc >= 3 && !strcmp(argv[1], "readdev")) return readdev(argc - 2, argv + 2);
+  fprintf(stderr, "usage: fdtest inherit | probe FD... | devfd | sockets | devices\n");
   return 2;
 }

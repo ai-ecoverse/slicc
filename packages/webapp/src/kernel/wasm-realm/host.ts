@@ -117,9 +117,11 @@ export function inheritedFds(fds: FdTable): InheritedFd[] {
       const open = fds.get(fd);
       const flags = fds.statusFlags(fd);
       const kind = open.file instanceof KernelSocket ? 'socket' : kernelFdKind(open.file);
+      const meta = open.file.heldMeta;
       return {
         fd,
         kind,
+        ...(kind === 'device' && meta && 'device' in meta ? { device: meta } : {}),
         ...(flags !== undefined ? { flags } : {}),
         ...(fds.closesOnExec(fd) ? { cloexec: true } : {}),
         ...(kind === 'stream' ? { desc: descId(open) } : {}),
