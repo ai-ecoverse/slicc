@@ -804,7 +804,8 @@ export class TabHandle {
     // Annotate the tree with backendNodeId values from the CDP Accessibility
     // domain. The injected script runs in page context and cannot access CDP
     // backendNodeIds, so we fetch them separately and match by role+name in
-    // document order (nth duplicate gets the nth AX id).
+    // shared AX hierarchy order (nth duplicate, after aria-owns reparenting,
+    // gets the nth AX id).
     try {
       const axResult = await this.send('Accessibility.getFullAXTree');
       const nodes = axResult['nodes'] as Array<CdpPayload> | undefined;
@@ -962,30 +963,88 @@ function isDestroyedContextError(err: unknown): boolean {
 }
 
 /**
- * Build a lookup map from (role, name) → backendDOMNodeId[] from the flat
- * CDP Accessibility.getFullAXTree node list.
+ * Build a lookup map from (role, name) → backendDOMNodeId[] from CDP
+ * Accessibility.getFullAXTree nodes.
  *
  * Keys are `${role}|${name}`. Duplicate role+name pairs (e.g. several "BUY"
- * buttons) keep every id in AX-tree order so
- * {@link annotateTreeWithBackendNodeIds} can pair the nth ARIA node with the
- * nth AX node — both walks are document order.
+ * buttons) keep every id in AX hierarchy order (DFS over `childIds`, which
+ * reflects aria-owns reparenting) so {@link annotateTreeWithBackendNodeIds}
+ * can pair the nth ARIA node with the nth AX node. Falls back to the flat
+ * payload order when `childIds` are absent (tests / older engines).
  */
 function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number[]> {
   const index = new Map<string, number[]>();
-  for (const n of nodes) {
+  const pushNode = (n: CdpPayload): void => {
     const backendNodeId = typeof n['backendDOMNodeId'] === 'number' ? n['backendDOMNodeId'] : null;
-    if (backendNodeId === null) continue;
+    if (backendNodeId === null) return;
     const roleObj = n['role'] as CdpPayload | undefined;
     const nameObj = n['name'] as CdpPayload | undefined;
     const role = typeof roleObj?.['value'] === 'string' ? roleObj['value'].toLowerCase() : '';
     const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
-    if (!role) continue;
+    if (!role) return;
     const key = axIndexKey(role, name);
     const list = index.get(key);
     if (list) list.push(backendNodeId);
     else index.set(key, [backendNodeId]);
-  }
+  };
+
+  const ordered = walkAxNodesInHierarchyOrder(nodes);
+  for (const n of ordered) pushNode(n);
   return index;
+}
+
+/**
+ * Pre-order walk following each node's `childIds` — Chrome's AX hierarchy,
+ * including aria-owns reparenting. Flat payload order can differ.
+ */
+function walkAxNodesInHierarchyOrder(nodes: Array<CdpPayload>): Array<CdpPayload> {
+  const hasChildIds = nodes.some(
+    (n) => Array.isArray(n['childIds']) && (n['childIds'] as unknown[]).length > 0
+  );
+  if (!hasChildIds) return nodes;
+
+  const byId = new Map<string, CdpPayload>();
+  const childOf = new Set<string>();
+  for (const n of nodes) {
+    const id = n['nodeId'];
+    if (id === undefined || id === null) continue;
+    byId.set(String(id), n);
+    const childIds = n['childIds'];
+    if (Array.isArray(childIds)) {
+      for (const cid of childIds) childOf.add(String(cid));
+    }
+  }
+
+  const ordered: CdpPayload[] = [];
+  const seen = new Set<string>();
+  const visit = (n: CdpPayload): void => {
+    const id = n['nodeId'];
+    const key = id === undefined || id === null ? '' : String(id);
+    if (key) {
+      if (seen.has(key)) return;
+      seen.add(key);
+    }
+    ordered.push(n);
+    const childIds = n['childIds'];
+    if (!Array.isArray(childIds)) return;
+    for (const cid of childIds) {
+      const child = byId.get(String(cid));
+      if (child) visit(child);
+    }
+  };
+
+  for (const n of nodes) {
+    const id = n['nodeId'];
+    if (id === undefined || id === null) continue;
+    if (!childOf.has(String(id))) visit(n);
+  }
+  // Orphans with no nodeId / not reached from a root — keep them after.
+  for (const n of nodes) {
+    const id = n['nodeId'];
+    const key = id === undefined || id === null ? '' : String(id);
+    if (!key || !seen.has(key)) ordered.push(n);
+  }
+  return ordered;
 }
 
 /**
@@ -1002,7 +1061,8 @@ function axIndexKey(role: string, name: string): string {
 /**
  * Walk the injected ARIA tree and stamp each node with the next unused
  * backendNodeId for its role+name from the CDP Accessibility index. Lists
- * are consumed in place so duplicate names resolve in document order.
+ * are consumed in place so duplicate names resolve in shared AX hierarchy
+ * order (both trees apply aria-owns reparenting before this walk).
  */
 function annotateTreeWithBackendNodeIds(
   node: AccessibilityNode,

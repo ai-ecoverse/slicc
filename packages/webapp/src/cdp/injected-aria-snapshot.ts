@@ -22,6 +22,8 @@
  * - Removed incremental snapshot, codegen, ref tracking, and matching logic
  * - Simplified to output AccessibilityNode tree compatible with SLICC's types
  * - Removed CSS tokenizer dependency (simplified CSS content parsing)
+ * - Skip aria-owns targets during the DOM walk and emit them under the owner
+ *   (Chrome AX reparenting) so ordinal backendNodeId join stays aligned
  */
 
 /**
@@ -722,8 +724,22 @@ export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
     var visited = new Set();
     var root = { role: 'RootWebArea', name: '', children: [] };
 
-    function visit(ariaNode, node, parentElementVisible) {
+    // Chrome reparents aria-owns targets under the owner (after the owner's
+    // DOM children). Collect them so the DOM walk skips them — otherwise an
+    // earlier DOM occurrence marks them visited and ordinal join to
+    // Accessibility.getFullAXTree swaps same-named siblings (#3755 review).
+    var ariaOwned = new Set();
+    try {
+      var owners = rootElement.ownerDocument.querySelectorAll('[aria-owns]');
+      for (var oi = 0; oi < owners.length; oi++) {
+        var ownedEls = getIdRefs(owners[oi], owners[oi].getAttribute('aria-owns'));
+        for (var oj = 0; oj < ownedEls.length; oj++) ariaOwned.add(ownedEls[oj]);
+      }
+    } catch (e) { /* exotic documents */ }
+
+    function visit(ariaNode, node, parentElementVisible, viaAriaOwns) {
       if (visited.has(node)) return;
+      if (node.nodeType === 1 && ariaOwned.has(node) && !viaAriaOwns) return;
       visited.add(node);
 
       if (node.nodeType === 3 && node.nodeValue) {
@@ -774,17 +790,17 @@ export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
       ariaNode.children.push(getCSSContent(element, '::before') || '');
       var assignedNodes = element.nodeName === 'SLOT' ? element.assignedNodes() : [];
       if (assignedNodes.length) {
-        for (var i = 0; i < assignedNodes.length; i++) visit(ariaNode, assignedNodes[i], parentElementVisible);
+        for (var i = 0; i < assignedNodes.length; i++) visit(ariaNode, assignedNodes[i], parentElementVisible, false);
       } else {
         for (var child = element.firstChild; child; child = child.nextSibling) {
-          if (!child.assignedSlot) visit(ariaNode, child, parentElementVisible);
+          if (!child.assignedSlot) visit(ariaNode, child, parentElementVisible, false);
         }
         if (element.shadowRoot) {
           for (var child = element.shadowRoot.firstChild; child; child = child.nextSibling)
-            visit(ariaNode, child, parentElementVisible);
+            visit(ariaNode, child, parentElementVisible, false);
         }
       }
-      for (var i = 0; i < ariaChildren.length; i++) visit(ariaNode, ariaChildren[i], parentElementVisible);
+      for (var i = 0; i < ariaChildren.length; i++) visit(ariaNode, ariaChildren[i], parentElementVisible, true);
       ariaNode.children.push(getCSSContent(element, '::after') || '');
       if (treatAsBlock) ariaNode.children.push(treatAsBlock);
 
@@ -832,7 +848,7 @@ export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
       return result;
     }
 
-    visit(root, rootElement, true);
+    visit(root, rootElement, true, false);
     normalizeStringChildren(root);
     return root;
   }
