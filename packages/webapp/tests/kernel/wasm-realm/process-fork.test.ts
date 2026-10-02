@@ -165,14 +165,33 @@ describe('describeInherited', () => {
     streams[3] = make({ fd: 3, sliccKernelFd: 8 });
     streams[4] = make({ fd: 4, sliccKernelFd: 9, sliccCloexec: true });
     streams[5] = make({ fd: 5, flags: 0, position: 2, node: vfs });
-    streams[6] = make({ fd: 6, path: '/dev/null' }); // a device: no kernel descriptor
+    streams[6] = make({ fd: 6, path: '/dev/null' }); // a device: the kernel's own
     streams[7] = make({ fd: 7, node: vfs, sliccCloexec: true }); // never handed over
     expect(describeInherited(Fs, s, kernel, () => '/w/in.txt')).toEqual([
       { fd: 3, kernel: 8 },
       { fd: 5, kernel: 10 },
+      { fd: 6, device: 'null' },
     ]);
     expect(s.opened).toEqual([['/w/in.txt', 0, 2, undefined]]);
     expect(streams[5]!.sliccKernelFile).toBe(true); // the parent shares it from now on
+  });
+
+  it("hands devices over as the kernel's own (a closed fd otherwise), a memory-FS file stays behind", () => {
+    const { Fs, streams, make } = fakeFs();
+    const kernel = new KernelStreams(Fs, sys());
+    streams[3] = make({ fd: 3, path: '/dev/null' });
+    streams[4] = make({ fd: 4, path: '/dev/zero' });
+    streams[5] = make({ fd: 5, path: '/dev/urandom' });
+    streams[6] = make({ fd: 6, path: '/dev/random' });
+    streams[7] = make({ fd: 7, path: '/tmp/own.txt' }); // the module's own FS: no kernel file
+    const actions: Array<[number, number]> = [[9, 3]]; // dup2 of /dev/null
+    expect(describeInherited(Fs, sys(), kernel, () => '', actions)).toEqual([
+      { fd: 3, device: 'null' },
+      { fd: 4, device: 'zero' },
+      { fd: 5, device: 'urandom' },
+      { fd: 6, device: 'urandom' },
+      { fd: 9, device: 'null' },
+    ]);
   });
 
   it("applies posix_spawn's file actions beyond fd 2: dup2 to a number, close", () => {

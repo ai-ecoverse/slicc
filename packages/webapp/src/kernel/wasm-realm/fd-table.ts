@@ -112,7 +112,10 @@ export interface KernelFile {
 }
 
 /** A WASI worker-held descriptor, as the kernel keeps it for the process's other threads. */
-export type HeldMeta = { dir: string; preopen?: string } | { device: 'null' | 'zero' | 'urandom' };
+export type HeldMeta = { dir: string; preopen?: string } | { device: KernelDevice };
+
+/** A device the kernel can stand in for: `/dev/null`, `/dev/zero`, `/dev/urandom` (and `/dev/random`). */
+export type KernelDevice = 'null' | 'zero' | 'urandom';
 
 /** A description's readiness: its own answer, or ready in whatever direction it serves. */
 export function pollFile(file: KernelFile): PollState {
@@ -199,6 +202,25 @@ export function sinkFile(onData: (bytes: Uint8Array) => void): OpenFile {
 export function nullFile(): OpenFile {
   return new OpenFile({
     read: async () => new Uint8Array(0),
+    write: async (bytes) => bytes.length,
+    close: () => {},
+  });
+}
+
+/** A device as a kernel description (a child inherits it): reads per `device`, writes vanish. */
+export function deviceFile(device: KernelDevice): OpenFile {
+  if (device === 'null') return nullFile();
+  return new OpenFile({
+    read: async (max) => {
+      const out = new Uint8Array(max);
+      if (device === 'urandom') {
+        // getRandomValues fills at most 65536 bytes per call.
+        for (let at = 0; at < max; at += 65536) {
+          crypto.getRandomValues(out.subarray(at, Math.min(max, at + 65536)));
+        }
+      }
+      return out;
+    },
     write: async (bytes) => bytes.length,
     close: () => {},
   });
