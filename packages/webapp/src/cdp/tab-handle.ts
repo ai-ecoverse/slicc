@@ -803,7 +803,8 @@ export class TabHandle {
 
     // Annotate the tree with backendNodeId values from the CDP Accessibility
     // domain. The injected script runs in page context and cannot access CDP
-    // backendNodeIds, so we fetch them separately and match by role+name.
+    // backendNodeIds, so we fetch them separately and match by role+name in
+    // document order (nth duplicate gets the nth AX id).
     try {
       const axResult = await this.send('Accessibility.getFullAXTree');
       const nodes = axResult['nodes'] as Array<CdpPayload> | undefined;
@@ -961,16 +962,16 @@ function isDestroyedContextError(err: unknown): boolean {
 }
 
 /**
- * Build a lookup map from (role, name) → backendDOMNodeId from the flat
+ * Build a lookup map from (role, name) → backendDOMNodeId[] from the flat
  * CDP Accessibility.getFullAXTree node list.
  *
- * Keys are `${role}|${name}`. When the same role+name appears more than once
- * (e.g. two "Cancel" buttons), the first occurrence wins — that's the same
- * ambiguity the CSS selector fallback faces, so consistency matters more than
- * perfect accuracy.
+ * Keys are `${role}|${name}`. Duplicate role+name pairs (e.g. several "BUY"
+ * buttons) keep every id in AX-tree order so
+ * {@link annotateTreeWithBackendNodeIds} can pair the nth ARIA node with the
+ * nth AX node — both walks are document order.
  */
-function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number> {
-  const index = new Map<string, number>();
+function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number[]> {
+  const index = new Map<string, number[]>();
   for (const n of nodes) {
     const backendNodeId = typeof n['backendDOMNodeId'] === 'number' ? n['backendDOMNodeId'] : null;
     if (backendNodeId === null) continue;
@@ -980,7 +981,9 @@ function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number> {
     const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
     if (!role) continue;
     const key = axIndexKey(role, name);
-    if (!index.has(key)) index.set(key, backendNodeId);
+    const list = index.get(key);
+    if (list) list.push(backendNodeId);
+    else index.set(key, [backendNodeId]);
   }
   return index;
 }
@@ -997,13 +1000,17 @@ function axIndexKey(role: string, name: string): string {
 }
 
 /**
- * Walk the injected ARIA tree and stamp each node with the backendNodeId
- * from the CDP Accessibility index (matched by role + accessible name).
+ * Walk the injected ARIA tree and stamp each node with the next unused
+ * backendNodeId for its role+name from the CDP Accessibility index. Lists
+ * are consumed in place so duplicate names resolve in document order.
  */
-function annotateTreeWithBackendNodeIds(node: AccessibilityNode, index: Map<string, number>): void {
+function annotateTreeWithBackendNodeIds(
+  node: AccessibilityNode,
+  index: Map<string, number[]>
+): void {
   const key = axIndexKey(node.role, node.name);
-  const id = index.get(key);
-  if (id !== undefined) node.backendNodeId = id;
+  const list = index.get(key);
+  if (list && list.length > 0) node.backendNodeId = list.shift();
   if (node.children) {
     for (const child of node.children) annotateTreeWithBackendNodeIds(child, index);
   }

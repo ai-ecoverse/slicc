@@ -129,6 +129,30 @@ describe('clickHandler', () => {
     expect(state.snapshots.has(TAB)).toBe(false);
   });
 
+  // #3755: when three same-named BUY buttons have distinct backendNodeIds,
+  // clicking the third ref must hit the third id — not the first.
+  it('clicks the third of three same-named button refs', async () => {
+    const { browser, spies } = makeBrowser();
+    const snapshot = makeSnapshot({
+      refToBackendNodeId: new Map([
+        ['e1', 101],
+        ['e2', 102],
+        ['e3', 103],
+      ]),
+    });
+    const result = await clickHandler(
+      createHandlerCtx({
+        browser,
+        state: stateWithSnapshot(snapshot),
+        positional: ['e3'],
+        flags: { tab: TAB },
+      })
+    );
+    expect(result.stdout).toBe('Clicked e3\n');
+    expect(spies.clickByBackendNodeId).toHaveBeenCalledTimes(1);
+    expect(spies.clickByBackendNodeId).toHaveBeenCalledWith(103, 0);
+  });
+
   it('falls back to a CSS selector and parses --modifiers', async () => {
     const { browser, spies } = makeBrowser();
     const snapshot = makeSnapshot({ refToSelector: new Map([['e5', '#btn']]) });

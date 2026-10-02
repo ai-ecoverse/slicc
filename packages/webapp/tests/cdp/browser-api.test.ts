@@ -1661,6 +1661,50 @@ describe('BrowserAPI', () => {
       expect(tree.children![0].backendNodeId).toBe(2719);
       expect(tree.children![1].backendNodeId).toBe(2800);
     });
+
+    // Drug Wars / #3755: several "BUY" buttons share role+name. Joining by
+    // first-match alone stamped every ref with the first button's id, so
+    // --boxes and click all hit the first element.
+    it('joins same-named elements to distinct backendNodeIds in document order', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({
+          result: {
+            type: 'object',
+            value: {
+              role: 'RootWebArea',
+              name: 'Drug Wars',
+              children: [
+                { role: 'button', name: 'BUY' },
+                { role: 'button', name: 'BUY' },
+                { role: 'button', name: 'BUY' },
+              ],
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          nodes: [
+            {
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 101,
+            },
+            {
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 102,
+            },
+            {
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 103,
+            },
+          ],
+        });
+
+      const tree = await page.getAccessibilityTree();
+      expect(tree.children!.map((c) => c.backendNodeId)).toEqual([101, 102, 103]);
+    });
   });
 
   describe('viewport override persistence', () => {
