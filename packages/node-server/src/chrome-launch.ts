@@ -367,12 +367,17 @@ export function buildChromeLaunchArgs(options: {
     // A container has no GPU, so a hosted leader turns it off, unless it runs on a GPU machine
     // (the cloud-run-gpu pool's L4): then WebGPU over Vulkan lets a page run models such as kev
     // on the GPU. Verified 2026-10-01 with headless Chrome 154 on that pool.
+    // --disable-vulkan-surface: headless Chrome has no surface, so without it vkCreateInstance
+    // fails (-7, extension not present) and WebGPU silently falls back to SwiftShader on the
+    // CPU. With it, a DedicatedWorker (where shell scripts such as kev run) gets the L4.
+    // Measured on cloud-run-gpu 2026-10-02: swiftshader without, nvidia/lovelace with.
     if (options.gpu) {
       args.push(
         '--enable-unsafe-webgpu',
         '--enable-features=Vulkan',
         '--use-angle=vulkan',
-        '--ignore-gpu-blocklist'
+        '--ignore-gpu-blocklist',
+        '--disable-vulkan-surface'
       );
     } else {
       args.push('--disable-gpu');
