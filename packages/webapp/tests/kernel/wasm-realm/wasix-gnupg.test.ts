@@ -260,13 +260,13 @@ describe.skipIf(!READY)('GnuPG in the wasm realm (real programs)', () => {
     const gen = await run(
       `${home} && mkdir -m 700 $GNUPGHOME && gpg --batch --pinentry-mode loopback --passphrase sekrit ` +
         "--quick-gen-key 'Locked Test <locked@slicc.test>' default default never && " +
-        'echo "pinentry-mode loopback" > $GNUPGHOME/gpg.conf && ' +
         'mkdir -p /tmp/locked && cd /tmp/locked && git init -q -b main . && ' +
         'git config user.email locked@slicc.test && git config user.name "Locked Test" && ' +
         'git config commit.gpgsign true'
     );
     expect(gen.code).toBe(0);
-    // git pipes gpg's stdio: the prompt and the answer go through the terminal.
+    // No gpg.conf: loopback is the package's default (no pinentry program). git pipes
+    // gpg's stdio, so the prompt and the answer go through the terminal.
     const first = bash(
       `${home} && cd /tmp/locked && echo 1 > f && git add f && git commit -q -m one; echo "first: $?"`,
       { terminal: true }
