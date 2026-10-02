@@ -1661,6 +1661,116 @@ describe('BrowserAPI', () => {
       expect(tree.children![0].backendNodeId).toBe(2719);
       expect(tree.children![1].backendNodeId).toBe(2800);
     });
+
+    // Drug Wars / #3755: several "BUY" buttons share role+name. Joining by
+    // first-match alone stamped every ref with the first button's id, so
+    // --boxes and click all hit the first element.
+    it('joins same-named elements to distinct backendNodeIds in document order', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({
+          result: {
+            type: 'object',
+            value: {
+              role: 'RootWebArea',
+              name: 'Drug Wars',
+              children: [
+                { role: 'button', name: 'BUY' },
+                { role: 'button', name: 'BUY' },
+                { role: 'button', name: 'BUY' },
+              ],
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          nodes: [
+            {
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 101,
+            },
+            {
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 102,
+            },
+            {
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 103,
+            },
+          ],
+        });
+
+      const tree = await page.getAccessibilityTree();
+      expect(tree.children!.map((c) => c.backendNodeId)).toEqual([101, 102, 103]);
+    });
+
+    // aria-owns target earlier in the DOM than its owner: Chrome's AX tree
+    // reparents the owned button after the owner's DOM children. Flat CDP
+    // payload order can still list the owned node first; walking childIds
+    // (and the injected tree applying the same reparenting) keeps ordinal
+    // pairing aligned — otherwise the two BUY buttons swap backendNodeIds.
+    it('joins same-named nodes in aria-owns AX hierarchy order, not flat DOM order', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({
+          result: {
+            type: 'object',
+            value: {
+              role: 'RootWebArea',
+              name: 'Owns',
+              children: [
+                {
+                  role: 'group',
+                  name: 'Owner',
+                  children: [
+                    { role: 'button', name: 'BUY' }, // DOM child
+                    { role: 'button', name: 'BUY' }, // aria-owns target (reparented)
+                  ],
+                },
+              ],
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          // Flat list is DOM order (owned id 101 before DOM-child id 102), but
+          // childIds put the owned button after the DOM child under the group.
+          nodes: [
+            {
+              nodeId: '1',
+              role: { value: 'RootWebArea' },
+              name: { value: 'Owns' },
+              childIds: ['2'],
+            },
+            {
+              nodeId: '2',
+              role: { value: 'group' },
+              name: { value: 'Owner' },
+              childIds: ['4', '3'],
+              backendDOMNodeId: 90,
+            },
+            {
+              nodeId: '3',
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 101, // owned (earlier in DOM / flat list)
+              childIds: [],
+            },
+            {
+              nodeId: '4',
+              role: { value: 'button' },
+              name: { value: 'BUY' },
+              backendDOMNodeId: 102, // DOM child of owner
+              childIds: [],
+            },
+          ],
+        });
+
+      const tree = await page.getAccessibilityTree();
+      const buys = tree.children![0].children!;
+      expect(buys.map((c) => c.backendNodeId)).toEqual([102, 101]);
+    });
   });
 
   describe('viewport override persistence', () => {
