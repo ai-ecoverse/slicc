@@ -12,6 +12,8 @@ import {
   WasiError,
 } from './wasi-files.js';
 
+const SYNTHETIC_DIRS = ['usr', 'bin'];
+
 export interface WasiKernel {
   sys: ProcessSys;
 
@@ -93,7 +95,7 @@ export class WasiFds {
       return out;
     }
 
-    for (const name of [...new Set([...names, 'dev'])].sort()) {
+    for (const name of [...new Set([...names, 'dev', ...SYNTHETIC_DIRS])].sort()) {
       const path = `/${name}`;
       if (path === '/dev') {
         out.push({ type: 'dir', path, preopen: path });
