@@ -70,6 +70,12 @@ async function agent(prompt, opts) {
     if (opts.model) flags.push('--model', String(opts.model));
     if (opts.thinking) flags.push('--thinking', String(opts.thinking));
     if (opts.schema) flags.push('--schema-b64', __b64(JSON.stringify(opts.schema)));
+    if (opts.minimal) flags.push('--minimal');
+    if (opts.systemPrompt != null && opts.systemPrompt !== '') flags.push('--system-prompt=' + String(opts.systemPrompt));
+    if (opts.tools) flags.push('--tools', String(opts.tools));
+    if (opts.resume && opts.session) flags.push('--resume', String(opts.session));
+    else if (opts.session) flags.push('--session', String(opts.session));
+    if (opts.usage || opts.session || opts.resume) flags.push('--usage');
     // No --read-only: the flag is pure-replace, so naming '/workspace/' here
     // would override the command's owner-relative default and hand a workflow
     // agent running under an extra cone the primary cone's files (#2271).

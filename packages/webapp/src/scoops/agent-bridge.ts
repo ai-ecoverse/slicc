@@ -52,6 +52,16 @@ import {
   parseWorkspaceMode,
 } from '../work-unit/workspace-mode.js';
 import { AGENT_ADJECTIVES, AGENT_FLAVORS } from './agent-names.js';
+import {
+  AGENT_SESSION_IDLE_MS,
+  type AgentCallUsage,
+  cacheStableUserPrompt,
+  classifySession,
+  sessionExpired,
+  sessionFingerprint,
+  sessionIdError,
+  sumAssistantUsage,
+} from './agent-session.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
@@ -298,6 +308,38 @@ export interface AgentSpawnOptions {
    * message; the kernel reconstructs an equivalent signal here (#1972).
    */
   signal?: AbortSignal;
+  /**
+   * Replace the assembled system prompt. A fixed safety trailer is still
+   * appended. Sandbox grants do not depend on this text.
+   */
+  systemPrompt?: string;
+  /**
+   * Short stable prompt instead of the skills essay. Ignored when
+   * {@link AgentSpawnOptions.systemPrompt} is set.
+   */
+  minimalSystemPrompt?: boolean;
+  /**
+   * Tool set. `auto` keeps StructuredOutput only when the allow-list is
+   * no-ops and a schema is set. `output` is StructuredOutput only and
+   * requires a schema. `full` is today's set. Unset leaves the scoop on
+   * `full` (internal callers). The `agent` command always sends `auto`.
+   */
+  toolSurface?: 'auto' | 'full' | 'output';
+  /**
+   * Omit the random scratch folder from the system prompt so identical
+   * calls share a prompt-cache prefix. The folder is named in the user
+   * message on create. The `agent` command sets this; other callers leave
+   * it unset.
+   */
+  cacheStablePrompt?: boolean;
+  /**
+   * Keep the scoop and append the next call to it. `--session` is
+   * get-or-create. With {@link AgentSpawnOptions.resumeOnly}, a missing or
+   * idle-expired id fails instead of starting over.
+   */
+  session?: string;
+  /** `--resume`: do not create a session that is not already live. */
+  resumeOnly?: boolean;
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -310,8 +352,19 @@ export interface AgentSpawnResult {
    * On error (`exitCode !== 0`) this is the error message.
    */
   finalText: string;
-  /** 0 on success; 1 on any failure (init error, agent error, abort). */
+  /**
+   * 0 on success. 1 on init, model, mismatch, or abort failures.
+   * 2 when `--resume` names a session that is missing or idle-expired.
+   */
   exitCode: number;
+  /** Set when this call left a named session live. */
+  sessionId?: string;
+  sessionStatus?: 'created' | 'resumed';
+  /**
+   * Assistant-turn usage added by this call. Omitted when the scoop context
+   * does not expose messages (tests, or a register that never landed).
+   */
+  usage?: AgentCallUsage;
 }
 
 /** Public contract exposed on `globalThis.__slicc_agent`. */
@@ -342,6 +395,8 @@ export interface AgentBridgeDeps {
    * (NOT the picker-filtered `getAllAvailableModels()`).
    */
   resolveModel?: (modelId: string) => ScoopModelResolution;
+  /** Clock for session idle expiry. Tests inject a fixed clock. */
+  now?: () => number;
 }
 
 /** Global hook name used by {@link publishAgentBridge}. */
@@ -357,6 +412,20 @@ type AgentBridgeGlobal = typeof globalThis & {
   [AGENT_BRIDGE_GLOBAL_KEY]?: AgentBridge;
 };
 
+/** One scoop kept alive so later `agent` calls append a turn. */
+interface LiveAgentSession {
+  id: string;
+  jid: string;
+  folder: string;
+  nameToken: string;
+  scratchFolder: string;
+  fingerprint: string;
+  lastUsed: number;
+  busy: boolean;
+  /** Fires once the idle TTL passes, so an unused id does not live forever. */
+  idleTimer?: ReturnType<typeof setTimeout>;
+}
+
 /** Context for bridge spawn helpers - closed over by the factory. */
 interface BridgeContext {
   orchestrator: Orchestrator;
@@ -365,6 +434,11 @@ interface BridgeContext {
   generateName: () => string;
   generateUid: () => string;
   resolveModel: (modelId: string) => ScoopModelResolution;
+  /** Live named sessions. One map per bridge; production publishes one bridge. */
+  sessions: Map<string, LiveAgentSession>;
+  /** Session ids whose create or expiry-drop has not finished. */
+  pendingSessions: Set<string>;
+  now: () => number;
 }
 
 /**
@@ -510,6 +584,9 @@ function validateSpawnOptions(
   const pathError = validateBookkeepingPaths(options);
   if (pathError) return pathError;
 
+  const decisionError = validateDecisionOptions(options);
+  if (decisionError) return decisionError;
+
   const requestedName = options.name;
   if (requestedName !== undefined && !isValidAgentName(requestedName)) {
     return {
@@ -520,6 +597,49 @@ function validateSpawnOptions(
     };
   }
 
+  return validatePositiveLimits(options, resolvedModelId, resolvedProviderId);
+}
+
+/** `--tools`, the system prompt, and the session id. Separate from model checks so both stay under the complexity cap. */
+function validateDecisionOptions(options: AgentSpawnOptions): { error: AgentSpawnResult } | null {
+  const surface = options.toolSurface;
+  if (surface !== undefined && surface !== 'auto' && surface !== 'full' && surface !== 'output') {
+    return {
+      error: {
+        finalText: 'agent: --tools must be one of: auto, full, output',
+        exitCode: 1,
+      },
+    };
+  }
+  if (surface === 'output' && options.structuredOutputSchema === undefined) {
+    return {
+      error: { finalText: 'agent: --tools output requires a schema', exitCode: 1 },
+    };
+  }
+  if (options.systemPrompt !== undefined && options.systemPrompt.trim() === '') {
+    return {
+      error: { finalText: 'agent: --system-prompt requires a non-empty value', exitCode: 1 },
+    };
+  }
+  if (options.resumeOnly === true && options.session === undefined) {
+    return {
+      error: { finalText: 'agent: --resume requires a session id', exitCode: 1 },
+    };
+  }
+  if (options.session !== undefined) {
+    const idError = sessionIdError(options.session);
+    if (idError) return { error: { finalText: idError, exitCode: 1 } };
+  }
+  return null;
+}
+
+function validatePositiveLimits(
+  options: AgentSpawnOptions,
+  resolvedModelId: string | undefined,
+  resolvedProviderId: string | undefined
+):
+  | { error: AgentSpawnResult }
+  | { resolvedModelId: string | undefined; resolvedProviderId: string | undefined } {
   for (const [name, value] of [
     ['maxTurns', options.maxTurns],
     ['maxWallClockMs', options.maxWallClockMs],
@@ -915,6 +1035,20 @@ function buildScoopConfig(
   if (options.escalate === false) {
     scoopConfig.escalate = false;
   }
+  if (options.systemPrompt !== undefined) {
+    scoopConfig.systemPromptOverride = options.systemPrompt;
+  }
+  if (options.minimalSystemPrompt === true) {
+    scoopConfig.minimalSystemPrompt = true;
+  }
+  if (options.toolSurface !== undefined) {
+    scoopConfig.toolSurface = options.toolSurface;
+  }
+  if (options.cacheStablePrompt === true) {
+    scoopConfig.cacheStablePrompt = true;
+    scoopConfig.promptCwd = options.cwd;
+    scoopConfig.assistantName = 'agent';
+  }
 
   return scoopConfig;
 }
@@ -952,6 +1086,36 @@ function registerScoopObserver(orchestrator: Orchestrator, jid: string) {
   return state;
 }
 
+interface TranscriptMessage {
+  role: string;
+  content?: readonly unknown[];
+}
+
+/**
+ * First StructuredOutput arguments in `messages`. A resumed scoop's latch
+ * still holds the previous turn, so the result has to come from this call.
+ */
+function structuredOutputFromTurn(messages: readonly TranscriptMessage[]): unknown {
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (typeof block !== 'object' || block === null) continue;
+      const part = block as { type?: string; name?: string; arguments?: unknown };
+      if (part.type === 'toolCall' && part.name === 'StructuredOutput') return part.arguments;
+    }
+  }
+  return undefined;
+}
+
+function messagesAddedSince(
+  orchestrator: Orchestrator,
+  jid: string,
+  start: number
+): readonly TranscriptMessage[] {
+  const messages = orchestrator.getScoopContext(jid)?.getAgentMessages?.() ?? [];
+  return messages.slice(start) as readonly TranscriptMessage[];
+}
+
 /**
  * Prompt scoop and optionally nudge for structured output.
  */
@@ -963,6 +1127,13 @@ async function runScoopAndCaptureOutput(
   observerState: ReturnType<typeof registerScoopObserver>,
   images: ImageContent[] = []
 ): Promise<AgentSpawnResult | null> {
+  const messageStart = orchestrator.getScoopContext(jid)?.getAgentMessages?.().length ?? 0;
+  // The latch keeps the first capture for the life of the scoop. Clear it so
+  // this turn can record a new one; the return value still prefers the tool
+  // call appended during this call.
+  if (structuredOutputSchema) {
+    orchestrator.getScoopContext(jid)?.resetStructuredOutput?.();
+  }
   await orchestrator.sendPrompt(jid, prompt, 'agent', 'agent', images);
 
   if (observerState.scoopError !== null) {
@@ -970,6 +1141,12 @@ async function runScoopAndCaptureOutput(
   }
 
   if (structuredOutputSchema) {
+    const fresh = (): unknown =>
+      structuredOutputFromTurn(messagesAddedSince(orchestrator, jid, messageStart));
+    const fromTurn = fresh();
+    if (fromTurn !== undefined) {
+      return { finalText: JSON.stringify(fromTurn), exitCode: 0 };
+    }
     const ctxRef = orchestrator.getScoopContext(jid);
     let so = ctxRef?.getStructuredOutput?.();
     for (let nudge = 0; nudge < 2 && !so?.captured; nudge++) {
@@ -983,6 +1160,10 @@ async function runScoopAndCaptureOutput(
       // 5xx, capability shim) instead of masking it as "did not produce output".
       if (observerState.scoopError !== null) {
         return { finalText: observerState.scoopError, exitCode: 1 };
+      }
+      const nudged = fresh();
+      if (nudged !== undefined) {
+        return { finalText: JSON.stringify(nudged), exitCode: 0 };
       }
       so = ctxRef?.getStructuredOutput?.();
     }
@@ -1138,6 +1319,236 @@ async function runScoopToOutcomeInner(
   }
 }
 
+interface UsageMessageSource {
+  getAgentMessages?: () => readonly {
+    role: string;
+    usage?: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      cost?: { total: number };
+    };
+  }[];
+}
+
+function usageForCall(ctx: BridgeContext, jid: string, start: number): AgentCallUsage | undefined {
+  const scoopCtx = ctx.orchestrator.getScoopContext(jid) as UsageMessageSource | undefined;
+  if (!scoopCtx || typeof scoopCtx.getAgentMessages !== 'function') return undefined;
+  return sumAssistantUsage(scoopCtx.getAgentMessages(), start);
+}
+
+function withSessionMeta(
+  outcome: AgentSpawnResult,
+  sessionId: string,
+  sessionStatus: 'created' | 'resumed',
+  usage: AgentCallUsage | undefined
+): AgentSpawnResult {
+  return {
+    ...outcome,
+    sessionId,
+    sessionStatus,
+    ...(usage ? { usage } : {}),
+  };
+}
+
+function fingerprintOf(
+  options: AgentSpawnOptions,
+  modelId: string,
+  modelProviderId: string | undefined,
+  thinkingLevel: ThinkingLevel | undefined
+): string {
+  return sessionFingerprint({
+    cwd: options.cwd,
+    allowedCommands: options.allowedCommands,
+    modelId: modelId || undefined,
+    modelProviderId,
+    thinkingLevel,
+    visiblePaths: options.visiblePaths,
+    writablePaths: grantedWritablePaths(options),
+    invokingCwd: options.invokingCwd,
+    workspaceMode: options.workspaceMode,
+    structuredOutputSchema: options.structuredOutputSchema,
+    escalate: options.escalate,
+    systemPrompt: options.systemPrompt,
+    minimalSystemPrompt: options.minimalSystemPrompt,
+    toolSurface: options.toolSurface,
+    backgroundAfterSeconds: options.backgroundAfterSeconds,
+    parentJid: options.parentJid,
+    cacheStablePrompt: options.cacheStablePrompt,
+  });
+}
+
+function clearIdleTimer(live: LiveAgentSession): void {
+  if (live.idleTimer === undefined) return;
+  clearTimeout(live.idleTimer);
+  live.idleTimer = undefined;
+}
+
+/** Drop this id when its idle TTL passes, including when no later call names it. */
+function armIdleTimer(ctx: BridgeContext, live: LiveAgentSession): void {
+  clearIdleTimer(live);
+  const elapsed = ctx.now() - live.lastUsed;
+  const remaining = AGENT_SESSION_IDLE_MS - elapsed + 1;
+  const delay = live.busy ? AGENT_SESSION_IDLE_MS : Math.max(1, remaining);
+  const timer = setTimeout(() => {
+    void reclaimIfIdle(ctx, live.id);
+  }, delay);
+  if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
+    timer.unref();
+  }
+  live.idleTimer = timer;
+}
+
+async function reclaimIfIdle(ctx: BridgeContext, id: string): Promise<void> {
+  const live = ctx.sessions.get(id);
+  if (!live) return;
+  if (live.busy || !sessionExpired(live.lastUsed, ctx.now())) {
+    armIdleTimer(ctx, live);
+    return;
+  }
+  await dropLiveSession(ctx, live);
+}
+
+/**
+ * Idle sessions other than `keepId`. The id this call is about stays, so
+ * `--resume` can still report expiry. Empty means the caller does not await.
+ */
+function idleSessionsExcept(ctx: BridgeContext, keepId: string | undefined): LiveAgentSession[] {
+  const now = ctx.now();
+  const due: LiveAgentSession[] = [];
+  for (const live of ctx.sessions.values()) {
+    if (live.id === keepId || live.busy) continue;
+    if (sessionExpired(live.lastUsed, now)) due.push(live);
+  }
+  return due;
+}
+
+async function dropLiveSession(ctx: BridgeContext, live: LiveAgentSession): Promise<void> {
+  clearIdleTimer(live);
+  ctx.sessions.delete(live.id);
+  await cleanupScoop(ctx, live.jid, live.folder, live.scratchFolder);
+}
+
+/**
+ * Append one turn to a live session. Does not register a new scoop. An abort,
+ * or a scoop that is no longer registered, drops the session.
+ */
+async function resumeNamedSession(
+  ctx: BridgeContext,
+  options: AgentSpawnOptions,
+  live: LiveAgentSession
+): Promise<AgentSpawnResult> {
+  live.busy = true;
+  const observerHandle = registerScoopObserver(ctx.orchestrator, live.jid);
+  const onAbort = (): void => {
+    try {
+      ctx.orchestrator.stopScoop(live.jid);
+    } catch (err) {
+      log.warn('stopScoop on abort failed', { jid: live.jid, error: errText(err) });
+    }
+  };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) {
+    options.signal.removeEventListener('abort', onAbort);
+    observerHandle.unsubscribe?.();
+    await dropLiveSession(ctx, live);
+    return { finalText: 'agent: aborted before start', exitCode: 1 };
+  }
+  const before = messageCount(ctx, live.jid);
+  let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
+  try {
+    const result = await runScoopAndCaptureOutput(
+      ctx.orchestrator,
+      live.jid,
+      options.prompt,
+      options.structuredOutputSchema,
+      observerHandle,
+      options.images
+    );
+    if (options.signal?.aborted) {
+      outcome = { finalText: 'agent: aborted', exitCode: 1 };
+    } else if (result) {
+      outcome = result;
+    } else {
+      outcome = { finalText: observerHandle.scoopError ?? '', exitCode: 1 };
+    }
+  } catch (err) {
+    outcome = { finalText: observerHandle.scoopError ?? errText(err), exitCode: 1 };
+  } finally {
+    options.signal?.removeEventListener('abort', onAbort);
+    observerHandle.unsubscribe?.();
+  }
+  const alive = ctx.orchestrator.getScoops().some((s) => s.jid === live.jid);
+  if (options.signal?.aborted || !alive) {
+    await dropLiveSession(ctx, live);
+    return outcome;
+  }
+  await writeAgentSessionArchive(ctx, options, live.jid, live.nameToken, outcome);
+  live.busy = false;
+  live.lastUsed = ctx.now();
+  armIdleTimer(ctx, live);
+  const usage = before === undefined ? undefined : usageForCall(ctx, live.jid, before);
+  return withSessionMeta(outcome, live.id, 'resumed', usage);
+}
+
+function messageCount(ctx: BridgeContext, jid: string): number | undefined {
+  const scoopCtx = ctx.orchestrator.getScoopContext(jid) as UsageMessageSource | undefined;
+  if (!scoopCtx || typeof scoopCtx.getAgentMessages !== 'function') return undefined;
+  return scoopCtx.getAgentMessages().length;
+}
+
+type NamedSessionOpen = { kind: 'done'; result: AgentSpawnResult } | { kind: 'create' };
+
+/**
+ * Classify a named session. `create` leaves the id in `pendingSessions`
+ * until the caller finishes the spawn. Resume runs here and returns `done`.
+ */
+async function openNamedSession(
+  ctx: BridgeContext,
+  options: AgentSpawnOptions,
+  fingerprint: string
+): Promise<NamedSessionOpen> {
+  const id = options.session ?? '';
+  if (ctx.pendingSessions.has(id)) {
+    return {
+      kind: 'done',
+      result: { finalText: `agent: session ${id} is already running`, exitCode: 1 },
+    };
+  }
+  const existing = ctx.sessions.get(id);
+  const action = classifySession(
+    existing && {
+      fingerprint: existing.fingerprint,
+      lastUsed: existing.lastUsed,
+      busy: existing.busy,
+    },
+    fingerprint,
+    ctx.now(),
+    options.resumeOnly === true,
+    id
+  );
+  if (action.action === 'error') {
+    if (existing && action.finalText === `agent: session expired: ${id}`) {
+      ctx.pendingSessions.add(id);
+      try {
+        await dropLiveSession(ctx, existing);
+      } finally {
+        ctx.pendingSessions.delete(id);
+      }
+    }
+    return { kind: 'done', result: { finalText: action.finalText, exitCode: action.exitCode } };
+  }
+  if (action.action === 'resume' && existing) {
+    return { kind: 'done', result: await resumeNamedSession(ctx, options, existing) };
+  }
+  ctx.pendingSessions.add(id);
+  if (existing && action.action === 'create' && action.drop) {
+    await dropLiveSession(ctx, existing);
+  }
+  return { kind: 'create' };
+}
+
 /**
  * Create an {@link AgentBridge} bound to an orchestrator + shared VFS.
  *
@@ -1158,6 +1569,9 @@ export function createAgentBridge(
     generateName: deps.generateName ?? defaultGenerateName,
     generateUid: deps.generateUid ?? defaultGenerateUid,
     resolveModel: deps.resolveModel ?? defaultResolveModel,
+    sessions: new Map(),
+    pendingSessions: new Set(),
+    now: deps.now ?? Date.now,
   };
 
   async function spawn(requested: AgentSpawnOptions): Promise<AgentSpawnResult> {
@@ -1184,102 +1598,232 @@ export function createAgentBridge(
       resolveParentThinkingLevel(ctx.orchestrator, options.parentJid) ??
       undefined;
 
-    // A validated fixed name wins; otherwise pick a fresh collision-free token.
-    const nameToken = options.name !== undefined ? options.name : pickFreshNameToken(ctx);
-    const folder = `agent-${nameToken}`;
-    const jid = `agent_${tokenToJid(nameToken)}`;
-    // A fixed name bypasses pickFreshNameToken's collision guard: if a scoop
-    // with this JID is still registered — a detached run still in flight, or a
-    // crashed one not yet cleaned up — reusing the name would clobber its
-    // session history and scratch folder. Reject rather than collide; the
-    // random path can never hit this (it excludes live JIDs by construction).
-    const liveJids = new Set(ctx.orchestrator.getScoops().map((s) => s.jid));
-    if (options.name !== undefined && liveJids.has(jid)) {
-      return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${nameToken}`, exitCode: 1 };
+    const prefixFingerprint = fingerprintOf(
+      options,
+      effectiveModelId,
+      effectiveModelProviderId,
+      effectiveThinkingLevel
+    );
+    const due = idleSessionsExcept(ctx, options.session);
+    if (due.length > 0) {
+      for (const live of due) await dropLiveSession(ctx, live);
     }
-    // Same rejection for a live rival (see `exclusiveWith`): a malformed
-    // rival token maps to a jid nothing can register under, so it never matches.
-    const rival = (options.exclusiveWith ?? []).find((n) => liveJids.has(`agent_${tokenToJid(n)}`));
-    if (rival !== undefined) {
-      return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${rival}`, exitCode: 1 };
+    let creatingSession = false;
+    if (options.session !== undefined) {
+      const opened = await openNamedSession(ctx, options, prefixFingerprint);
+      if (opened.kind === 'done') return opened.result;
+      creatingSession = true;
     }
-    const scratchFolder = `/scoops/${folder}`;
 
-    // Ownership edge: the invoking unit when the caller supplied it,
-    // otherwise the default root — a spawned agent always has an owner.
-    // (`originToolCallId` stays never-inferred; this is ownership, not
-    // tool-call provenance.)
-    const parentJid = options.parentJid ?? rootsOf(ctx.orchestrator.getScoops())[0]?.jid ?? null;
-    const scoopConfig = buildScoopConfig(
+    return launchNewAgentScoop(ctx, {
       options,
       effectiveModelId,
       effectiveModelProviderId,
       effectiveThinkingLevel,
-      scratchFolder,
-      resolveOwnerVisibleRoots(ctx.orchestrator, parentJid)
-    );
-
-    const scoop: RegisteredScoop = {
-      jid,
-      name: folder,
-      folder,
-      requiresTrigger: false,
-      assistantLabel: folder,
-      addedAt: new Date().toISOString(),
-      config: scoopConfig,
-      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
-      notifyOnComplete: options.notifyOnComplete === true,
-      parentJid,
-      // Defer the ready-path cone notify until after the receipt is written
-      // so a non-zero exit is not reported as `completed` (#3460).
-      ...(options.outcomeReceiptPath ? { outcomeReceiptPath: options.outcomeReceiptPath } : {}),
-    };
-
-    const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
-    // Caller-held cancel: stop the running scoop so an abandoned wait
-    // actually reclaims the run instead of letting it keep billing.
-    const onAbort = (): void => {
-      try {
-        ctx.orchestrator.stopScoop(jid);
-      } catch (err) {
-        log.warn('stopScoop on abort failed', { jid, error: errText(err) });
-      }
-    };
-    // Attach BEFORE the aborted-check, then re-check: an abort landing in
-    // the window between check and attach would otherwise be missed
-    // (AbortSignal fires exactly once), leaving stopScoop uncalled and the
-    // cancellation deferred to the post-run gate — the 30s+ window this is
-    // meant to eliminate.
-    options.signal?.addEventListener('abort', onAbort, { once: true });
-    if (options.signal?.aborted) {
-      options.signal.removeEventListener('abort', onAbort);
-      observerHandle.unsubscribe?.();
-      return { finalText: 'agent: aborted before start', exitCode: 1 };
-    }
-
-    // Held so the `finally` can archive the transcript with the real exit
-    // code, whatever path `runScoopToOutcome` leaves through.
-    let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
-    try {
-      const finished = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
-      outcome = finished.outcome;
-      // Publish the final outcome to the cone AFTER status.json is written
-      // (when it actually landed) and AFTER any bound-trip draft promotion,
-      // so the headline matches the durable receipt (#3460). Must run before
-      // cleanup unregisters the scoop (notifyWithOutcome looks it up).
-      await maybeNotifyPassOutcome(ctx, options, jid, finished);
-      return outcome;
-    } finally {
-      options.signal?.removeEventListener('abort', onAbort);
-      observerHandle.unsubscribe?.();
-      // Archive the transcript BEFORE cleanupScoop drops the IDB session and
-      // the ScoopContext the history is read from. Runs on success AND failure.
-      await writeAgentSessionArchive(ctx, options, jid, nameToken, outcome);
-      await cleanupScoop(ctx, jid, folder, scratchFolder);
-    }
+      prefixFingerprint,
+      creatingSession,
+    });
   }
 
   return { spawn };
+}
+interface LaunchArgs {
+  options: AgentSpawnOptions;
+  effectiveModelId: string;
+  effectiveModelProviderId: string | undefined;
+  effectiveThinkingLevel: ThinkingLevel | undefined;
+  prefixFingerprint: string;
+  creatingSession: boolean;
+}
+
+/**
+ * Keep a named session when the scoop is still registered and the call was
+ * not aborted. A one-shot only attaches usage.
+ */
+function keepFinishedSession(
+  ctx: BridgeContext,
+  kept: {
+    options: AgentSpawnOptions;
+    creatingSession: boolean;
+    jid: string;
+    folder: string;
+    nameToken: string;
+    scratchFolder: string;
+    prefixFingerprint: string;
+    outcome: AgentSpawnResult;
+    usage: AgentCallUsage | undefined;
+  }
+): { outcome: AgentSpawnResult; keepLive: boolean } {
+  const { options, outcome, usage } = kept;
+  if (!(kept.creatingSession && options.session !== undefined)) {
+    return { outcome: usage ? { ...outcome, usage } : outcome, keepLive: false };
+  }
+  const alive = ctx.orchestrator.getScoops().some((s) => s.jid === kept.jid);
+  if (!alive || options.signal?.aborted === true) {
+    return { outcome, keepLive: false };
+  }
+  ctx.sessions.set(options.session, {
+    id: options.session,
+    jid: kept.jid,
+    folder: kept.folder,
+    nameToken: kept.nameToken,
+    scratchFolder: kept.scratchFolder,
+    fingerprint: kept.prefixFingerprint,
+    lastUsed: ctx.now(),
+    busy: false,
+  });
+  const stored = ctx.sessions.get(options.session);
+  if (stored) armIdleTimer(ctx, stored);
+  return {
+    outcome: withSessionMeta(outcome, options.session, 'created', usage),
+    keepLive: true,
+  };
+}
+
+/**
+ * Register a new agent scoop and run one turn. A named session stays
+ * registered when the turn finishes; every other spawn is cleaned up.
+ */
+async function launchNewAgentScoop(
+  ctx: BridgeContext,
+  launch: LaunchArgs
+): Promise<AgentSpawnResult> {
+  let options = launch.options;
+  const {
+    effectiveModelId,
+    effectiveModelProviderId,
+    effectiveThinkingLevel,
+    prefixFingerprint,
+    creatingSession,
+  } = launch;
+  const nameToken =
+    creatingSession || options.name === undefined ? pickFreshNameToken(ctx) : options.name;
+  const folder = `agent-${nameToken}`;
+  const jid = `agent_${tokenToJid(nameToken)}`;
+  // A fixed name bypasses pickFreshNameToken's collision guard: if a scoop
+  // with this JID is still registered — a detached run still in flight, or a
+  // crashed one not yet cleaned up — reusing the name would clobber its
+  // session history and scratch folder. Reject rather than collide; the
+  // random path can never hit this (it excludes live JIDs by construction).
+  const liveJids = new Set(ctx.orchestrator.getScoops().map((s) => s.jid));
+  if (!creatingSession && options.name !== undefined && liveJids.has(jid)) {
+    return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${nameToken}`, exitCode: 1 };
+  }
+  // Same rejection for a live rival (see `exclusiveWith`): a malformed
+  // rival token maps to a jid nothing can register under, so it never matches.
+  const rival = (options.exclusiveWith ?? []).find((n) => liveJids.has(`agent_${tokenToJid(n)}`));
+  if (rival !== undefined) {
+    if (creatingSession && options.session !== undefined)
+      ctx.pendingSessions.delete(options.session);
+    return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${rival}`, exitCode: 1 };
+  }
+  const scratchFolder = `/scoops/${folder}`;
+  // The scratch folder is unique per scoop. Naming it here, not in the
+  // system prompt, is what lets the next identical call read the cache.
+  if (options.cacheStablePrompt) {
+    options = {
+      ...options,
+      prompt: cacheStableUserPrompt(options.prompt, options.cwd, scratchFolder),
+    };
+  }
+
+  // Ownership edge: the invoking unit when the caller supplied it,
+  // otherwise the default root — a spawned agent always has an owner.
+  // (`originToolCallId` stays never-inferred; this is ownership, not
+  // tool-call provenance.)
+  const parentJid = options.parentJid ?? rootsOf(ctx.orchestrator.getScoops())[0]?.jid ?? null;
+  const scoopConfig = buildScoopConfig(
+    options,
+    effectiveModelId,
+    effectiveModelProviderId,
+    effectiveThinkingLevel,
+    scratchFolder,
+    resolveOwnerVisibleRoots(ctx.orchestrator, parentJid)
+  );
+
+  const scoop: RegisteredScoop = {
+    jid,
+    name: folder,
+    folder,
+    requiresTrigger: false,
+    assistantLabel: folder,
+    addedAt: new Date().toISOString(),
+    config: scoopConfig,
+    configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    notifyOnComplete: options.notifyOnComplete === true,
+    parentJid,
+    // Defer the ready-path cone notify until after the receipt is written
+    // so a non-zero exit is not reported as `completed` (#3460).
+    ...(options.outcomeReceiptPath ? { outcomeReceiptPath: options.outcomeReceiptPath } : {}),
+  };
+
+  const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
+  // Caller-held cancel: stop the running scoop so an abandoned wait
+  // actually reclaims the run instead of letting it keep billing.
+  const onAbort = (): void => {
+    try {
+      ctx.orchestrator.stopScoop(jid);
+    } catch (err) {
+      log.warn('stopScoop on abort failed', { jid, error: errText(err) });
+    }
+  };
+  // Attach BEFORE the aborted-check, then re-check: an abort landing in
+  // the window between check and attach would otherwise be missed
+  // (AbortSignal fires exactly once), leaving stopScoop uncalled and the
+  // cancellation deferred to the post-run gate — the 30s+ window this is
+  // meant to eliminate.
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) {
+    options.signal.removeEventListener('abort', onAbort);
+    observerHandle.unsubscribe?.();
+    if (creatingSession && options.session !== undefined) {
+      ctx.pendingSessions.delete(options.session);
+    }
+    return { finalText: 'agent: aborted before start', exitCode: 1 };
+  }
+
+  // Held so the `finally` can archive the transcript with the real exit
+  // code, whatever path `runScoopToOutcome` leaves through.
+  let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
+  let keepLive = false;
+  try {
+    const before = messageCount(ctx, jid) ?? 0;
+    const finished = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
+    outcome = finished.outcome;
+    // Publish the final outcome to the cone AFTER status.json is written
+    // (when it actually landed) and AFTER any bound-trip draft promotion,
+    // so the headline matches the durable receipt (#3460). Must run before
+    // cleanup unregisters the scoop (notifyWithOutcome looks it up).
+    await maybeNotifyPassOutcome(ctx, options, jid, finished);
+    const usage = usageForCall(ctx, jid, before);
+    const kept = keepFinishedSession(ctx, {
+      options,
+      creatingSession,
+      jid,
+      folder,
+      nameToken,
+      scratchFolder,
+      prefixFingerprint,
+      outcome,
+      usage,
+    });
+    outcome = kept.outcome;
+    keepLive = kept.keepLive;
+    return outcome;
+  } finally {
+    options.signal?.removeEventListener('abort', onAbort);
+    observerHandle.unsubscribe?.();
+    // Archive the transcript BEFORE cleanupScoop drops the IDB session and
+    // the ScoopContext the history is read from. Runs on success AND failure.
+    // A kept session skips cleanup so the next call can resume it.
+    await writeAgentSessionArchive(ctx, options, jid, nameToken, outcome);
+    if (creatingSession && options.session !== undefined) {
+      ctx.pendingSessions.delete(options.session);
+    }
+    if (!keepLive) {
+      await cleanupScoop(ctx, jid, folder, scratchFolder);
+    }
+  }
 }
 
 /**
@@ -1374,6 +1918,13 @@ function normalizeRwPrefix(path: string): string {
 function resolvedWorkspaceMode(raw: WorkspaceIsolationMode | undefined): ImplementedWorkspaceMode {
   const parsed = parseWorkspaceMode(raw);
   return parsed.ok ? parsed.mode : DEFAULT_CHILD_WORKSPACE_MODE;
+}
+
+/** Writable grant a resume must match. Scratch and `/tmp/` are added later. */
+function grantedWritablePaths(options: AgentSpawnOptions): string[] {
+  const cwdPrefix = normalizeRwPrefix(options.cwd);
+  const mode = resolvedWorkspaceMode(options.workspaceMode);
+  return resolveWritablePaths(options.writablePaths, cwdPrefix, mode);
 }
 
 function resolveWritablePaths(

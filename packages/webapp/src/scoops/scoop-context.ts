@@ -357,6 +357,15 @@ export class ScoopContext {
     return { captured: this.structuredOutputCaptured, value: this.structuredOutputValue };
   }
 
+  /**
+   * Drop the previous turn's capture. The tool keeps the first value of a
+   * turn, so a resumed session would otherwise return that stale JSON.
+   */
+  resetStructuredOutput(): void {
+    this.structuredOutputCaptured = false;
+    this.structuredOutputValue = undefined;
+  }
+
   /** Whether a prompt is active or the underlying agent is still streaming. */
   get isBusy(): boolean {
     return this.isProcessing || (this.agent?.state?.isStreaming ?? false);

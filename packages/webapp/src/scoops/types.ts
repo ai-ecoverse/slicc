@@ -325,6 +325,30 @@ export interface ScoopConfig {
    * its result in the specified schema shape.
    */
   structuredOutputSchema?: JsonSchemaObject;
+  /**
+   * Replace the assembled system prompt. A fixed safety trailer is still
+   * appended. Sandbox grants do not depend on this text.
+   */
+  systemPromptOverride?: string;
+  /**
+   * Skip skills, memories, and the capability essay. A short stable prompt
+   * plus the safety trailer is used instead, unless
+   * {@link ScoopConfig.systemPromptOverride} is set.
+   */
+  minimalSystemPrompt?: boolean;
+  /**
+   * Omit the random scratch folder from the system prompt so identical
+   * `agent` spawns share a prompt-cache prefix. The folder is named in the
+   * user message. Set by the `agent` command; other bridge callers leave it
+   * unset and keep today's prompt.
+   */
+  cacheStablePrompt?: boolean;
+  /** Working directory named by a cache-stable prompt's user-message preamble. */
+  promptCwd?: string;
+  /**
+   * Tool set for this unit. Unset means `full`. See `agent-tool-surface.ts`.
+   */
+  toolSurface?: 'auto' | 'full' | 'output';
 }
 
 /** Message from any channel */
