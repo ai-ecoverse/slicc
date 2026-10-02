@@ -186,6 +186,8 @@ describe('chrome-launch', () => {
       '--enable-features=Vulkan',
       '--use-angle=vulkan',
       '--ignore-gpu-blocklist',
+
+      '--disable-vulkan-surface',
     ];
 
     it('a hosted leader disables the GPU by default', () => {

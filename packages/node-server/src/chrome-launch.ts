@@ -277,7 +277,8 @@ export function buildChromeLaunchArgs(options: {
         '--enable-unsafe-webgpu',
         '--enable-features=Vulkan',
         '--use-angle=vulkan',
-        '--ignore-gpu-blocklist'
+        '--ignore-gpu-blocklist',
+        '--disable-vulkan-surface'
       );
     } else {
       args.push('--disable-gpu');
