@@ -5123,7 +5123,7 @@ describe('playwright-cli flag additions (Task 5)', () => {
     expect(browser.dblclickByBackendNodeId).toHaveBeenCalledWith(42, 'left', 1);
   });
 
-  // 4. type --submit fires Enter key events
+  // 4. type --submit fires Enter key events (with text/keyCode for form submit)
   it('type --submit fires Enter key events after type', async () => {
     const mockTransport = { send: vi.fn().mockResolvedValue({}) };
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
@@ -5132,12 +5132,24 @@ describe('playwright-cli flag additions (Task 5)', () => {
     expect(result.exitCode).toBe(0);
     expect(mockTransport.send).toHaveBeenCalledWith(
       'Input.dispatchKeyEvent',
-      { type: 'keyDown', key: 'Enter' },
+      {
+        type: 'keyDown',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        text: '\r',
+        unmodifiedText: '\r',
+      },
       'session-1'
     );
     expect(mockTransport.send).toHaveBeenCalledWith(
       'Input.dispatchKeyEvent',
-      { type: 'keyUp', key: 'Enter' },
+      {
+        type: 'keyUp',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+      },
       'session-1'
     );
   });
@@ -5166,7 +5178,14 @@ describe('playwright-cli flag additions (Task 5)', () => {
       (c) => c[0] === 'Input.dispatchKeyEvent' && (c[1] as { type: string }).type === 'keyDown'
     );
     expect(enterDown).toBeDefined();
-    expect(enterDown![1]).toEqual({ type: 'keyDown', key: 'Enter' });
+    expect(enterDown![1]).toEqual({
+      type: 'keyDown',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+      text: '\r',
+      unmodifiedText: '\r',
+    });
   });
 
   // 6. cookie-list --domain filters by domain
