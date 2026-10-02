@@ -23,6 +23,22 @@ function nodeNeedsRef(role: string, name: string): boolean {
   return !!name || REF_ROLES.includes(role);
 }
 
+export function formatAriaStates(description: string | undefined): string {
+  if (!description) return '';
+  const parts: string[] = [];
+  for (const raw of description
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    if (raw === 'collapsed') {
+      parts.push('[expanded=false]');
+      continue;
+    }
+    parts.push(`[${raw}]`);
+  }
+  return parts.length > 0 ? ` ${parts.join(' ')}` : '';
+}
+
 function buildRefSelector(role: string, name: string): string {
   const escapedName = escapeCssAttr(name);
   if (role === 'button' && name) {
@@ -76,6 +92,8 @@ export function renderNode(
   let line = `${indent}- ${role}`;
   if (name) line += ` "${escapeYaml(name)}"`;
   if (ref) line += ` [ref=${ref}]`;
+
+  line += formatAriaStates(node.description);
   if (value) line += `: "${escapeYaml(value)}"`;
   lines.push(line);
 

@@ -65,6 +65,8 @@ playwright-cli snapshot --tab=E9A3F
 
 Snapshots assign short ref IDs (`e1`, `e2`, ...) to interactive elements. Use these refs with `click`, `fill`, `dblclick`, `hover`, `select`, `check`, `uncheck`, `drag`, `upload`, `drop`, and `screenshot`.
 
+When present, accessibility states appear after the ref in Playwright aria-snapshot form — `[checked]`, `[checked=mixed]`, `[expanded]` / `[expanded=false]`, `[selected]`, `[pressed]`, `[disabled]`, `[level=N]` — so a re-snapshot shows whether a radio, disclosure, tab, or toggle changed.
+
 Refs are invalidated after any state-changing command. Always re-snapshot to get fresh refs.
 
 ## Commands

@@ -4901,12 +4901,24 @@ describe('playwright-cli flag additions (Task 5)', () => {
     expect(result.exitCode).toBe(0);
     expect(mockTransport.send).toHaveBeenCalledWith(
       'Input.dispatchKeyEvent',
-      { type: 'keyDown', key: 'Enter' },
+      {
+        type: 'keyDown',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        text: '\r',
+        unmodifiedText: '\r',
+      },
       'session-1'
     );
     expect(mockTransport.send).toHaveBeenCalledWith(
       'Input.dispatchKeyEvent',
-      { type: 'keyUp', key: 'Enter' },
+      {
+        type: 'keyUp',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+      },
       'session-1'
     );
   });
@@ -4934,7 +4946,14 @@ describe('playwright-cli flag additions (Task 5)', () => {
       (c) => c[0] === 'Input.dispatchKeyEvent' && (c[1] as { type: string }).type === 'keyDown'
     );
     expect(enterDown).toBeDefined();
-    expect(enterDown![1]).toEqual({ type: 'keyDown', key: 'Enter' });
+    expect(enterDown![1]).toEqual({
+      type: 'keyDown',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+      text: '\r',
+      unmodifiedText: '\r',
+    });
   });
 
   it('cookie-list --domain filters cookies by domain', async () => {
