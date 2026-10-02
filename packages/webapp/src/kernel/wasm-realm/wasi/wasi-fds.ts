@@ -268,12 +268,20 @@ export class WasiFds {
       .sort((a, b) => a - b);
   }
 
-  /** The descriptors known to be terminals (a `/dev/tty` the program opened), lowest first. */
+  /**
+   * The descriptors that are terminals (a `/dev/tty` the program opened),
+   * lowest first: with threads, the kernel's table, since another thread may
+   * have opened it.
+   */
   terminals(): number[] {
-    return [...this.table]
-      .filter(([, e]) => e.type === 'kernel' && e.kind === 'tty')
-      .map(([fd]) => fd)
-      .sort((a, b) => a - b);
+    const fds = this.shared
+      ? (this.kernel.call({ op: 'fd-list' }) as Array<FdInfo & { fd: number }>)
+          .filter((info) => info.tty)
+          .map((info) => info.fd)
+      : [...this.table]
+          .filter(([, e]) => e.type === 'kernel' && e.kind === 'tty')
+          .map(([fd]) => fd);
+    return fds.sort((a, b) => a - b);
   }
 
   /** A kernel descriptor the kernel just made (an accepted connection), at its number. */

@@ -210,6 +210,13 @@ describe('WasiFds shared by threads (5d)', () => {
     return { kernel, a, b };
   }
 
+  it("a terminal one thread opened is the other's too (tty_get / tty_set find it)", () => {
+    const { kernel, a, b } = twoThreads();
+    kernel.tty = true;
+    const fd = a.open('/dev/tty', 0, 0n, 0);
+    expect(b.terminals()).toEqual([fd]);
+  });
+
   it('a new thread finds the preopens, and `.`, through the kernel', () => {
     const { b } = twoThreads();
     expect(b.cwd()).toBe('/workspace');

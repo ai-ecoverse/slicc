@@ -37,13 +37,12 @@ export type ChildStdio =
 
 /**
  * A program fd beyond 0-2 the child inherits: the parent's kernel descriptor
- * `kernel`, and for a socket its status flags (O_NONBLOCK).
+ * `kernel`, and for a socket its status flags (O_NONBLOCK) — or `/dev/null`
+ * (a spawn file action's), which is no descriptor of the parent's.
  */
-export interface InheritedSlot {
-  fd: number;
-  kernel: number;
-  flags?: number;
-}
+export type InheritedSlot =
+  | { fd: number; kernel: number; flags?: number }
+  | { fd: number; null: true };
 
 export interface ChildSpawnRequest {
   /** The program: a name or a path, as the parent passed it. */
@@ -182,10 +181,14 @@ export class ChildTable {
     try {
       for (const [n, slot] of stdio.entries()) fds.installAt(n, this.openSlot(slot, n, captured));
       // stdio is the file actions' to decide; an inherited 0-2 is already a slot.
-      for (const { fd, kernel, flags } of inherit) {
-        if (fd <= 2) continue;
-        fds.installAt(fd, this.parentFds.get(kernel).retain());
-        if (flags !== undefined) fds.setStatusFlags(fd, flags);
+      for (const slot of inherit) {
+        if (slot.fd <= 2) continue;
+        if ('null' in slot) {
+          fds.installAt(slot.fd, nullFile());
+          continue;
+        }
+        fds.installAt(slot.fd, this.parentFds.get(slot.kernel).retain());
+        if (slot.flags !== undefined) fds.setStatusFlags(slot.fd, slot.flags);
       }
     } catch (e) {
       await fds.closeAll();

@@ -271,6 +271,15 @@ describe('WASIX: spawn fd operations', () => {
     });
   });
 
+  it('a /dev/null open beyond stdio is inherited as a null slot, not dropped', () => {
+    const t = setup();
+    spawn(t, ops(t, [[OPEN, 5, 0, '/dev/null']]), 1);
+    expect(t.kernel.opened).toEqual([]);
+    expect(t.kernel.calls.find((c) => c.op === 'proc-spawn')).toMatchObject({
+      inherit: [{ fd: 5, null: true }],
+    });
+  });
+
   it("drops its metadata cache after a spawn and a child's end (the child changes the VFS)", () => {
     const t = setup();
     const invalidate = vi.fn();

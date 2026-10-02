@@ -106,9 +106,10 @@ export class WasixProcess {
       const k = map.get(fd);
       return k === undefined ? { none: true } : { fd: k };
     });
-    const inherit: InheritedSlot[] = [...map]
-      .filter(([fd]) => fd > 2)
-      .map(([fd, kernel]) => ({ fd, kernel }));
+    const inherit: InheritedSlot[] = [
+      ...[...map].filter(([fd]) => fd > 2).map(([fd, kernel]) => ({ fd, kernel })),
+      ...[...nulls].filter((fd) => fd > 2).map((fd) => ({ fd, null: true as const })),
+    ];
     return { stdio, inherit, cwd, opened };
   }
 
@@ -121,7 +122,7 @@ export class WasixProcess {
     const { map, nulls, opened } = slots;
     const { fds } = this.host;
     const point = (fd: number, kfd: number | undefined) => {
-      // undefined: /dev/null, which is no VFS file (a stdio slot without a descriptor is the child's /dev/null).
+      // undefined: /dev/null, which is no VFS file (stdio: no descriptor; beyond: a null slot).
       if (kfd === undefined) {
         map.delete(fd);
         nulls.add(fd);

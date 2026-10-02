@@ -75,6 +75,15 @@ describe('ChildTable', () => {
     expect(out).toEqual(['via 63', ' still']);
   });
 
+  it('gives an inherited /dev/null slot (a spawn file action beyond 0-2) a null descriptor', async () => {
+    const { spawner, tables } = controllable();
+    const children = new ChildTable(new FdTable(), spawner);
+    await children.spawn(REQ, [{ none: true }], [{ fd: 9, null: true }]);
+    const [child] = tables;
+    expect(child!.numbers()).toEqual([0, 9]);
+    expect(await readAll(child!, 9)).toBe('');
+  });
+
   it('fails an inherited slot naming a closed parent descriptor with EBADF, releasing the rest', async () => {
     const { spawner } = controllable();
     const parent = new FdTable();
