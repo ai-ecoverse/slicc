@@ -10,9 +10,10 @@
  * relative paths through `.`), then one absolute preopen per top-level VFS
  * directory, and the shell's synthetic `/usr` and `/bin` (the command
  * registry, which `/` does not list), so a program that searches `$PATH`
- * itself (cargo finding `cargo`) sees `/usr/bin/<command>`. `/` itself is never one: wasi-libc lets it shadow `.`. Go takes
- * its cwd from `$PWD`. An absolute path on any directory fd resolves from
- * the VFS root (Zig hands absolute paths to fd 3): the process's fs token
+ * itself (cargo finding `cargo`) sees `/usr/bin/<command>`. `/` itself is
+ * never one: wasi-libc lets it shadow `.`. Go takes its cwd from `$PWD`.
+ * An absolute path on any directory fd resolves from the VFS root (Zig
+ * hands absolute paths to fd 3): the process's fs token
  * bounds what it can reach, so WASI rights add nothing and every descriptor
  * carries them all.
  */
@@ -20,10 +21,6 @@ import type { SyncFsBridgeStat, SyncFsPosixBridge } from '../../realm/sync-fs-xh
 import type { HeldMeta, KernelFdKind } from '../fd-table.js';
 import type { ProcessSys } from '../kernel-streams.js';
 import type { FdInfo, WasmSyscall } from '../process.js';
-
-/** Directories the shell synthesizes without listing them at `/`: the command registry. */
-const SYNTHETIC_DIRS = ['usr', 'bin'];
-
 import { FDFLAGS, OFLAGS, RIGHTS } from './wasi-abi.js';
 import {
   FileBuffer,
@@ -33,6 +30,9 @@ import {
   type WasiEntry,
   WasiError,
 } from './wasi-files.js';
+
+/** Directories the shell synthesizes without listing them at `/`: the command registry. */
+const SYNTHETIC_DIRS = ['usr', 'bin'];
 
 /** The kernel as the WASI host calls it. */
 export interface WasiKernel {
