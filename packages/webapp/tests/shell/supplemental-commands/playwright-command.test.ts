@@ -5137,7 +5137,6 @@ describe('playwright-cli flag additions (Task 5)', () => {
         key: 'Enter',
         code: 'Enter',
         windowsVirtualKeyCode: 13,
-        nativeVirtualKeyCode: 13,
         text: '\r',
         unmodifiedText: '\r',
       },
@@ -5150,7 +5149,6 @@ describe('playwright-cli flag additions (Task 5)', () => {
         key: 'Enter',
         code: 'Enter',
         windowsVirtualKeyCode: 13,
-        nativeVirtualKeyCode: 13,
       },
       'session-1'
     );
@@ -5185,7 +5183,6 @@ describe('playwright-cli flag additions (Task 5)', () => {
       key: 'Enter',
       code: 'Enter',
       windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
       text: '\r',
       unmodifiedText: '\r',
     });

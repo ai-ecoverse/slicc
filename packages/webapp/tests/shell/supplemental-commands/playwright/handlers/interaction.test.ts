@@ -218,7 +218,6 @@ const ENTER_KEY_DOWN = {
   key: 'Enter',
   code: 'Enter',
   windowsVirtualKeyCode: 13,
-  nativeVirtualKeyCode: 13,
   text: '\r',
   unmodifiedText: '\r',
 };
@@ -227,7 +226,6 @@ const ENTER_KEY_UP = {
   key: 'Enter',
   code: 'Enter',
   windowsVirtualKeyCode: 13,
-  nativeVirtualKeyCode: 13,
 };
 
 describe('keyboard + type handlers', () => {
@@ -269,7 +267,6 @@ describe('keyboard + type handlers', () => {
         key: 'Escape',
         code: 'Escape',
         windowsVirtualKeyCode: 27,
-        nativeVirtualKeyCode: 27,
       },
       'session-1'
     );
@@ -288,7 +285,6 @@ describe('keyboard + type handlers', () => {
         key: 'A',
         code: 'KeyA',
         windowsVirtualKeyCode: 65,
-        nativeVirtualKeyCode: 65,
         text: 'A',
         unmodifiedText: 'A',
       },

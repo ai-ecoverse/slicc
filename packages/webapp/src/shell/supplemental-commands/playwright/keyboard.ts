@@ -3,8 +3,9 @@
  *
  * Chrome ignores bare `{ key: 'Enter' }` for form submit: without
  * `text: '\r'` there is no keypress/char, and without
- * `windowsVirtualKeyCode: 13` the DOM `keyCode` is 0. Matches the
- * Playwright / Puppeteer US keyboard layout fields that matter for CDP.
+ * `windowsVirtualKeyCode: 13` the DOM `keyCode` is 0. Field set matches
+ * Playwright/Puppeteer (US layout): `windowsVirtualKeyCode` only — never
+ * mirror that value into `nativeVirtualKeyCode` (platform-native on macOS/Linux).
  */
 
 export interface KeyDefinition {
@@ -21,7 +22,6 @@ export interface CdpKeyEventParams {
   key: string;
   code: string;
   windowsVirtualKeyCode: number;
-  nativeVirtualKeyCode: number;
   text?: string;
   unmodifiedText?: string;
   /** Satisfies CDP transport `CdpPayload` / `CDPPayload` index signatures. */
@@ -63,6 +63,46 @@ for (let i = 1; i <= 12; i++) {
   NAMED_KEYS[`F${i}`] = { key: `F${i}`, code: `F${i}`, keyCode: 111 + i };
 }
 
+/**
+ * US keyboard punctuation (and shifted digits): physical `code` + Windows VK.
+ * Aligned with Playwright / Puppeteer `USKeyboardLayout` main-keyboard rows
+ * (not Numpad aliases).
+ */
+const PRINTABLE: Record<string, KeyDefinition> = {
+  ';': { key: ';', code: 'Semicolon', keyCode: 186, text: ';' },
+  '=': { key: '=', code: 'Equal', keyCode: 187, text: '=' },
+  ',': { key: ',', code: 'Comma', keyCode: 188, text: ',' },
+  '-': { key: '-', code: 'Minus', keyCode: 189, text: '-' },
+  '.': { key: '.', code: 'Period', keyCode: 190, text: '.' },
+  '/': { key: '/', code: 'Slash', keyCode: 191, text: '/' },
+  '`': { key: '`', code: 'Backquote', keyCode: 192, text: '`' },
+  '[': { key: '[', code: 'BracketLeft', keyCode: 219, text: '[' },
+  '\\': { key: '\\', code: 'Backslash', keyCode: 220, text: '\\' },
+  ']': { key: ']', code: 'BracketRight', keyCode: 221, text: ']' },
+  "'": { key: "'", code: 'Quote', keyCode: 222, text: "'" },
+  ':': { key: ':', code: 'Semicolon', keyCode: 186, text: ':' },
+  '+': { key: '+', code: 'Equal', keyCode: 187, text: '+' },
+  '<': { key: '<', code: 'Comma', keyCode: 188, text: '<' },
+  _: { key: '_', code: 'Minus', keyCode: 189, text: '_' },
+  '>': { key: '>', code: 'Period', keyCode: 190, text: '>' },
+  '?': { key: '?', code: 'Slash', keyCode: 191, text: '?' },
+  '~': { key: '~', code: 'Backquote', keyCode: 192, text: '~' },
+  '{': { key: '{', code: 'BracketLeft', keyCode: 219, text: '{' },
+  '|': { key: '|', code: 'Backslash', keyCode: 220, text: '|' },
+  '}': { key: '}', code: 'BracketRight', keyCode: 221, text: '}' },
+  '"': { key: '"', code: 'Quote', keyCode: 222, text: '"' },
+  ')': { key: ')', code: 'Digit0', keyCode: 48, text: ')' },
+  '!': { key: '!', code: 'Digit1', keyCode: 49, text: '!' },
+  '@': { key: '@', code: 'Digit2', keyCode: 50, text: '@' },
+  '#': { key: '#', code: 'Digit3', keyCode: 51, text: '#' },
+  $: { key: '$', code: 'Digit4', keyCode: 52, text: '$' },
+  '%': { key: '%', code: 'Digit5', keyCode: 53, text: '%' },
+  '^': { key: '^', code: 'Digit6', keyCode: 54, text: '^' },
+  '&': { key: '&', code: 'Digit7', keyCode: 55, text: '&' },
+  '*': { key: '*', code: 'Digit8', keyCode: 56, text: '*' },
+  '(': { key: '(', code: 'Digit9', keyCode: 57, text: '(' },
+};
+
 /** Resolve a playwright-cli key name to a layout definition. */
 export function resolveKeyDefinition(keyName: string): KeyDefinition {
   const named = NAMED_KEYS[keyName];
@@ -75,6 +115,9 @@ export function resolveKeyDefinition(keyName: string): KeyDefinition {
   }
 
   if (keyName.length === 1) {
+    const printable = PRINTABLE[keyName];
+    if (printable) return printable;
+
     const ch = keyName;
     const lower = ch.toLowerCase();
     if (lower >= 'a' && lower <= 'z') {
@@ -88,7 +131,7 @@ export function resolveKeyDefinition(keyName: string): KeyDefinition {
     if (ch >= '0' && ch <= '9') {
       return { key: ch, code: `Digit${ch}`, keyCode: ch.charCodeAt(0), text: ch };
     }
-    // Punctuation / other printable: emit text; code unknown → reuse key.
+    // Unknown printable: still emit text so typing works; code/VK best-effort.
     return { key: ch, code: ch, keyCode: ch.charCodeAt(0), text: ch };
   }
 
@@ -104,7 +147,6 @@ export function keyEventParams(keyName: string, type: 'keyDown' | 'keyUp'): CdpK
     key: def.key,
     code: def.code,
     windowsVirtualKeyCode: def.keyCode,
-    nativeVirtualKeyCode: def.keyCode,
   };
   // text/unmodifiedText only on keyDown — that is what produces keypress/char
   // and triggers Chrome's implicit form submit for Enter.

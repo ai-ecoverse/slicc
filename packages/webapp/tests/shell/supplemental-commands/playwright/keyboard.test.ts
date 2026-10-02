@@ -13,7 +13,6 @@ describe('playwright keyboard CDP payloads', () => {
       key: 'Enter',
       code: 'Enter',
       windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
       text: '\r',
       unmodifiedText: '\r',
     });
@@ -22,9 +21,10 @@ describe('playwright keyboard CDP payloads', () => {
       key: 'Enter',
       code: 'Enter',
       windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
     });
     expect(keyUp).not.toHaveProperty('text');
+    expect(keyDown).not.toHaveProperty('nativeVirtualKeyCode');
+    expect(keyUp).not.toHaveProperty('nativeVirtualKeyCode');
   });
 
   it('accepts enter / Return aliases', () => {
@@ -38,7 +38,6 @@ describe('playwright keyboard CDP payloads', () => {
       key: 'Escape',
       code: 'Escape',
       windowsVirtualKeyCode: 27,
-      nativeVirtualKeyCode: 27,
     });
     expect(keyEventParams('ArrowLeft', 'keyDown').windowsVirtualKeyCode).toBe(37);
     expect(keyEventParams('ArrowLeft', 'keyDown')).not.toHaveProperty('text');
@@ -61,6 +60,27 @@ describe('playwright keyboard CDP payloads', () => {
       code: 'Digit5',
       keyCode: 53,
       text: '5',
+    });
+  });
+
+  it('punctuation uses US layout code and Windows VK', () => {
+    expect(resolveKeyDefinition(';')).toEqual({
+      key: ';',
+      code: 'Semicolon',
+      keyCode: 186,
+      text: ';',
+    });
+    expect(resolveKeyDefinition('?')).toEqual({
+      key: '?',
+      code: 'Slash',
+      keyCode: 191,
+      text: '?',
+    });
+    expect(resolveKeyDefinition('@')).toEqual({
+      key: '@',
+      code: 'Digit2',
+      keyCode: 50,
+      text: '@',
     });
   });
 });
