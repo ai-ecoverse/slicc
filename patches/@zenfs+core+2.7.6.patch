@@ -14,7 +14,7 @@ index 1e20478..51f47b7 100644
                  if (metadata.size < data.byteLength)
                      data.fill(0, metadata.size);
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 26aaf3a..82d80c0 100644
+index 26aaf3a..f030c48 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
 @@ -54,7 +54,10 @@ var __disposeResources = (this && this.__disposeResources) || (function (Suppres
@@ -325,21 +325,126 @@ index 26aaf3a..82d80c0 100644
          }
          /**
           * @internal
-@@ -283,8 +486,14 @@ export function Async(FS) {
+@@ -258,42 +461,86 @@ export function Async(FS) {
+         _patchAsync() {
+             const noPatch = ['read', 'readdir', 'stat', 'exists'];
+             const toPatch = _asyncFSKeys.filter(key => !noPatch.includes(key));
+-            for (const key of toPatch) {
+-                // TS does not narrow the union based on the key
+-                const originalMethod = this[key].bind(this);
+-                function isInLoop(depth, error) {
+-                    if (!error) {
+-                        error = new Error();
+-                        Error.captureStackTrace(error, isInLoop);
+-                    }
+-                    if (!error.stack)
+-                        return false;
+-                    const stack = error.stack.split('\n').slice(depth).join('\n');
+-                    // From the async queue
+-                    return (stack.includes(`at <computed> [as ${key}]`)
+-                        || stack.includes(`at async <computed> [as ${key}]`)
+-                        || stack.includes(`${key}Sync `));
++            // PATCH(slicc WebKit rename): whether a call is "in the loop" is read
++            // from stack traces. Upstream matched V8's frame text only (`at
++            // <computed> [as write]`), so in JavaScriptCore and SpiderMonkey no
++            // call ever was: a mirror update that fails because an outer call
++            // is mid-flight (IndexFS.rename writing the new path before the
++            // mirror has it) threw ENOENT instead of being skipped, and every
++            // rename of a file failed. Each wrapper is now a function with a
++            // literal name, `zenfsMirror_<key>`, which every engine prints in
++            // its stack frames (a computed or assigned name is not printed by
++            // JavaScriptCore), and the frames are compared in any format.
++            const wrapperName = (key) => `zenfsMirror_${key}`;
++            const isFrameOf = (key, line) => line.includes(wrapperName(key))
++                || line.includes(`<computed> [as ${key}]`)
++                || line.includes(`${key}Sync `)
++                || line.includes(`${key}Sync@`);
++            /** A stack's frames, without V8's leading `Error: message` line. */
++            const framesOf = (error) => {
++                const lines = (error?.stack ?? '').split('\n').filter(Boolean);
++                const v8 = lines.slice(1).some(line => /^\s*at /.test(line));
++                if (v8 && !/^\s*at /.test(lines[0] ?? ''))
++                    lines.shift();
++                return lines;
++            };
++            /** Called (awaited) from another call of the same method, or from its sync counterpart. */
++            const isNested = (key) => {
++                const frames = framesOf(new Error());
++                const own = frames.findIndex(line => line.includes(wrapperName(key)) || line.includes(`<computed> [as ${key}]`));
++                return frames.slice(own + 1).some(line => isFrameOf(key, line));
++            };
++            /** The mirror call failed beneath a call of the same method (V8's upstream rule: past the error's first two frames). */
++            const failedInLoop = (key, error) => framesOf(error).slice(2).some(line => isFrameOf(key, line));
++            const mirrored = async (key, originalMethod, args) => {
++                const result = await originalMethod(...args);
++                if (isNested(key))
++                    return result;
++                if (!this._isInitialized) {
++                    this._skippedCacheUpdates++;
++                    return result;
+                 }
+-                this[key] = async (...args) => {
+-                    const result = await originalMethod(...args);
+-                    if (isInLoop(2))
++                try {
++                    // PATCH(slicc#3441, upstream zen-fs/core#322): keep large bodies out of the mirror.
++                    if (this._mirrorMetaOnly(key, args))
                          return result;
-                     }
-                     try {
-+                        // PATCH(slicc#3441, upstream zen-fs/core#322): keep large bodies out of the mirror.
-+                        if (this._mirrorMetaOnly(key, args))
-+                            return result;
-                         // @ts-expect-error 2556 - The type of `args` is not narrowed
-+                        if (key === 'write')
-+                            this._prepareMetaWrite(args[0], args[2]);
-                         this._sync?.[`${key}Sync`]?.(...args);
-+                        this._followMetaOnly(key, args);
-                     }
-                     catch (e) {
-                         if (isInLoop(3, e))
+-                    if (!this._isInitialized) {
+-                        this._skippedCacheUpdates++;
++                    if (key === 'write')
++                        this._prepareMetaWrite(args[0], args[2]);
++                    this._sync?.[`${key}Sync`]?.(...args);
++                    this._followMetaOnly(key, args);
++                }
++                catch (e) {
++                    if (failedInLoop(key, e))
+                         return result;
+-                    }
+-                    try {
+-                        // @ts-expect-error 2556 - The type of `args` is not narrowed
+-                        this._sync?.[`${key}Sync`]?.(...args);
+-                    }
+-                    catch (e) {
+-                        if (isInLoop(3, e))
+-                            return result;
+-                        e.message += ' (Out of sync!)';
+-                        throw err(e);
+-                    }
+-                    return result;
+-                };
++                    e.message += ' (Out of sync!)';
++                    throw err(e);
++                }
++                return result;
++            };
++            const originals = {};
++            const wrappers = {
++                async zenfsMirror_rename(...args) { return await mirrored('rename', originals.rename, args); },
++                async zenfsMirror_stat(...args) { return await mirrored('stat', originals.stat, args); },
++                async zenfsMirror_touch(...args) { return await mirrored('touch', originals.touch, args); },
++                async zenfsMirror_createFile(...args) { return await mirrored('createFile', originals.createFile, args); },
++                async zenfsMirror_unlink(...args) { return await mirrored('unlink', originals.unlink, args); },
++                async zenfsMirror_rmdir(...args) { return await mirrored('rmdir', originals.rmdir, args); },
++                async zenfsMirror_mkdir(...args) { return await mirrored('mkdir', originals.mkdir, args); },
++                async zenfsMirror_readdir(...args) { return await mirrored('readdir', originals.readdir, args); },
++                async zenfsMirror_exists(...args) { return await mirrored('exists', originals.exists, args); },
++                async zenfsMirror_link(...args) { return await mirrored('link', originals.link, args); },
++                async zenfsMirror_sync(...args) { return await mirrored('sync', originals.sync, args); },
++                async zenfsMirror_read(...args) { return await mirrored('read', originals.read, args); },
++                async zenfsMirror_write(...args) { return await mirrored('write', originals.write, args); },
++                async zenfsMirror_ioctl(...args) { return await mirrored('ioctl', originals.ioctl, args); },
++            };
++            for (const key of toPatch) {
++                // TS does not narrow the union based on the key
++                originals[key] = this[key].bind(this);
++                const wrapper = wrappers[wrapperName(key)];
++                if (!wrapper)
++                    throw new Error(`Async: no mirror wrapper for ${key}`);
++                this[key] = wrapper;
+             }
+             debug(`Async: patched ${toPatch.length} methods`);
+         }
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
 index 44f7ed2..faea5dc 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js

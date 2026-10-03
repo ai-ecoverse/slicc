@@ -703,6 +703,27 @@ interrupted download fetches the file again instead of skipping it. Tests: `test
 `tests/fs/zenfs-opfs-read-retry.test.ts`, and
 `tests/shell/supplemental-commands/hf-download.test.ts`.
 
+## OPFS Sync Mirror: Stack Traces Are Engine-Specific
+
+**Files**: `patches/@zenfs+core+*.patch` (`Async._patchAsync`),
+`packages/webapp/tests/fs/zenfs-mirror-loop-stack-format.test.ts`.
+
+The same mirror decides from `error.stack` whether a call is nested in another call
+of the same method, and whether a failed mirror update happened under one; such a
+failure is skipped. Upstream matched V8's frame text only (`at <computed> [as
+write]`). JavaScriptCore prints `name@url:line:col` and no name at all for a
+computed or assigned function name, so on WebKit (Safari, every iOS browser,
+WKWebView) nothing matched. `IndexFS.rename` writes the new path through the
+mirrored `write` before the mirror has that entry, and that failure was rethrown:
+every file rename failed with ENOENT, which broke `mv`, git's lock files and
+`git init` (#3783). The patch names each wrapper literally (`zenfsMirror_<key>`, a
+name every engine prints) and compares frames in any format.
+
+Never assume V8's stack format in code that runs in the browser. Test code like
+this with `Error.prepareStackTrace` printing JavaScriptCore's format, as the test
+above does. Vitest installs its own formatter, so set `prepareStackTrace` to
+`undefined` to get V8's.
+
 ## OPFS Writes: Serialize Per Mount, Across Contexts
 
 **Files**: `packages/webapp/src/fs/virtual-fs.ts` (`withWriteLock`),
