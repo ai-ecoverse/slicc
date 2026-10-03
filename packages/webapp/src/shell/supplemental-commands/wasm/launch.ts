@@ -228,6 +228,29 @@ export function modulePath(glue: string): string {
   return glue.endsWith('.js') ? `${glue.slice(0, -3)}.wasm` : `${glue}.wasm`;
 }
 
+/** Enough of a file for its `#!` line. */
+const SHEBANG_PREFIX = 128;
+
+/**
+ * Whether `path` starts with a `#!` line for anything but node: an
+ * extensionless Emscripten glue's own `#!` is node's; any other is a script.
+ */
+async function isForeignScript(fs: CommandContext['fs'], path: string): Promise<boolean> {
+  const ranged = (
+    fs as { readFileRange?: (p: string, s: number, e: number) => Promise<Uint8Array> }
+  ).readFileRange;
+  let head: string;
+  try {
+    head = ranged
+      ? new TextDecoder().decode(await ranged.call(fs, path, 0, SHEBANG_PREFIX))
+      : (await fs.readFile(path)).slice(0, SHEBANG_PREFIX);
+  } catch {
+    return false;
+  }
+  if (!head.startsWith('#!')) return false;
+  return !/\bnode\b/.test(head.split('\n', 1)[0] ?? '');
+}
+
 /** The command a program path names: `/usr/bin/rm` and `rm` are `rm`. */
 function commandName(file: string): string {
   return REGISTRY_PATH.exec(file)?.[1] ?? baseName(file);
@@ -652,6 +675,9 @@ export class WasmSession {
     }
     const glue = this.ctx.fs.resolvePath(cwd, file);
     if (!(await this.ctx.fs.exists(glue))) return undefined;
+    // A `#!` script beside a module of its name (wasi-rustc's `bin/rustc`
+    // wrapper next to `bin/rustc.wasm`) is no glue: its interpreter runs it.
+    if (await isForeignScript(this.ctx.fs, glue)) return undefined;
     const module = modulePath(glue);
     if (await this.ctx.fs.exists(module)) return { glue, module, argv0: baseName(argv0 || file) };
     // A wasm module by itself: a WASI program (its name without `.wasm`, for a multi-call binary).

@@ -169,6 +169,26 @@ describe('WasmSession', () => {
     expect(await session.resolve(`${PKG}/bin/other`, 'other', '/w')).toBeUndefined();
   });
 
+  it('runs a #! wrapper beside a module of its name as a script, not as its glue', async () => {
+    const RUST = '/shared/lib/node_modules/@ai-ecoverse/wasi-rustc';
+    const session = new WasmSession(
+      ctx({
+        [`${RUST}/bin/rustc`]: '#!/bin/sh\nexec "$RUSTC_SYSROOT/bin/rustc.wasm" "$@"\n',
+        [`${RUST}/bin/rustc.wasm`]: 'W',
+        '/w/tool': '#!/usr/bin/env node\nvar Module;',
+        '/w/tool.wasm': 'W',
+      }),
+      undefined,
+      () => {}
+    );
+    expect(await session.resolve(`${RUST}/bin/rustc`, 'rustc', '/w')).toBeUndefined();
+    // An extensionless Emscripten glue keeps node's #! line: still a program.
+    expect(await session.resolve('/w/tool', './tool', '/w')).toMatchObject({
+      glue: '/w/tool',
+      module: '/w/tool.wasm',
+    });
+  });
+
   it('resolves installed names and paths with a module; nothing else', async () => {
     const session = new WasmSession(ctx(installed), undefined, () => {});
     expect(await session.resolve('tac', 'tac', '/w')).toEqual({
