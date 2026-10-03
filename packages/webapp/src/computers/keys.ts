@@ -7,6 +7,7 @@
  */
 
 import type { ComputerInputEvent } from '@slicc/shared-ts';
+import { resolveKeyDefinition } from '../shell/supplemental-commands/playwright/keyboard.js';
 
 export interface KeyModifiers {
   ctrl: boolean;
@@ -178,34 +179,12 @@ function splitChord(raw: string): string[] {
   return raw.split(/[-+]/u).filter(Boolean);
 }
 
-/** US punctuation Windows VK (Playwright / Puppeteer `USKeyboardLayout`). */
-const PUNCT: Record<string, KeyDef> = {
-  '.': { key: '.', code: 'Period', keyCode: 190, text: '.' },
-  ',': { key: ',', code: 'Comma', keyCode: 188, text: ',' },
-  '/': { key: '/', code: 'Slash', keyCode: 191, text: '/' },
-  ';': { key: ';', code: 'Semicolon', keyCode: 186, text: ';' },
-  "'": { key: "'", code: 'Quote', keyCode: 222, text: "'" },
-  '[': { key: '[', code: 'BracketLeft', keyCode: 219, text: '[' },
-  ']': { key: ']', code: 'BracketRight', keyCode: 221, text: ']' },
-  '\\': { key: '\\', code: 'Backslash', keyCode: 220, text: '\\' },
-  '`': { key: '`', code: 'Backquote', keyCode: 192, text: '`' },
-  '-': { key: '-', code: 'Minus', keyCode: 189, text: '-' },
-  '=': { key: '=', code: 'Equal', keyCode: 187, text: '=' },
-};
-
 function namedDef(token: string): KeyDef | null {
   const lower = token.toLowerCase();
   if (NAMED[lower]) return NAMED[lower];
   if (token.length === 1) {
-    const ch = token;
-    if (/[A-Za-z]/u.test(ch)) {
-      const upper = ch.toUpperCase();
-      return { key: ch, code: `Key${upper}`, keyCode: upper.charCodeAt(0), text: ch };
-    }
-    if (/[0-9]/u.test(ch)) {
-      return { key: ch, code: `Digit${ch}`, keyCode: ch.charCodeAt(0), text: ch };
-    }
-    return PUNCT[ch] ?? { key: ch, code: '', keyCode: ch.charCodeAt(0), text: ch };
+    const def = resolveKeyDefinition(token);
+    return { key: def.key, code: def.code, keyCode: def.keyCode, text: def.text };
   }
   return null;
 }

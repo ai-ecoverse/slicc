@@ -80,6 +80,41 @@ describe('computer keys', () => {
     expect(toCdpKeyEvents(parseKeysym('enter')!)[0].text).toBe('\r');
   });
 
+  it('maps shifted US symbols to the physical code and Windows VK', () => {
+    const bang = parseKeysym('!');
+    expect(bang).not.toBeNull();
+    expect(bang).toMatchObject({ key: '!', code: 'Digit1' });
+    const [bangDown] = toCdpKeyEvents(bang!);
+    expect(bangDown).toMatchObject({
+      key: '!',
+      code: 'Digit1',
+      windowsVirtualKeyCode: 49,
+      text: '!',
+    });
+    expect(bangDown.code).not.toBe('');
+    expect(bangDown.windowsVirtualKeyCode).not.toBe(33);
+
+    const question = toCdpKeyEvents(parseKeysym('?')!);
+    expect(question[0]).toMatchObject({
+      key: '?',
+      code: 'Slash',
+      windowsVirtualKeyCode: 191,
+      text: '?',
+    });
+
+    const fromLightbox = keysymFromKeyEvent({
+      key: '!',
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: true,
+      metaKey: false,
+    });
+    expect(fromLightbox).toBe('!');
+    const [lightboxDown] = toCdpKeyEvents(parseKeysym(fromLightbox!)!);
+    expect(lightboxDown.code).toBe('Digit1');
+    expect(lightboxDown.windowsVirtualKeyCode).toBe(49);
+  });
+
   it('preserves modifiers and omits insert text on chords', () => {
     const parsed = parseKeysym('ctrl+alt+Delete');
     expect(parsed).not.toBeNull();
