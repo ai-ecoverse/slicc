@@ -902,6 +902,26 @@ describe("WasiHost: a threaded process's files are kernel descriptions (5d)", ()
     expect(promotes.find((c) => c.fd === reread)?.dirty).toBeUndefined();
   });
 
+  it('hands one buffer over once: a second open of the path joins it without a copy of its own', () => {
+    const { call, g, open, kernel, host } = setup();
+    const [, a] = open('shared.txt', OFLAGS.CREAT | OFLAGS.TRUNC);
+    const [, b] = open('shared.txt');
+    const [iov, n] = g.iov('one');
+    expect(call('fd_pwrite', a, iov, n, 0n, g.alloc(4))).toBe(E.SUCCESS);
+    host.fds.share(new Int32Array(new SharedArrayBuffer(16)), false);
+    const promotes = kernel.calls.filter((c) => c.op === 'fd-promote') as Array<{
+      fd: number;
+      path?: string;
+      contents?: Uint8Array;
+      dirty?: boolean;
+    }>;
+    expect(promotes.find((c) => c.fd === a)).toMatchObject({ dirty: true });
+    const joined = promotes.find((c) => c.fd === b);
+    expect(joined?.path).toBe('/workspace/p/shared.txt');
+    expect(joined?.contents).toBeUndefined();
+    expect(joined?.dirty).toBeUndefined();
+  });
+
   it("an unlink, a rename and a path's stat tell the kernel, whose descriptions hold the bytes", () => {
     const { kernel, open, path, g, call } = threaded();
     open('a.txt');

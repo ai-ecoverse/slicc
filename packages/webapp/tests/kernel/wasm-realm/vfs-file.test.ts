@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FsError } from '../../../src/fs/types.js';
-import { VfsNode, vfsFile, WRITEBACK_MS } from '../../../src/kernel/wasm-realm/vfs-file.js';
+import {
+  VfsNode,
+  VfsNodes,
+  vfsFile,
+  WRITEBACK_MS,
+} from '../../../src/kernel/wasm-realm/vfs-file.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -123,6 +128,40 @@ describe('vfsFile', () => {
     await Promise.resolve(file.release());
     expect(files['/cache/h/m.txt']).toBe('manifest');
     expect(writes).toEqual([['/cache/h/m.txt', 'manifest']]);
+  });
+
+  it('shares one node among the descriptions of one handed-over buffer, so none writes back a stale copy', async () => {
+    // Two separate opens of one path in a WASI worker share one buffer; at the
+    // first thread both become kernel descriptions. A write through one must
+    // not be overwritten by the other's snapshot when they close.
+    const files: Record<string, string> = { '/m': '' };
+    const { fs } = memFs(files);
+    const nodes = new VfsNodes(fs);
+    const first = vfsFile(
+      fs,
+      { path: '/m', flags: O_RDWR, position: 0, contents: bytes('AAAA'), dirty: true },
+      nodes
+    );
+    const joined = vfsFile(fs, { path: '/m', flags: O_RDWR, position: 0 }, nodes);
+    await joined.file.write!(bytes('B'));
+    await Promise.resolve(joined.release());
+    await Promise.resolve(first.release());
+    expect(files['/m']).toBe('BAAA');
+    // Even two snapshots of it (each with contents) end up on one node.
+    const a = vfsFile(
+      fs,
+      { path: '/m', flags: O_RDWR, position: 0, contents: bytes('CCCC'), dirty: true },
+      nodes
+    );
+    const b = vfsFile(
+      fs,
+      { path: '/m', flags: O_RDWR, position: 0, contents: bytes('CCCC'), dirty: true },
+      nodes
+    );
+    await b.file.write!(bytes('D'));
+    await Promise.resolve(b.release());
+    await Promise.resolve(a.release());
+    expect(files['/m']).toBe('DCCC');
   });
 
   it('never rewrites handed-over contents that are already on the VFS', async () => {

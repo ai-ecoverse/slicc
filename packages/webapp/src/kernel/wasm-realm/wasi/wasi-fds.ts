@@ -390,25 +390,18 @@ export class WasiFds {
    */
   promoteFiles(): void {
     const promoted = new Map<LocalFile, number>();
+    // Buffers already handed over: another description of one (a separate open
+    // of the path) joins the kernel's node of the path, never a second copy.
+    const handed = new Set<FileBuffer>();
     for (const [fd, e] of [...this.table]) {
       if (e.type !== 'file') continue;
       const first = promoted.get(e.file);
       if (first !== undefined) {
         this.kernel.call({ op: 'fd-promote', fd, share: first });
       } else {
-        const f = e.file;
-        this.kernel.call({
-          op: 'fd-promote',
-          fd,
-          path: f.path,
-          flags: (f.writable ? (f.readable ? O_RDWR : O_WRONLY) : 0) | (f.append ? O_APPEND : 0),
-          position: f.offset,
-          contents: f.buffer.contents(),
-          ...(f.buffer.isOrphan() ? { orphan: true } : {}),
-          // Bytes it has not written back yet are the kernel's to write now.
-          ...(f.buffer.isDirty() ? { dirty: true } : {}),
-        });
-        promoted.set(f, fd);
+        this.kernel.call(promoteRequest(fd, e.file, handed));
+        handed.add(e.file.buffer);
+        promoted.set(e.file, fd);
       }
       this.table.set(fd, { type: 'kernel', kind: 'file', nonblock: false, append: e.file.append });
     }
@@ -709,5 +702,30 @@ function entryOf(info: FdInfo): WasiEntry | undefined {
     kind: info.kind,
     nonblock: ((info.flags ?? 0) & O_NONBLOCK) !== 0,
     append: ((info.flags ?? 0) & O_APPEND) !== 0,
+  };
+}
+
+/**
+ * The fd-promote of a description of a buffered file. Its buffer's bytes go
+ * over once; another description of the same buffer (a separate open of the
+ * path) joins the kernel's node of the path. An orphan keeps its own bytes.
+ */
+function promoteRequest(
+  fd: number,
+  f: LocalFile,
+  handed: ReadonlySet<FileBuffer>
+): Extract<WasmSyscall, { op: 'fd-promote' }> {
+  const orphan = f.buffer.isOrphan();
+  const joins = !orphan && handed.has(f.buffer);
+  return {
+    op: 'fd-promote',
+    fd,
+    path: f.path,
+    flags: (f.writable ? (f.readable ? O_RDWR : O_WRONLY) : 0) | (f.append ? O_APPEND : 0),
+    position: f.offset,
+    ...(joins ? {} : { contents: f.buffer.contents() }),
+    ...(orphan ? { orphan: true } : {}),
+    // Bytes it has not written back yet are the kernel's to write now.
+    ...(!joins && f.buffer.isDirty() ? { dirty: true } : {}),
   };
 }
