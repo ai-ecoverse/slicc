@@ -2,6 +2,7 @@ import type { CommandContext } from 'just-bash';
 import 'fake-indexeddb/auto';
 import { expect, test } from 'vitest';
 import { RestrictedFS } from '../../../src/fs/restricted-fs.js';
+import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { dispatchSyncFs } from '../../../src/kernel/realm/sync-fs-dispatch.js';
 import { mintSyncFsToken } from '../../../src/kernel/realm/sync-fs-token-registry.js';
@@ -157,4 +158,20 @@ test('ESCALATION GUARD: readdir-stat shows no more than readdir (no out-of-sandb
   const names = r.ok && r.kind === 'json' ? (r.json as Array<[string]>).map(([n]) => n) : [];
   expect(names).not.toContain('secret.txt');
   expect(names).toEqual(plain.ok && plain.kind === 'json' ? plain.json : []);
+});
+
+test('read assembles a file past the whole-read cap from ranged reads (#3762)', async () => {
+  const vfs = await VirtualFS.create({ dbName: `sfd-${counter++}`, wipe: true });
+  await vfs.mkdir('/mnt', { recursive: true });
+  const content = Uint8Array.from({ length: 5000 }, (_, i) => i % 251);
+  await vfs.writeFile('/mnt/big.bin', content);
+  const adapter = new VfsAdapter(vfs);
+  // What a hostfs mount answers for a whole read over its body cap.
+  adapter.readFileBuffer = async (p: string) => {
+    throw new FsError('EFBIG', 'file exceeds the hostfs body cap', p);
+  };
+  const token = mintSyncFsToken({ fs: adapter as unknown as CommandContext['fs'], cwd: '/mnt' });
+  const r = await dispatchSyncFs({ token, op: 'read', path: 'big.bin' });
+  expect(r).toMatchObject({ ok: true, kind: 'bytes' });
+  if (r.ok && r.kind === 'bytes') expect(r.bytes).toEqual(content);
 });
