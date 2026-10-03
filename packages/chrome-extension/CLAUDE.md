@@ -65,8 +65,7 @@ the tray.
   **Retry** (a Port reconnect the SW treats as a reopen).
 - **Bundle**: side-panel esbuild resolves `@ai-ecoverse/cherry` to `embed-ui.ts`
   (no host CDP handlers) so `sidepanel.js` stays inside its 14 kB size-limit.
-- **Bundle**: side-panel esbuild resolves `@ai-ecoverse/cherry` to `embed-ui.ts`
-  (no host CDP handlers) so `sidepanel.js` stays inside its 14 kB size-limit.
+  Extension coverage excludes `packages/cherry/**`; cherry has its own gate.
 
 ## Key Files
 

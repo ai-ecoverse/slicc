@@ -31,8 +31,9 @@ export function buildVitestArgs(pkg, floors, extraArgs = []) {
     }
   }
   // Packages with a bespoke exclude set (e.g. chrome-extension, which must
-  // drop the webapp subtrees it transitively imports) override the config's
-  // base excludes wholesale, matching the previous inline-script behavior.
+  // drop the webapp / cherry source it transitively imports) override the
+  // config's base excludes wholesale, matching the previous inline-script
+  // behavior. Those packages have their own coverage gates.
   if (Array.isArray(floors.coverageExclude)) {
     for (const pattern of floors.coverageExclude) {
       args.push(`--coverage.exclude=${pattern}`);
