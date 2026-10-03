@@ -46,6 +46,12 @@ export interface WasmProgram {
    * reflect an import's type.
    */
   memory?: ImportedMemory;
+  /**
+   * WASI: the module's name-section sidecar (`<module>.names`, the payload of
+   * a `name` custom section) when it ships without that section. Set only
+   * under `SLICC_WASM_BACKTRACE=1`; read only to name a trap's frames.
+   */
+  names?: string;
 }
 
 /**

@@ -24,6 +24,7 @@ import {
   WASM_PROCESS_ERROR,
   WASM_PROCESS_EXIT,
   type WasmProcessInitMsg,
+  type WasmProgram,
   type WasmThreadInitMsg,
 } from '../protocol.js';
 import { dylinkInfo } from './dylink.js';
@@ -36,6 +37,7 @@ import { MAIN_TID, ThreadExit, threadCap, WasiThreads } from './wasi-threads.js'
 import { AsyncifyDriver } from './wasix-fork.js';
 import { WasixHost } from './wasix-host.js';
 import { type LinkerHost, type LinkRecord, WasixLinker } from './wasix-linker.js';
+import { nameFrame, sidecarNames } from './wasm-names.js';
 
 /** A program that trapped (abort, `unreachable`, a stack overflow) ends as SIGABRT would. */
 const TRAPPED = 134;
@@ -420,7 +422,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     if (e instanceof WasiExit) return e.code;
     if (!(e instanceof WebAssembly.RuntimeError)) throw e;
     try {
-      say(trapMessage(e, init.env));
+      say(trapMessage(e, init.env, '', programNames(host, init.program)));
     } catch {
       // No stderr to say it on (closed, a broken pipe): the kernel's diagnostics get it.
       throw new Error(`${init.argv0}: wasm trap: ${e.message}`);
@@ -441,12 +443,14 @@ const BACKTRACE_FRAMES = 40;
  * `SLICC_WASM_BACKTRACE=1` in the program's environment the wasm frames
  * under it, as V8 names them from the module's name section (`at
  * Build.Step.zigProcessUpdate (wasm://…)`) — where a toolchain's panic
- * handler (`unreachable`) came from.
+ * handler (`unreachable`) came from. A module shipped without its name
+ * section gets them from its sidecar (`name`, see `wasm-names.ts`).
  */
 export function trapMessage(
   e: WebAssembly.RuntimeError,
   env: Readonly<Record<string, string>>,
-  where = ''
+  where = '',
+  name?: (index: number) => string | undefined
 ): string {
   const head = `wasm trap${where}: ${e.message}`;
   if (env.SLICC_WASM_BACKTRACE !== '1') return head;
@@ -455,8 +459,18 @@ export function trapMessage(
   const frames = (e.stack ?? '')
     .split('\n')
     .filter((line) => /^\s+at .*wasm:\/\/wasm\//.test(line))
-    .slice(0, BACKTRACE_FRAMES);
+    .slice(0, BACKTRACE_FRAMES)
+    .map((line) => (name ? nameFrame(line, name) : line));
   return frames.length ? `${head}\n${frames.join('\n')}` : head;
+}
+
+/** The frame names of a program shipped with a name-section sidecar, read on first use. */
+function programNames(
+  host: WasiHost,
+  program: WasmProgram
+): ((index: number) => string | undefined) | undefined {
+  const path = program.names;
+  return path === undefined ? undefined : sidecarNames((p) => host.o.fs.readFile(p), path);
 }
 
 /**
@@ -514,7 +528,7 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
     }
     if (e instanceof WebAssembly.RuntimeError) {
       try {
-        say(trapMessage(e, init.env, ` in thread ${thread.tid}`));
+        say(trapMessage(e, init.env, ` in thread ${thread.tid}`, programNames(host, init.program)));
       } catch {
         /* no stderr left */
       }

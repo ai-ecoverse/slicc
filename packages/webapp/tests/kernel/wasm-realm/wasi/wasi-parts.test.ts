@@ -282,6 +282,22 @@ describe('trapMessage', () => {
     expect(trapMessage(trap(), {})).toBe('wasm trap: unreachable');
   });
 
+  it('names the frames of a module shipped without its name section from its sidecar', () => {
+    const e = new WebAssembly.RuntimeError('unreachable');
+    e.stack = [
+      'RuntimeError: unreachable',
+      '    at wasm://wasm/0a1b2c3d:wasm-function[12]:0x40',
+      '    at wasm://wasm/0a1b2c3d:wasm-function[7]:0x80',
+    ].join('\n');
+    const name = (i: number) => (i === 12 ? 'rustc_driver::run' : undefined);
+    expect(trapMessage(e, { SLICC_WASM_BACKTRACE: '1' }, '', name).split('\n').slice(1)).toEqual([
+      '    at rustc_driver::run (wasm://wasm/0a1b2c3d:wasm-function[12]:0x40)',
+      '    at wasm://wasm/0a1b2c3d:wasm-function[7]:0x80',
+    ]);
+    // Without SLICC_WASM_BACKTRACE nothing is named (nor read).
+    expect(trapMessage(e, {}, '', name)).toBe('wasm trap: unreachable');
+  });
+
   it("shows the program's wasm frames, not the runtime's JS ones under them", () => {
     const e = trap();
     e.stack += [
