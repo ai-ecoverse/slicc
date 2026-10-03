@@ -37,6 +37,7 @@ import {
   type WasmCommand,
 } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
+import { interpreterFromShebang } from '../../shebang-exec-hint.js';
 import { STDIN_ISATTY_ENV, STDOUT_ISATTY_ENV } from '../stdio-tty.js';
 
 export const SECRET_FUNCTION_ENV = 'BASH_FUNC_secret%%';
@@ -152,6 +153,24 @@ function isWasmBytes(bytes: Uint8Array): boolean {
 
 export function modulePath(glue: string): string {
   return glue.endsWith('.js') ? `${glue.slice(0, -3)}.wasm` : `${glue}.wasm`;
+}
+
+const SHEBANG_PREFIX = 256;
+
+async function isForeignScript(fs: CommandContext['fs'], path: string): Promise<boolean> {
+  const ranged = (
+    fs as { readFileRange?: (p: string, s: number, e: number) => Promise<Uint8Array> }
+  ).readFileRange;
+  let head: string;
+  try {
+    head = ranged
+      ? new TextDecoder().decode(await ranged.call(fs, path, 0, SHEBANG_PREFIX))
+      : (await fs.readFile(path)).slice(0, SHEBANG_PREFIX);
+  } catch {
+    return false;
+  }
+  if (!head.startsWith('#!')) return false;
+  return interpreterFromShebang(head) !== 'node';
 }
 
 function commandName(file: string): string {
@@ -509,6 +528,8 @@ export class WasmSession {
     }
     const glue = this.ctx.fs.resolvePath(cwd, file);
     if (!(await this.ctx.fs.exists(glue))) return undefined;
+
+    if (await isForeignScript(this.ctx.fs, glue)) return undefined;
     const module = modulePath(glue);
     if (await this.ctx.fs.exists(module)) return { glue, module, argv0: baseName(argv0 || file) };
 
