@@ -22,6 +22,7 @@
  * mark first (`invalidateSidecarConsistency`).
  */
 
+import { sha256Hex } from '@slicc/shared-ts';
 import { SIDECAR_CONSISTENT_NAME, type SidecarIndexJson } from './sidecar-merge.js';
 
 /** Same ceiling `opfs-mount.ts` uses for ZenFS preload. Native OPFS was tested at 16. */
@@ -154,11 +155,7 @@ export async function writeOpfsSidecarText(
 }
 
 async function fingerprint(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  const bytes = new Uint8Array(digest);
-  let hex = '';
-  for (const byte of bytes) hex += byte.toString(16).padStart(2, '0');
-  return hex;
+  return sha256Hex(text);
 }
 
 /** True when `text` is exactly the sidecar bytes last certified against the tree. */

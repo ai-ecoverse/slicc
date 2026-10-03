@@ -45,6 +45,7 @@
  * caller receives the `rebindSecret` for every later rebind.
  */
 
+import { sha256Hex } from '@slicc/shared-ts';
 import { jsonResponse } from './shared.js';
 import { timingSafeEqual } from './timing-safe-equal.js';
 import { readBoundedWebhookBody, WebhookBodyError, withWebhookTimeout } from './webhook-body.js';
@@ -165,13 +166,6 @@ function base64ToBytes(b64: string): Uint8Array {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
-}
-
-/** SHA-256 hex of a UTF-8 string. */
-async function sha256Hex(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**

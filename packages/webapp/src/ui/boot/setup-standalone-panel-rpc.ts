@@ -10,6 +10,7 @@
  * bridge — it's meant for the in-panel terminal, not the agent.
  */
 
+import { sha256Hex } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { ComputerNativeFramePayload } from '../../kernel/panel-rpc.js';
 import { getAccounts } from '../../providers/account-store.js';
@@ -65,8 +66,7 @@ async function computeUserHash(): Promise<string> {
       candidates[0];
     const identity = account ? accountIdentity(account) : null;
     if (!identity) return '00000000';
-    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
-    return Array.from(new Uint8Array(bytes, 0, 4), (b) => b.toString(16).padStart(2, '0')).join('');
+    return (await sha256Hex(identity)).slice(0, 8);
   } catch {
     return '00000000';
   }

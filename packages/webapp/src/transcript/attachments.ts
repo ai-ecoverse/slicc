@@ -18,6 +18,7 @@
  */
 
 import {
+  sha256Hex,
   type TranscriptAttachment,
   type TranscriptCompletenessReason,
   type TranscriptContentBlock,
@@ -93,17 +94,6 @@ export function attachmentHandling(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const buf = bytes.buffer.slice(
-    bytes.byteOffset,
-    bytes.byteOffset + bytes.byteLength
-  ) as ArrayBuffer;
-  const hash = await crypto.subtle.digest('SHA-256', buf);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
 
 /** Allowlisted MIME → file extension map. Derived from MIME, not user filename (safe). */
 const MIME_EXT_MAP: Record<string, string> = {

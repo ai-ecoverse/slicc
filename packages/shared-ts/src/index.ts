@@ -30,6 +30,7 @@ export * from './secret-env-schema.js';
 export * from './secret-masking.js';
 export * from './secrets-pipeline.js';
 export * from './session-secret-store.js';
+export * from './sha256.js';
 export * from './sign-and-forward.js';
 export * from './sigv4.js';
 export * from './slicc-app-url.js';

@@ -1,14 +1,11 @@
+import { sha256Hex } from '@slicc/shared-ts';
 import type { AuthResult } from './auth.js';
 
 const TTL_MS = 10 * 60 * 1000;
 const cache = new Map<string, { result: AuthResult; expiresAt: number }>();
 
 async function hashToken(token: string): Promise<string> {
-  const data = new TextEncoder().encode(token);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+  return sha256Hex(token);
 }
 
 export async function getCached(token: string): Promise<AuthResult | null> {

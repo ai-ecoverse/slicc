@@ -11,6 +11,7 @@
  */
 
 import {
+  sha256Hex,
   type TranscriptDocumentV1,
   TranscriptExportError,
   validateTranscriptDocumentV1,
@@ -43,18 +44,6 @@ function assertNotAborted(signal?: AbortSignal): void {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  // Slice to ensure the argument is a plain ArrayBuffer (TypeScript strict).
-  const buf = bytes.buffer.slice(
-    bytes.byteOffset,
-    bytes.byteOffset + bytes.byteLength
-  ) as ArrayBuffer;
-  const hash = await crypto.subtle.digest('SHA-256', buf);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
 
 /**
  * Guard against path-traversal attacks via malicious sessionId values.
