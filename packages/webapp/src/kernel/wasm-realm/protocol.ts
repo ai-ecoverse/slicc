@@ -22,6 +22,8 @@ export interface WasmProgram {
   module: WebAssembly.Module;
 
   memory?: ImportedMemory;
+
+  names?: string;
 }
 
 export interface ForkState {

@@ -153,7 +153,57 @@ afterAll(() => worker?.dispose());
 
 const text = async (path: string) => new TextDecoder().decode(await fs.readFileBuffer(path));
 
+function namelessTrap(): { bytes: Uint8Array<ArrayBuffer>; sidecar: Uint8Array<ArrayBuffer> } {
+  const enc = new TextEncoder();
+  const str = (x: string) => [enc.encode(x).length, ...enc.encode(x)];
+  const section = (id: number, body: number[]) => [id, body.length, ...body];
+  const bytes = new Uint8Array([
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    ...section(1, [1, 0x60, 0, 0]),
+    ...section(3, [2, 0, 0]),
+    ...section(5, [1, 0, 1]),
+    ...section(7, [2, ...str('memory'), 2, 0, ...str('_start'), 0, 0]),
+    ...section(10, [2, 4, 0, 0x10, 1, 0x0b, 3, 0, 0x00, 0x0b]),
+  ]);
+  const fns = [2, 0, ...str('_start'), 1, ...str('boom')];
+  const sidecar = new Uint8Array([1, fns.length, ...fns]);
+  return { bytes, sidecar };
+}
+
 describe('WASI preview1 programs in the wasm realm', () => {
+  it("names a trap's frames from the name-section sidecar of a module shipped without one", async () => {
+    const { bytes, sidecar } = namelessTrap();
+
+    const dir = '/home/names-trap';
+    await fs.mkdir(dir, { recursive: true });
+    try {
+      await fs.writeFile(`${dir}/trap.wasm`, bytes);
+      await fs.writeFile(`${dir}/trap.wasm.names`, sidecar);
+      const program: WasmProgram = {
+        abi: 'wasi',
+        glue: '',
+        module: await WebAssembly.compile(bytes),
+        names: `${dir}/trap.wasm.names`,
+      };
+      const traced = await run(program, [], { env: { SLICC_WASM_BACKTRACE: '1' } });
+      expect(traced.code).toBe(134);
+      expect(traced.stderr).toMatch(/^prog: wasm trap: unreachable\n/);
+      expect(traced.stderr).toMatch(/at boom \(wasm:\/\/wasm\/[^)]*wasm-function\[1\]/);
+      expect(traced.stderr).toMatch(/at _start \(wasm:\/\/wasm\//);
+      const plain = await run(program, []);
+      expect(plain.stderr.trim()).toBe('prog: wasm trap: unreachable');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('C (wasi-libc): create, append, rename, stat, symlink, readdir and remove on the VFS', async () => {
     const r = await run(await wasi(`${FIXTURES}wasitest.wasm`), ['files', '/tmp']);
     expect(r.stderr).toBe('');

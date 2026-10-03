@@ -232,6 +232,20 @@ async function loadWasi(
   return { module, ...(memory ? { memory } : {}) };
 }
 
+async function namesSidecar(
+  ctx: CommandContext,
+  path: string,
+  module: WebAssembly.Module
+): Promise<string | undefined> {
+  if (WebAssembly.Module.customSections(module, 'name').length > 0) return undefined;
+  const beside = `${path}.names`;
+  if (await ctx.fs.exists(beside)) return beside;
+  const root = PACKAGE_ROOT.exec(path)?.[1];
+  if (root === undefined) return undefined;
+  const optional = `${root}-names${beside.slice(root.length)}`;
+  return (await ctx.fs.exists(optional)) ? optional : undefined;
+}
+
 export async function isModuleFile(ctx: CommandContext, path: string): Promise<boolean> {
   let key: string;
   try {
@@ -370,11 +384,15 @@ export class WasmSession {
     }
     const env = withSecretFunction(req.argv0, withLogname(withDefaults(req.defaults, req.env)));
     if (wasi) await this.pythonPackages(req, env);
+    const names =
+      wasi && env.SLICC_WASM_BACKTRACE === '1'
+        ? await namesSidecar(this.ctx, req.module, module)
+        : undefined;
     return this.start({
       ...req,
       env,
       program: wasi
-        ? { abi: 'wasi', glue, module, ...(memory ? { memory } : {}) }
+        ? { abi: 'wasi', glue, module, ...(memory ? { memory } : {}), ...(names ? { names } : {}) }
         : { glue, module },
     });
   }
