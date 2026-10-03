@@ -138,7 +138,10 @@ state explicitly in the PR why a runtime is excluded; add a cross-runtime test w
 **Historical precedent** — **PR #361** (`Wake renderer before screenshot to fix background
 tab capture`): screenshots of backgrounded tabs came back blank because the renderer was
 throttled. **PR #673** (`validate DevToolsActivePort port via /json/version before trusting
-it`): an unvalidated CDP port was trusted directly.
+it`): an unvalidated CDP port was trusted directly. **#3768 / #3772**: a bare CDP
+`{ key: 'Enter' }` (or a WKWebView `KeyboardEvent` that only sets `key`) leaves DOM
+`keyCode` at 0 and never submits; federated/synthetic Input must keep
+`windowsVirtualKeyCode` / `text` and define `keyCode`/`which`.
 
 **Remediation** — foreground the page before visual operations; probe / validate the CDP
 target and port before use; handle disconnects gracefully rather than hanging.

@@ -51,11 +51,22 @@ Display is `ICloudSessionList.recentRows`: trays the live iCloud list already sh
 `SliccTrayFollower/Models/SyncProtocol.swift` mirrors a **subset** of `packages/shared-ts/src/tray-sync-protocol.ts`; the `docs/architecture.md` matrix is canonical. The iOS-local message handling:
 
 - `preview.open` → `CDPBridge.handleTabOpen`, acks `tab.opened`. iOS never originates transcript export (prompts decode `.unknown` / `undecodable`).
+- Federated `cdp.request` `Input.dispatchKeyEvent` is synthesized in-page (WKWebView has no Chrome input pipeline): [Federated CDP Input](#federated-cdp-input).
 - `sudo.approve.request` / `.cancel` → `SudoApprovalController` (SliccTrayKit/Sudo): Allow/Always gate on `LAContext` `.deviceOwnerAuthentication`, Deny never does; `hello` advertises `sudoApproval` / `biometric`, `push.register` carries the APNs token — see [Sudo approval and push](#sudo-approval-and-push).
 - `capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, scoped-approval gated — see [Exec capability](#exec-capability) and [x-callback exec](#x-callback-exec).
 - `computers.list` / `computer.frame` → cards + live JPEG (`AppState+Computers`). iOS never advertises `capabilities.computer` and ignores `computer.native.*`; soft keys send `computer.input`, watch is visibility-refcounted — see [Computers (viewer)](#computers-viewer).
 
 Adding a variant is a fixed six-step order: [Protocol variant checklist](#protocol-variant-checklist).
+
+## Federated CDP Input
+
+iOS tabs are WKWebViews. There is no Chrome input pipeline, so `Input.dispatchKeyEvent` is reconstructed in-page (`CDPInputDomain`). A synthetic `KeyboardEvent({ key: 'Enter' })` leaves `keyCode`/`which` at 0 (the constructor ignores those init fields) and never runs implicit form submit. The injected script therefore:
+
+- Sets `key`, `code` when the leader sent them, and defines `keyCode`/`which` from `windowsVirtualKeyCode` (Enter → 13).
+- On `keyDown`, uses leader `text` (`'\r'` for Enter) to dispatch `keypress` with `charCode` 13, then `HTMLFormElement.requestSubmit()` on a focused `INPUT` inside a form — WKWebView will not implicit-submit the way Chrome does for a real key.
+- JSON-encodes `text` so a carriage return cannot break the injected source.
+
+`Input.insertText` and CDP `type: "char"` still append to the focused control. Leader `press Enter` / `--submit` payloads are documented in `docs/shell-reference.md` (`playwright/keyboard.ts`).
 
 ## Inbound entry points
 
