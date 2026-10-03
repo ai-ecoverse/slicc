@@ -313,6 +313,6 @@ export class FdTable {
     this.fds.clear();
     this.cloexec.clear();
     this.status.clear();
-    await Promise.all(files.map((file) => Promise.resolve(file.release())));
+    await Promise.allSettled(files.map((file) => Promise.resolve().then(() => file.release())));
   }
 }

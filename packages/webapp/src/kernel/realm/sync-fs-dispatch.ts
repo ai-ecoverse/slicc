@@ -1,4 +1,5 @@
 import type { FsStat } from 'just-bash';
+import { readWholeFile } from './read-whole-file.js';
 import { resolveSyncFsToken, type SyncFsTokenEntry } from './sync-fs-token-registry.js';
 
 import type { SyncFsRequest, SyncFsResult } from './sync-fs-wire.js';
@@ -25,7 +26,7 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
     const resolved = fs.resolvePath(cwd, req.path);
     switch (req.op) {
       case 'read':
-        return { ok: true, kind: 'bytes', bytes: await fs.readFileBuffer(resolved) };
+        return { ok: true, kind: 'bytes', bytes: await readWholeFile(fs, resolved) };
       case 'write':
         await fs.writeFile(resolved, req.body ?? new Uint8Array(0));
         return { ok: true, kind: 'void' };

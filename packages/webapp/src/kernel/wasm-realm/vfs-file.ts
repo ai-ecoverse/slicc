@@ -1,7 +1,7 @@
+import { readWholeFile, type WholeFileFs } from '../realm/read-whole-file.js';
 import { KernelError, OpenFile } from './fd-table.js';
 
-export interface VfsFileFs {
-  readFileBuffer(path: string): Promise<Uint8Array>;
+export interface VfsFileFs extends WholeFileFs {
   writeFile(path: string, content: Uint8Array): Promise<void>;
 }
 
@@ -33,6 +33,11 @@ export interface VfsFileOptions {
 export const WRITEBACK_MS = 250;
 
 const WRITEBACK_COST_FACTOR = 10;
+
+function isMissing(err: unknown): boolean {
+  if ((err as { code?: unknown } | null)?.code === 'ENOENT') return true;
+  return err instanceof Error && err.message.startsWith('ENOENT');
+}
 
 function within(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`);
@@ -72,8 +77,9 @@ export class VfsNode {
   async load(): Promise<Uint8Array> {
     if (!this.data) {
       try {
-        this.data = await this.fs.readFileBuffer(this.path);
-      } catch {
+        this.data = await readWholeFile(this.fs, this.path);
+      } catch (err) {
+        if (!isMissing(err)) throw err;
         this.data = new Uint8Array(0);
         this.missing = true;
       }
@@ -141,7 +147,12 @@ export class VfsNode {
     if (!this.dirty || !this.data || this.orphaned) return;
     this.dirty = false;
     const started = performance.now();
-    await this.fs.writeFile(this.path, this.data.slice(0, this.length));
+    try {
+      await this.fs.writeFile(this.path, this.data.slice(0, this.length));
+    } catch (err) {
+      this.dirty = true;
+      throw err;
+    }
     this.writeBackCost = performance.now() - started;
   }
 }
@@ -208,10 +219,27 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
     nodes && opts.contents === undefined && !opts.orphan
       ? nodes.open(opts.path)
       : new VfsNode(fs, opts.path, opts.contents, opts.orphan === true);
-  if (opts.create) void node.serial(() => node.materialize());
-  if (opts.truncate) void node.serial(() => node.truncate(0));
+
+  let openError: { err: unknown } | undefined;
+  const atOpen = (op: () => Promise<void>): void => {
+    void node.serial(op).catch((err: unknown) => {
+      openError ??= { err };
+    });
+  };
+  if (opts.create) atOpen(() => node.materialize());
+  if (opts.truncate) atOpen(() => node.truncate(0));
+  const takeOpenError = (): void => {
+    if (!openError) return;
+    const { err } = openError;
+    openError = undefined;
+    throw err;
+  };
   let offset = opts.position;
-  const serial = <T>(op: () => Promise<T>) => node.serial(op);
+  const serial = <T>(op: () => Promise<T>) =>
+    node.serial(() => {
+      takeOpenError();
+      return op();
+    });
 
   return new OpenFile({
     read: readable
@@ -264,9 +292,13 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
     flush: () => serial(() => node.flush()),
 
     close: () =>
-      serial(async () => {
-        await node.flush();
-        nodes?.closed(node);
+      node.serial(async () => {
+        try {
+          takeOpenError();
+          await node.flush();
+        } finally {
+          nodes?.closed(node);
+        }
       }),
   });
 }
