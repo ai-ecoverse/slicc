@@ -1,3 +1,4 @@
+import { sha256Hex } from '@slicc/shared-ts';
 import {
   MAX_PREVIEW_FILE_BYTES,
   normalizePreviewArchivePath,
@@ -268,8 +269,7 @@ async function previewUploadCommitResponse(
 }
 
 async function previewUploadHash(bytes: ArrayBuffer): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return sha256Hex(bytes);
 }
 
 async function reconcilePreviewUpload(

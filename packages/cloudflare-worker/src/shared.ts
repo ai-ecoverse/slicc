@@ -3,7 +3,7 @@ import type {
   TrayBootstrapFailure,
   TrayBootstrapState,
 } from '@slicc/shared-ts';
-import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+import { bytesToHex, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 
 export type TrayKind = 'desktop' | 'hosted';
 
@@ -252,8 +252,7 @@ export interface CreateTrayRequest {
 export function createCapabilityToken(trayId: string, bytes = 18): string {
   const data = new Uint8Array(bytes);
   crypto.getRandomValues(data);
-  const secret = Array.from(data, (value) => value.toString(16).padStart(2, '0')).join('');
-  return `${trayId}.${secret}`;
+  return `${trayId}.${bytesToHex(data)}`;
 }
 
 export function parseCapabilityToken(token: string): { trayId: string; secret: string } | null {

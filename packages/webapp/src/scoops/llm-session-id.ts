@@ -1,3 +1,4 @@
+import { sha256Hex } from '@slicc/shared-ts';
 import type { RegisteredScoop } from './types.js';
 
 const DAILY_UUID_KEY_PREFIX = 'slicc:adobe-daily-uuid:';
@@ -57,11 +58,7 @@ export function getDailyAdobeUuid(anchor: string): string {
 }
 
 async function hashFolder(folder: string, salt: string): Promise<string> {
-  const data = new TextEncoder().encode(`${salt}:${folder}`);
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(digest).slice(0, 8))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+  return (await sha256Hex(`${salt}:${folder}`)).slice(0, 16);
 }
 
 export async function getAdobeSessionId(

@@ -1,5 +1,6 @@
 import {
   SLICC_TRANSCRIPT_FORMAT,
+  sha256Hex,
   TRANSCRIPT_SCHEMA_VERSION,
   type TranscriptDocumentV1,
   TranscriptExportError,
@@ -155,15 +156,7 @@ async function patchTextAttachmentMetadata(
       if (!att.present || !att.path || att.handling !== 'text-redacted') return att;
       const bytes = bundleFiles.get(att.path);
       if (!bytes) return att;
-      const buf = bytes.buffer.slice(
-        bytes.byteOffset,
-        bytes.byteOffset + bytes.byteLength
-      ) as ArrayBuffer;
-      const hashBuf = await crypto.subtle.digest('SHA-256', buf);
-      const sha256Hex = Array.from(new Uint8Array(hashBuf))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-      return { ...att, byteLength: bytes.length, sha256: sha256Hex };
+      return { ...att, byteLength: bytes.length, sha256: await sha256Hex(bytes) };
     })
   );
 }

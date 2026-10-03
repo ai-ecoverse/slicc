@@ -1,16 +1,12 @@
+import { sha256Hex } from '@slicc/shared-ts';
 import type { SecureFetch } from 'just-bash';
 import { getFetchBodyBytes } from '../fetch-body.js';
+
+export { sha256Hex };
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 250;
-
-export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', bytes as unknown as BufferSource);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
 
 function isHttpsUrl(url: string): boolean {
   try {
