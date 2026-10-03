@@ -141,11 +141,25 @@ describe('dispatchTabEvent', () => {
       },
       {
         method: 'Input.dispatchKeyEvent',
-        params: { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 0 },
+        params: {
+          type: 'keyDown',
+          key: 'Enter',
+          code: 'Enter',
+          modifiers: 0,
+          windowsVirtualKeyCode: 13,
+          text: '\r',
+          unmodifiedText: '\r',
+        },
       },
       {
         method: 'Input.dispatchKeyEvent',
-        params: { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 0 },
+        params: {
+          type: 'keyUp',
+          key: 'Enter',
+          code: 'Enter',
+          modifiers: 0,
+          windowsVirtualKeyCode: 13,
+        },
       },
       { method: 'Input.insertText', params: { text: 'hi' } },
     ]);

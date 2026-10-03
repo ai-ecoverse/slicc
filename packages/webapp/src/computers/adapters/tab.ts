@@ -367,7 +367,10 @@ async function dispatchKey(
       key: payload.key,
       code: payload.code,
       modifiers: payload.modifiers,
-      ...(payload.text !== undefined ? { text: payload.text } : {}),
+      windowsVirtualKeyCode: payload.windowsVirtualKeyCode,
+      ...(payload.text !== undefined
+        ? { text: payload.text, unmodifiedText: payload.unmodifiedText ?? payload.text }
+        : {}),
     });
   }
 }

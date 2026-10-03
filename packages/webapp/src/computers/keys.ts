@@ -7,6 +7,7 @@
  */
 
 import type { ComputerInputEvent } from '@slicc/shared-ts';
+import { resolveKeyDefinition } from '../shell/supplemental-commands/playwright/keyboard.js';
 
 export interface KeyModifiers {
   ctrl: boolean;
@@ -44,43 +45,47 @@ const MOD_ALIASES: Record<string, keyof KeyModifiers> = {
 interface KeyDef {
   key: string;
   code: string;
+  /** Windows VK for CDP `windowsVirtualKeyCode` (US layout). */
+  keyCode: number;
+  /** Character / form-submit text (Enter → `\\r`). */
+  text?: string;
 }
 
 /** Named keys (xdotool + historical v86 aliases), keyed lowercase. */
 const NAMED: Record<string, KeyDef> = {
-  return: { key: 'Enter', code: 'Enter' },
-  enter: { key: 'Enter', code: 'Enter' },
-  kp_enter: { key: 'Enter', code: 'NumpadEnter' },
-  tab: { key: 'Tab', code: 'Tab' },
-  escape: { key: 'Escape', code: 'Escape' },
-  esc: { key: 'Escape', code: 'Escape' },
-  space: { key: ' ', code: 'Space' },
-  backspace: { key: 'Backspace', code: 'Backspace' },
-  delete: { key: 'Delete', code: 'Delete' },
-  del: { key: 'Delete', code: 'Delete' },
-  insert: { key: 'Insert', code: 'Insert' },
-  home: { key: 'Home', code: 'Home' },
-  end: { key: 'End', code: 'End' },
-  pageup: { key: 'PageUp', code: 'PageUp' },
-  page_up: { key: 'PageUp', code: 'PageUp' },
-  prior: { key: 'PageUp', code: 'PageUp' },
-  pagedown: { key: 'PageDown', code: 'PageDown' },
-  page_down: { key: 'PageDown', code: 'PageDown' },
-  next: { key: 'PageDown', code: 'PageDown' },
-  up: { key: 'ArrowUp', code: 'ArrowUp' },
-  down: { key: 'ArrowDown', code: 'ArrowDown' },
-  left: { key: 'ArrowLeft', code: 'ArrowLeft' },
-  right: { key: 'ArrowRight', code: 'ArrowRight' },
-  menu: { key: 'ContextMenu', code: 'ContextMenu' },
-  caps_lock: { key: 'CapsLock', code: 'CapsLock' },
-  num_lock: { key: 'NumLock', code: 'NumLock' },
-  scroll_lock: { key: 'ScrollLock', code: 'ScrollLock' },
-  print: { key: 'PrintScreen', code: 'PrintScreen' },
-  pause: { key: 'Pause', code: 'Pause' },
+  return: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
+  enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
+  kp_enter: { key: 'Enter', code: 'NumpadEnter', keyCode: 13, text: '\r' },
+  tab: { key: 'Tab', code: 'Tab', keyCode: 9, text: '\t' },
+  escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  esc: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  space: { key: ' ', code: 'Space', keyCode: 32, text: ' ' },
+  backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
+  delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
+  del: { key: 'Delete', code: 'Delete', keyCode: 46 },
+  insert: { key: 'Insert', code: 'Insert', keyCode: 45 },
+  home: { key: 'Home', code: 'Home', keyCode: 36 },
+  end: { key: 'End', code: 'End', keyCode: 35 },
+  pageup: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
+  page_up: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
+  prior: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
+  pagedown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
+  page_down: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
+  next: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
+  up: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+  down: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+  left: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+  right: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+  menu: { key: 'ContextMenu', code: 'ContextMenu', keyCode: 93 },
+  caps_lock: { key: 'CapsLock', code: 'CapsLock', keyCode: 20 },
+  num_lock: { key: 'NumLock', code: 'NumLock', keyCode: 144 },
+  scroll_lock: { key: 'ScrollLock', code: 'ScrollLock', keyCode: 145 },
+  print: { key: 'PrintScreen', code: 'PrintScreen', keyCode: 44 },
+  pause: { key: 'Pause', code: 'Pause', keyCode: 19 },
 };
 
 for (let i = 1; i <= 12; i++) {
-  NAMED[`f${i}`] = { key: `F${i}`, code: `F${i}` };
+  NAMED[`f${i}`] = { key: `F${i}`, code: `F${i}`, keyCode: 111 + i };
 }
 
 const PS2_NAMED: Record<string, number[]> = {
@@ -178,26 +183,8 @@ function namedDef(token: string): KeyDef | null {
   const lower = token.toLowerCase();
   if (NAMED[lower]) return NAMED[lower];
   if (token.length === 1) {
-    const ch = token;
-    if (/[A-Za-z]/u.test(ch)) {
-      const upper = ch.toUpperCase();
-      return { key: ch, code: `Key${upper}` };
-    }
-    if (/[0-9]/u.test(ch)) return { key: ch, code: `Digit${ch}` };
-    const punct: Record<string, KeyDef> = {
-      '.': { key: '.', code: 'Period' },
-      ',': { key: ',', code: 'Comma' },
-      '/': { key: '/', code: 'Slash' },
-      ';': { key: ';', code: 'Semicolon' },
-      "'": { key: "'", code: 'Quote' },
-      '[': { key: '[', code: 'BracketLeft' },
-      ']': { key: ']', code: 'BracketRight' },
-      '\\': { key: '\\', code: 'Backslash' },
-      '`': { key: '`', code: 'Backquote' },
-      '-': { key: '-', code: 'Minus' },
-      '=': { key: '=', code: 'Equal' },
-    };
-    return punct[ch] ?? { key: ch, code: '' };
+    const def = resolveKeyDefinition(token);
+    return { key: def.key, code: def.code, keyCode: def.keyCode, text: def.text };
   }
   return null;
 }
@@ -302,24 +289,41 @@ export interface CdpKeyEvent {
   key: string;
   code: string;
   modifiers: number;
+  windowsVirtualKeyCode: number;
   text?: string;
+  unmodifiedText?: string;
 }
 
+function cdpKeyFields(parsed: ParsedKey): { windowsVirtualKeyCode: number; text?: string } {
+  if (parsed.native) return { windowsVirtualKeyCode: 0 };
+  const def = NAMED[parsed.keysym.toLowerCase()] ?? namedDef(parsed.keysym);
+  if (def) return { windowsVirtualKeyCode: def.keyCode, text: def.text };
+  return { windowsVirtualKeyCode: 0 };
+}
+
+/**
+ * CDP `Input.dispatchKeyEvent` payloads for a tab computer.
+ *
+ * Chrome ignores bare `{ key: 'Enter' }` for form submit: without
+ * `text: '\r'` there is no keypress/char, and without
+ * `windowsVirtualKeyCode: 13` the DOM `keyCode` is 0. Field set matches
+ * playwright-cli / Puppeteer (US layout): `windowsVirtualKeyCode` only —
+ * never `nativeVirtualKeyCode`.
+ */
 export function toCdpKeyEvents(parsed: ParsedKey, down?: boolean): CdpKeyEvent[] {
   const modifiers = cdpModifiers(parsed.modifiers);
-  const printable =
-    parsed.key.length === 1 &&
-    !parsed.modifiers.ctrl &&
-    !parsed.modifiers.alt &&
-    !parsed.modifiers.meta
-      ? parsed.key
-      : undefined;
+  const fields = cdpKeyFields(parsed);
+  const suppressText = parsed.modifiers.ctrl || parsed.modifiers.alt || parsed.modifiers.meta;
+  const printable = suppressText ? undefined : fields.text;
   const make = (type: 'keyDown' | 'keyUp'): CdpKeyEvent => ({
     type,
     key: parsed.key,
     code: parsed.code,
     modifiers,
-    ...(type === 'keyDown' && printable ? { text: printable } : {}),
+    windowsVirtualKeyCode: fields.windowsVirtualKeyCode,
+    ...(type === 'keyDown' && printable !== undefined
+      ? { text: printable, unmodifiedText: printable }
+      : {}),
   });
   if (down === true) return [make('keyDown')];
   if (down === false) return [make('keyUp')];
