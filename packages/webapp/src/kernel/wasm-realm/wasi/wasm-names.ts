@@ -43,14 +43,39 @@ export function parseFunctionNames(payload: Uint8Array): Map<number, string> {
   return names;
 }
 
-/** A V8 stack line of an unnamed wasm frame: `at wasm://wasm/<id>:wasm-function[N]:0x<offset>`. */
-const UNNAMED_FRAME = /^(\s+at )(wasm:\/\/wasm\/[^\s()]*:wasm-function\[(\d+)\]:0x[0-9a-f]+)$/;
+/** A V8 stack line of an unnamed wasm frame: `at wasm://wasm/<module>:wasm-function[N]:0x<offset>`. */
+const UNNAMED_FRAME = /^(\s+at )(wasm:\/\/wasm\/([^\s()]+?):wasm-function\[(\d+)\]:0x[0-9a-f]+)$/;
+/** The module of any wasm frame, named or not. */
+const WASM_MODULE = /wasm:\/\/wasm\/([^\s()]+?):wasm-function\[/;
 
-/** `line` with its function named (`at <name> (wasm://…)`, as V8 prints a named frame), when `name` knows it. */
-export function nameFrame(line: string, name: (index: number) => string | undefined): string {
+/**
+ * The main module's `wasm://wasm/<id>` in a stack's lines: the bottom wasm
+ * frame's, the one the runtime's JS called (`_start`, `wasi_thread_start`).
+ * Side modules a WASIX linker loaded have their own ids and function indices.
+ * Undefined when the stack was cut short above that frame (no JS frame under
+ * the last wasm one): then no frame can be told to be the main module's.
+ */
+export function mainModule(lines: readonly string[]): string | undefined {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = WASM_MODULE.exec(lines[i] as string);
+    if (!m) continue;
+    return lines.slice(i + 1).some((line) => /^\s+at /.test(line)) ? m[1] : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * `line` with its function named (`at <name> (wasm://…)`, as V8 prints a
+ * named frame), when it is a frame of `module` and `name` knows it.
+ */
+export function nameFrame(
+  line: string,
+  module: string,
+  name: (index: number) => string | undefined
+): string {
   const m = UNNAMED_FRAME.exec(line);
-  if (!m) return line;
-  const found = name(Number(m[3]));
+  if (!m || m[3] !== module) return line;
+  const found = name(Number(m[4]));
   return found === undefined ? line : `${m[1]}${found} (${m[2]})`;
 }
 

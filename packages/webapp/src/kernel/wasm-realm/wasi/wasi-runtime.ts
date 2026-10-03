@@ -37,7 +37,7 @@ import { MAIN_TID, ThreadExit, threadCap, WasiThreads } from './wasi-threads.js'
 import { AsyncifyDriver } from './wasix-fork.js';
 import { WasixHost } from './wasix-host.js';
 import { type LinkerHost, type LinkRecord, WasixLinker } from './wasix-linker.js';
-import { nameFrame, sidecarNames } from './wasm-names.js';
+import { mainModule, nameFrame, sidecarNames } from './wasm-names.js';
 
 /** A program that trapped (abort, `unreachable`, a stack overflow) ends as SIGABRT would. */
 const TRAPPED = 134;
@@ -444,7 +444,8 @@ const BACKTRACE_FRAMES = 40;
  * under it, as V8 names them from the module's name section (`at
  * Build.Step.zigProcessUpdate (wasm://…)`) — where a toolchain's panic
  * handler (`unreachable`) came from. A module shipped without its name
- * section gets them from its sidecar (`name`, see `wasm-names.ts`).
+ * section gets them from its sidecar (`name`, see `wasm-names.ts`): the
+ * main module's frames only, never a side module's.
  */
 export function trapMessage(
   e: WebAssembly.RuntimeError,
@@ -454,13 +455,15 @@ export function trapMessage(
 ): string {
   const head = `wasm trap${where}: ${e.message}`;
   if (env.SLICC_WASM_BACKTRACE !== '1') return head;
+  const lines = (e.stack ?? '').split('\n');
+  // The sidecar names the main module's functions, not a side module's.
+  const main = name && mainModule(lines);
   // The program's frames only: under them the stack goes on into the
   // runtime's own JS (runWasiProcess, the worker).
-  const frames = (e.stack ?? '')
-    .split('\n')
+  const frames = lines
     .filter((line) => /^\s+at .*wasm:\/\/wasm\//.test(line))
     .slice(0, BACKTRACE_FRAMES)
-    .map((line) => (name ? nameFrame(line, name) : line));
+    .map((line) => (name && main ? nameFrame(line, main, name) : line));
   return frames.length ? `${head}\n${frames.join('\n')}` : head;
 }
 

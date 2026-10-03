@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  mainModule,
   nameFrame,
   parseFunctionNames,
   sidecarNames,
@@ -37,17 +38,46 @@ describe('parseFunctionNames', () => {
 describe('nameFrame', () => {
   const name = (i: number) => (i === 1674 ? 'Build.Step.zigProcessUpdate' : undefined);
 
-  it('names an unnamed wasm frame as V8 would from the section', () => {
-    expect(nameFrame('    at wasm://wasm/00ce402e:wasm-function[1674]:0x196785', name)).toBe(
+  it('names an unnamed wasm frame of the module as V8 would from the section', () => {
+    expect(
+      nameFrame('    at wasm://wasm/00ce402e:wasm-function[1674]:0x196785', '00ce402e', name)
+    ).toBe(
       '    at Build.Step.zigProcessUpdate (wasm://wasm/00ce402e:wasm-function[1674]:0x196785)'
     );
   });
 
-  it('leaves frames it cannot name, and frames that are named already', () => {
+  it('leaves frames it cannot name, frames that are named already, and other modules’ frames', () => {
     const unknown = '    at wasm://wasm/00ce402e:wasm-function[9]:0x10';
-    expect(nameFrame(unknown, name)).toBe(unknown);
+    expect(nameFrame(unknown, '00ce402e', name)).toBe(unknown);
     const named = '    at debug.defaultPanic (wasm://wasm/00ce402e:wasm-function[1674]:0x24b977)';
-    expect(nameFrame(named, name)).toBe(named);
+    expect(nameFrame(named, '00ce402e', name)).toBe(named);
+    const side = '    at wasm://wasm/libfoo-7a7a7a7a:wasm-function[1674]:0x10';
+    expect(nameFrame(side, '00ce402e', name)).toBe(side);
+  });
+});
+
+describe('mainModule', () => {
+  it('is the module of the bottom wasm frame, the one JS called', () => {
+    expect(
+      mainModule([
+        'RuntimeError: unreachable',
+        '    at wasm://wasm/libfoo-7a7a7a7a:wasm-function[3]:0x10',
+        '    at wasm://wasm/00ce402e:wasm-function[12]:0x40',
+        '    at _start (wasm://wasm/00ce402e:wasm-function[1]:0x20)',
+        '    at runWasiProcess (worker.js:1:2)',
+      ])
+    ).toBe('00ce402e');
+  });
+
+  it('is unknown when the stack was cut short above the JS caller, or has no wasm frame', () => {
+    expect(
+      mainModule([
+        'RuntimeError: unreachable',
+        '    at wasm://wasm/00ce402e:wasm-function[12]:0x40',
+        '    at wasm://wasm/libfoo-7a7a7a7a:wasm-function[3]:0x10',
+      ])
+    ).toBeUndefined();
+    expect(mainModule(['Error: x', '    at f (a.js:1:1)'])).toBeUndefined();
   });
 });
 
