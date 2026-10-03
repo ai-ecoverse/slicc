@@ -190,4 +190,33 @@ describe('a file past the whole-read cap (#3762)', () => {
     await Promise.resolve(file.release());
     expect(writes).toEqual([]);
   });
+
+  it('keeps a failed delayed write-back dirty, so the close reports it', async () => {
+    vi.useFakeTimers();
+    try {
+      const writeFile = vi.fn(async (p: string) => {
+        throw new FsError('EFBIG', 'body exceeds the hostfs body cap', p);
+      });
+      const fs = { readFileBuffer: vi.fn(async () => bytes('old')), writeFile };
+      const file = vfsFile(fs, { path: '/m/big', flags: O_WRONLY | O_APPEND, position: 0 });
+      await file.file.write!(bytes('more'));
+      await vi.advanceTimersByTimeAsync(WRITEBACK_MS); // the delayed write-back fails
+      expect(writeFile).toHaveBeenCalledTimes(1);
+      await expect(Promise.resolve(file.release())).rejects.toMatchObject({ code: 'EFBIG' });
+      expect(writeFile).toHaveBeenCalledTimes(2); // retried at close, not forgotten
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports the open's own failure (O_CREAT, O_TRUNC) at the close", async () => {
+    const { fs, writes } = cappedFs('precious');
+    fs.readFileBuffer.mockRejectedValue(new FsError('EIO', 'bridge down', '/m/big'));
+    const created = vfsFile(fs, { path: '/m/big', flags: O_WRONLY, position: 0, create: true });
+    await expect(Promise.resolve(created.release())).rejects.toMatchObject({ code: 'EIO' });
+    const truncated = vfsFile(fs, { path: '/m/big', flags: O_WRONLY, position: 0, truncate: true });
+    await expect(truncated.file.flush!()).rejects.toMatchObject({ code: 'EIO' });
+    await Promise.resolve(truncated.release()); // reported once, by the op that took it
+    expect(writes).toEqual([]);
+  });
 });

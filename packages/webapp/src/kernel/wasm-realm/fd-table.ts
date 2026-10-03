@@ -377,12 +377,16 @@ export class FdTable {
     return child;
   }
 
-  /** Process exit: release every description and wait for any writeback. */
+  /**
+   * Process exit: release every description and wait for any writeback. A
+   * failed writeback is dropped, as exit drops a close's error on Unix: it
+   * must not stop the other descriptions' releases, an exec or the exit.
+   */
   async closeAll(): Promise<void> {
     const files = [...this.fds.values()];
     this.fds.clear();
     this.cloexec.clear();
     this.status.clear();
-    await Promise.all(files.map((file) => Promise.resolve(file.release())));
+    await Promise.allSettled(files.map((file) => Promise.resolve().then(() => file.release())));
   }
 }
