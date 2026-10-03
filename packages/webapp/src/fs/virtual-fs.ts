@@ -1923,8 +1923,9 @@ export class VirtualFS {
         }
 
         this.markSidecarDirty(normalized, 'prefix');
-        await this.writeOpfsMetadataSidecarUnlocked();
       });
+
+      this.scheduleMetadataSidecarFlush();
     } catch (err) {
       throw convertError(err, normalized);
     }

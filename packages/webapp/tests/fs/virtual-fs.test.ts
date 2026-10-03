@@ -156,7 +156,7 @@ describe('VirtualFS', () => {
       expect(await vfs.exists('/tree')).toBe(false);
     });
 
-    it('flushes metadata once after removing a large directory tree', async () => {
+    it('removes a large directory tree without a sidecar write per entry', async () => {
       const paths = Array.from(
         { length: 100 },
         (_, i) => `/large-tree/pkg${i % 10}/nested/file${i}.txt`
@@ -171,7 +171,7 @@ describe('VirtualFS', () => {
       await vfs.rm('/large-tree', { recursive: true });
 
       expect(await vfs.exists('/large-tree')).toBe(false);
-      expect(flushSpy).toHaveBeenCalledTimes(1);
+      expect(flushSpy).not.toHaveBeenCalled();
     });
 
     it('serializes recursive removal with concurrent mkdir and writes', async () => {
