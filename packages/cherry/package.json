@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./embed-ui": {
+      "types": "./src/embed-ui.ts",
+      "import": "./src/embed-ui.ts"
     }
   },
   "files": [

@@ -1,3 +1,4 @@
+import { createCdpHostHandler } from './cdp-host-handlers.js';
 import { mountSliccImpl } from './mount.js';
 import type { SliccTheme } from './theme-types.js';
 import type { ExportSessionOptions } from './transcript-types.js';
@@ -92,5 +93,11 @@ export function mountSlicc(options: MountSliccOptions): SliccHandle {
   if (!options?.container && !options?.iframe) {
     throw new Error('mountSlicc: either options.container or options.iframe is required');
   }
-  return mountSliccImpl(options);
+  return mountSliccImpl({
+    ...options,
+    __hostHandler: createCdpHostHandler({
+      capabilities: options.capabilities,
+      onOpenUrl: options.hooks?.onOpenUrl,
+    }),
+  });
 }

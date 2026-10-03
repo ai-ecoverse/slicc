@@ -118,7 +118,8 @@ function buildSidePanelPlugin() {
         entryPoints: [resolve(Dirname, 'src/sidepanel-entry.ts')],
         outfile: resolve(outDir, 'sidepanel.js'),
         alias: {
-          '@ai-ecoverse/cherry': resolve(repoRoot, 'packages/cherry/src/index.ts'),
+          '@ai-ecoverse/cherry/embed-ui': resolve(repoRoot, 'packages/cherry/src/embed-ui.ts'),
+          '@ai-ecoverse/cherry': resolve(repoRoot, 'packages/cherry/src/embed-ui.ts'),
           '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
         },
         external: ['html2canvas-pro'],

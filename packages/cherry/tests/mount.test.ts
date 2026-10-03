@@ -1,7 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mountSliccImpl } from '../src/mount.js';
+import { createCdpHostHandler } from '../src/cdp-host-handlers.js';
+import { type MountSliccImplOptions, mountSliccImpl as mountSliccImplBare } from '../src/mount.js';
 import { CHERRY_PROTOCOL_VERSION } from '../src/protocol.js';
 import { TranscriptExportError } from '../src/transcript-types.js';
+
+function mountSliccImpl(options: MountSliccImplOptions) {
+  return mountSliccImplBare({
+    ...options,
+    __hostHandler:
+      options.__hostHandler ??
+      createCdpHostHandler({
+        capabilities: options.capabilities,
+        onOpenUrl: options.hooks?.onOpenUrl,
+      }),
+  });
+}
 
 interface VersionMismatchShape {
   kind?: string;
@@ -673,6 +686,25 @@ describe('iframe reload / re-handshake', () => {
 });
 
 describe('mountSlicc iframe + uiOnly options', () => {
+  it('rejects host CDP when no handler is injected (ui-only / embed-ui)', async () => {
+    const container = document.createElement('div');
+    const handle = mountSliccImplBare({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+    });
+    const res = await handle.testReceive({
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Input.dispatchKeyEvent',
+      params: { type: 'keyDown', key: 'Enter' },
+    } as never);
+    expect(res?.error?.code).toBe(-32601);
+    expect(res?.error?.message).toContain('Input.dispatchKeyEvent');
+    handle.destroy();
+  });
+
   it('uses a caller-provided iframe instead of creating one', () => {
     const iframe = document.createElement('iframe');
     const container = document.createElement('div');

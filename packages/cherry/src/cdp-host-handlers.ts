@@ -1,10 +1,6 @@
-export class CherryUnsupportedError extends Error {
-  readonly code = -32601;
-  constructor(method: string) {
-    super(`Cherry: unsupported CDP method '${method}'`);
-    this.name = 'CherryUnsupportedError';
-  }
-}
+import { CherryUnsupportedError } from './cdp-errors.js';
+
+export { CherryUnsupportedError };
 
 export interface CdpHostHandlerOptions {
   capabilities: { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean };
@@ -108,10 +104,145 @@ function handleDispatchMouseEvent(params: CdpPayload): CdpPayload {
   return {};
 }
 
+function stringParam(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function numericParam(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function keyCodeFromParams(params: CdpPayload): number {
+  const vk =
+    numericParam(params.windowsVirtualKeyCode) ?? numericParam(params.nativeVirtualKeyCode);
+  if (vk !== undefined) return vk;
+  const key = stringParam(params.key);
+  const text = stringParam(params.text);
+  if (key === 'Enter' || text === '\r') return 13;
+  if (key && key.length === 1) return key.charCodeAt(0);
+  return 0;
+}
+
+function keypressCharCode(params: CdpPayload, keyCode: number): number {
+  const text = stringParam(params.text);
+  if (text !== undefined && text !== '') return text.charCodeAt(0);
+  return keyCode;
+}
+
+function createSyntheticKeyboardEvent(
+  type: 'keydown' | 'keyup' | 'keypress',
+  params: CdpPayload
+): KeyboardEvent {
+  const key = stringParam(params.key) ?? '';
+  const code = stringParam(params.code) ?? key;
+  const keyCode = keyCodeFromParams(params);
+  const charCode = type === 'keypress' ? keypressCharCode(params, keyCode) : 0;
+  const event = new KeyboardEvent(type, {
+    key,
+    code,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  });
+
+  Object.defineProperties(event, {
+    keyCode: { configurable: true, enumerable: true, get: () => keyCode },
+    which: { configurable: true, enumerable: true, get: () => keyCode },
+    charCode: { configurable: true, enumerable: true, get: () => charCode },
+  });
+  return event;
+}
+
+function dispatchSyntheticKey(
+  target: EventTarget,
+  type: 'keydown' | 'keyup' | 'keypress',
+  params: CdpPayload
+): boolean {
+  return target.dispatchEvent(createSyntheticKeyboardEvent(type, params));
+}
+
+const IMPLICIT_SUBMIT_INPUT_TYPES = new Set([
+  'text',
+  'search',
+  'url',
+  'tel',
+  'email',
+  'password',
+  'date',
+  'month',
+  'week',
+  'time',
+  'datetime-local',
+  'number',
+]);
+
+function isSubmitButton(el: EventTarget): el is HTMLButtonElement | HTMLInputElement {
+  if (el instanceof HTMLButtonElement) return el.type === 'submit';
+  if (el instanceof HTMLInputElement) return el.type === 'submit' || el.type === 'image';
+  return false;
+}
+
+function defaultSubmitter(form: HTMLFormElement): HTMLButtonElement | HTMLInputElement | undefined {
+  for (const el of form.elements) {
+    if (isSubmitButton(el) && !el.disabled) return el;
+  }
+  return undefined;
+}
+
+function maybeImplicitSubmit(target: EventTarget): void {
+  if (isSubmitButton(target)) {
+    target.click();
+    return;
+  }
+  if (!(target instanceof HTMLInputElement) || !IMPLICIT_SUBMIT_INPUT_TYPES.has(target.type)) {
+    return;
+  }
+  const form = target.form;
+  if (!form) return;
+  const submitter = defaultSubmitter(form);
+  if (typeof form.requestSubmit === 'function') {
+    if (submitter) form.requestSubmit(submitter);
+    else form.requestSubmit();
+    return;
+  }
+  if (submitter) {
+    submitter.click();
+    return;
+  }
+  form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+}
+
 function handleDispatchKeyEvent(params: CdpPayload): CdpPayload {
-  const active = document.activeElement as HTMLElement | null;
-  if (active && params.type === 'keyDown' && typeof params.key === 'string') {
-    active.dispatchEvent(new KeyboardEvent('keydown', { key: params.key, bubbles: true }));
+  const active = (document.activeElement as HTMLElement | null) ?? document.body;
+  if (!active) return {};
+
+  const type = stringParam(params.type) ?? '';
+  const isDown = type === 'keyDown' || type === 'rawKeyDown';
+  const isUp = type === 'keyUp';
+  const isChar = type === 'char';
+  if (!isDown && !isUp && !isChar) return {};
+
+  const key = stringParam(params.key) ?? '';
+  const text = stringParam(params.text);
+  const isEnter = key === 'Enter' || text === '\r' || keyCodeFromParams(params) === 13;
+
+  if (isChar) {
+    dispatchSyntheticKey(active, 'keypress', params);
+    return {};
+  }
+
+  if (isUp) {
+    dispatchSyntheticKey(active, 'keyup', params);
+    return {};
+  }
+
+  const downAllowed = dispatchSyntheticKey(active, 'keydown', params);
+  let pressAllowed = true;
+  if (downAllowed && text !== undefined && text !== '') {
+    pressAllowed = dispatchSyntheticKey(active, 'keypress', params);
+  }
+  if (downAllowed && pressAllowed && isEnter) {
+    maybeImplicitSubmit(active);
   }
   return {};
 }
