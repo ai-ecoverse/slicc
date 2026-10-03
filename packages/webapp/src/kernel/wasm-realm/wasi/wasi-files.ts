@@ -83,6 +83,10 @@ export class FileBuffer {
     return this.orphaned;
   }
 
+  isDirty(): boolean {
+    return this.dirty;
+  }
+
   contents(): Uint8Array {
     return this.load().slice(0, this.length);
   }

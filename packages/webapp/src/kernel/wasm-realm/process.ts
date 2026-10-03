@@ -94,6 +94,8 @@ export type WasmSyscall =
       position?: number;
       contents?: Uint8Array;
       orphan?: boolean;
+
+      dirty?: boolean;
     }
   | { op: 'fd-open-tty'; name?: string }
   | { op: 'tty-get'; fd: number }
@@ -587,6 +589,7 @@ export class WasmProcess {
         position: req.position ?? 0,
         ...(req.contents !== undefined ? { contents: req.contents } : {}),
         ...(req.orphan ? { orphan: true } : {}),
+        ...(req.dirty ? { dirty: true } : {}),
       },
       this.nodes
     );

@@ -25,6 +25,8 @@ export interface VfsFileOptions {
 
   orphan?: boolean;
 
+  dirty?: boolean;
+
   truncate?: boolean;
 
   create?: boolean;
@@ -61,11 +63,13 @@ export class VfsNode {
     private readonly fs: VfsFileFs,
     public path: string,
     contents?: Uint8Array,
-    public orphaned = false
+    public orphaned = false,
+    dirty = false
   ) {
     if (contents !== undefined) this.data = new Uint8Array(contents);
     else if (orphaned) this.data = new Uint8Array(0);
     this.length = this.data?.length ?? 0;
+    if (dirty && contents !== undefined) this.markDirty();
   }
 
   serial<T>(op: () => Promise<T>): Promise<T> {
@@ -86,6 +90,13 @@ export class VfsNode {
       this.length = this.data.length;
     }
     return this.data;
+  }
+
+  replace(contents: Uint8Array): void {
+    this.data = new Uint8Array(contents);
+    this.length = this.data.length;
+    this.missing = false;
+    this.markDirty();
   }
 
   async materialize(): Promise<void> {
@@ -172,6 +183,18 @@ export class VfsNodes {
     return node;
   }
 
+  adopt(path: string, contents: Uint8Array, dirty: boolean): VfsNode {
+    let node = this.byPath.get(path);
+    if (!node) {
+      node = new VfsNode(this.fs, path, contents, false, dirty);
+      this.byPath.set(path, node);
+    } else if (dirty) {
+      node.replace(contents);
+    }
+    node.opens++;
+    return node;
+  }
+
   closed(node: VfsNode): void {
     node.opens--;
     if (node.opens === 0 && this.byPath.get(node.path) === node) this.byPath.delete(node.path);
@@ -215,10 +238,13 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
   const access = opts.flags & O_ACCMODE;
   const readable = access !== O_WRONLY;
   const writable = access === O_WRONLY || access === O_RDWR;
+
   const node =
-    nodes && opts.contents === undefined && !opts.orphan
-      ? nodes.open(opts.path)
-      : new VfsNode(fs, opts.path, opts.contents, opts.orphan === true);
+    !nodes || opts.orphan
+      ? new VfsNode(fs, opts.path, opts.contents, opts.orphan === true, opts.dirty === true)
+      : opts.contents !== undefined
+        ? nodes.adopt(opts.path, opts.contents, opts.dirty === true)
+        : nodes.open(opts.path);
 
   let openError: { err: unknown } | undefined;
   const atOpen = (op: () => Promise<void>): void => {

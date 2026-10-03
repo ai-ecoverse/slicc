@@ -311,23 +311,17 @@ export class WasiFds {
 
   promoteFiles(): void {
     const promoted = new Map<LocalFile, number>();
+
+    const handed = new Set<FileBuffer>();
     for (const [fd, e] of [...this.table]) {
       if (e.type !== 'file') continue;
       const first = promoted.get(e.file);
       if (first !== undefined) {
         this.kernel.call({ op: 'fd-promote', fd, share: first });
       } else {
-        const f = e.file;
-        this.kernel.call({
-          op: 'fd-promote',
-          fd,
-          path: f.path,
-          flags: (f.writable ? (f.readable ? O_RDWR : O_WRONLY) : 0) | (f.append ? O_APPEND : 0),
-          position: f.offset,
-          contents: f.buffer.contents(),
-          ...(f.buffer.isOrphan() ? { orphan: true } : {}),
-        });
-        promoted.set(f, fd);
+        this.kernel.call(promoteRequest(fd, e.file, handed));
+        handed.add(e.file.buffer);
+        promoted.set(e.file, fd);
       }
       this.table.set(fd, { type: 'kernel', kind: 'file', nonblock: false, append: e.file.append });
     }
@@ -599,5 +593,25 @@ function entryOf(info: FdInfo): WasiEntry | undefined {
     kind: info.kind,
     nonblock: ((info.flags ?? 0) & O_NONBLOCK) !== 0,
     append: ((info.flags ?? 0) & O_APPEND) !== 0,
+  };
+}
+
+function promoteRequest(
+  fd: number,
+  f: LocalFile,
+  handed: ReadonlySet<FileBuffer>
+): Extract<WasmSyscall, { op: 'fd-promote' }> {
+  const orphan = f.buffer.isOrphan();
+  const joins = !orphan && handed.has(f.buffer);
+  return {
+    op: 'fd-promote',
+    fd,
+    path: f.path,
+    flags: (f.writable ? (f.readable ? O_RDWR : O_WRONLY) : 0) | (f.append ? O_APPEND : 0),
+    position: f.offset,
+    ...(joins ? {} : { contents: f.buffer.contents() }),
+    ...(orphan ? { orphan: true } : {}),
+
+    ...(!joins && f.buffer.isDirty() ? { dirty: true } : {}),
   };
 }
