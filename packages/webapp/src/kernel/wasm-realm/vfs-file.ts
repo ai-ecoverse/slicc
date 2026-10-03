@@ -21,11 +21,15 @@
  * opens every file here, so two opens see each other's writes, and an
  * unlink or rename reaches the bytes of every open.
  */
+import { readWholeFile, type WholeFileFs } from '../realm/read-whole-file.js';
 import { KernelError, OpenFile } from './fd-table.js';
 
-/** The filesystem slice a description reads and writes through (the spawner's gated fs). */
-export interface VfsFileFs {
-  readFileBuffer(path: string): Promise<Uint8Array>;
+/**
+ * The filesystem slice a description reads and writes through (the spawner's
+ * gated fs). With `readFileRange` and `stat`, a file past a mount's whole-file
+ * cap still loads (#3762).
+ */
+export interface VfsFileFs extends WholeFileFs {
   writeFile(path: string, content: Uint8Array): Promise<void>;
 }
 
@@ -68,6 +72,12 @@ export const WRITEBACK_MS = 250;
  * long as the last took, so a large file costs at most a tenth of the time.
  */
 const WRITEBACK_COST_FACTOR = 10;
+
+/** A read failed because the path holds no file (an `FsError` code, or a bare `ENOENT:` message). */
+function isMissing(err: unknown): boolean {
+  if ((err as { code?: unknown } | null)?.code === 'ENOENT') return true;
+  return err instanceof Error && err.message.startsWith('ENOENT');
+}
 
 /** Whether `path` is `root` or beneath it. */
 function within(path: string, root: string): boolean {
@@ -115,9 +125,13 @@ export class VfsNode {
   async load(): Promise<Uint8Array> {
     if (!this.data) {
       try {
-        this.data = await this.fs.readFileBuffer(this.path);
-      } catch {
-        this.data = new Uint8Array(0); // created, or gone since: start empty
+        this.data = await readWholeFile(this.fs, this.path);
+      } catch (err) {
+        // Only a missing path starts empty (created, or gone since). Any other
+        // failure must not either: O_CREAT would write the empty buffer over
+        // the file, and a write-back would replace it with what was appended.
+        if (!isMissing(err)) throw err;
+        this.data = new Uint8Array(0);
         this.missing = true;
       }
       this.length = this.data.length;
@@ -182,11 +196,21 @@ export class VfsNode {
     return grown;
   }
 
+  /**
+   * Write back what changed. A failed write-back (a hostfs file over its
+   * body cap: EFBIG) leaves the node dirty, so the next flush or the close
+   * tries again and reports it: a delayed write-back's failure is not lost.
+   */
   async flush(): Promise<void> {
     if (!this.dirty || !this.data || this.orphaned) return;
     this.dirty = false;
     const started = performance.now();
-    await this.fs.writeFile(this.path, this.data.slice(0, this.length));
+    try {
+      await this.fs.writeFile(this.path, this.data.slice(0, this.length));
+    } catch (err) {
+      this.dirty = true;
+      throw err;
+    }
     this.writeBackCost = performance.now() - started;
   }
 }
@@ -268,10 +292,28 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
     nodes && opts.contents === undefined && !opts.orphan
       ? nodes.open(opts.path)
       : new VfsNode(fs, opts.path, opts.contents, opts.orphan === true);
-  if (opts.create) void node.serial(() => node.materialize());
-  if (opts.truncate) void node.serial(() => node.truncate(0));
+  // What the open itself queued (O_CREAT, O_TRUNC) and failed is the
+  // description's next op's error, close included: never a silent success.
+  let openError: { err: unknown } | undefined;
+  const atOpen = (op: () => Promise<void>): void => {
+    void node.serial(op).catch((err: unknown) => {
+      openError ??= { err };
+    });
+  };
+  if (opts.create) atOpen(() => node.materialize());
+  if (opts.truncate) atOpen(() => node.truncate(0));
+  const takeOpenError = (): void => {
+    if (!openError) return;
+    const { err } = openError;
+    openError = undefined;
+    throw err;
+  };
   let offset = opts.position;
-  const serial = <T>(op: () => Promise<T>) => node.serial(op);
+  const serial = <T>(op: () => Promise<T>) =>
+    node.serial(() => {
+      takeOpenError();
+      return op();
+    });
 
   return new OpenFile({
     read: readable
@@ -324,9 +366,13 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
     flush: () => serial(() => node.flush()),
     // Awaitable: process exit and fd-close wait for the final writeback.
     close: () =>
-      serial(async () => {
-        await node.flush();
-        nodes?.closed(node);
+      node.serial(async () => {
+        try {
+          takeOpenError();
+          await node.flush();
+        } finally {
+          nodes?.closed(node);
+        }
       }),
   });
 }

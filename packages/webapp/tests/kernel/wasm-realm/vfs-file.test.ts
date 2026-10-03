@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { FsError } from '../../../src/fs/types.js';
 import { VfsNode, vfsFile, WRITEBACK_MS } from '../../../src/kernel/wasm-realm/vfs-file.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
@@ -131,6 +132,91 @@ describe('vfsFile', () => {
     const reader = vfsFile(fs, { path: '/r', flags: 0, position: 0 });
     await reader.file.read!(2);
     await Promise.resolve(reader.release());
+    expect(writes).toEqual([]);
+  });
+});
+
+describe('a file past the whole-read cap (#3762)', () => {
+  /** A hostfs-like mount: whole reads of `/m/big` are EFBIG, ranged reads work. */
+  function cappedFs(content: string) {
+    const writes: Array<[string, string]> = [];
+    return {
+      writes,
+      fs: {
+        readFileBuffer: vi.fn(async (p: string) => {
+          throw new FsError('EFBIG', 'file exceeds the hostfs body cap', p);
+        }),
+        readFileRange: vi.fn(async (_p: string, start: number, end: number) =>
+          bytes(content).slice(start, end)
+        ),
+        stat: vi.fn(async () => ({ size: bytes(content).byteLength })),
+        writeFile: vi.fn(async (p: string, c: Uint8Array) => {
+          writes.push([p, text(c)]);
+        }),
+      },
+    };
+  }
+
+  it('reads it through ranged reads', async () => {
+    const { fs } = cappedFs('a big file');
+    const file = vfsFile(fs, { path: '/m/big', flags: 0, position: 2 });
+    expect(text(await file.file.read!(100))).toBe('big file');
+    expect(fs.readFileRange).toHaveBeenCalled();
+  });
+
+  it('appends to it without replacing what was there', async () => {
+    const { fs, writes } = cappedFs('kept\n');
+    const file = vfsFile(fs, {
+      path: '/m/big',
+      flags: O_WRONLY | O_APPEND,
+      position: 0,
+      create: true,
+    });
+    await file.file.write!(bytes('more\n'));
+    await Promise.resolve(file.release());
+    expect(writes).toEqual([['/m/big', 'kept\nmore\n']]);
+  });
+
+  it('never writes over a file it could not read', async () => {
+    const { fs, writes } = cappedFs('precious');
+    fs.readFileBuffer.mockRejectedValue(new FsError('EIO', 'bridge down', '/m/big'));
+    const file = vfsFile(fs, {
+      path: '/m/big',
+      flags: O_WRONLY | O_APPEND,
+      position: 0,
+      create: true,
+    });
+    await expect(file.file.write!(bytes('x'))).rejects.toMatchObject({ code: 'EIO' });
+    await Promise.resolve(file.release());
+    expect(writes).toEqual([]);
+  });
+
+  it('keeps a failed delayed write-back dirty, so the close reports it', async () => {
+    vi.useFakeTimers();
+    try {
+      const writeFile = vi.fn(async (p: string) => {
+        throw new FsError('EFBIG', 'body exceeds the hostfs body cap', p);
+      });
+      const fs = { readFileBuffer: vi.fn(async () => bytes('old')), writeFile };
+      const file = vfsFile(fs, { path: '/m/big', flags: O_WRONLY | O_APPEND, position: 0 });
+      await file.file.write!(bytes('more'));
+      await vi.advanceTimersByTimeAsync(WRITEBACK_MS); // the delayed write-back fails
+      expect(writeFile).toHaveBeenCalledTimes(1);
+      await expect(Promise.resolve(file.release())).rejects.toMatchObject({ code: 'EFBIG' });
+      expect(writeFile).toHaveBeenCalledTimes(2); // retried at close, not forgotten
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports the open's own failure (O_CREAT, O_TRUNC) at the close", async () => {
+    const { fs, writes } = cappedFs('precious');
+    fs.readFileBuffer.mockRejectedValue(new FsError('EIO', 'bridge down', '/m/big'));
+    const created = vfsFile(fs, { path: '/m/big', flags: O_WRONLY, position: 0, create: true });
+    await expect(Promise.resolve(created.release())).rejects.toMatchObject({ code: 'EIO' });
+    const truncated = vfsFile(fs, { path: '/m/big', flags: O_WRONLY, position: 0, truncate: true });
+    await expect(truncated.file.flush!()).rejects.toMatchObject({ code: 'EIO' });
+    await Promise.resolve(truncated.release()); // reported once, by the op that took it
     expect(writes).toEqual([]);
   });
 });

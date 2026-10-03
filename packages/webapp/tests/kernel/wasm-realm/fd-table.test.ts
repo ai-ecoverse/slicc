@@ -5,6 +5,7 @@ import {
   KernelError,
   kernelFdKind,
   nullFile,
+  OpenFile,
   openPipe,
   sinkFile,
 } from '../../../src/kernel/wasm-realm/fd-table.js';
@@ -35,6 +36,15 @@ describe('FdTable', () => {
     await t.closeAll();
     t.installAt(4, nullFile());
     expect([t.closesOnExec(4), t.statusFlags(4)]).toEqual([false, undefined]);
+  });
+
+  it('closeAll releases every description even when a writeback fails', async () => {
+    const t = new FdTable();
+    const closed: string[] = [];
+    t.installAt(3, new OpenFile({ close: () => Promise.reject(new KernelError('EIO')) }));
+    t.installAt(4, new OpenFile({ close: () => void closed.push('4') }));
+    await expect(t.closeAll()).resolves.toBeUndefined();
+    expect(closed).toEqual(['4']);
   });
 
   it('names how a runtime backs a descriptor', () => {
