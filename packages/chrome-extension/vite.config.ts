@@ -153,7 +153,8 @@ function buildPreviewSwPlugin() {
 /**
  * Build the side-panel host as ESM. The panel mounts a UI-only cherry follower
  * iframe and runs the tri-state controller (booting → ready → disconnected)
- * via a chrome-panel Port to the service worker.
+ * via a chrome-panel Port to the service worker. The Cherry alias is
+ * `embed-ui.ts` (not `index.ts`) so synthetic host CDP stays out of sidepanel.js.
  */
 function buildSidePanelPlugin() {
   return {
@@ -166,7 +167,8 @@ function buildSidePanelPlugin() {
         entryPoints: [resolve(Dirname, 'src/sidepanel-entry.ts')],
         outfile: resolve(outDir, 'sidepanel.js'),
         alias: {
-          '@ai-ecoverse/cherry': resolve(repoRoot, 'packages/cherry/src/index.ts'),
+          '@ai-ecoverse/cherry/embed-ui': resolve(repoRoot, 'packages/cherry/src/embed-ui.ts'),
+          '@ai-ecoverse/cherry': resolve(repoRoot, 'packages/cherry/src/embed-ui.ts'),
           '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
         },
         external: ['html2canvas-pro'],

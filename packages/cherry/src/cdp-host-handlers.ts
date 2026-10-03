@@ -3,13 +3,9 @@
  * Runs on the third-party host page inside @ai-ecoverse/cherry.
  */
 
-export class CherryUnsupportedError extends Error {
-  readonly code = -32601;
-  constructor(method: string) {
-    super(`Cherry: unsupported CDP method '${method}'`);
-    this.name = 'CherryUnsupportedError';
-  }
-}
+import { CherryUnsupportedError } from './cdp-errors.js';
+
+export { CherryUnsupportedError };
 
 export interface CdpHostHandlerOptions {
   capabilities: { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean };

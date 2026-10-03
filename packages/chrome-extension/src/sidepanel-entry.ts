@@ -1,5 +1,5 @@
 /// <reference path="./chrome.d.ts" />
-import { type CherryFeatures, mountSlicc, type SliccHandle } from '@ai-ecoverse/cherry';
+import { type CherryFeatures, mountSlicc, type SliccHandle } from '@ai-ecoverse/cherry/embed-ui';
 import { nudgeIframeRepaint, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import {
   CHERRY_PANEL_PORT_NAME,
