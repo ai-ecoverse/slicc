@@ -1,16 +1,19 @@
 /**
- * ZenFS's Async mixin decides from stack traces whether a call is nested in
- * another call of the same method, or whether a failed mirror update happened
- * under one (and is then not an error). Upstream matched V8's frame text only
- * (`at <computed> [as write]`). In JavaScriptCore (Safari, every iOS browser,
- * WKWebView) nothing matched, so the nested `write` that `IndexFS.rename`
- * issues for the new path failed against the mirror with ENOENT, and every
- * rename of a file failed: `mv`, git's lock files, `git init`.
+ * ZenFS's Async mixin mirrors every async call into its in-memory sync copy.
+ * Upstream decided from stack traces whether a call was nested in another
+ * mirrored call ("in the loop"), and only then tolerated a failed mirror
+ * update. That depended on the engine: V8's frame text only, so in
+ * JavaScriptCore (Safari, every iOS browser, WKWebView) nothing matched, and
+ * release Firefox records no async frames at all unless DevTools is attached.
+ * The nested `write` that `IndexFS.rename` issues for the new path then failed
+ * against the mirror with ENOENT, and every rename of a file failed: `mv`,
+ * git's lock files, `git init` (#3783).
  *
- * Node is V8, so these tests make V8 print JavaScriptCore's frame format
- * (`name@url:line:col`, `async name@…`, no `Error: message` header line)
- * through `Error.prepareStackTrace`, and run the same cases with V8's own
- * format, which upstream already handled.
+ * The patch reads no stacks: a backend method runs against a view whose
+ * patched methods are nested ones (best-effort mirror), and only a top-level
+ * call's failed update throws "Out of sync!". These tests make V8 print the
+ * other engines' stacks through `Error.prepareStackTrace` (and no stack at
+ * all) to pin that the outcome no longer depends on them.
  */
 import { WebAccess } from '@zenfs/dom';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -38,6 +41,30 @@ function useJavaScriptCoreStacks(): void {
         return `${frame.isAsync() ? 'async ' : ''}${name}@${frame.getFileName()}:${frame.getLineNumber()}:${frame.getColumnNumber()}`;
       })
       .join('\n');
+}
+
+/** Release Firefox without DevTools: the synchronous frames only, no `async*` ones. */
+function useFirefoxReleaseStacks(): void {
+  ErrorWithPrepare.prepareStackTrace = (_error, frames) => {
+    const sync = frames.slice(
+      0,
+      Math.max(
+        1,
+        frames.findIndex((frame) => frame.isAsync())
+      )
+    );
+    return sync
+      .map(
+        (frame) =>
+          `${frame.getFunctionName() ?? ''}@${frame.getFileName()}:${frame.getLineNumber()}:${frame.getColumnNumber()}`
+      )
+      .join('\n');
+  };
+}
+
+/** No stack at all. */
+function useNoStacks(): void {
+  ErrorWithPrepare.prepareStackTrace = () => '';
 }
 
 /** V8's own format (`at Class.method [as key] (…)`); vitest's source-map formatter is not it. */
@@ -75,6 +102,8 @@ async function readBoth(
 describe.each([
   ['JavaScriptCore', useJavaScriptCoreStacks],
   ['V8', useV8Stacks],
+  ['release-Firefox (no async frames)', useFirefoxReleaseStacks],
+  ['no', useNoStacks],
 ])('ZenFS Async mirror with %s stack traces', (_engine, useStacks) => {
   it('renames a file, in the backend and in the sync mirror', async () => {
     useStacks();
@@ -139,6 +168,30 @@ describe.each([
     expect(mirrored).toEqual([['/a', '/b']]);
     expect(await readBoth(backend, '/b', 4)).toEqual(['sync', 'sync']);
     expect(() => backend.statSync('/a')).toThrow(/no such file/);
+  });
+
+  it('throws a top-level mirror failure even while another mirrored call is in flight', async () => {
+    useStacks();
+    const backend = await makeBackend();
+    await backend.createFile('/a.lock', mode);
+    await backend.write('/a.lock', text('a'), 0);
+    await backend.createFile('/other', mode);
+    const mirror = (backend as unknown as { _sync: { writeSync: (...args: unknown[]) => void } })
+      ._sync;
+    const writeSync = mirror.writeSync.bind(mirror);
+    mirror.writeSync = (...args) => {
+      if (args[0] === '/other') throw new Error('mirror rejected the write');
+      writeSync(...args);
+    };
+    try {
+      const rename = backend.rename('/a.lock', '/a');
+      const write = backend.write('/other', text('x'), 0);
+      await expect(write).rejects.toThrow(/Out of sync/);
+      await expect(rename).resolves.toBeUndefined();
+    } finally {
+      mirror.writeSync = writeSync;
+    }
+    expect(await readBoth(backend, '/a', 1)).toEqual(['a', 'a']);
   });
 
   it('throws a mirror failure that no outer call will repair (out of sync)', async () => {
