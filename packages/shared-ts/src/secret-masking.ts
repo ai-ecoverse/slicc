@@ -5,6 +5,8 @@
  * server side (fetch proxy response scrubbing).
  */
 
+import { bytesToHex } from './sha256.js';
+
 // ---------- Known token prefixes ----------
 
 const KNOWN_PREFIXES: string[] = [
@@ -56,12 +58,6 @@ async function hmacSha256(key: string, message: string): Promise<Uint8Array> {
   return new Uint8Array(sig);
 }
 
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
 /**
  * HMAC-SHA256 over raw bytes, hex-encoded. Used by the fetch proxy's
  * body-signing path (`SecretsPipeline.signHmac`) — the counterpart of
@@ -79,7 +75,7 @@ export async function hmacSha256Hex(key: string, message: Uint8Array): Promise<s
     ['sign']
   );
   const sig = await crypto.subtle.sign('HMAC', cryptoKey, message as SubtleData);
-  return toHex(new Uint8Array(sig));
+  return bytesToHex(new Uint8Array(sig));
 }
 
 // ---------- Public API ----------
@@ -99,7 +95,7 @@ export async function mask(
   const remainder = realValue.slice(prefix.length);
 
   const hmac = await hmacSha256(sessionId + secretName, realValue);
-  let hex = toHex(hmac);
+  let hex = bytesToHex(hmac);
 
   // Repeat hex if remainder is longer than 64 hex chars
   while (hex.length < remainder.length) hex += hex;

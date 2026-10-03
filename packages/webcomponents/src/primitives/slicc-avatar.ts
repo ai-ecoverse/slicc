@@ -1,3 +1,4 @@
+import { sha256Hex } from '@slicc/shared-ts';
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 
@@ -289,15 +290,6 @@ export class SliccAvatar extends HTMLElement {
         /* digest unavailable / rejected — keep initials. */
       });
   }
-}
-
-/** Hex-encode a SHA-256 digest of `input` using the Web Crypto SubtleCrypto API. */
-async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }
 
 /** Take up to 2 uppercase initials from a full name (first letters of first/last word). */

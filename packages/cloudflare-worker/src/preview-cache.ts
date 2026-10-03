@@ -8,6 +8,8 @@
  * detects VFS changes under the served root.
  */
 
+import { bytesToHex } from '@slicc/shared-ts';
+
 // ponytail: 5s covers a page-load burst without stale-content frustration
 const PREVIEW_CACHE_TTL_S = 5;
 
@@ -80,7 +82,7 @@ export async function cachedPreviewFetch(opts: CachedPreviewOpts): Promise<Respo
   const body = await fresh.arrayBuffer();
 
   const hash = await crypto.subtle.digest('SHA-1', body);
-  const etag = `"${[...new Uint8Array(hash.slice(0, 8))].map((b) => b.toString(16).padStart(2, '0')).join('')}"`;
+  const etag = `"${bytesToHex(new Uint8Array(hash, 0, 8))}"`;
 
   const ifNoneMatch = request.headers.get('if-none-match');
   if (ifNoneMatch === etag) {

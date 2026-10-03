@@ -2,6 +2,7 @@ import {
   ELECTRON_OVERLAY_APP_PATH,
   SLICC_HOSTED_ORIGIN,
   scanGithubReleases,
+  sha256Hex,
 } from '@slicc/shared-ts';
 import { buildApiCatalogResponse } from './api-catalog.js';
 import { buildAppSiteAssociationResponse } from './apple-app-site-association.js';
@@ -1500,9 +1501,8 @@ interface ConeIdentity {
  * distinct; retries after bind failure or a lost response reuse the same DO.
  */
 async function trayIdForCreateAttempt(identity: ConeIdentity): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(
+  const hex = (
+    await sha256Hex(
       JSON.stringify([
         'tray-create-v1',
         identity.coneId,
@@ -1510,12 +1510,9 @@ async function trayIdForCreateAttempt(identity: ConeIdentity): Promise<string> {
         identity.createAttemptId,
       ])
     )
-  );
+  ).slice(0, 32);
   // Keep the existing 128-bit UUID-shaped tray grammar. Preview DNS labels
   // encode its 32 hex digits; a full SHA-256 hex ID cannot round-trip there.
-  const hex = Array.from(new Uint8Array(digest).slice(0, 16), (byte) =>
-    byte.toString(16).padStart(2, '0')
-  ).join('');
   return [
     hex.slice(0, 8),
     hex.slice(8, 12),

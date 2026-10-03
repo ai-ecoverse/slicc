@@ -5,19 +5,9 @@
  * The hash follows the modern Gravatar spec: trim + lowercase the email, then
  * SHA-256 it to a lowercase hex string. The URL is
  * `https://www.gravatar.com/avatar/<hash>` with `?s=<size>&d=<default>`.
- *
- * SHA-256 runs through `crypto.subtle.digest` (async; available in every
- * browser the library targets and in the `@vitest/browser` Chromium runtime).
  */
 
-/** SHA-256 a string to a lowercase hex digest via the Web Crypto API. */
-export async function sha256Hex(input: string): Promise<string> {
-  const data = new TextEncoder().encode(input);
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+import { sha256Hex } from '@slicc/shared-ts';
 
 /** Options for {@link gravatarUrl}. */
 export interface GravatarOptions {
