@@ -54,10 +54,17 @@ function envFlagWidth(token: string): number {
   return ENV_ARG_FLAGS.has(flag) ? 2 : 1;
 }
 
-function splitStringPayload(token: string, next: string | undefined): string[] {
+/** `-S` / `--split-string` splits the rest of the `#!` line: its payload and every token after it. */
+function splitStringPayload(token: string, rest: string[]): string[] {
   const eq = token.indexOf('=');
-  const payload = eq === -1 ? next : token.slice(eq + 1);
-  return payload ? payload.split(/\s+/).filter(Boolean) : [];
+  const head =
+    eq === -1
+      ? []
+      : token
+          .slice(eq + 1)
+          .split(/\s+/)
+          .filter(Boolean);
+  return [...head, ...rest];
 }
 
 function envInterpreter(tokens: string[]): string {
@@ -71,7 +78,7 @@ function envInterpreter(tokens: string[]): string {
     if (token.startsWith('-')) {
       const flag = token.split('=', 1)[0];
       if (flag === '-S' || flag === '--split-string') {
-        return envInterpreter(splitStringPayload(token, tokens[i + 1]));
+        return envInterpreter(splitStringPayload(token, tokens.slice(i + 1)));
       }
       i += envFlagWidth(token);
       continue;
@@ -85,7 +92,11 @@ function envInterpreter(tokens: string[]): string {
   return 'bash';
 }
 
-function interpreterFromShebang(content: string): string {
+/**
+ * The program a `#!` line runs (`env`'s flags, assignments and `-S` seen
+ * through), as a basename; `bash` when the line names none.
+ */
+export function interpreterFromShebang(content: string): string {
   const line = content.split(/\r?\n/, 1)[0] ?? '';
   if (!line.startsWith('#!')) return 'bash';
   const tokens = line.slice(2).trim().split(/\s+/).filter(Boolean);
