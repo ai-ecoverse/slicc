@@ -234,6 +234,7 @@ export class FakeKernel implements WasiKernel {
       case 'fd-path-unlinking':
       case 'fd-path-unlinked':
       case 'fd-path-renamed':
+      case 'fd-promote':
         return undefined;
       default:
         throw posix('ENOSYS');

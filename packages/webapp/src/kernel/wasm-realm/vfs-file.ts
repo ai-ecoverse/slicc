@@ -56,6 +56,12 @@ export interface VfsFileOptions {
   contents?: Uint8Array;
   /** Unlinked while open: never write back (the live mount's orphan rule). */
   orphan?: boolean;
+  /**
+   * `contents` differ from what the VFS holds (a handed-over buffer with writes
+   * not yet written back): written back as any write is, else they are lost.
+   * With `nodes`, they become (or replace) the process's node of the path.
+   */
+  dirty?: boolean;
   /** Created or truncated by the open: empty, whatever the path held. */
   truncate?: boolean;
   /**
@@ -108,12 +114,14 @@ export class VfsNode {
     private readonly fs: VfsFileFs,
     public path: string,
     contents?: Uint8Array,
-    public orphaned = false
+    public orphaned = false,
+    dirty = false
   ) {
     // Orphans carry their live bytes (possibly empty); never re-read a gone path.
     if (contents !== undefined) this.data = new Uint8Array(contents);
     else if (orphaned) this.data = new Uint8Array(0);
     this.length = this.data?.length ?? 0;
+    if (dirty && contents !== undefined) this.markDirty();
   }
 
   serial<T>(op: () => Promise<T>): Promise<T> {
@@ -137,6 +145,14 @@ export class VfsNode {
       this.length = this.data.length;
     }
     return this.data;
+  }
+
+  /** A handed-over buffer's bytes, newer than what the node held: they replace it and are written back. */
+  replace(contents: Uint8Array): void {
+    this.data = new Uint8Array(contents);
+    this.length = this.data.length;
+    this.missing = false;
+    this.markDirty();
   }
 
   /** Put the file on the VFS now if the path is missing (O_CREAT); never touch one that exists. */
@@ -235,6 +251,23 @@ export class VfsNodes {
     return node;
   }
 
+  /**
+   * The node of `path` for a handed-over buffer (fd-promote): its bytes join
+   * the process's node of the path, so every description of that buffer
+   * shares one node (and one write-back), as the worker's opens shared it.
+   */
+  adopt(path: string, contents: Uint8Array, dirty: boolean): VfsNode {
+    let node = this.byPath.get(path);
+    if (!node) {
+      node = new VfsNode(this.fs, path, contents, false, dirty);
+      this.byPath.set(path, node);
+    } else if (dirty) {
+      node.replace(contents);
+    }
+    node.opens++;
+    return node;
+  }
+
   /** A description on `node` closed: the last one forgets it. */
   closed(node: VfsNode): void {
     node.opens--;
@@ -288,10 +321,14 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
   const access = opts.flags & O_ACCMODE;
   const readable = access !== O_WRONLY;
   const writable = access === O_WRONLY || access === O_RDWR;
+  // An orphan (its path is gone) keeps a node of its own; every other open of a
+  // path, a handed-over one included, shares the process's node of it.
   const node =
-    nodes && opts.contents === undefined && !opts.orphan
-      ? nodes.open(opts.path)
-      : new VfsNode(fs, opts.path, opts.contents, opts.orphan === true);
+    !nodes || opts.orphan
+      ? new VfsNode(fs, opts.path, opts.contents, opts.orphan === true, opts.dirty === true)
+      : opts.contents !== undefined
+        ? nodes.adopt(opts.path, opts.contents, opts.dirty === true)
+        : nodes.open(opts.path);
   // What the open itself queued (O_CREAT, O_TRUNC) and failed is the
   // description's next op's error, close included: never a silent success.
   let openError: { err: unknown } | undefined;
