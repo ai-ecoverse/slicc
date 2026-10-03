@@ -103,17 +103,41 @@ function linkImports(
   return imports;
 }
 
+/**
+ * The largest maximum WebKit reliably reserves for a shared memory: 2 GiB.
+ * JavaScriptCore reserves a shared memory's whole maximum up front, and on
+ * iOS a 4 GiB reservation fails with `RangeError: Out of memory` once a page
+ * holds a few other memories (rustc imports `maximum: 65536`).
+ */
+export const FALLBACK_MAXIMUM_PAGES = 32768;
+
+/**
+ * A memory for an import declared `{ initial, maximum }`. A provided memory
+ * may have a smaller maximum than the import declares, so when the engine
+ * cannot reserve the declared one the program gets 2 GiB instead of none.
+ */
+function newImportedMemory(spec: ImportedMemory): WebAssembly.Memory {
+  const maximum = spec.maximum ?? 65536;
+  try {
+    return new WebAssembly.Memory({ initial: spec.initial, maximum, shared: spec.shared });
+  } catch (err) {
+    if (!(err instanceof RangeError) || maximum <= FALLBACK_MAXIMUM_PAGES) throw err;
+    if (spec.initial > FALLBACK_MAXIMUM_PAGES) throw err;
+    return new WebAssembly.Memory({
+      initial: spec.initial,
+      maximum: FALLBACK_MAXIMUM_PAGES,
+      shared: spec.shared,
+    });
+  }
+}
+
 /** The shared memory a WASIX program imports, grown to hold a forked parent's copy. */
-function importedMemory(
+export function createImportedMemory(
   spec: ImportedMemory | undefined,
   copy?: Uint8Array
 ): WebAssembly.Memory | undefined {
   if (!spec) return undefined;
-  const memory = new WebAssembly.Memory({
-    initial: spec.initial,
-    maximum: spec.maximum ?? 65536,
-    shared: spec.shared,
-  });
+  const memory = newImportedMemory(spec);
   if (copy) {
     const pages = copy.byteLength / 65536 - memory.buffer.byteLength / 65536;
     if (pages > 0) memory.grow(pages);
@@ -349,7 +373,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
     return 126;
   }
   const fork = init.fork?.wasi;
-  const memory = importedMemory(init.program.memory, fork ? init.fork?.memory : undefined);
+  const memory = createImportedMemory(init.program.memory, fork ? init.fork?.memory : undefined);
   const threads =
     memory?.buffer instanceof SharedArrayBuffer && spawnsThreads(module)
       ? new WasiThreads(port, memory, threadCap(init.env), MAIN_TID)

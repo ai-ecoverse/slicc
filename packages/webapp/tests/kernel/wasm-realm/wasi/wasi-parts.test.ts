@@ -3,7 +3,7 @@
  * the stat cache, and which modules the preview1 runtime refuses.
  */
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { E, wasiErrnoOf } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
 import { WasiFds } from '../../../../src/kernel/wasm-realm/wasi/wasi-fds.js';
 import {
@@ -17,6 +17,8 @@ import {
 import { importedMemory } from '../../../../src/kernel/wasm-realm/wasi/wasi-module.js';
 import {
   captureBacktraces,
+  createImportedMemory,
+  FALLBACK_MAXIMUM_PAGES,
   trapMessage,
   unsupportedImport,
 } from '../../../../src/kernel/wasm-realm/wasi/wasi-runtime.js';
@@ -313,5 +315,65 @@ describe('trapMessage', () => {
         '    at Build.Step.zigProcessUpdate (wasm://wasm/00ce402e:wasm-function[1674]:0x196785)',
       ].join('\n')
     );
+  });
+});
+
+describe('createImportedMemory', () => {
+  const RealMemory = WebAssembly.Memory;
+  const asked: WebAssembly.MemoryDescriptor[] = [];
+  /** An engine that cannot reserve more than `limit` pages, as WebKit on iOS with 4 GiB. */
+  const engineCapping = (limit: number, error: Error = new RangeError('Out of memory')) => {
+    asked.length = 0;
+    const Capped = function (descriptor: WebAssembly.MemoryDescriptor) {
+      asked.push(descriptor);
+      if ((descriptor.maximum ?? 0) > limit) throw error;
+      return new RealMemory(descriptor);
+    } as unknown as typeof WebAssembly.Memory;
+    WebAssembly.Memory = Capped;
+  };
+  afterEach(() => {
+    WebAssembly.Memory = RealMemory;
+  });
+  const spec = { module: 'env', name: 'memory', initial: 2, maximum: 65536, shared: true };
+
+  it('reserves the declared maximum when the engine can', () => {
+    engineCapping(65536);
+    createImportedMemory(spec);
+    expect(asked.map((d) => d.maximum)).toEqual([65536]);
+  });
+
+  it('falls back to 2 GiB when the declared 4 GiB maximum throws RangeError', () => {
+    engineCapping(FALLBACK_MAXIMUM_PAGES);
+    const memory = createImportedMemory(spec);
+    expect(asked.map((d) => d.maximum)).toEqual([65536, FALLBACK_MAXIMUM_PAGES]);
+    expect(asked[1]).toMatchObject({ initial: 2, shared: true });
+    expect(memory?.buffer.byteLength).toBe(2 * 65536);
+  });
+
+  it('treats a missing maximum as 4 GiB and falls back the same way', () => {
+    engineCapping(FALLBACK_MAXIMUM_PAGES);
+    createImportedMemory({ ...spec, maximum: undefined });
+    expect(asked.map((d) => d.maximum)).toEqual([65536, FALLBACK_MAXIMUM_PAGES]);
+  });
+
+  it('rethrows when the maximum is already 2 GiB or less, or the error is not a RangeError', () => {
+    engineCapping(1024);
+    expect(() => createImportedMemory({ ...spec, maximum: FALLBACK_MAXIMUM_PAGES })).toThrow(
+      RangeError
+    );
+    engineCapping(FALLBACK_MAXIMUM_PAGES, new TypeError('bad descriptor'));
+    expect(() => createImportedMemory(spec)).toThrow(TypeError);
+  });
+
+  it('copies a forked parent into the fallback memory', () => {
+    engineCapping(FALLBACK_MAXIMUM_PAGES);
+    const copy = new Uint8Array(3 * 65536).fill(7);
+    const memory = createImportedMemory(spec, copy);
+    expect(memory?.buffer.byteLength).toBe(3 * 65536);
+    expect(new Uint8Array(memory!.buffer)[3 * 65536 - 1]).toBe(7);
+  });
+
+  it('has no memory for a module that imports none', () => {
+    expect(createImportedMemory(undefined)).toBeUndefined();
   });
 });
