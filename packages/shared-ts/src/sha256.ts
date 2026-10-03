@@ -13,13 +13,16 @@ export function bytesToHex(bytes: Uint8Array): string {
 }
 
 /**
- * Compact a view or buffer to a standalone `ArrayBuffer` covering exactly
- * the visible bytes. Passing `view.buffer` (or a TypeScript `as BufferSource`
- * of that buffer) to `digest` hashes bytes outside an offset view.
+ * Compact a view or buffer to a current-realm `ArrayBuffer` covering exactly
+ * the visible bytes. Passing `view.buffer` to `digest` hashes bytes outside
+ * an offset view. `instanceof ArrayBuffer` is false for a buffer from another
+ * realm (iframe / `vm`); copy through `Uint8Array` instead.
  */
 export function compactArrayBuffer(data: Uint8Array | ArrayBuffer): ArrayBuffer {
-  if (data instanceof ArrayBuffer) return data;
-  return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice().buffer;
+  }
+  return new Uint8Array(data).slice().buffer;
 }
 
 /**

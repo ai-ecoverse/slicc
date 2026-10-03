@@ -1,3 +1,4 @@
+import { createContext, runInContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { bytesToHex, compactArrayBuffer, sha256Hex } from '../src/sha256.js';
 
@@ -46,5 +47,22 @@ describe('sha256Hex', () => {
     expect(await sha256Hex(view)).not.toBe(castBufferHex);
     expect(compactArrayBuffer(view).byteLength).toBe(view.byteLength);
     expect(compactArrayBuffer(view).byteLength).not.toBe(view.buffer.byteLength);
+  });
+
+  it('hashes ArrayBuffer and Uint8Array values from another vm realm', async () => {
+    const ctx = createContext();
+    const foreignBuffer = runInContext('new ArrayBuffer(4)', ctx);
+    expect(foreignBuffer instanceof ArrayBuffer).toBe(false);
+    new Uint8Array(foreignBuffer).set([2, 3, 4, 5]);
+    const local = new Uint8Array([2, 3, 4, 5]);
+    expect(await sha256Hex(foreignBuffer as ArrayBuffer)).toBe(await sha256Hex(local));
+
+    const foreignView = runInContext(
+      'new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]).subarray(2, 6)',
+      ctx
+    );
+    expect(foreignView instanceof Uint8Array).toBe(false);
+    expect(ArrayBuffer.isView(foreignView)).toBe(true);
+    expect(await sha256Hex(foreignView as Uint8Array)).toBe(await sha256Hex(local));
   });
 });
