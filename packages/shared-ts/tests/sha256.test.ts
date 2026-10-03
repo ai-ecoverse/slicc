@@ -1,4 +1,3 @@
-import { createContext, runInContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { bytesToHex, compactArrayBuffer, sha256Hex } from '../src/sha256.js';
 
@@ -50,14 +49,20 @@ describe('sha256Hex', () => {
   });
 
   it('hashes ArrayBuffer and Uint8Array values from another vm realm', async () => {
-    const ctx = createContext();
-    const foreignBuffer = runInContext('new ArrayBuffer(4)', ctx);
+    // Load `vm` by specifier at runtime so this package's tsconfig (DOM, no
+    // `@types/node`) does not resolve `node:vm`.
+    const vm = (await import(['node', 'vm'].join(':'))) as {
+      createContext: (sandbox?: object) => object;
+      runInContext: (code: string, context: object) => unknown;
+    };
+    const ctx = vm.createContext();
+    const foreignBuffer = vm.runInContext('new ArrayBuffer(4)', ctx);
     expect(foreignBuffer instanceof ArrayBuffer).toBe(false);
-    new Uint8Array(foreignBuffer).set([2, 3, 4, 5]);
+    new Uint8Array(foreignBuffer as ArrayBuffer).set([2, 3, 4, 5]);
     const local = new Uint8Array([2, 3, 4, 5]);
     expect(await sha256Hex(foreignBuffer as ArrayBuffer)).toBe(await sha256Hex(local));
 
-    const foreignView = runInContext(
+    const foreignView = vm.runInContext(
       'new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]).subarray(2, 6)',
       ctx
     );
