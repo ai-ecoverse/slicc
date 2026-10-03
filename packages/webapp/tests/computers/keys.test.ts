@@ -35,6 +35,63 @@ describe('computer keys', () => {
     expect(parsed).not.toBeNull();
     const events = toCdpKeyEvents(parsed!);
     expect(events.map((e) => e.type)).toEqual(['keyDown', 'keyUp']);
+    expect(events[0]).toEqual({
+      type: 'keyDown',
+      key: 'a',
+      code: 'KeyA',
+      modifiers: 0,
+      windowsVirtualKeyCode: 65,
+      text: 'a',
+      unmodifiedText: 'a',
+    });
+    expect(events[1]).toEqual({
+      type: 'keyUp',
+      key: 'a',
+      code: 'KeyA',
+      modifiers: 0,
+      windowsVirtualKeyCode: 65,
+    });
+    expect(events[0]).not.toHaveProperty('nativeVirtualKeyCode');
+    expect(events[1]).not.toHaveProperty('nativeVirtualKeyCode');
+  });
+
+  it('Enter includes windowsVirtualKeyCode 13 and text \\r on keyDown only', () => {
+    const parsed = parseKeysym('Return');
+    expect(parsed).not.toBeNull();
+    const [keyDown, keyUp] = toCdpKeyEvents(parsed!);
+    expect(keyDown).toEqual({
+      type: 'keyDown',
+      key: 'Enter',
+      code: 'Enter',
+      modifiers: 0,
+      windowsVirtualKeyCode: 13,
+      text: '\r',
+      unmodifiedText: '\r',
+    });
+    expect(keyUp).toEqual({
+      type: 'keyUp',
+      key: 'Enter',
+      code: 'Enter',
+      modifiers: 0,
+      windowsVirtualKeyCode: 13,
+    });
+    expect(keyUp).not.toHaveProperty('text');
+    expect(toCdpKeyEvents(parseKeysym('enter')!)[0].windowsVirtualKeyCode).toBe(13);
+    expect(toCdpKeyEvents(parseKeysym('enter')!)[0].text).toBe('\r');
+  });
+
+  it('preserves modifiers and omits insert text on chords', () => {
+    const parsed = parseKeysym('ctrl+alt+Delete');
+    expect(parsed).not.toBeNull();
+    const [keyDown, keyUp] = toCdpKeyEvents(parsed!);
+    expect(keyDown.modifiers).toBe(1 + 2);
+    expect(keyDown.windowsVirtualKeyCode).toBe(46);
+    expect(keyDown).not.toHaveProperty('text');
+    expect(keyUp.modifiers).toBe(keyDown.modifiers);
+    const ctrlC = toCdpKeyEvents(parseKeysym('ctrl+c')!);
+    expect(ctrlC[0].windowsVirtualKeyCode).toBe(67);
+    expect(ctrlC[0].modifiers).toBe(2);
+    expect(ctrlC[0]).not.toHaveProperty('text');
   });
 
   it('maps click/hold/scroll onto touch actions', () => {
