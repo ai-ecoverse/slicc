@@ -63,7 +63,8 @@ Adding a variant is a fixed six-step order: [Protocol variant checklist](#protoc
 iOS tabs are WKWebViews. There is no Chrome input pipeline, so `Input.dispatchKeyEvent` is reconstructed in-page (`CDPInputDomain`). A synthetic `KeyboardEvent({ key: 'Enter' })` leaves `keyCode`/`which` at 0 (the constructor ignores those init fields) and never runs implicit form submit. The injected script therefore:
 
 - Sets `key`, `code` when the leader sent them, and defines `keyCode`/`which` from `windowsVirtualKeyCode` (Enter → 13).
-- On `keyDown`, uses leader `text` (`'\r'` for Enter) to dispatch `keypress` with `charCode` 13, then `HTMLFormElement.requestSubmit()` on a focused `INPUT` inside a form — WKWebView will not implicit-submit the way Chrome does for a real key.
+- On CDP `keyDown` only (not `rawKeyDown`), uses leader `text` (`'\r'` for Enter) to dispatch `keypress` with `charCode` 13, then HTML implicit submission: `requestSubmit(defaultButton)` when the form has a default submit button, otherwise submit a buttonless form only when it has at most one blocking text field. WKWebView will not implicit-submit a synthetic key the way Chrome does.
+- `keyCode`/`which` come from `windowsVirtualKeyCode` or the key name — never `nativeVirtualKeyCode` (macOS Return is 36).
 - JSON-encodes `text` so a carriage return cannot break the injected source.
 
 `Input.insertText` and CDP `type: "char"` still append to the focused control. Leader `press Enter` / `--submit` payloads are documented in `docs/shell-reference.md` (`playwright/keyboard.ts`).

@@ -36,9 +36,12 @@ enum CDPInputDomain {
         """
     }
 
+    /// DOM `keyCode`/`which` come from `windowsVirtualKeyCode` (the Windows VK
+    /// / Chrome value). `nativeVirtualKeyCode` is platform-native (macOS
+    /// Return is 36) and must not stand in for it — same rule as
+    /// `playwright/keyboard.ts`.
     static func keyCode(from params: [String: Any]) -> Int {
         if let code = intValue(params["windowsVirtualKeyCode"]) { return code }
-        if let code = intValue(params["nativeVirtualKeyCode"]) { return code }
         let key = (params["key"] as? String) ?? ""
         switch key {
         case "Enter", "Return", "\r", "\n": return 13
@@ -64,8 +67,10 @@ enum CDPInputDomain {
         let text = (params["text"] as? String) ?? ""
         let keyCode = keyCode(from: params)
         let isEnter = keyCode == 13 || key == "Enter" || text == "\r" || text == "\n"
-        let emitKeypress = evt == "keydown" && (isEnter || !text.isEmpty)
-        let submitOnEnter = evt == "keydown" && isEnter
+        // CDP `rawKeyDown` is the key-down without a char/text phase; do not
+        // synthesize keypress or implicit submit for it.
+        let emitKeypress = type == "keyDown" && (isEnter || !text.isEmpty)
+        let submitOnEnter = type == "keyDown" && isEnter
         return """
             (function() {
               var el = document.activeElement || document.body;
@@ -97,11 +102,39 @@ enum CDPInputDomain {
         let submit =
             submitOnEnter
             ? """
-                if (!cancelled) {
+                if (!cancelled && el.tagName === 'INPUT') {
                   var form = el.form || (el.closest && el.closest('form'));
-                  if (form && el.tagName === 'INPUT') {
-                    if (typeof form.requestSubmit === 'function') form.requestSubmit();
-                    else form.submit();
+                  if (form) {
+                    var blocking = {text:1,search:1,url:1,tel:1,email:1,password:1,date:1,month:1,week:1,time:1,'datetime-local':1,number:1};
+                    var elType = (el.type || 'text').toLowerCase();
+                    if (blocking[elType]) {
+                      var defaultBtn = null;
+                      var nodes = form.querySelectorAll('button, input');
+                      for (var i = 0; i < nodes.length; i++) {
+                        var n = nodes[i];
+                        if (n.disabled) continue;
+                        var nt = (n.getAttribute('type') || (n.tagName === 'BUTTON' ? 'submit' : '')).toLowerCase();
+                        if (n.tagName === 'BUTTON' && nt !== 'submit') continue;
+                        if (n.tagName === 'INPUT' && nt !== 'submit' && nt !== 'image') continue;
+                        defaultBtn = n;
+                        break;
+                      }
+                      if (defaultBtn) {
+                        if (typeof form.requestSubmit === 'function') form.requestSubmit(defaultBtn);
+                        else defaultBtn.click();
+                      } else {
+                        var count = 0;
+                        var inputs = form.querySelectorAll('input');
+                        for (var j = 0; j < inputs.length; j++) {
+                          var t = (inputs[j].type || 'text').toLowerCase();
+                          if (blocking[t] && !inputs[j].disabled) count++;
+                        }
+                        if (count <= 1) {
+                          if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                          else form.submit();
+                        }
+                      }
+                    }
                   }
                 }
             """

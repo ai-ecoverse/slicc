@@ -29,7 +29,40 @@ final class CDPInputDomainTests: XCTestCase {
         let js = CDPInputDomain.dispatchKeyEventJavaScript(enterKeyDown)
         XCTAssertTrue(js.contains("\\r") || js.contains("\\u000d"), "text '\\r' must survive as a JS string, not a raw CR")
         XCTAssertTrue(js.contains("keypress"), js)
-        XCTAssertTrue(js.contains("requestSubmit") || js.contains(".submit("), js)
+        XCTAssertTrue(
+            js.contains("requestSubmit(defaultBtn)"),
+            "implicit submit must pass the default button so its click/formaction run; bare requestSubmit() is not enough")
+        XCTAssertTrue(js.contains("count <= 1"), "buttonless forms submit only with at most one blocking field")
+    }
+
+    func testRawKeyDownEnterDoesNotSynthesizeKeypressOrSubmit() {
+        let js = CDPInputDomain.dispatchKeyEventJavaScript([
+            "type": "rawKeyDown",
+            "key": "Enter",
+            "code": "Enter",
+            "windowsVirtualKeyCode": 13,
+            "text": "\r",
+        ])
+        XCTAssertTrue(js.contains("keydown"), js)
+        XCTAssertFalse(js.contains("keypress"), js)
+        XCTAssertFalse(js.contains("requestSubmit"), js)
+        XCTAssertTrue(js.contains("keyCode = 13") || js.contains("keyCode =13"), js)
+    }
+
+    func testNativeVirtualKeyCodeIsNotUsedAsDomKeyCode() {
+        XCTAssertEqual(
+            CDPInputDomain.keyCode(from: ["nativeVirtualKeyCode": 36, "key": "Enter"]),
+            13,
+            "macOS Return native 36 must not replace the key-name mapping to 13")
+        XCTAssertEqual(
+            CDPInputDomain.keyCode(from: ["nativeVirtualKeyCode": 36]),
+            0,
+            "native-only payloads must not leak platform scan codes as DOM keyCode")
+        XCTAssertEqual(
+            CDPInputDomain.keyCode(from: [
+                "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 36, "key": "Enter",
+            ]),
+            13)
     }
 
     func testEnterKeyUpDoesNotSubmit() {
