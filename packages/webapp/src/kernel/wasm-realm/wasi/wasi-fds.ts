@@ -405,6 +405,8 @@ export class WasiFds {
           position: f.offset,
           contents: f.buffer.contents(),
           ...(f.buffer.isOrphan() ? { orphan: true } : {}),
+          // Bytes it has not written back yet are the kernel's to write now.
+          ...(f.buffer.isDirty() ? { dirty: true } : {}),
         });
         promoted.set(f, fd);
       }

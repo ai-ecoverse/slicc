@@ -56,6 +56,11 @@ export interface VfsFileOptions {
   contents?: Uint8Array;
   /** Unlinked while open: never write back (the live mount's orphan rule). */
   orphan?: boolean;
+  /**
+   * `contents` differ from what the VFS holds (a handed-over buffer with writes
+   * not yet written back): written back as any write is, else they are lost.
+   */
+  dirty?: boolean;
   /** Created or truncated by the open: empty, whatever the path held. */
   truncate?: boolean;
   /**
@@ -108,12 +113,14 @@ export class VfsNode {
     private readonly fs: VfsFileFs,
     public path: string,
     contents?: Uint8Array,
-    public orphaned = false
+    public orphaned = false,
+    dirty = false
   ) {
     // Orphans carry their live bytes (possibly empty); never re-read a gone path.
     if (contents !== undefined) this.data = new Uint8Array(contents);
     else if (orphaned) this.data = new Uint8Array(0);
     this.length = this.data?.length ?? 0;
+    if (dirty && contents !== undefined) this.markDirty();
   }
 
   serial<T>(op: () => Promise<T>): Promise<T> {
@@ -291,7 +298,7 @@ export function vfsFile(fs: VfsFileFs, opts: VfsFileOptions, nodes?: VfsNodes): 
   const node =
     nodes && opts.contents === undefined && !opts.orphan
       ? nodes.open(opts.path)
-      : new VfsNode(fs, opts.path, opts.contents, opts.orphan === true);
+      : new VfsNode(fs, opts.path, opts.contents, opts.orphan === true, opts.dirty === true);
   // What the open itself queued (O_CREAT, O_TRUNC) and failed is the
   // description's next op's error, close included: never a silent success.
   let openError: { err: unknown } | undefined;

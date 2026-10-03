@@ -134,6 +134,8 @@ export type WasmSyscall =
       position?: number;
       contents?: Uint8Array;
       orphan?: boolean;
+      /** `contents` hold writes the VFS does not have yet. */
+      dirty?: boolean;
     }
   /** open("/dev/tty"): a new descriptor on the controlling terminal (ENXIO without one). */
   | { op: 'fd-open-tty'; name?: string }
@@ -676,6 +678,7 @@ export class WasmProcess {
         position: req.position ?? 0,
         ...(req.contents !== undefined ? { contents: req.contents } : {}),
         ...(req.orphan ? { orphan: true } : {}),
+        ...(req.dirty ? { dirty: true } : {}),
       },
       this.nodes
     );

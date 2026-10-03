@@ -108,6 +108,30 @@ describe('vfsFile', () => {
     expect(writes).toEqual([]);
   });
 
+  it('writes back handed-over contents the VFS does not have yet (dirty)', async () => {
+    // A WASI process's buffered file, written but not yet written back, when its
+    // first thread makes its files the kernel's: lost if the node starts clean.
+    const files: Record<string, string> = { '/cache/h/m.txt': '' };
+    const { fs, writes } = memFs(files);
+    const file = vfsFile(fs, {
+      path: '/cache/h/m.txt',
+      flags: O_RDWR,
+      position: 8,
+      contents: bytes('manifest'),
+      dirty: true,
+    });
+    await Promise.resolve(file.release());
+    expect(files['/cache/h/m.txt']).toBe('manifest');
+    expect(writes).toEqual([['/cache/h/m.txt', 'manifest']]);
+  });
+
+  it('never rewrites handed-over contents that are already on the VFS', async () => {
+    const { fs, writes } = memFs({ '/f': 'same' });
+    const file = vfsFile(fs, { path: '/f', flags: O_RDWR, position: 0, contents: bytes('same') });
+    await Promise.resolve(file.release());
+    expect(writes).toEqual([]);
+  });
+
   it('appends with O_APPEND, seeks, and zero-fills a gap', async () => {
     const { fs, writes } = memFs({ '/f': 'head' });
     const file = vfsFile(fs, { path: '/f', flags: O_RDWR | O_APPEND, position: 0 });

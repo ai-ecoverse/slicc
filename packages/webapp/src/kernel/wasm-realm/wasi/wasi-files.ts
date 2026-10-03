@@ -102,6 +102,11 @@ export class FileBuffer {
     return this.orphaned;
   }
 
+  /** Written since the last write-back. */
+  isDirty(): boolean {
+    return this.dirty;
+  }
+
   /** The current bytes (a copy), for a handoff to the kernel. */
   contents(): Uint8Array {
     return this.load().slice(0, this.length);

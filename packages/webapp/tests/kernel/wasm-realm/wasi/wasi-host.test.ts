@@ -878,6 +878,30 @@ describe("WasiHost: a threaded process's files are kernel descriptions (5d)", ()
     expect(g.u64(st + 32)).toBe(4n);
   });
 
+  it('a file written before the second thread hands its unwritten bytes over as dirty', () => {
+    // A cache manifest as Zig writes it: pwrite + set_size, then LLVM starts a
+    // thread, then exit with the file still open. The kernel must write it back.
+    const { call, g, open, kernel, host } = setup();
+    const [, fd] = open('manifest.txt', OFLAGS.CREAT | OFLAGS.TRUNC);
+    const [, clean] = open('read-only.txt', OFLAGS.CREAT);
+    const [iov, n] = g.iov('manifest');
+    expect(call('fd_pwrite', fd, iov, n, 0n, g.alloc(4))).toBe(E.SUCCESS);
+    expect(call('fd_filestat_set_size', fd, 8n)).toBe(E.SUCCESS);
+    expect(call('fd_close', clean)).toBe(E.SUCCESS);
+    const [, reread] = open('read-only.txt');
+    host.fds.share(new Int32Array(new SharedArrayBuffer(16)), false);
+    const promotes = kernel.calls.filter((c) => c.op === 'fd-promote') as Array<{
+      fd: number;
+      contents?: Uint8Array;
+      dirty?: boolean;
+    }>;
+    const written = promotes.find((c) => c.fd === fd);
+    expect(new TextDecoder().decode(written?.contents)).toBe('manifest');
+    expect(written?.dirty).toBe(true);
+    // Nothing unwritten: the kernel need not write it again.
+    expect(promotes.find((c) => c.fd === reread)?.dirty).toBeUndefined();
+  });
+
   it("an unlink, a rename and a path's stat tell the kernel, whose descriptions hold the bytes", () => {
     const { kernel, open, path, g, call } = threaded();
     open('a.txt');
