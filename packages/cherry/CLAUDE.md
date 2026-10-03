@@ -19,11 +19,15 @@ Agent may navigate / screenshot / open-url, but **never** drive raw
 - `src/index.ts` — public surface: `mountSlicc(options)`,
   `MountSliccOptions`, `HostCapabilities`, `HostHooks`, `SliccHandle`.
 - `src/mount.ts` — `mountSliccImpl`: creates `?cherry=1` iframe, runs
-  handshake, dispatches `cdp.request` via host handlers, posts
-  `cdp.response` back. Holds `channelId`, `message` listener.
+  handshake, dispatches `cdp.request` via an injected host handler, posts
+  `cdp.response` back. Holds `channelId`, `message` listener. With no
+  handler (ui-only), every CDP method is `CherryUnsupportedError`.
+- `src/embed-ui.ts` — side-panel `mountSlicc` that does **not** import
+  `cdp-host-handlers.ts` (extension `sidepanel.js` 14 kB budget).
+- `src/cdp-errors.ts` — `CherryUnsupportedError` (`code = -32601`).
 - `src/cdp-host-handlers.ts` — `createCdpHostHandler`: host-realm
-  execution of the synthetic CDP subset + `CherryUnsupportedError`
-  (`code = -32601`). Also consumed by `preview-bootstrap.ts`.
+  execution of the synthetic CDP subset. Public `mountSlicc` in
+  `index.ts` injects it. Also consumed by `preview-bootstrap.ts`.
 - `src/preview-bootstrap.ts` — driveable-preview bootstrap (same-origin
   previews for `serve --bridge`); opens `/__slicc/bridge` WS, runs
   `createCdpHostHandler` against its **own** `document` (no postMessage

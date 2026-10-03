@@ -63,7 +63,8 @@
         "packages/webapp/src/core/runtime-env.ts",
         "packages/webapp/src/cdp/remote-cdp-transport.ts",
         "packages/node-server/src/**",
-        "packages/shared-ts/**"
+        "packages/shared-ts/**",
+        "packages/cherry/**"
       ]
     },
     "webapp": {

@@ -40,7 +40,9 @@ per-surface implementation rationale that doesn't fit either page.
   the service worker. It relays the follower avatar menu's "Bring leader to
   front" (`slicc.focus-leader-tab`) as `focus-leader` with
   `openSettings: false` — the follower iframe has no `chrome.tabs` access, and
-  the pinned leader lives in one window only.
+  the pinned leader lives in one window only. The side-panel esbuild aliases
+  `@ai-ecoverse/cherry` to `packages/cherry/src/embed-ui.ts` so host-realm
+  synthetic CDP is not packed into the 14 kB `sidepanel.js` budget.
 - **Secrets options page** (`secrets.html` + `src/secrets-entry.ts`): user-
   facing CRUD over `chrome.storage.local` credentials consumed by the SW's
   fetch-proxy and sign-and-forward backends.

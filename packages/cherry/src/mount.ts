@@ -1,4 +1,5 @@
-import { CherryUnsupportedError, createCdpHostHandler } from './cdp-host-handlers.js';
+import { CherryUnsupportedError } from './cdp-errors.js';
+import type { CdpPayload } from './cdp-host-handlers.js';
 import type { MountSliccOptions, SliccHandle } from './index.js';
 import {
   acceptEnvelope,
@@ -21,7 +22,11 @@ import {
  */
 const MISMATCH_HOOK_GRACE_MS = 250;
 
-type CdpResult = Awaited<ReturnType<ReturnType<typeof createCdpHostHandler>>>;
+/** Host-realm CDP dispatcher. Injected by the public `mountSlicc` so ui-only
+ *  embeds can omit `cdp-host-handlers.ts` from the bundle. */
+export type HostCdpHandler = (method: string, params: CdpPayload) => Promise<CdpPayload>;
+
+type CdpResult = Awaited<ReturnType<HostCdpHandler>>;
 
 interface CdpResponseShape {
   result?: CdpResult;
@@ -42,8 +47,13 @@ export interface CherrySliccHandle extends SliccHandle {
 }
 
 /** `mountSliccImpl` accepts an optional `__test_post` seam to capture outbound envelopes in tests. */
-type MountSliccImplOptions = MountSliccOptions & {
+export type MountSliccImplOptions = MountSliccOptions & {
   __test_post?: (env: CherryEnvelope) => void;
+  /**
+   * Host CDP dispatcher. Public `mountSlicc` injects `createCdpHostHandler`.
+   * Omitted (ui-only / embed-ui) → every method is CherryUnsupportedError.
+   */
+  __hostHandler?: HostCdpHandler;
 };
 
 function buildWelcomeEnvelope(
@@ -173,9 +183,15 @@ function handleExportError(
   settlePending(pending, env.requestId, { reject: new TranscriptExportError(code) });
 }
 
+function unsupportedHostHandler(): HostCdpHandler {
+  return async (method) => {
+    throw new CherryUnsupportedError(method);
+  };
+}
+
 async function dispatchCdp(
   env: Extract<CherryEnvelope, { kind: 'cdp.request' }>,
-  hostHandler: ReturnType<typeof createCdpHostHandler>,
+  hostHandler: HostCdpHandler,
   onPermissionRequest?: (domain: string) => boolean | Promise<boolean>
 ): Promise<CdpResponseShape> {
   const domain = env.method.split('.')[0] ?? env.method;
@@ -291,10 +307,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
 
   let channelId: string | null = null;
   const pending = new Map<string, PendingExport>();
-  const hostHandler = createCdpHostHandler({
-    capabilities: options.capabilities,
-    onOpenUrl: options.hooks?.onOpenUrl,
-  });
+  const hostHandler = options.__hostHandler ?? unsupportedHostHandler();
   const post = (env: CherryEnvelope) => {
     if (options.__test_post) {
       options.__test_post(env);

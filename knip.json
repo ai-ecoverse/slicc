@@ -104,7 +104,12 @@
       "project": ["src/**/*.ts!", "tests/**/*.ts"]
     },
     "packages/cherry": {
-      "entry": ["src/index.ts!", "src/preview-bootstrap.ts!", "tests/**/*.test.ts"],
+      "entry": [
+        "src/index.ts!",
+        "src/embed-ui.ts!",
+        "src/preview-bootstrap.ts!",
+        "tests/**/*.test.ts"
+      ],
       "project": ["src/**/*.ts!", "tests/**/*.ts"],
       "ignoreDependencies": ["jsdom", "@types/jsdom"]
     },

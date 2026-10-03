@@ -46,7 +46,8 @@ The host advertises capabilities; respect them. Typical allowances:
   `Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`) and evaluate expressions
   in the host page realm (`Runtime.evaluate`). These are the baseline driveable
   contract; per-domain denials are enforced upstream by the host's permission
-  gate, so a domain may still be refused.
+  gate, so a domain may still be refused. `press Enter` / `--submit` send
+  `windowsVirtualKeyCode: 13` and `text: '\r'` so the host form actually submits.
 
 ## What you can NEVER do
 
