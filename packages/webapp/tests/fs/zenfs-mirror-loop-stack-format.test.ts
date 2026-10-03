@@ -118,12 +118,43 @@ describe.each([
   it('mirrors a sync rename once, when the queued async rename replays it', async () => {
     useStacks();
     const backend = await makeBackend();
+    const mirror = (backend as unknown as { _sync: { renameSync: (...args: unknown[]) => void } })
+      ._sync;
+    const renameSync = mirror.renameSync.bind(mirror);
+    const mirrored: unknown[][] = [];
+    mirror.renameSync = (...args) => {
+      mirrored.push(args);
+      renameSync(...args);
+    };
     backend.createFileSync('/a', mode);
     backend.writeSync('/a', text('sync'), 0);
     backend.renameSync('/a', '/b');
+    // `sync()` swallows a failed replay; the queue itself must not have failed.
+    await expect(
+      (backend as unknown as { _promise: Promise<unknown> })._promise
+    ).resolves.not.toThrow();
     await backend.sync();
 
+    // The replay runs the backend's rename only: the mirror already has it.
+    expect(mirrored).toEqual([['/a', '/b']]);
     expect(await readBoth(backend, '/b', 4)).toEqual(['sync', 'sync']);
     expect(() => backend.statSync('/a')).toThrow(/no such file/);
+  });
+
+  it('throws a mirror failure that no outer call will repair (out of sync)', async () => {
+    useStacks();
+    const backend = await makeBackend();
+    await backend.createFile('/f', mode);
+    const mirror = (backend as unknown as { _sync: { writeSync: (...args: unknown[]) => void } })
+      ._sync;
+    const writeSync = mirror.writeSync.bind(mirror);
+    mirror.writeSync = () => {
+      throw new Error('mirror rejected the write');
+    };
+    try {
+      await expect(backend.write('/f', text('x'), 0)).rejects.toThrow(/Out of sync/);
+    } finally {
+      mirror.writeSync = writeSync;
+    }
   });
 });

@@ -14,7 +14,7 @@ index 1e20478..51f47b7 100644
                  if (metadata.size < data.byteLength)
                      data.fill(0, metadata.size);
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 26aaf3a..f030c48 100644
+index 26aaf3a..392517c 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
 @@ -54,7 +54,10 @@ var __disposeResources = (this && this.__disposeResources) || (function (Suppres
@@ -29,7 +29,25 @@ index 26aaf3a..f030c48 100644
  import { join } from '../path.js';
  import { _asyncFSKeys } from './shared.js';
  /**
-@@ -129,9 +132,163 @@ export function Async(FS) {
+@@ -85,6 +88,17 @@ export function Async(FS) {
+         _async(thunk) {
+             this._promise = this._promise.finally(() => thunk());
+         }
++        /**
++         * PATCH(slicc#3783): a `*Sync` method has already updated the mirror, so
++         * the queued async call it schedules runs the backend's own method,
++         * not the mirroring wrapper (which used to apply the change a second
++         * time and rely on swallowing the failure).
++         * @internal
++         */
++        _replay(key, ...args) {
++            const original = this._zenfsOriginals?.[key] ?? this[key].bind(this);
++            return original(...args);
++        }
+         _isInitialized = false;
+         /** Tracks how many updates to the sync. cache we skipped during initialization */
+         _skippedCacheUpdates = 0;
+@@ -129,10 +143,164 @@ export function Async(FS) {
                  throw crit(withErrno('ENOTSUP', 'No sync cache is attached to this async file system'));
              }
          }
@@ -189,25 +207,58 @@ index 26aaf3a..f030c48 100644
          renameSync(oldPath, newPath) {
              this.checkSync();
              this._sync.renameSync(oldPath, newPath);
+-            this._async(() => this.rename(oldPath, newPath));
 +            this._moveMetaOnly(oldPath, newPath);
-             this._async(() => this.rename(oldPath, newPath));
++            this._async(() => this._replay('rename', oldPath, newPath));
          }
          statSync(path) {
-@@ -152,11 +309,13 @@ export function Async(FS) {
+             this.checkSync();
+@@ -141,28 +309,30 @@ export function Async(FS) {
+         touchSync(path, metadata) {
+             this.checkSync();
+             this._sync.touchSync(path, metadata);
+-            this._async(() => this.touch(path, metadata));
++            this._async(() => this._replay('touch', path, metadata));
+         }
+         createFileSync(path, options) {
+             this.checkSync();
+             const result = this._sync.createFileSync(path, options);
+-            this._async(() => this.createFile(path, options));
++            this._async(() => this._replay('createFile', path, options));
+             return result;
+         }
          unlinkSync(path) {
              this.checkSync();
              this._sync.unlinkSync(path);
+-            this._async(() => this.unlink(path));
 +            this._metaOnly?.delete(path);
-             this._async(() => this.unlink(path));
++            this._async(() => this._replay('unlink', path));
          }
          rmdirSync(path) {
              this.checkSync();
              this._sync.rmdirSync(path);
+-            this._async(() => this.rmdir(path));
 +            this._forgetMetaOnly(path);
-             this._async(() => this.rmdir(path));
++            this._async(() => this._replay('rmdir', path));
          }
          mkdirSync(path, options) {
-@@ -189,10 +348,15 @@ export function Async(FS) {
+             this.checkSync();
+             const result = this._sync.mkdirSync(path, options);
+-            this._async(() => this.mkdir(path, options));
++            this._async(() => this._replay('mkdir', path, options));
+             return result;
+         }
+         readdirSync(path) {
+@@ -172,7 +342,7 @@ export function Async(FS) {
+         linkSync(srcpath, dstpath) {
+             this.checkSync();
+             this._sync.linkSync(srcpath, dstpath);
+-            this._async(() => this.link(srcpath, dstpath));
++            this._async(() => this._replay('link', srcpath, dstpath));
+         }
+         async sync() {
+             if (!this.attributes.has('no_async_preload') && this._sync)
+@@ -189,12 +359,17 @@ export function Async(FS) {
          }
          readSync(path, buffer, offset, end) {
              this.checkSync();
@@ -221,9 +272,12 @@ index 26aaf3a..f030c48 100644
              this.checkSync();
 +            this._prepareMetaWrite(path, offset);
              this._sync.writeSync(path, buffer, offset);
-             this._async(() => this.write(path, buffer, offset));
+-            this._async(() => this.write(path, buffer, offset));
++            this._async(() => this._replay('write', path, buffer, offset));
          }
-@@ -219,37 +383,76 @@ export function Async(FS) {
+         ioctlSync(context, command, ...args) {
+             this.checkSync();
+@@ -219,37 +394,76 @@ export function Async(FS) {
          /** @internal @protected */
          _crossCopySemaphore;
          /** @internal */
@@ -313,19 +367,19 @@ index 26aaf3a..f030c48 100644
 -            if (path !== '/') {
 -                this._sync.mkdirSync(path, stats);
 -                this._sync.touchSync(path, stats);
--            }
--            const promises = [];
--            for (const file of await this.readdir(path)) {
--                promises.push(this.crossCopy(join(path, file)));
 +            catch (error) {
 +                preload.failure ??= { error };
 +                throw preload.failure.error;
              }
+-            const promises = [];
+-            for (const file of await this.readdir(path)) {
+-                promises.push(this.crossCopy(join(path, file)));
+-            }
 -            await Promise.all(promises);
          }
          /**
           * @internal
-@@ -258,42 +461,86 @@ export function Async(FS) {
+@@ -258,42 +472,96 @@ export function Async(FS) {
          _patchAsync() {
              const noPatch = ['read', 'readdir', 'stat', 'exists'];
              const toPatch = _asyncFSKeys.filter(key => !noPatch.includes(key));
@@ -367,14 +421,23 @@ index 26aaf3a..f030c48 100644
 +                    lines.shift();
 +                return lines;
 +            };
-+            /** Called (awaited) from another call of the same method, or from its sync counterpart. */
-+            const isNested = (key) => {
-+                const frames = framesOf(new Error());
-+                const own = frames.findIndex(line => line.includes(wrapperName(key)) || line.includes(`<computed> [as ${key}]`));
-+                return frames.slice(own + 1).some(line => isFrameOf(key, line));
++            const isOwnFrame = (key, line) => line.includes(wrapperName(key)) || line.includes(`<computed> [as ${key}]`);
++            /** The frames below this call's own wrapper frame. */
++            const callersOf = (key, error) => {
++                const frames = framesOf(error);
++                return frames.slice(frames.findIndex(line => isOwnFrame(key, line)) + 1);
 +            };
-+            /** The mirror call failed beneath a call of the same method (V8's upstream rule: past the error's first two frames). */
-+            const failedInLoop = (key, error) => framesOf(error).slice(2).some(line => isFrameOf(key, line));
++            /** Called (awaited) from another call of the same method, or from its sync counterpart. */
++            const isNested = (key) => callersOf(key, new Error()).some(line => isFrameOf(key, line));
++            /**
++             * The mirror update failed while an outer mirrored call (any method) is
++             * in flight beneath this one: IndexFS.rename writes the new path before
++             * the outer rename has moved the mirror's entry, and the outer call
++             * mirrors the whole change when it returns. A failure with no outer
++             * mirrored call is a real one and is thrown, out of sync.
++             */
++            const failedInLoop = (key, error) => callersOf(key, error)
++                .some(line => line.includes('zenfsMirror_') || line.includes('<computed> [as '));
 +            const mirrored = async (key, originalMethod, args) => {
 +                const result = await originalMethod(...args);
 +                if (isNested(key))
@@ -419,6 +482,7 @@ index 26aaf3a..f030c48 100644
 +                return result;
 +            };
 +            const originals = {};
++            this._zenfsOriginals = originals;
 +            const wrappers = {
 +                async zenfsMirror_rename(...args) { return await mirrored('rename', originals.rename, args); },
 +                async zenfsMirror_stat(...args) { return await mirrored('stat', originals.stat, args); },

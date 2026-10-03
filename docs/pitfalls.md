@@ -717,7 +717,11 @@ WKWebView) nothing matched. `IndexFS.rename` writes the new path through the
 mirrored `write` before the mirror has that entry, and that failure was rethrown:
 every file rename failed with ENOENT, which broke `mv`, git's lock files and
 `git init` (#3783). The patch names each wrapper literally (`zenfsMirror_<key>`, a
-name every engine prints) and compares frames in any format.
+name every engine prints) and compares frames in any format. A mirror failure is skipped only
+while an outer mirrored call is in flight beneath the failing one; otherwise it is
+thrown as `Out of sync!` (upstream's V8 rule swallowed nearly all of them). The
+async call a `*Sync` method queues runs the backend's own method, since the sync
+method has already updated the mirror.
 
 Never assume V8's stack format in code that runs in the browser. Test code like
 this with `Error.prepareStackTrace` printing JavaScriptCore's format, as the test
