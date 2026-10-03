@@ -2797,8 +2797,13 @@ export class VirtualFS {
         // Prefix mark: a recursive remove supersedes every on-disk child
         // entry, not just the top path (see sidecar-merge.ts).
         this.markSidecarDirty(normalized, 'prefix');
-        await this.writeOpfsMetadataSidecarUnlocked();
       });
+      // Coalesced, like chmod/utimes: a write here re-serialized the whole
+      // sidecar per unlink, so `rm -rf` of a 7,000-file package took 16 min
+      // (~140 ms a file). A reload before the flush is safe: the consistency
+      // marker dropped above makes the next boot re-probe the tree, and the
+      // repair drops every entry whose file is gone.
+      this.scheduleMetadataSidecarFlush();
     } catch (err) {
       throw convertError(err, normalized);
     }
