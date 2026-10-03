@@ -177,11 +177,15 @@ describe('WasmSession', () => {
         [`${RUST}/bin/rustc.wasm`]: 'W',
         '/w/tool': '#!/usr/bin/env node\nvar Module;',
         '/w/tool.wasm': 'W',
+        // `node` in an env assignment is no node interpreter: sh runs this.
+        '/w/wrap': '#!/usr/bin/env -S RUNTIME=node sh\nexec "$0.wasm" "$@"\n',
+        '/w/wrap.wasm': 'W',
       }),
       undefined,
       () => {}
     );
     expect(await session.resolve(`${RUST}/bin/rustc`, 'rustc', '/w')).toBeUndefined();
+    expect(await session.resolve('/w/wrap', './wrap', '/w')).toBeUndefined();
     // An extensionless Emscripten glue keeps node's #! line: still a program.
     expect(await session.resolve('/w/tool', './tool', '/w')).toMatchObject({
       glue: '/w/tool',

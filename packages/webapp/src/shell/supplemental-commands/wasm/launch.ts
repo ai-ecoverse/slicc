@@ -52,6 +52,7 @@ import {
   type WasmCommand,
 } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
+import { interpreterFromShebang } from '../../shebang-exec-hint.js';
 import { STDIN_ISATTY_ENV, STDOUT_ISATTY_ENV } from '../stdio-tty.js';
 
 /**
@@ -228,8 +229,8 @@ export function modulePath(glue: string): string {
   return glue.endsWith('.js') ? `${glue.slice(0, -3)}.wasm` : `${glue}.wasm`;
 }
 
-/** Enough of a file for its `#!` line. */
-const SHEBANG_PREFIX = 128;
+/** Enough of a file for its `#!` line, a long `env -S` one included. */
+const SHEBANG_PREFIX = 256;
 
 /**
  * Whether `path` starts with a `#!` line for anything but node: an
@@ -248,7 +249,7 @@ async function isForeignScript(fs: CommandContext['fs'], path: string): Promise<
     return false;
   }
   if (!head.startsWith('#!')) return false;
-  return !/\bnode\b/.test(head.split('\n', 1)[0] ?? '');
+  return interpreterFromShebang(head) !== 'node';
 }
 
 /** The command a program path names: `/usr/bin/rm` and `rm` are `rm`. */

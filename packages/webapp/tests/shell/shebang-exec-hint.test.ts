@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { withShebangExecHint } from '../../src/shell/shebang-exec-hint.js';
+import { interpreterFromShebang, withShebangExecHint } from '../../src/shell/shebang-exec-hint.js';
 
 function fsWith(files: Record<string, string>) {
   return {
@@ -105,5 +105,20 @@ describe('withShebangExecHint', () => {
       exitCode: 1,
     };
     await expect(withShebangExecHint(chmod, '/tmp', fs)).resolves.toEqual(chmod);
+  });
+});
+
+describe('interpreterFromShebang', () => {
+  it.each([
+    ['#!/bin/sh\n', 'sh'],
+    ['#!/usr/bin/env node\n', 'node'],
+    ['#!/usr/bin/env -S python3 -u\n', 'python3'],
+    // -S splits the whole rest of the line: assignments in it are no program.
+    ['#!/usr/bin/env -S RUNTIME=node sh\n', 'sh'],
+    ['#!/usr/bin/env --split-string=RUNTIME=node sh -e\n', 'sh'],
+    ['#!/usr/bin/env -u NODE_OPTIONS node\n', 'node'],
+    ['echo no shebang\n', 'bash'],
+  ])('%j runs %s', (line, interpreter) => {
+    expect(interpreterFromShebang(line)).toBe(interpreter);
   });
 });
