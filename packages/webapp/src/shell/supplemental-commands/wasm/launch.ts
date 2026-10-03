@@ -320,6 +320,27 @@ async function loadWasi(
   return { module, ...(memory ? { memory } : {}) };
 }
 
+/**
+ * The name-section sidecar of a WASI module shipped without its `name`
+ * section, for a backtrace to name its frames: `<module>.names` beside it, or
+ * the same path in an optional `<package>-names` package (rustc's 50 MB of
+ * names, installed only by who wants backtraces). Undefined when the module
+ * has its names or no sidecar is there.
+ */
+async function namesSidecar(
+  ctx: CommandContext,
+  path: string,
+  module: WebAssembly.Module
+): Promise<string | undefined> {
+  if (WebAssembly.Module.customSections(module, 'name').length > 0) return undefined;
+  const beside = `${path}.names`;
+  if (await ctx.fs.exists(beside)) return beside;
+  const root = PACKAGE_ROOT.exec(path)?.[1];
+  if (root === undefined) return undefined;
+  const optional = `${root}-names${beside.slice(root.length)}`;
+  return (await ctx.fs.exists(optional)) ? optional : undefined;
+}
+
 export async function isModuleFile(ctx: CommandContext, path: string): Promise<boolean> {
   let key: string;
   try {
@@ -476,11 +497,15 @@ export class WasmSession {
     }
     const env = withSecretFunction(req.argv0, withLogname(withDefaults(req.defaults, req.env)));
     if (wasi) await this.pythonPackages(req, env);
+    const names =
+      wasi && env.SLICC_WASM_BACKTRACE === '1'
+        ? await namesSidecar(this.ctx, req.module, module)
+        : undefined;
     return this.start({
       ...req,
       env,
       program: wasi
-        ? { abi: 'wasi', glue, module, ...(memory ? { memory } : {}) }
+        ? { abi: 'wasi', glue, module, ...(memory ? { memory } : {}), ...(names ? { names } : {}) }
         : { glue, module },
     });
   }

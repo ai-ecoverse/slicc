@@ -3,7 +3,7 @@
  * the stat cache, and which modules the preview1 runtime refuses.
  */
 import { readFileSync } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { E, wasiErrnoOf } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
 import { WasiFds } from '../../../../src/kernel/wasm-realm/wasi/wasi-fds.js';
 import {
@@ -280,6 +280,41 @@ describe('trapMessage', () => {
 
   it('is the message alone by default', () => {
     expect(trapMessage(trap(), {})).toBe('wasm trap: unreachable');
+  });
+
+  it('names the frames of a module shipped without its name section from its sidecar', () => {
+    const e = new WebAssembly.RuntimeError('unreachable');
+    e.stack = [
+      'RuntimeError: unreachable',
+      '    at wasm://wasm/0a1b2c3d:wasm-function[12]:0x40',
+      '    at wasm://wasm/libfoo-7a7a7a7a:wasm-function[12]:0x10',
+      '    at wasm://wasm/0a1b2c3d:wasm-function[7]:0x80',
+      '    at runWasiProcess (worker.js:1:2)',
+    ].join('\n');
+    const name = (i: number) => (i === 12 ? 'rustc_driver::run' : undefined);
+    expect(trapMessage(e, { SLICC_WASM_BACKTRACE: '1' }, '', name).split('\n').slice(1)).toEqual([
+      '    at rustc_driver::run (wasm://wasm/0a1b2c3d:wasm-function[12]:0x40)',
+      // A side module's function 12 is not the main module's.
+      '    at wasm://wasm/libfoo-7a7a7a7a:wasm-function[12]:0x10',
+      '    at wasm://wasm/0a1b2c3d:wasm-function[7]:0x80',
+    ]);
+    // Without SLICC_WASM_BACKTRACE nothing is named (nor read).
+    expect(trapMessage(e, {}, '', name)).toBe('wasm trap: unreachable');
+  });
+
+  it('names nothing when the stack is cut short above the main module’s entry', () => {
+    const e = new WebAssembly.RuntimeError('unreachable');
+    e.stack = [
+      'RuntimeError: unreachable',
+      '    at wasm://wasm/0a1b2c3d:wasm-function[12]:0x40',
+      '    at wasm://wasm/libfoo-7a7a7a7a:wasm-function[12]:0x10',
+    ].join('\n');
+    const name = vi.fn((i: number) => (i === 12 ? 'rustc_driver::run' : undefined));
+    expect(trapMessage(e, { SLICC_WASM_BACKTRACE: '1' }, '', name).split('\n').slice(1)).toEqual([
+      '    at wasm://wasm/0a1b2c3d:wasm-function[12]:0x40',
+      '    at wasm://wasm/libfoo-7a7a7a7a:wasm-function[12]:0x10',
+    ]);
+    expect(name).not.toHaveBeenCalled();
   });
 
   it("shows the program's wasm frames, not the runtime's JS ones under them", () => {

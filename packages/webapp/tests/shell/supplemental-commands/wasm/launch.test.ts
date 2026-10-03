@@ -3,9 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const spawn = vi.hoisted(() => vi.fn());
 vi.mock('../../../../src/kernel/wasm-realm/host.js', () => ({ spawnWasmProcess: spawn }));
+const compileWasmModule = vi.hoisted(() =>
+  vi.fn(async (_bytes: Uint8Array): Promise<unknown> => ({}))
+);
 vi.mock('../../../../src/kernel/realm/wasm-compiler.js', () => ({
   compileWasmFromVfs: async () => ({}),
-  compileWasmModule: async () => ({}),
+  compileWasmModule,
 }));
 
 import type { ChildSpawner } from '../../../../src/kernel/wasm-realm/children.js';
@@ -466,6 +469,41 @@ describe('WasmSession', () => {
     delete files['/home/u/.local/lib/python3.14/site-packages/_slicc_packages.pth'];
     await parentSpawner(session);
     expect(Object.keys(files).some((f) => f.endsWith('.pth'))).toBe(false);
+  });
+
+  it('hands a WASI program its name-section sidecar only for a backtrace, and only when it lacks names', async () => {
+    fakeProcesses();
+    const pkg = '/shared/lib/node_modules/@ai-ecoverse/wasi-tool';
+    const files: Record<string, string> = {
+      ...installed,
+      [`${pkg}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasi-tool',
+        slicc: { abi: 'wasi', commands: { tool: { wasm: 'bin/tool.wasm' } } },
+      }),
+      [`${pkg}/bin/tool.wasm`]: 'W',
+      [`${pkg}/bin/tool.wasm.names`]: 'N',
+    };
+    // A real module without a name section (the empty module).
+    const nameless = new WebAssembly.Module(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]));
+    compileWasmModule.mockResolvedValue(nameless);
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    const run = async (env: Record<string, string>) => {
+      const target = await session.resolve('tool', 'tool', '/w');
+      await session.launch({ ...target!, args: [], env, cwd: '/w', fds: stdio() });
+      return spawn.mock.calls.at(-1)![0].program.names as string | undefined;
+    };
+    try {
+      expect(await run({ SLICC_WASM_BACKTRACE: '1' })).toBe(`${pkg}/bin/tool.wasm.names`);
+      expect(await run({})).toBeUndefined();
+      delete files[`${pkg}/bin/tool.wasm.names`];
+      expect(await run({ SLICC_WASM_BACKTRACE: '1' })).toBeUndefined();
+      // Or in an optional `<package>-names` package, at the same path.
+      files[`${pkg}-names/bin/tool.wasm.names`] = 'N';
+      expect(await run({ SLICC_WASM_BACKTRACE: '1' })).toBe(`${pkg}-names/bin/tool.wasm.names`);
+    } finally {
+      compileWasmModule.mockReset();
+      compileWasmModule.mockImplementation(async () => ({}));
+    }
   });
 
   it('scans the Python packages once per installed set, again after an install', async () => {
