@@ -46,11 +46,8 @@ The host advertises capabilities; respect them. Typical allowances:
   `Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`) and evaluate expressions
   in the host page realm (`Runtime.evaluate`). These are the baseline driveable
   contract; per-domain denials are enforced upstream by the host's permission
-  gate, so a domain may still be refused. `press Enter` / `type --submit` on a
-  cherry target send the full CDP key payload (`code`, `windowsVirtualKeyCode: 13`,
-  `text: '\r'`); the host handler synthesizes cancelable keydown/keypress/keyup
-  with `keyCode`/`which` so implicit form submit runs. A bare `{ key: 'Enter' }`
-  is not enough.
+  gate, so a domain may still be refused. `press Enter` / `--submit` send
+  `windowsVirtualKeyCode: 13` and `text: '\r'` so the host form actually submits.
 
 ## What you can NEVER do
 

@@ -144,6 +144,12 @@ function keyCodeFromParams(params: CdpPayload): number {
   return 0;
 }
 
+function keypressCharCode(params: CdpPayload, keyCode: number): number {
+  const text = stringParam(params.text);
+  if (text !== undefined && text !== '') return text.charCodeAt(0);
+  return keyCode;
+}
+
 function createSyntheticKeyboardEvent(
   type: 'keydown' | 'keyup' | 'keypress',
   params: CdpPayload
@@ -151,7 +157,7 @@ function createSyntheticKeyboardEvent(
   const key = stringParam(params.key) ?? '';
   const code = stringParam(params.code) ?? key;
   const keyCode = keyCodeFromParams(params);
-  const charCode = type === 'keypress' ? keyCode : 0;
+  const charCode = type === 'keypress' ? keypressCharCode(params, keyCode) : 0;
   const event = new KeyboardEvent(type, {
     key,
     code,
@@ -177,16 +183,53 @@ function dispatchSyntheticKey(
   return target.dispatchEvent(createSyntheticKeyboardEvent(type, params));
 }
 
+/** Input types that implicit-submit a form on Enter (HTML spec, minus textarea). */
+const IMPLICIT_SUBMIT_INPUT_TYPES = new Set([
+  'text',
+  'search',
+  'url',
+  'tel',
+  'email',
+  'password',
+  'date',
+  'month',
+  'week',
+  'time',
+  'datetime-local',
+  'number',
+]);
+
+function isSubmitButton(el: EventTarget): el is HTMLButtonElement | HTMLInputElement {
+  if (el instanceof HTMLButtonElement) return el.type === 'submit';
+  if (el instanceof HTMLInputElement) return el.type === 'submit' || el.type === 'image';
+  return false;
+}
+
+function defaultSubmitter(form: HTMLFormElement): HTMLButtonElement | HTMLInputElement | undefined {
+  for (const el of form.elements) {
+    if (isSubmitButton(el) && !el.disabled) return el;
+  }
+  return undefined;
+}
+
 function maybeImplicitSubmit(target: EventTarget): void {
-  if (!(target instanceof HTMLElement)) return;
-  if (target instanceof HTMLTextAreaElement) return;
-  const form =
-    target instanceof HTMLInputElement || target instanceof HTMLButtonElement
-      ? target.form
-      : target.closest('form');
+  if (isSubmitButton(target)) {
+    target.click();
+    return;
+  }
+  if (!(target instanceof HTMLInputElement) || !IMPLICIT_SUBMIT_INPUT_TYPES.has(target.type)) {
+    return;
+  }
+  const form = target.form;
   if (!form) return;
+  const submitter = defaultSubmitter(form);
   if (typeof form.requestSubmit === 'function') {
-    form.requestSubmit();
+    if (submitter) form.requestSubmit(submitter);
+    else form.requestSubmit();
+    return;
+  }
+  if (submitter) {
+    submitter.click();
     return;
   }
   form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));

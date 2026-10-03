@@ -228,6 +228,22 @@ describe('createCdpHostHandler', () => {
     expect(keyed).toHaveBeenCalledOnce();
   });
 
+  it('Input.dispatchKeyEvent Enter clicks the default submitter when requestSubmit is missing', async () => {
+    const form = document.createElement('form');
+    const input = document.createElement('input');
+    input.type = 'text';
+    const submit = document.createElement('button');
+    submit.type = 'submit';
+    form.append(input, submit);
+    document.body.replaceChildren(form);
+    Object.defineProperty(form, 'requestSubmit', { value: undefined });
+    const submitted = vi.fn((ev: Event) => ev.preventDefault());
+    form.addEventListener('submit', submitted);
+    input.focus();
+    await handle('Input.dispatchKeyEvent', ENTER_KEY_DOWN);
+    expect(submitted).toHaveBeenCalledOnce();
+  });
+
   it('Input.dispatchKeyEvent Enter submits via submit event when requestSubmit is missing', async () => {
     const form = document.createElement('form');
     const input = document.createElement('input');
@@ -283,7 +299,7 @@ describe('createCdpHostHandler', () => {
     expect(submitted).toHaveBeenCalledOnce();
   });
 
-  it('Input.dispatchKeyEvent Enter on a nested host element submits the closest form', async () => {
+  it('Input.dispatchKeyEvent Enter on a nested host element does not submit', async () => {
     const form = document.createElement('form');
     const wrap = document.createElement('div');
     wrap.tabIndex = 0;
@@ -293,7 +309,57 @@ describe('createCdpHostHandler', () => {
     form.addEventListener('submit', submitted);
     wrap.focus();
     await handle('Input.dispatchKeyEvent', ENTER_KEY_DOWN);
+    expect(submitted).not.toHaveBeenCalled();
+  });
+
+  it('Input.dispatchKeyEvent Enter on type=button does not submit', async () => {
+    const form = document.createElement('form');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    form.append(btn);
+    document.body.replaceChildren(form);
+    const submitted = vi.fn((ev: Event) => ev.preventDefault());
+    form.addEventListener('submit', submitted);
+    btn.focus();
+    await handle('Input.dispatchKeyEvent', ENTER_KEY_DOWN);
+    expect(submitted).not.toHaveBeenCalled();
+  });
+
+  it('Input.dispatchKeyEvent Enter on a text input uses the default submitter', async () => {
+    const form = document.createElement('form');
+    const input = document.createElement('input');
+    input.type = 'text';
+    const submit = document.createElement('button');
+    submit.type = 'submit';
+    submit.name = 'go';
+    form.append(input, submit);
+    document.body.replaceChildren(form);
+    const submitted = vi.fn((ev: Event) => {
+      ev.preventDefault();
+      expect((ev as SubmitEvent).submitter).toBe(submit);
+    });
+    form.addEventListener('submit', submitted);
+    input.focus();
+    await handle('Input.dispatchKeyEvent', ENTER_KEY_DOWN);
     expect(submitted).toHaveBeenCalledOnce();
+  });
+
+  it('Input.dispatchKeyEvent keypress charCode comes from text, not the virtual key', async () => {
+    const btn = document.getElementById('b') as HTMLButtonElement;
+    btn.focus();
+    const pressed = vi.fn((ev: KeyboardEvent) => {
+      expect(ev.keyCode).toBe(65);
+      expect(ev.charCode).toBe('a'.charCodeAt(0));
+    });
+    btn.addEventListener('keypress', pressed);
+    await handle('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'a',
+      code: 'KeyA',
+      windowsVirtualKeyCode: 65,
+      text: 'a',
+    });
+    expect(pressed).toHaveBeenCalledOnce();
   });
 
   it('Input.dispatchKeyEvent treats text \\r as Enter even without key', async () => {
