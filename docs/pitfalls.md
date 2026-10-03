@@ -716,7 +716,8 @@ computed or assigned function name, so on WebKit (Safari, every iOS browser,
 WKWebView) nothing matched. `IndexFS.rename` writes the new path through the
 mirrored `write` before the mirror has that entry, and that failure was rethrown:
 every file rename failed with ENOENT, which broke `mv`, git's lock files and
-`git init` (#3783). The patch names each wrapper literally (`zenfsMirror_<key>`, a
+`git init` (#3783; upstream report:
+[zen-fs/core#325](https://github.com/zen-fs/core/issues/325)). The patch names each wrapper literally (`zenfsMirror_<key>`, a
 name every engine prints) and compares frames in any format. A mirror failure is skipped only
 while an outer mirrored call is in flight beneath the failing one; otherwise it is
 thrown as `Out of sync!` (upstream's V8 rule swallowed nearly all of them). The

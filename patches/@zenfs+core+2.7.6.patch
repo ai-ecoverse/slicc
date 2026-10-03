@@ -14,7 +14,7 @@ index 1e20478..51f47b7 100644
                  if (metadata.size < data.byteLength)
                      data.fill(0, metadata.size);
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 26aaf3a..392517c 100644
+index 26aaf3a..5c61eda 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
 @@ -54,7 +54,10 @@ var __disposeResources = (this && this.__disposeResources) || (function (Suppres
@@ -34,7 +34,7 @@ index 26aaf3a..392517c 100644
              this._promise = this._promise.finally(() => thunk());
          }
 +        /**
-+         * PATCH(slicc#3783): a `*Sync` method has already updated the mirror, so
++         * PATCH(slicc#3783, upstream zen-fs/core#325): a `*Sync` method has already updated the mirror, so
 +         * the queued async call it schedules runs the backend's own method,
 +         * not the mirroring wrapper (which used to apply the change a second
 +         * time and rely on swallowing the failure).
@@ -398,7 +398,7 @@ index 26aaf3a..392517c 100644
 -                    return (stack.includes(`at <computed> [as ${key}]`)
 -                        || stack.includes(`at async <computed> [as ${key}]`)
 -                        || stack.includes(`${key}Sync `));
-+            // PATCH(slicc WebKit rename): whether a call is "in the loop" is read
++            // PATCH(slicc#3783, upstream zen-fs/core#325): whether a call is "in the loop" is read
 +            // from stack traces. Upstream matched V8's frame text only (`at
 +            // <computed> [as write]`), so in JavaScriptCore and SpiderMonkey no
 +            // call ever was: a mirror update that fails because an outer call
