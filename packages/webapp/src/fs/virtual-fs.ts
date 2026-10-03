@@ -1015,7 +1015,8 @@ export class VirtualFS {
    *
    * The caller must hold {@link withWriteLock} — either the public
    * {@link writeOpfsMetadataSidecar} wrapper or an in-lock mutation path
-   * (rm / symlink persist eagerly inside their critical section).
+   * (rename / symlinkBatch persist eagerly inside their critical section;
+   * rm coalesces through {@link scheduleMetadataSidecarFlush}).
    * No-op on the InMemory backend, on backends without a captured index
    * reference, or if the OPFS handle was never captured.
    */
