@@ -76,7 +76,7 @@ computer screenshot -c tab:<targetId>
 computer click 1 --at 100,80 type hello
 ```
 
-`computer add tab` refuses SLICC app tabs (`sliccy.ai` leader, `?slicc=`, extension pages). Pass a URL or a CDP target id. Look at the screenshot and click what you see — screenshot-space `--at` lands on the visual target even when `devicePixelRatio` is not 1.
+`computer add tab` refuses SLICC app tabs (`sliccy.ai` leader, `?slicc=`, extension pages). Pass a URL or a CDP target id. Look at the screenshot and click what you see — screenshot-space `--at` lands on the visual target even when `devicePixelRatio` is not 1. `computer key Return` (or `enter`) is a real Enter and submits a focused form.
 
 ## Display share (`screen`)
 

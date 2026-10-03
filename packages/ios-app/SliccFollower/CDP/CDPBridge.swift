@@ -493,67 +493,14 @@ final class CDPBridge {
                 Task { @MainActor in self?.respond(requestId: requestId, result: [:]) }
             }
         case "Input.dispatchKeyEvent":
-            let type = (params["type"] as? String) ?? ""
-            let key = (params["key"] as? String) ?? ""
-            let text = (params["text"] as? String) ?? key
-            let evt: String
-            switch type {
-            case "keyDown", "rawKeyDown": evt = "keydown"
-            case "keyUp": evt = "keyup"
-            case "char": evt = "input"
-            default: evt = type
-            }
-            let escapedKey = key.replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-            let escapedText = text.replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-            let js: String
-            if evt == "input" {
-                js = """
-                    (function() {
-                      var el = document.activeElement;
-                      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
-                        if (el.value !== undefined) { el.value += '\(escapedText)'; }
-                        else { el.textContent += '\(escapedText)'; }
-                        el.dispatchEvent(new Event('input', {bubbles:true}));
-                        el.dispatchEvent(new Event('change', {bubbles:true}));
-                        return true;
-                      }
-                      return false;
-                    })()
-                    """
-            } else {
-                js = """
-                    (function() {
-                      var el = document.activeElement || document.body;
-                      var ev = new KeyboardEvent('\(evt)', {bubbles:true, cancelable:true, key:'\(escapedKey)'});
-                      el.dispatchEvent(ev);
-                      return true;
-                    })()
-                    """
-            }
+            let js = CDPInputDomain.dispatchKeyEventJavaScript(params)
             target.runtimeEvaluate(
                 expression: js, awaitPromise: false, returnByValue: true
             ) { [weak self] _ in
                 Task { @MainActor in self?.respond(requestId: requestId, result: [:]) }
             }
         case "Input.insertText":
-            let text = (params["text"] as? String) ?? ""
-            let escaped = text.replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-            let js = """
-                (function() {
-                  var el = document.activeElement;
-                  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
-                    if (el.value !== undefined) { el.value += '\(escaped)'; }
-                    else { el.textContent += '\(escaped)'; }
-                    el.dispatchEvent(new Event('input', {bubbles:true}));
-                    el.dispatchEvent(new Event('change', {bubbles:true}));
-                    return true;
-                  }
-                  return false;
-                })()
-                """
+            let js = CDPInputDomain.insertTextJavaScript(text: (params["text"] as? String) ?? "")
             target.runtimeEvaluate(
                 expression: js, awaitPromise: false, returnByValue: true
             ) { [weak self] _ in
