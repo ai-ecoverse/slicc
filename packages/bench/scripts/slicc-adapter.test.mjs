@@ -1,11 +1,17 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ARM_TIME_MARGIN_S,
+  armAnswer,
+  armCommand,
+  armConversation,
+  armTurns,
   assertStagedSkills,
   buildPrompt,
+  collectArmFiles,
   costTotals,
   decodeTranscriptPart,
   expectedSkillNames,
@@ -13,10 +19,12 @@ import {
   exportTranscriptCommand,
   FINAL_INSTRUCTION,
   FLAGS_PROBE,
+  lastScoopAssistantText,
   lastTurnProviderError,
   leaderHealth,
   NO_DEFAULT_SKILLS_MISSING,
   PROMPT_ALL_SETTLED,
+  parseArmResult,
   parseExportListing,
   parseModelSpec,
   parseSkillNames,
@@ -47,6 +55,7 @@ import {
   traceFromResult,
   transcriptSteps,
   transcriptSummary,
+  validateArm,
   watchSpend,
 } from './slicc-adapter.mjs';
 
@@ -2105,5 +2114,223 @@ describe('lastTurnProviderError', () => {
     expect(lastTurnProviderError(run(cone({ role: 'assistant', stopReason: 'error' })))).toBe(
       'provider error'
     );
+  });
+});
+
+describe('arm mode', () => {
+  const ARM = {
+    name: 'intent-budget',
+    skills: ['intent', 'decide-quickly'],
+    setup: ['intent prepare'],
+    command: 'intent-arm --tool intent --private',
+    files: '/tmp/intent-arm',
+    scratch: ['/tmp/intent'],
+  };
+  const b64 = (s) => Buffer.from(s).toString('base64');
+
+  it('validates arms, including the ones the bench ships', () => {
+    expect(validateArm('intent-budget', ARM)).toEqual([]);
+    const errs = validateArm('Bad Name', {
+      command: '; rm -rf /',
+      skills: ['ok', 'Not Ok'],
+      setup: 'x',
+      files: '/etc',
+    }).join('\n');
+    for (const want of [
+      'a-z0-9',
+      'command must start',
+      'skill directory',
+      'setup must',
+      'under /tmp',
+    ])
+      expect(errs).toContain(want);
+    const shipped = JSON.parse(readFileSync(new URL('../arms/arms.json', import.meta.url), 'utf8'));
+    for (const [name, arm] of Object.entries(shipped)) expect(validateArm(name, arm)).toEqual([]);
+  });
+
+  it('keeps the task off the command line: it travels in a goal file', () => {
+    const cmd = armCommand(ARM, {
+      goalFile: '/tmp/bench/r1/goal.txt',
+      model: 'claude-sonnet-5-5@low',
+      timeoutSeconds: 3600,
+    });
+    expect(cmd).toBe(
+      `intent-arm --tool intent --private --model 'claude-sonnet-5-5' --time-limit ${3600 - ARM_TIME_MARGIN_S} --json --goal-file '/tmp/bench/r1/goal.txt'`
+    );
+    expect(armCommand(ARM, { goalFile: '/g', model: 'm', timeoutSeconds: 30 })).toContain(
+      '--time-limit 60'
+    );
+  });
+
+  it('reads the driver result, the scoop answer, and the answer in result.json', () => {
+    expect(parseArmResult('progress\n{\n  "ok": true,\n  "steps": 4\n}\n')).toEqual({
+      ok: true,
+      steps: 4,
+    });
+    expect(parseArmResult('no json')).toBeNull();
+    expect(lastScoopAssistantText(TRANSCRIPT)).toBe('scoop says hi');
+    expect(lastScoopAssistantText({ conversations: [] })).toBe('');
+    expect(
+      armAnswer([
+        { path: '/tmp/intent-arm/x/result.json', base64: b64('{"answer":"FINAL ANSWER: 42"}') },
+      ])
+    ).toBe('FINAL ANSWER: 42');
+    expect(armAnswer([])).toBe('');
+  });
+
+  it('runs the arm instead of prompting the cone, and keeps its files for the trace', async () => {
+    let costCalls = 0;
+    const canary = 'CANARY-TASK-TEXT-7f3a';
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        'new-session': ok('new session (erase)'),
+        model: ok('bedrock-camp:global.anthropic.claude-sonnet-5-5\n'),
+      },
+      commands: [
+        [/^intent-arm /, ok('{"ok":true,"steps":3,"run":"2026-10-04T00-00-00-run"}\n')],
+        [
+          /^cost --json --all$/,
+          () =>
+            ok(
+              JSON.stringify({
+                scoops: [
+                  {
+                    type: 'scoop',
+                    turns: 1,
+                    usage: { totalTokens: 1, cost: { total: ++costCalls === 1 ? 0.1 : 0.4 } },
+                  },
+                ],
+              })
+            ),
+        ],
+        [/^playwright-cli tab-list$/, ok('[T1] https://example.com/ "Example"')],
+        [
+          /^find '\/tmp\/intent-arm'/,
+          ok('/tmp/intent-arm/run/result.json\n/tmp/intent-arm/run/transcript.md\n'),
+        ],
+        [/^base64 '\/tmp\/intent-arm\/run\/result\.json'$/, ok(b64(`{"answer":"${canary}"}`))],
+        [/^base64 '\/tmp\/intent-arm\/run\/transcript\.md'$/, ok(b64(`goal: ${canary}`))],
+        ...leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT))).commands,
+        [/^base64 /, ok('UE5H')],
+      ],
+    });
+    const task = { id: 't', task: `Do ${canary}.`, slicc: { timeoutSeconds: 120 } };
+    const result = await runTask({
+      leader,
+      task,
+      runId: 'r1',
+      model: 'claude-sonnet-5-5',
+      arm: ARM,
+      capture: { pollMs: 5 },
+    });
+    expect(calls.some((c) => c.kind === 'cli' && c.args[0] === 'prompt')).toBe(false);
+    const wipes = calls.filter(
+      (c) => c.kind === 'exec' && /^rm -rf '\/tmp\/intent/.test(c.command)
+    );
+    expect(wipes.map((c) => c.command)).toEqual([
+      "rm -rf '/tmp/intent-arm'",
+      "rm -rf '/tmp/intent'",
+    ]);
+    const goal = calls.find(
+      (c) => c.kind === 'exec' && c.command === "base64 -d > '/tmp/bench/r1/goal.txt'"
+    );
+    expect(Buffer.from(goal.opts.stdin, 'base64').toString()).toBe(buildPrompt(task));
+    const run = calls.find((c) => c.kind === 'exec' && c.command.startsWith('intent-arm '));
+    expect(run.command).not.toContain(canary);
+    expect(run.opts).toMatchObject({ timeoutMs: 120000, interrupt: true });
+    expect(result.finalText).toBe('scoop says hi');
+    expect(result.arm.name).toBe('intent-budget');
+    expect(result.arm.result).toEqual({ ok: true, steps: 3, run: '2026-10-04T00-00-00-run' });
+    expect(result.arm.files.map((f) => f.path)).toEqual([
+      '/tmp/intent-arm/run/result.json',
+      '/tmp/intent-arm/run/transcript.md',
+    ]);
+    expect(result.costUsd).toBeCloseTo(0.3);
+
+    expect(JSON.stringify(traceFromResult(result).metrics)).not.toContain(canary);
+  });
+});
+
+describe('arm helpers', () => {
+  const msg = (role, text, timestamp, extra = {}) => ({
+    role,
+    timestamp,
+    content:
+      text == null
+        ? []
+        : [
+            { type: 'text', text },
+            { type: 'tool-call', name: 'bash' },
+          ],
+    ...extra,
+  });
+  const DOC = {
+    conversations: [
+      { id: 'cone', kind: 'cone', messages: [msg('assistant', 'cone talk', 9)] },
+      { id: 'old', kind: 'scoop', messages: [msg('assistant', 'earlier scoop', 1)] },
+      { id: 'quiet', kind: 'scoop', messages: [msg('user', 'only a user turn', 5)] },
+      {
+        id: 'arm',
+        kind: 'scoop',
+        messages: [msg('assistant', 'FINAL ANSWER: 42', 3), msg('assistant', '', 4)],
+      },
+    ],
+  };
+
+  it('finds the arm scoop that spoke last, its turns and its last words', () => {
+    expect(armConversation(DOC).id).toBe('arm');
+    expect(armTurns(DOC)).toBe(2);
+    expect(lastScoopAssistantText(DOC)).toBe('FINAL ANSWER: 42');
+    expect(armConversation(null)).toBeNull();
+    expect(armTurns(undefined)).toBe(0);
+  });
+
+  it('judges an arm run by its scoop: a provider error there is a run error, and steps are its turns', () => {
+    const dead = {
+      conversations: [
+        { id: 'cone', kind: 'cone', messages: [msg('assistant', 'fine', 1)] },
+        {
+          id: 'arm',
+          kind: 'scoop',
+          messages: [msg('assistant', null, 2, { stopReason: 'error', errorMessage: 'HTTP 503' })],
+        },
+      ],
+    };
+    expect(lastTurnProviderError({ arm: { name: 'x' }, transcript: dead })).toBe('HTTP 503');
+    expect(lastTurnProviderError({ transcript: dead })).toBeNull();
+    const t = traceFromResult({ arm: { name: 'x' }, transcript: DOC, durationMs: 1000 });
+    expect(t.metrics.steps).toBe(2);
+  });
+
+  it('collects the driver files within a byte budget, skipping odd paths and failed reads', async () => {
+    const { leader } = fakeLeader({
+      commands: [
+        [
+          /^find '\/tmp\/d'/,
+          ok('/tmp/d/a.txt\n/tmp/d/bad name.txt\n/tmp/d/gone.txt\n/tmp/d/big.txt\n'),
+        ],
+        [/^base64 '\/tmp\/d\/a\.txt'$/, ok('QUFB\n')],
+        [/^base64 '\/tmp\/d\/gone\.txt'$/, fail('no such file')],
+        [/^base64 '\/tmp\/d\/big\.txt'$/, ok('QUFBQUFBQUFB')],
+      ],
+    });
+    expect(await collectArmFiles(leader, '/tmp/d', { maxBytes: 8 })).toEqual({
+      files: [{ path: '/tmp/d/a.txt', base64: 'QUFB' }],
+      truncated: true,
+    });
+    const { leader: none } = fakeLeader({ commands: [[/^find /, fail('no dir')]] });
+    expect(await collectArmFiles(none, '/tmp/d')).toEqual({ files: [], truncated: false });
+  });
+
+  it('rejects arms that are not objects, and reads no answer from a broken result.json', () => {
+    expect(validateArm('a', null)).toEqual(['arm a is not an object']);
+    expect(
+      armAnswer([
+        { path: '/tmp/x/result.json', base64: Buffer.from('not json').toString('base64') },
+      ])
+    ).toBe('');
+    expect(
+      armAnswer([{ path: '/tmp/x/result.json', base64: Buffer.from('{}').toString('base64') }])
+    ).toBe('');
   });
 });

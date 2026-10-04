@@ -5,10 +5,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { taskDigests, withDigests } from './format.mjs';
 import {
+  ARMS_FILE,
   ageSeconds,
+  checkArmConditions,
   DEFAULT_MODELS,
   defaultSkillsMatch,
   guardrails,
+  loadArm,
   loadSet,
   main,
   parseCli,
@@ -24,8 +27,9 @@ import {
   selectTasks,
   shardRuns,
   tracePath,
+  withArm,
 } from './run.mjs';
-import { PROMPT_ALL_SETTLED, RUN_ID_PATTERN } from './slicc-adapter.mjs';
+import { PROMPT_ALL_SETTLED, parseSkillsCondition, RUN_ID_PATTERN } from './slicc-adapter.mjs';
 
 describe('runConfig', () => {
   it('records whether the condition seeds bundled skills', () => {
@@ -1525,5 +1529,151 @@ describe('provider errors', () => {
         defaultSkills: undefined,
       })
     ).toBe('run');
+  });
+});
+
+describe('arms', () => {
+  it('loads a shipped arm with its name, and refuses an unknown one', () => {
+    const arm = loadArm('intent-budget');
+    expect(arm.name).toBe('intent-budget');
+    expect(arm.skills).toEqual(['intent', 'decide-quickly']);
+    expect(arm.command).toContain('--retrieve budget');
+    expect(arm.command).toContain('--private');
+    expect(() => loadArm('nope')).toThrow(/no arm nope/);
+    expect(existsSync(ARMS_FILE)).toBe(true);
+  });
+
+  it('needs every skills condition to stage the arm set', () => {
+    const arm = { name: 'a' };
+    expect(() => checkArmConditions(arm, [parseSkillsCondition('builtin+arm')])).not.toThrow();
+    expect(() => checkArmConditions(arm, [parseSkillsCondition('builtin')])).toThrow(/\+arm/);
+    expect(() => checkArmConditions(null, [parseSkillsCondition('builtin')])).not.toThrow();
+  });
+
+  it('records the arm in the config, so arm runs pair with cone runs by task', () => {
+    expect(
+      runConfig('h', 'claude-sonnet-5-5', parseSkillsCondition('builtin+arm'), {
+        name: 'intent-agent',
+      })
+    ).toMatchObject({
+      skills: 'builtin+arm',
+      arm: 'intent-agent',
+    });
+    expect(runConfig('h', 'm', parseSkillsCondition('builtin'))).not.toHaveProperty('arm');
+  });
+});
+
+describe('arm runs', () => {
+  const quiet = () => vi.spyOn(console, 'log').mockImplementation(() => {});
+  const ownSet = (dir) => {
+    const path = join(dir, 'set.json');
+    writeFileSync(path, JSON.stringify({ benchmark: 'Own', tasks: [TASK] }));
+    return path;
+  };
+
+  it('keeps each arm apart in paths, run ids, keys and resume', () => {
+    const c = parseSkillsCondition('builtin+arm');
+    const a = withArm(c, { name: 'intent-agent' });
+    expect(a).toMatchObject({ name: 'builtin+arm.intent-agent', builtin: true, extras: ['arm'] });
+    expect(withArm(c, null)).toBe(c);
+    expect(recordPath('/o', 'B', a.name, 'm', 't', 1)).not.toBe(
+      recordPath('/o', 'B', withArm(c, { name: 'intent-budget' }).name, 'm', 't', 1)
+    );
+    const record = {
+      digests: taskDigests(TASK),
+      config: { arm: 'intent-agent', default_skills: true },
+      score: 1,
+      judge: { model: 'j' },
+    };
+    const opts = { judge: false, judgeModel: 'j', traceExists: true, defaultSkills: true };
+    expect(resumeAction(record, TASK, { ...opts, arm: 'intent-agent' })).toBe('done');
+    expect(resumeAction(record, TASK, { ...opts, arm: 'intent-budget' })).toBe('run');
+    expect(resumeAction(record, TASK, opts)).toBe('run');
+  });
+
+  it('parses --arm into the arm and arm-named conditions, from a given arms file', () => {
+    const dir = tmp();
+    const file = join(dir, 'arms.json');
+    writeFileSync(
+      file,
+      JSON.stringify({ x: { command: 'drv --a', skills: ['s'], setup: ['go'] } })
+    );
+    const opts = parseCli([
+      '--set',
+      'bu-v2',
+      '--arm',
+      'x',
+      '--arms-file',
+      file,
+      '--skills',
+      'builtin+arm',
+    ]);
+    expect(opts.arm).toMatchObject({ name: 'x', command: 'drv --a' });
+    expect(opts.skills.map((c) => c.name)).toEqual(['builtin+arm.x']);
+    writeFileSync(file, JSON.stringify({ x: { command: '', skills: [] } }));
+    expect(() => loadArm('x', file)).toThrow(/command must start/);
+  });
+
+  it('stages the arm, runs its setup, then the driver instead of the prompt', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    const fake = leader();
+    const code = await main(
+      [
+        '--set',
+        ownSet(dir),
+        '--models',
+        'm',
+        '--no-judge',
+        '--out',
+        out,
+        '--arm',
+        'intent-budget',
+        '--skills',
+        'builtin+arm',
+      ],
+      { ...fake.deps, log: vi.fn() }
+    );
+    expect(code).toBe(0);
+    expect(fake.commands).toContain('intent prepare');
+    expect(fake.commands).toContain('intent pull --model 4b-vision');
+    expect(fake.commands.some((c) => c.startsWith('intent-arm --tool intent'))).toBe(true);
+    expect(fake.commands).not.toContain(PROMPT);
+    const r = JSON.parse(
+      readFileSync(recordPath(out, 'Own', 'builtin+arm.intent-budget', 'm', 'own-1', 1), 'utf8')
+    );
+    expect(r.config).toMatchObject({ arm: 'intent-budget', skills: 'builtin+arm.intent-budget' });
+    q.mockRestore();
+  });
+
+  it('fails the lane when an arm setup command fails, naming the command', async () => {
+    const dir = tmp();
+    const q = quiet();
+    const fake = leader({ failOn: /^intent pull/ });
+    const log = vi.fn();
+    await expect(
+      main(
+        [
+          '--set',
+          ownSet(dir),
+          '--models',
+          'm',
+          '--no-judge',
+          '--out',
+          join(dir, 'o'),
+          '--arm',
+          'intent-agent',
+          '--skills',
+          'builtin+arm',
+        ],
+        { ...fake.deps, log }
+      )
+    ).resolves.not.toBe(0);
+    const err = vi.mocked(console.error);
+    expect(JSON.stringify([log.mock.calls, q.mock.calls, err.mock?.calls ?? []])).toMatch(
+      /intent pull --model 4b-vision/
+    );
+    q.mockRestore();
   });
 });

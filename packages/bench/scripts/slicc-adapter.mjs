@@ -24,6 +24,113 @@ export function buildPrompt(task) {
   return `${task.task.trim()}\n\n${FINAL_INSTRUCTION}\n`;
 }
 
+export const ARM_SKILL_SET = 'arm';
+
+export const ARM_TIME_MARGIN_S = 60;
+
+export const ARM_FILES_MAX_BYTES = 32 * 1024 * 1024;
+
+export function validateArm(name, arm) {
+  const errors = [];
+  if (!/^[a-z0-9][a-z0-9.-]*$/.test(String(name))) errors.push(`arm name ${name} must be a-z0-9.-`);
+  if (!arm || typeof arm !== 'object') return [...errors, `arm ${name} is not an object`];
+  if (typeof arm.command !== 'string' || !/^[a-z][a-z0-9-]*( |$)/.test(arm.command))
+    errors.push(`arm ${name}: command must start with a command name`);
+  if (!Array.isArray(arm.skills) || !arm.skills.every((x) => /^[a-z0-9][a-z0-9-]*$/.test(x)))
+    errors.push(`arm ${name}: skills must be skill directory names`);
+  if (
+    arm.setup != null &&
+    !(Array.isArray(arm.setup) && arm.setup.every((x) => typeof x === 'string' && x))
+  )
+    errors.push(`arm ${name}: setup must be a list of commands`);
+  for (const p of [arm.files, ...(arm.scratch ?? [])].filter((x) => x != null))
+    if (!/^\/tmp\/[A-Za-z0-9._/-]+$/.test(String(p)) || String(p).includes('..'))
+      errors.push(`arm ${name}: files and scratch must be plain paths under /tmp`);
+  return errors;
+}
+
+export function armCommand(arm, { goalFile, model, timeoutSeconds }) {
+  const { alias } = parseModelSpec(model);
+  const limit = Math.max(60, timeoutSeconds - ARM_TIME_MARGIN_S);
+  return `${arm.command} --model ${quote(alias)} --time-limit ${limit} --json --goal-file ${quote(goalFile)}`;
+}
+
+export function armAnswer(files) {
+  const f = (files ?? []).find((x) => x.path.endsWith('/result.json'));
+  if (!f) return '';
+  try {
+    return String(JSON.parse(Buffer.from(f.base64, 'base64').toString('utf8')).answer ?? '');
+  } catch {
+    return '';
+  }
+}
+
+export function parseArmResult(stdout) {
+  const lines = String(stdout ?? '')
+    .trim()
+    .split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const text = lines.slice(i).join('\n');
+    if (!text.trimStart().startsWith('{')) continue;
+    try {
+      return JSON.parse(text);
+    } catch {}
+  }
+  return null;
+}
+
+export function armConversation(doc) {
+  let best = null;
+  for (const c of doc?.conversations ?? []) {
+    if (c.kind === 'cone') continue;
+    const last = (c.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
+    if (!last) continue;
+    const at = Number(last.timestamp ?? 0);
+    if (!best || at >= best.at) best = { at, c };
+  }
+  return best?.c ?? null;
+}
+
+const textOf = (m) =>
+  (m?.content ?? [])
+    .filter((p) => p.type === 'text')
+    .map((p) => p.text ?? '')
+    .join('')
+    .trim();
+
+export function lastScoopAssistantText(doc) {
+  const msgs = (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant');
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const text = textOf(msgs[i]);
+    if (text) return text;
+  }
+  return '';
+}
+
+export async function collectArmFiles(leader, root, { maxBytes = ARM_FILES_MAX_BYTES } = {}) {
+  const listing = await leader.exec(`find ${quote(root)} -type f 2>/dev/null | sort`);
+  if (listing.status !== 0) return { files: [], truncated: false };
+  const files = [];
+  let total = 0;
+  let truncated = false;
+  for (const path of listing.stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)) {
+    if (!/^\/[A-Za-z0-9._/-]+$/.test(path)) continue;
+    const r = await leader.exec(`base64 ${quote(path)}`);
+    if (r.status !== 0) continue;
+    const base64 = r.stdout.replace(/\s+/g, '');
+    if (total + base64.length > maxBytes) {
+      truncated = true;
+      break;
+    }
+    total += base64.length;
+    files.push({ path, base64 });
+  }
+  return { files, truncated };
+}
+
 export function quote(word) {
   return `'${String(word).replace(/'/g, `'\\''`)}'`;
 }
@@ -80,8 +187,10 @@ export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhig
 export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export function lastTurnProviderError(result) {
-  const cone = (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
-  const last = (cone?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
+  const agent = result?.arm
+    ? armConversation(result?.transcript)
+    : (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
+  const last = (agent?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
   if (last?.stopReason !== 'error') return null;
   return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
 }
@@ -645,6 +754,9 @@ export function transcriptSummary(info) {
   return summary;
 }
 
+export const armTurns = (doc) =>
+  (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant').length;
+
 export function traceFromResult(result) {
   const t = transcriptSteps(result.transcript);
   const finalResult =
@@ -662,7 +774,7 @@ export function traceFromResult(result) {
     screenshots: result.screenshots ?? [],
     outputFilesText: null,
     metrics: {
-      steps: t.assistantTurns || result.turns || 0,
+      steps: (result.arm ? armTurns(result.transcript) : t.assistantTurns) || result.turns || 0,
       duration: result.durationMs / 1000,
       cost: result.costUsd,
       tokens: result.tokens,
@@ -975,6 +1087,52 @@ async function collectAfterPrompt({
   };
 }
 
+async function prepareArmRun(leader, arm, dir, task) {
+  if (!arm) return null;
+  for (const p of [arm.files, ...(arm.scratch ?? [])].filter(Boolean))
+    await must(leader, `rm -rf ${quote(p)}`);
+  const goalFile = `${dir}/goal.txt`;
+  await must(leader, `base64 -d > ${quote(goalFile)}`, {
+    stdin: Buffer.from(buildPrompt(task)).toString('base64'),
+  });
+  return goalFile;
+}
+
+function startAgent(leader, { arm, goalFile, task, model, timeout, signal }) {
+  const opts = { timeoutMs: timeout * 1000, interrupt: true, signal };
+  return arm
+    ? leader.exec(armCommand(arm, { goalFile, model, timeoutSeconds: timeout }), opts)
+    : leader.cli(['prompt', '--allsettled', PROMPT_ALL_SETTLED, '-'], {
+        stdin: buildPrompt(task),
+        ...opts,
+      });
+}
+
+async function collectArmRun(leader, arm, reply, transcript) {
+  if (!arm) return null;
+  const files = arm.files ? await collectArmFiles(leader, arm.files) : null;
+  return {
+    finalText: lastScoopAssistantText(transcript) || armAnswer(files?.files),
+    record: {
+      arm: {
+        name: arm.name ?? null,
+        result: parseArmResult(reply.stdout),
+        files: files?.files ?? [],
+        filesTruncated: Boolean(files?.truncated),
+      },
+    },
+  };
+}
+
+const agentLabel = (arm) => (arm ? `arm ${arm.name ?? ''}`.trim() : 'slicc prompt');
+
+const waitsForCone = (arm, interrupted) => !interrupted && !arm;
+
+function finalTextOf(armOut, { resumedAfterSettle, transcript, reply }) {
+  if (armOut) return armOut.finalText;
+  return resumedAfterSettle ? lastConeAssistantText(transcript) : reply.stdout;
+}
+
 export async function runTask({
   leader,
   task,
@@ -991,6 +1149,7 @@ export async function runTask({
   stopProbeBudgetMs = STOP_PROBE_BUDGET_MS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   condition = null,
+  arm = null,
 }) {
   if (!RUN_ID_PATTERN.test(runId)) throw new Error(`bad run id ${runId}`);
   const dir = `/tmp/bench/${runId}`;
@@ -1000,6 +1159,7 @@ export async function runTask({
   const staged = [];
   try {
     await must(leader, `rm -rf ${dir} && mkdir -p ${dir}`);
+    const goalFile = await prepareArmRun(leader, arm, dir, task);
     const files = task.slicc?.files ?? [];
     const leaves = await planStagedCleanup(leader, files);
     for (const [i, f] of files.entries()) {
@@ -1019,16 +1179,18 @@ export async function runTask({
     const shooter = startCapture(leader, dir, { now, ...capture });
     const abort = new AbortController();
     const watcher = maxCost > 0 ? watchSpend(leader, before, maxCost, abort, costPollMs) : null;
-    const reply = await leader.cli(['prompt', '--allsettled', PROMPT_ALL_SETTLED, '-'], {
-      stdin: buildPrompt(task),
-      timeoutMs: timeout * 1000,
-      interrupt: true,
+    const reply = await startAgent(leader, {
+      arm,
+      goalFile,
+      task,
+      model,
+      timeout,
       signal: abort.signal,
     });
     const durationMs = now() - started;
     await watcher?.stop();
     const shots = await shooter.stop();
-    if (reply.leaderDown) throw failure('slicc prompt', reply);
+    if (reply.leaderDown) throw failure(agentLabel(arm), reply);
     const interrupted = Boolean(reply.timedOut || reply.aborted || reply.status === 130);
 
     let after = null;
@@ -1059,7 +1221,8 @@ export async function runTask({
       dir,
       reply,
       after,
-      checkPrompt: !interrupted,
+
+      checkPrompt: waitsForCone(arm, interrupted),
       busyProbeMs,
       sleep,
       deadline: started + timeout * 1000,
@@ -1074,6 +1237,7 @@ export async function runTask({
     const { transcript, transcriptExport, resumedAfterSettle } = collected;
     await closeTabs(leader).catch(() => {});
     const { taken, images } = await readShots(leader, shots);
+    const armOut = await collectArmRun(leader, arm, reply, transcript);
     health.after = await leaderHealth(leader, now);
     const done = now();
     return {
@@ -1085,7 +1249,8 @@ export async function runTask({
       exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
       timedOut: Boolean(reply.timedOut || collected.timedOut),
       costCapped: Boolean(reply.aborted || collected.costCapped),
-      finalText: resumedAfterSettle ? lastConeAssistantText(transcript) : reply.stdout,
+      finalText: finalTextOf(armOut, { resumedAfterSettle, transcript, reply }),
+      ...armOut?.record,
       stderr: reply.stderr.slice(-4000),
       durationMs: resumedAfterSettle
         ? (collected.stoppedAt ?? collected.settledAt ?? done) - started

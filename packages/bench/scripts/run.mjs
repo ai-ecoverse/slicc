@@ -24,6 +24,7 @@ import {
 } from './lifecycle.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
+  ARM_SKILL_SET,
   lastTurnProviderError,
   parseModelSpec,
   parseSkillsCondition,
@@ -31,6 +32,7 @@ import {
   runTask,
   stageSkills,
   traceFromResult,
+  validateArm,
 } from './slicc-adapter.mjs';
 import { decryptSetFile, encryptJson, loadFindingsSpec, loadUpstreamSet } from './upstream.mjs';
 
@@ -65,6 +67,8 @@ export function parseCli(argv) {
       out: { type: 'string', default: 'bench-out' },
       harness: { type: 'string', default: 'dev' },
       plan: { type: 'boolean', default: false },
+      arm: { type: 'string' },
+      'arms-file': { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -103,6 +107,7 @@ export function parseCli(argv) {
       `--deadline-minutes ${deadlineMinutes} leaves no time for a run: one takes up to ${runMinutes} (the timeout plus ${RUN_OVERHEAD_MS / 60_000} for the restart, collection and judge)`
     );
   const shard = parseShard(values.shard);
+  const arm = values.arm ? loadArm(values.arm, values['arms-file']) : null;
   const money = (flag) => {
     const v = Number(values[flag]);
     if (!Number.isFinite(v) || v < 0) throw new Error(`--${flag} must be 0 (none) or dollars`);
@@ -112,7 +117,9 @@ export function parseCli(argv) {
     help: values.help,
     sets: values.set ?? [],
     models,
-    skills: list(values.skills).map(parseSkillsCondition),
+    skills: list(values.skills)
+      .map(parseSkillsCondition)
+      .map((c) => withArm(c, arm)),
     repeats,
     taskIds: values.tasks ? resolveTaskIds(list(values.tasks)) : null,
     limit: values.limit ? Number.parseInt(values.limit, 10) : null,
@@ -131,7 +138,53 @@ export function parseCli(argv) {
     deadlineMinutes,
     maxTaskCost: money('max-task-cost'),
     maxCost: money('max-cost'),
+    arm,
   };
+}
+
+export function withArm(condition, arm) {
+  return arm ? { ...condition, name: `${condition.name}.${arm.name}` } : condition;
+}
+
+export const ARM_SETUP_TIMEOUT_MS = 30 * 60_000;
+
+async function mustExec(leader, command, timeoutMs) {
+  const r = await leader.exec(command, { timeoutMs });
+  if (r.status !== 0 || r.leaderDown) {
+    const err = new Error(
+      `\`${command}\` failed (${r.leaderDown ? 'leader down' : `exit ${r.status}`}): ${String(
+        r.stderr ?? ''
+      )
+        .trim()
+        .slice(-300)}`
+    );
+    if (r.leaderDown) err.leaderDown = true;
+    throw err;
+  }
+  return r;
+}
+
+export const ARMS_FILE = fileURLToPath(new URL('../arms/arms.json', import.meta.url));
+
+export function loadArm(name, file = ARMS_FILE, readFile = readFileSync) {
+  const arms = JSON.parse(readFile(file || ARMS_FILE, 'utf8'));
+  const arm = arms[name];
+  if (!arm)
+    throw new Error(
+      `no arm ${name} in ${file || ARMS_FILE} (have: ${Object.keys(arms).join(', ')})`
+    );
+  const errors = validateArm(name, arm);
+  if (errors.length) throw new Error(errors.join('; '));
+  return { ...arm, name };
+}
+
+export function checkArmConditions(arm, conditions) {
+  if (!arm) return;
+  for (const c of conditions)
+    if (!c.extras.includes(ARM_SKILL_SET))
+      throw new Error(
+        `arm ${arm.name} needs its skills staged: use a skills condition with +${ARM_SKILL_SET} (e.g. builtin+${ARM_SKILL_SET}), not ${c.name}`
+      );
 }
 
 export async function loadSet(
@@ -374,7 +427,7 @@ function failInto(record, stage, err) {
   record.error_stage = stage;
 }
 
-export function runConfig(harness, model, condition) {
+export function runConfig(harness, model, condition, arm = null) {
   const spec = parseModelSpec(model);
   return {
     harness,
@@ -382,6 +435,8 @@ export function runConfig(harness, model, condition) {
     thinking: spec.thinking,
     skills: condition.name,
     default_skills: Boolean(condition.builtin),
+
+    ...(arm ? { arm: arm.name } : {}),
   };
 }
 
@@ -392,7 +447,7 @@ export function runIdFor(taskId, model, skills, repeat, now = Date.now()) {
 
 async function runOne(r, ctx) {
   const { leader, opts, judge } = ctx;
-  const config = runConfig(opts.harness, r.model, r.condition);
+  const config = runConfig(opts.harness, r.model, r.condition, opts.arm);
   const runId = runIdFor(r.task.id, r.model, config.skills, r.repeat);
   const record = {
     benchmark: r.set.benchmark,
@@ -413,6 +468,7 @@ async function runOne(r, ctx) {
       model: r.model,
       timeoutSeconds: opts.timeout,
       condition: r.condition,
+      ...(opts.arm ? { arm: opts.arm } : {}),
       ...(opts.maxTaskCost ? { maxCost: opts.maxTaskCost } : {}),
       ...(ctx.capture ? { capture: ctx.capture } : {}),
       ...(ctx.now ? { now: ctx.now } : {}),
@@ -458,10 +514,16 @@ export function defaultSkillsMatch(recorded, expected) {
   return recorded === undefined && expected === true;
 }
 
-export function resumeAction(record, task, { judge, judgeModel, traceExists, defaultSkills }) {
+export function resumeAction(
+  record,
+  task,
+  { judge, judgeModel, traceExists, defaultSkills, arm = null }
+) {
   if (!record) return 'run';
   const d = taskDigests(task);
   if (!record.digests || record.digests.task_sha !== d.task_sha) return 'run';
+
+  if ((record.config?.arm ?? null) !== (arm ?? null)) return 'run';
   if (!defaultSkillsMatch(record.config?.default_skills, defaultSkills)) return 'run';
   if (record.error && record.error_stage !== 'judge') return 'run';
   if (!judge) return 'done';
@@ -583,6 +645,12 @@ async function prepareLeader(r, ctx, log) {
     const count = await stageSkills(ctx.leader, r.condition);
     lane.staged = r.condition.name;
     log(`skills ${lane.staged}: ${count} entries in /workspace/skills`);
+
+    for (const command of opts.arm?.setup ?? []) {
+      const t0 = Date.now();
+      await mustExec(ctx.leader, command, ARM_SETUP_TIMEOUT_MS);
+      log(`arm ${opts.arm.name} setup \`${command}\`: ${Math.round((Date.now() - t0) / 1000)} s`);
+    }
   }
 }
 
@@ -717,6 +785,7 @@ async function processRun(i, r, runs, ctx, say) {
     judgeModel: opts.judgeModel,
     traceExists: before.traceExists,
     defaultSkills: Boolean(r.condition.builtin),
+    arm: opts.arm?.name ?? null,
   });
   if (action === 'done') {
     say(
@@ -840,6 +909,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const log =
     deps.log ??
     ((line) => console.error(`[bench ${new Date().toISOString().slice(11, 19)}] ${line}`));
+  checkArmConditions(opts.arm, opts.skills);
   const runs = await loadAndPlan(opts, deps, log);
   if (opts.plan) {
     for (const r of runs)
