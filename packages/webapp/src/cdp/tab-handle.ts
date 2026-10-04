@@ -42,6 +42,13 @@ import type {
 const log = createLogger('tab-handle');
 
 /**
+ * Remote-object group for the element handles a command resolves (ref
+ * lookups, backend-node resolution), so {@link TabHandle.releaseObjects}
+ * can drop them in one call once the command is done.
+ */
+const ELEMENT_OBJECT_GROUP = 'slicc-element-handles';
+
+/**
  * A snapshot ref that no longer names a live element: the element left the
  * DOM, or the document navigated and never minted that ref.
  */
@@ -218,6 +225,9 @@ export type TabPage = { [K in keyof TabHandle]: TabHandle[K] };
  * have been evicted or replaced by then, and its sends will fail as stale.
  */
 export class TabHandle {
+  /** Whether this handle put anything in {@link ELEMENT_OBJECT_GROUP}. */
+  private holdsElementObjects = false;
+
   constructor(
     private readonly host: TabHost,
     /** The tab this handle drives. */
@@ -573,7 +583,12 @@ export class TabHandle {
   private async evaluateRawInFrame(
     frameId: string,
     expression: string,
-    options: { world: ExecutionWorld; awaitPromise: boolean; returnByValue: boolean }
+    options: {
+      world: ExecutionWorld;
+      awaitPromise: boolean;
+      returnByValue: boolean;
+      objectGroup?: string;
+    }
   ): Promise<CdpPayload> {
     const { world } = options;
 
@@ -594,6 +609,7 @@ export class TabHandle {
       contextId,
       awaitPromise: options.awaitPromise,
       returnByValue: options.returnByValue,
+      ...(options.objectGroup ? { objectGroup: options.objectGroup } : {}),
     };
 
     let result: CdpPayload;
@@ -871,16 +887,23 @@ export class TabHandle {
    */
   async resolveAriaRef(ref: string, frameId?: string): Promise<ResolvedAriaRef> {
     const expression = ariaRefLookupExpression(ref);
+    const objectGroup = ELEMENT_OBJECT_GROUP;
+    this.holdsElementObjects = true;
     let result: CdpPayload;
     if (frameId) {
       result = await this.evaluateRawInFrame(frameId, expression, {
         world: 'isolated',
         awaitPromise: false,
         returnByValue: false,
+        objectGroup,
       });
     } else {
       await this.send('Runtime.enable');
-      result = await this.send('Runtime.evaluate', { expression, returnByValue: false });
+      result = await this.send('Runtime.evaluate', {
+        expression,
+        returnByValue: false,
+        objectGroup,
+      });
       const failure = evaluationFailure(result);
       if (failure !== null) throw new Error(`Resolving ref ${ref} failed: ${failure}`);
     }
@@ -893,6 +916,17 @@ export class TabHandle {
       ?.backendNodeId;
     if (typeof backendNodeId !== 'number') throw new StaleAriaRefError(ref);
     return { objectId: handle.objectId, backendNodeId };
+  }
+
+  /**
+   * Release every element handle this handle resolved (ref lookups and
+   * backend-node resolution). Call once the command that used them is done;
+   * a no-op when nothing was resolved.
+   */
+  async releaseObjects(): Promise<void> {
+    if (!this.holdsElementObjects) return;
+    this.holdsElementObjects = false;
+    await this.send('Runtime.releaseObjectGroup', { objectGroup: ELEMENT_OBJECT_GROUP });
   }
 
   /**
@@ -933,7 +967,11 @@ export class TabHandle {
   private async resolveNodeObjectId(backendNodeId: number): Promise<string> {
     await this.send('DOM.enable');
     await this.send('Runtime.enable');
-    const resolveResult = await this.send('DOM.resolveNode', { backendNodeId });
+    this.holdsElementObjects = true;
+    const resolveResult = await this.send('DOM.resolveNode', {
+      backendNodeId,
+      objectGroup: ELEMENT_OBJECT_GROUP,
+    });
     const object = resolveResult['object'] as { objectId?: string } | undefined;
     if (!object?.objectId) {
       throw new Error(`Could not resolve backend node ${backendNodeId} to a DOM element`);

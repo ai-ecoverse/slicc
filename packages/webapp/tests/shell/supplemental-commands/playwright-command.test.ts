@@ -121,6 +121,7 @@ function createMockBrowser(overrides: Record<string, unknown> = {}): MockBrowser
       return { objectId: `obj-${ref}`, backendNodeId };
     }),
     ariaRefRects: vi.fn().mockResolvedValue({}),
+    releaseObjects: vi.fn().mockResolvedValue(undefined),
     getTransport: vi.fn().mockReturnValue({
       send: vi.fn().mockResolvedValue({}),
     }),
@@ -246,6 +247,7 @@ function mockTabHandle(browser: MockBrowser, targetId: string): unknown {
       ),
     resolveAriaRef: (...a: unknown[]) => call('resolveAriaRef')(...a),
     ariaRefRects: (...a: unknown[]) => call('ariaRefRects')(...a),
+    releaseObjects: (...a: unknown[]) => call('releaseObjects')(...a),
     clickByBackendNodeId: (...a: unknown[]) => call('clickByBackendNodeId')(...a),
     dblclickByBackendNodeId: (...a: unknown[]) => call('dblclickByBackendNodeId')(...a),
     hoverByBackendNodeId: (...a: unknown[]) => call('hoverByBackendNodeId')(...a),
@@ -804,6 +806,19 @@ describe('playwright-cli click', () => {
     // fill focuses by clicking: order box, surname box, then the search button.
     expect(clicked).toEqual([28, 30, 31]);
     expect(clicked).not.toContain(29);
+  });
+
+  it('releases the element handles a command resolved once its tab hold ends', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    (browser.releaseObjects as ReturnType<typeof vi.fn>).mockClear();
+    (browser.clickByBackendNodeId as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('click failed')
+    );
+    const failed = await cmd.execute(['click', 'e1', '--tab=tab-1'], mockCtx);
+    expect(failed.exitCode).toBe(1);
+    // Released even when the command throws.
+    expect(browser.releaseObjects).toHaveBeenCalledTimes(1);
   });
 
   it('points action output at the auto-saved snapshot', async () => {
@@ -1506,11 +1521,14 @@ describe('playwright-cli tab management', () => {
     ]);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    state.tabRefs.set('tab-1', { floor: 9, framePrefixes: new Map([['frame-1', 'f1']]) });
     const result = await cmd.execute(['tab-close', '--tab=tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Closed tab');
     expect(browser.closePage).toHaveBeenCalledWith('tab-1');
+    expect(state.tabRefs.has('tab-1')).toBe(false);
   });
 
   it('tab-close ignores internal UI targets when resolving indexes', async () => {

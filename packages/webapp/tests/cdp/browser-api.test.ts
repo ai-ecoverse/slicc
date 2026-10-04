@@ -1695,8 +1695,13 @@ describe('BrowserAPI', () => {
         objectId: 'obj-1',
         backendNodeId: 501,
       });
-      const params = evaluateCall()[1] as { expression: string; returnByValue: boolean };
+      const params = evaluateCall()[1] as {
+        expression: string;
+        returnByValue: boolean;
+        objectGroup: string;
+      };
       expect(params.returnByValue).toBe(false);
+      expect(params.objectGroup).toBe('slicc-element-handles');
       expect(params.expression).toContain('"e33"');
       expect(params).not.toHaveProperty('contextId');
     });
@@ -1736,6 +1741,27 @@ describe('BrowserAPI', () => {
         exceptionDetails: { text: 'Uncaught', exception: { description: 'boom' } },
       });
       await expect(page.resolveAriaRef('e1')).rejects.toThrow('Resolving ref e1 failed: boom');
+    });
+
+    it('releases resolved element handles once, and only when it holds some', async () => {
+      respond(
+        { result: { type: 'object', subtype: 'node', objectId: 'obj-1' } },
+        { node: { backendNodeId: 501 } }
+      );
+      const releases = () =>
+        (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+          (c) => c[0] === 'Runtime.releaseObjectGroup'
+        );
+
+      await page.releaseObjects();
+      expect(releases()).toHaveLength(0);
+
+      await page.resolveAriaRef('e1');
+      await page.releaseObjects();
+      await page.releaseObjects();
+      expect(releases()).toEqual([
+        ['Runtime.releaseObjectGroup', { objectGroup: 'slicc-element-handles' }, 'sess-1'],
+      ]);
     });
 
     it('reads every live rect in one evaluate', async () => {

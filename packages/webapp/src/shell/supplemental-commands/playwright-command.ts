@@ -336,7 +336,20 @@ export function createPlaywrightCommand(
       // Every tab hold a handler takes inherits this invocation's abort, so
       // an abandoned command stops at the bridge's next cancellation boundary
       // instead of running to completion for a caller that is gone.
-      onTab: (targetId, fn) => browser.withTab(targetId, fn, { signal: ctx.signal }),
+      // Element handles a command resolved are released when its hold ends,
+      // so a long-lived page does not accumulate one per ref command.
+      onTab: (targetId, fn) =>
+        browser.withTab(
+          targetId,
+          async (page) => {
+            try {
+              return await fn(page);
+            } finally {
+              await page.releaseObjects?.().catch(() => undefined);
+            }
+          },
+          { signal: ctx.signal }
+        ),
       signal: ctx.signal,
     });
 

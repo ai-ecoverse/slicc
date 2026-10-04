@@ -57,32 +57,24 @@ async function verifyFillAndApplyFallback(
   }
 }
 
-/** Fill via backendNodeId: click to focus, clear, insertText, verify+fallback. */
-async function fillByBackendNodeId(
+/** Fill a resolved element: click to focus, clear, insertText, verify+fallback. */
+async function fillElement(
   page: TabHandle,
-  backendNodeId: number,
+  target: { backendNodeId: number; objectId: string },
   fillText: string
 ): Promise<void> {
-  await page.clickByBackendNodeId(backendNodeId);
-  await page.send('DOM.enable');
-  await page.send('Runtime.enable');
-  const resolveResult = await page.send('DOM.resolveNode', { backendNodeId });
-  const obj = resolveResult['object'] as { objectId?: string } | undefined;
-  if (obj?.objectId) {
-    await page.send('Runtime.callFunctionOn', {
-      objectId: obj.objectId,
-      functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
-      returnByValue: true,
-    });
-  }
+  await page.clickByBackendNodeId(target.backendNodeId);
+  await page.send('Runtime.callFunctionOn', {
+    objectId: target.objectId,
+    functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
+    returnByValue: true,
+  });
   // Single Input.insertText frame so the per-frame whole-token
   // unmask gate in the node-server CDP proxy can replace a
   // masked secret with its real value (a per-character
   // Input.dispatchKeyEvent loop fragments the token).
   await page.insertText(fillText);
-  if (obj?.objectId) {
-    await verifyFillAndApplyFallback(page, obj.objectId, fillText);
-  }
+  await verifyFillAndApplyFallback(page, target.objectId, fillText);
 }
 
 export const clickHandler: PlaywrightHandler = async ({
@@ -176,7 +168,7 @@ export const fillHandler: PlaywrightHandler = async ({
       if (flags['submit'] === 'true') await sendEnterKey(page);
       return `Filled ${ref} with: ${fillText} (in iframe)`;
     }
-    await fillByBackendNodeId(page, target.backendNodeId, fillText);
+    await fillElement(page, target, fillText);
     state.snapshots.delete(tab.targetId);
     if (flags['submit'] === 'true') await sendEnterKey(page);
     return `Filled ${ref} with: ${fillText}`;
