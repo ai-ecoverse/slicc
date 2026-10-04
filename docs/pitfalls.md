@@ -703,31 +703,36 @@ interrupted download fetches the file again instead of skipping it. Tests: `test
 `tests/fs/zenfs-opfs-read-retry.test.ts`, and
 `tests/shell/supplemental-commands/hf-download.test.ts`.
 
-## OPFS Sync Mirror: Stack Traces Are Engine-Specific
+## OPFS Sync Mirror: Never Read Stack Traces
 
 **Files**: `patches/@zenfs+core+*.patch` (`Async._patchAsync`),
 `packages/webapp/tests/fs/zenfs-mirror-loop-stack-format.test.ts`.
 
-The same mirror decides from `error.stack` whether a call is nested in another call
-of the same method, and whether a failed mirror update happened under one; such a
-failure is skipped. Upstream matched V8's frame text only (`at <computed> [as
-write]`). JavaScriptCore prints `name@url:line:col` and no name at all for a
-computed or assigned function name, so on WebKit (Safari, every iOS browser,
-WKWebView) nothing matched. `IndexFS.rename` writes the new path through the
-mirrored `write` before the mirror has that entry, and that failure was rethrown:
-every file rename failed with ENOENT, which broke `mv`, git's lock files and
-`git init` (#3783; upstream report:
-[zen-fs/core#325](https://github.com/zen-fs/core/issues/325)). The patch names each wrapper literally (`zenfsMirror_<key>`, a
-name every engine prints) and compares frames in any format. A mirror failure is skipped only
-while an outer mirrored call is in flight beneath the failing one; otherwise it is
-thrown as `Out of sync!` (upstream's V8 rule swallowed nearly all of them). The
-async call a `*Sync` method queues runs the backend's own method, since the sync
-method has already updated the mirror.
+The same mirror needs to know whether a call is nested in another mirrored call:
+`IndexFS.rename` writes the new path through `write` before the outer rename has
+moved the mirror's entry, so that nested update fails, and the outer call mirrors
+the whole change when it returns. Upstream read nesting from `error.stack`, which
+only works in V8: JavaScriptCore prints `name@url:line:col` with no name for the
+arrow wrapper, and release Firefox records no async frames unless DevTools is
+attached. On WebKit and Firefox every file rename failed with ENOENT, which broke
+`mv`, git's lock files and `git init` (#3783; upstream report:
+[zen-fs/core#325](https://github.com/zen-fs/core/issues/325)).
 
-Never assume V8's stack format in code that runs in the browser. Test code like
-this with `Error.prepareStackTrace` printing JavaScriptCore's format, as the test
+The patch reads no stacks. A backend method runs against an `unmirrored` Proxy
+view of the file system whose patched methods are nested ones, so nesting is known
+from how a call was made. A nested call updates the mirror best-effort (it still
+copies what it can, such as the bytes a replayed rename writes to a path the mirror
+keeps as metadata only); a top-level call's failed update is thrown as `Out of
+sync!`. The async call a `*Sync` method queues runs the backend's own method, since
+the sync method has already updated the mirror.
+
+Never read `error.stack` for control flow in code that runs in the browser: its
+format differs per engine, and async frames may be missing altogether. Test such
+code with `Error.prepareStackTrace` printing other engines' stacks, as the test
 above does. Vitest installs its own formatter, so set `prepareStackTrace` to
-`undefined` to get V8's.
+`undefined` to get V8's. Playwright's Firefox is always a debuggee and records
+async frames; set `javascript.options.asyncstack` to `false` to get release
+behavior.
 
 ## OPFS Writes: Serialize Per Mount, Across Contexts
 
