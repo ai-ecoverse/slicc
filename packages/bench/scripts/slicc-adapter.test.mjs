@@ -2221,7 +2221,10 @@ describe('arm mode', () => {
           ok('/tmp/intent-arm/run/result.json\n/tmp/intent-arm/run/transcript.md\n'),
         ],
         [/^base64 '\/tmp\/intent-arm\/run\/result\.json'$/, ok(b64(`{"answer":"${canary}"}`))],
-        [/^base64 '\/tmp\/intent-arm\/run\/transcript\.md'$/, ok(b64(`goal: ${canary}`))],
+        [
+          /^base64 '\/tmp\/intent-arm\/run\/transcript\.md'$/,
+          ok(b64(`## user\ngoal: ${canary}\n## assistant\nFINAL ANSWER: from the driver`)),
+        ],
         ...leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT))).commands,
         [/^base64 /, ok('UE5H')],
       ],
@@ -2250,7 +2253,8 @@ describe('arm mode', () => {
     const run = calls.find((c) => c.kind === 'exec' && c.command.startsWith('intent-arm '));
     expect(run.command).not.toContain(canary);
     expect(run.opts).toMatchObject({ timeoutMs: 120000, interrupt: true });
-    expect(result.finalText).toBe('scoop says hi');
+    // The driver's own transcript answers first: it is this run's for sure.
+    expect(result.finalText).toBe('FINAL ANSWER: from the driver');
     expect(result.arm.name).toBe('intent-budget');
     expect(result.arm.result).toEqual({ ok: true, steps: 3, run: '2026-10-04T00-00-00-run' });
     expect(result.arm.files.map((f) => f.path)).toEqual([
@@ -2405,5 +2409,43 @@ describe('arm driver transcript', () => {
     expect(t.steps[0]).toMatch(/^## scoop · user/);
     expect(t.steps.some((x) => x.includes('FINAL ANSWER: 42'))).toBe(true);
     expect(t.metrics.steps).toBe(2);
+  });
+});
+
+describe('arm runs on a reused leader', () => {
+  const file = (path, text) => ({ path, base64: Buffer.from(text).toString('base64') });
+  const MD = ['## user', 'Task two.', '## assistant', 'Done.', '', 'FINAL ANSWER: two'].join('\n');
+  const scoop = (id, text, timestamp, extra = {}) => ({
+    id,
+    kind: 'scoop',
+    messages: [{ role: 'assistant', timestamp, content: [{ type: 'text', text }], ...extra }],
+  });
+  // An earlier task's scoop, still in the export of a leader reused across tasks.
+  const STALE = {
+    conversations: [
+      { id: 'cone', kind: 'cone', messages: [] },
+      scoop('old', 'FINAL ANSWER: one', 1_000, { stopReason: 'error', errorMessage: 'HTTP 500' }),
+    ],
+  };
+  const result = {
+    arm: { name: 'x', startedAt: 5_000, files: [file('/tmp/intent-arm/r2/transcript.md', MD)] },
+    transcript: STALE,
+    finalText: 'FINAL ANSWER: two',
+    durationMs: 1000,
+  };
+
+  it("never takes an earlier task's scoop for this run's", () => {
+    expect(armConversation(STALE, 5_000)).toBeNull();
+    expect(armConversation(STALE).id).toBe('old');
+    expect(lastScoopAssistantText(STALE, 5_000)).toBe('');
+    expect(lastTurnProviderError(result)).toBeNull();
+  });
+
+  it('judges from the current driver transcript even when a leftover scoop is in the export', () => {
+    const t = traceFromResult(result);
+    expect(t.steps.join('\n')).toContain('FINAL ANSWER: two');
+    expect(t.steps.join('\n')).not.toContain('FINAL ANSWER: one');
+    expect(t.metrics.steps).toBe(1);
+    expect(armAnswer(result.arm.files)).toBe('Done.\n\nFINAL ANSWER: two');
   });
 });
