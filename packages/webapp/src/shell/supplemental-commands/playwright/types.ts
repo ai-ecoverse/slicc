@@ -196,6 +196,14 @@ export interface PlaywrightState {
   routeCleanup: Map<string, () => void>;
   /** Last known mouse position per targetId, updated by mousemove. Used by mousedown/mouseup/mousewheel. */
   lastMousePosition: Map<string, { x: number; y: number }>;
+  /**
+   * targetId → the tab's number in `tab-list` / `tab-select`, assigned on
+   * first sight and never reused, so opening or closing one tab does not
+   * renumber the others.
+   */
+  tabNumbers: Map<string, number>;
+  /** Highest tab number handed out in this shell. */
+  lastTabNumber: number;
 }
 
 export interface TeleportStorageSnapshot {
