@@ -14,6 +14,8 @@ import {
   collectArmFiles,
   costTotals,
   decodeTranscriptPart,
+  driverSections,
+  driverSteps,
   expectedSkillNames,
   exportTranscript,
   exportTranscriptCommand,
@@ -2342,5 +2344,66 @@ describe('arm helpers', () => {
     expect(
       armAnswer([{ path: '/tmp/x/result.json', base64: Buffer.from('{}').toString('base64') }])
     ).toBe('');
+  });
+});
+
+describe('arm driver transcript', () => {
+  const MD = [
+    '# Agent session: s1',
+    '## Prompt',
+    'Do the task.',
+    '## user',
+    'Do the task.',
+    '## assistant',
+    'Looking.',
+    '### tool: bash',
+    'intent --intent "open https://example.com"',
+    '## tool result',
+    'opened example.com',
+    '## assistant',
+    'Found it.',
+    '',
+    'FINAL ANSWER: 42',
+  ].join('\n');
+  const file = (path, text) => ({ path, base64: Buffer.from(text).toString('base64') });
+  const files = [
+    file('/tmp/intent-arm/r/transcript.md', MD),
+    file('/tmp/intent-arm/r/result.json', JSON.stringify({ answer: 'Found it.' })),
+  ];
+
+  it('splits a driver transcript into sections, assistant text without its tool calls', () => {
+    const secs = driverSections(MD);
+    expect(secs.map((x) => x.role)).toEqual([
+      'prompt',
+      'user',
+      'assistant',
+      'tool result',
+      'assistant',
+    ]);
+    expect(secs[2].text).toBe('Looking.');
+    expect(secs[2].body).toContain('### tool: bash');
+    expect(driverSteps(files)).toHaveLength(4);
+    expect(driverSteps([])).toEqual([]);
+  });
+
+  it('answers from answer.txt, else the transcript, else the result.json prefix', () => {
+    expect(armAnswer([file('/x/answer.txt', ' FINAL ANSWER: full \n'), ...files])).toBe(
+      'FINAL ANSWER: full'
+    );
+    expect(armAnswer(files)).toBe('Found it.\n\nFINAL ANSWER: 42');
+    expect(armAnswer([files[1]])).toBe('Found it.');
+  });
+
+  it('judges from the driver transcript when the export lost the scoop', () => {
+    const result = {
+      arm: { name: 'x', files },
+      transcript: { conversations: [{ id: 'cone', kind: 'cone', messages: [] }] },
+      finalText: 'FINAL ANSWER: 42',
+      durationMs: 1000,
+    };
+    const t = traceFromResult(result);
+    expect(t.steps[0]).toMatch(/^## scoop · user/);
+    expect(t.steps.some((x) => x.includes('FINAL ANSWER: 42'))).toBe(true);
+    expect(t.metrics.steps).toBe(2);
   });
 });

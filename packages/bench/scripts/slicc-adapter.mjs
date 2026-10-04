@@ -100,13 +100,59 @@ export function armCommand(arm, { goalFile, model, timeoutSeconds }) {
 
 /** The driver's own answer from its result.json among the collected files, or ''. */
 export function armAnswer(files) {
-  const f = (files ?? []).find((x) => x.path.endsWith('/result.json'));
-  if (!f) return '';
+  const text = (name) => {
+    const f = (files ?? []).find((x) => x.path.endsWith(name));
+    return f ? Buffer.from(f.base64, 'base64').toString('utf8') : null;
+  };
+  // The driver's full last message, then its session transcript; result.json's `answer` is a
+  // prefix (intent-arm keeps 500 characters), which lost FINAL ANSWER in every run of 37189369126.
+  const full = text('/answer.txt');
+  if (full?.trim()) return full.trim();
+  const md = text('/transcript.md');
+  const last = md
+    ? driverSections(md)
+        .filter((x) => x.role === 'assistant' && x.text)
+        .at(-1)
+    : null;
+  if (last) return last.text;
   try {
-    return String(JSON.parse(Buffer.from(f.base64, 'base64').toString('utf8')).answer ?? '');
+    return String(JSON.parse(text('/result.json') ?? 'null')?.answer ?? '');
   } catch {
     return '';
   }
+}
+
+/**
+ * A driver's session transcript (`transcript.md`: `## user` / `## assistant` / `## tool …`
+ * sections, tool calls under `### tool:`) → `[{ role, text }]`, the assistant text without its
+ * tool calls. The judge's trajectory when the transcript export no longer holds the arm's scoop:
+ * a one-shot scoop is dropped when the driver returns, before the export runs.
+ */
+export function driverSections(md) {
+  const out = [];
+  let cur = null;
+  for (const line of String(md).split('\n')) {
+    const m = /^## (user|assistant|tool result|tool|prompt)\b/i.exec(line);
+    if (m) {
+      if (cur) out.push(cur);
+      cur = { role: m[1].toLowerCase(), lines: [] };
+    } else if (cur) cur.lines.push(line);
+  }
+  if (cur) out.push(cur);
+  return out.map((x) => {
+    const body = x.lines.join('\n');
+    const text = (x.role === 'assistant' ? body.split(/\n### tool:/)[0] : body).trim();
+    return { role: x.role, text, body: body.trim() };
+  });
+}
+
+/** The arm's trajectory from the driver's transcript.md, as judge steps; [] without one. */
+export function driverSteps(files) {
+  const f = (files ?? []).find((x) => x.path.endsWith('/transcript.md'));
+  if (!f) return [];
+  return driverSections(Buffer.from(f.base64, 'base64').toString('utf8'))
+    .filter((x) => x.role !== 'prompt')
+    .map((x) => `## scoop · ${x.role}\n${clip(x.body)}`);
 }
 
 /** The last JSON object the driver printed, or null. */
@@ -949,12 +995,18 @@ export function transcriptSummary(info) {
 }
 
 /** Assistant turns of the arm's scoop. */
-export const armTurns = (doc) =>
-  (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant').length;
+export const armTurns = (doc, files) =>
+  (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant').length ||
+  driverSteps(files).filter((x) => x.startsWith('## scoop · assistant')).length;
 
 /** A run's result → the trace shape `judge.mjs` reads. */
 export function traceFromResult(result) {
   const t = transcriptSteps(result.transcript);
+  // An arm's scoop is gone from the export once the driver returns: its transcript.md stands in.
+  if (result.arm && !armConversation(result.transcript)) {
+    const steps = driverSteps(result.arm.files);
+    if (steps.length) t.steps = steps;
+  }
   const finalResult =
     result.finalText?.trim() ||
     (result.timedOut ? 'The run was stopped at the time limit before the cone answered.' : '') ||
@@ -971,7 +1023,10 @@ export function traceFromResult(result) {
     outputFilesText: null,
     metrics: {
       // In arm mode the agent's turns are the arm scoop's: the cone only started the driver.
-      steps: (result.arm ? armTurns(result.transcript) : t.assistantTurns) || result.turns || 0,
+      steps:
+        (result.arm ? armTurns(result.transcript, result.arm.files) : t.assistantTurns) ||
+        result.turns ||
+        0,
       duration: result.durationMs / 1000,
       cost: result.costUsd,
       tokens: result.tokens,

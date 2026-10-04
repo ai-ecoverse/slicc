@@ -201,9 +201,12 @@ previous task, writes the task plus `FINAL_INSTRUCTION` to
 `/tmp/bench/<run>/goal.txt`, and execs `<command> --model <alias> --time-limit
 <timeout − 60> --json --goal-file <path>` with the run's timeout, interrupt and
 cost watch. The arm's commands run `--private`, so the driver's stdout carries
-numbers only. The answer the judge reads is the scoop's last assistant message
-(the transcript export includes scoops), falling back to the driver's
-`result.json`. Spend is the usual `cost --json --all` delta, which counts scoops.
+numbers only. The answer the judge reads is the scoop's last assistant message. The
+driver's one-shot scoop is usually dropped by the time the transcript export
+runs, so the answer then comes from the driver's `answer.txt` or the last
+assistant section of its `transcript.md`, and that transcript is the judge's
+trajectory (run 37189369126 lost both: the judge saw no steps and a 500-character
+answer prefix). Spend is the usual `cost --json --all` delta, which counts scoops.
 
 The arm's skills are copied from `skills-ref` (only the ones the arm lists,
 without `evals/`) and staged as the extra set `arm`, so the skills condition is
