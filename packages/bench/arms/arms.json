@@ -1,0 +1,18 @@
+{
+  "intent-agent": {
+    "description": "ai-ecoverse/skills intent (#473): a Sonnet scoop that browses only through `intent`, with kev-4b-vision as System 1 on the leader's GPU",
+    "skills": ["intent", "decide-quickly"],
+    "setup": ["intent prepare", "intent pull --model 4b-vision"],
+    "command": "intent-arm --tool intent --s1-model 4b-vision --require-gpu --private",
+    "files": "/tmp/intent-arm",
+    "scratch": ["/tmp/intent"]
+  },
+  "intent-budget": {
+    "description": "intent-agent with RETRIEVE answering from the top texts by kev up to a character budget",
+    "skills": ["intent", "decide-quickly"],
+    "setup": ["intent prepare", "intent pull --model 4b-vision"],
+    "command": "intent-arm --tool intent --s1-model 4b-vision --require-gpu --retrieve budget --private",
+    "files": "/tmp/intent-arm",
+    "scratch": ["/tmp/intent"]
+  }
+}

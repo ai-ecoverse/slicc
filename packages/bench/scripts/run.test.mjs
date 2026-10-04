@@ -5,10 +5,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { taskDigests, withDigests } from './format.mjs';
 import {
+  ARMS_FILE,
   ageSeconds,
+  checkArmConditions,
   DEFAULT_MODELS,
   defaultSkillsMatch,
   guardrails,
+  loadArm,
   loadSet,
   main,
   parseCli,
@@ -25,7 +28,7 @@ import {
   shardRuns,
   tracePath,
 } from './run.mjs';
-import { PROMPT_ALL_SETTLED, RUN_ID_PATTERN } from './slicc-adapter.mjs';
+import { PROMPT_ALL_SETTLED, parseSkillsCondition, RUN_ID_PATTERN } from './slicc-adapter.mjs';
 
 describe('runConfig', () => {
   it('records whether the condition seeds bundled skills', () => {
@@ -1530,5 +1533,36 @@ describe('provider errors', () => {
         defaultSkills: undefined,
       })
     ).toBe('run');
+  });
+});
+
+describe('arms', () => {
+  it('loads a shipped arm with its name, and refuses an unknown one', () => {
+    const arm = loadArm('intent-budget');
+    expect(arm.name).toBe('intent-budget');
+    expect(arm.skills).toEqual(['intent', 'decide-quickly']);
+    expect(arm.command).toContain('--retrieve budget');
+    expect(arm.command).toContain('--private');
+    expect(() => loadArm('nope')).toThrow(/no arm nope/);
+    expect(existsSync(ARMS_FILE)).toBe(true);
+  });
+
+  it('needs every skills condition to stage the arm set', () => {
+    const arm = { name: 'a' };
+    expect(() => checkArmConditions(arm, [parseSkillsCondition('builtin+arm')])).not.toThrow();
+    expect(() => checkArmConditions(arm, [parseSkillsCondition('builtin')])).toThrow(/\+arm/);
+    expect(() => checkArmConditions(null, [parseSkillsCondition('builtin')])).not.toThrow();
+  });
+
+  it('records the arm in the config, so arm runs pair with cone runs by task', () => {
+    expect(
+      runConfig('h', 'claude-sonnet-5-5', parseSkillsCondition('builtin+arm'), {
+        name: 'intent-agent',
+      })
+    ).toMatchObject({
+      skills: 'builtin+arm',
+      arm: 'intent-agent',
+    });
+    expect(runConfig('h', 'm', parseSkillsCondition('builtin'))).not.toHaveProperty('arm');
   });
 });

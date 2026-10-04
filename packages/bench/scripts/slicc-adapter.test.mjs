@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ARM_TIME_MARGIN_S,
+  armAnswer,
+  armCommand,
   assertStagedSkills,
   buildPrompt,
   costTotals,
@@ -13,10 +16,12 @@ import {
   exportTranscriptCommand,
   FINAL_INSTRUCTION,
   FLAGS_PROBE,
+  lastScoopAssistantText,
   lastTurnProviderError,
   leaderHealth,
   NO_DEFAULT_SKILLS_MISSING,
   PROMPT_ALL_SETTLED,
+  parseArmResult,
   parseExportListing,
   parseModelSpec,
   parseSkillNames,
@@ -47,6 +52,7 @@ import {
   traceFromResult,
   transcriptSteps,
   transcriptSummary,
+  validateArm,
   watchSpend,
 } from './slicc-adapter.mjs';
 
@@ -2115,5 +2121,139 @@ describe('lastTurnProviderError', () => {
     expect(lastTurnProviderError(run(cone({ role: 'assistant', stopReason: 'error' })))).toBe(
       'provider error'
     );
+  });
+});
+
+describe('arm mode', () => {
+  const ARM = {
+    name: 'intent-budget',
+    skills: ['intent', 'decide-quickly'],
+    setup: ['intent prepare'],
+    command: 'intent-arm --tool intent --private',
+    files: '/tmp/intent-arm',
+    scratch: ['/tmp/intent'],
+  };
+  const b64 = (s) => Buffer.from(s).toString('base64');
+
+  it('validates arms, including the ones the bench ships', () => {
+    expect(validateArm('intent-budget', ARM)).toEqual([]);
+    const errs = validateArm('Bad Name', {
+      command: '; rm -rf /',
+      skills: ['ok', 'Not Ok'],
+      setup: 'x',
+      files: '/etc',
+    }).join('\n');
+    for (const want of [
+      'a-z0-9',
+      'command must start',
+      'skill directory',
+      'setup must',
+      'under /tmp',
+    ])
+      expect(errs).toContain(want);
+    const shipped = JSON.parse(readFileSync(new URL('../arms/arms.json', import.meta.url), 'utf8'));
+    for (const [name, arm] of Object.entries(shipped)) expect(validateArm(name, arm)).toEqual([]);
+  });
+
+  it('keeps the task off the command line: it travels in a goal file', () => {
+    const cmd = armCommand(ARM, {
+      goalFile: '/tmp/bench/r1/goal.txt',
+      model: 'claude-sonnet-5-5@low',
+      timeoutSeconds: 3600,
+    });
+    expect(cmd).toBe(
+      `intent-arm --tool intent --private --model 'claude-sonnet-5-5' --time-limit ${3600 - ARM_TIME_MARGIN_S} --json --goal-file '/tmp/bench/r1/goal.txt'`
+    );
+    expect(armCommand(ARM, { goalFile: '/g', model: 'm', timeoutSeconds: 30 })).toContain(
+      '--time-limit 60'
+    );
+  });
+
+  it('reads the driver result, the scoop answer, and the answer in result.json', () => {
+    expect(parseArmResult('progress\n{\n  "ok": true,\n  "steps": 4\n}\n')).toEqual({
+      ok: true,
+      steps: 4,
+    });
+    expect(parseArmResult('no json')).toBeNull();
+    expect(lastScoopAssistantText(TRANSCRIPT)).toBe('scoop says hi');
+    expect(lastScoopAssistantText({ conversations: [] })).toBe('');
+    expect(
+      armAnswer([
+        { path: '/tmp/intent-arm/x/result.json', base64: b64('{"answer":"FINAL ANSWER: 42"}') },
+      ])
+    ).toBe('FINAL ANSWER: 42');
+    expect(armAnswer([])).toBe('');
+  });
+
+  it('runs the arm instead of prompting the cone, and keeps its files for the trace', async () => {
+    let costCalls = 0;
+    const canary = 'CANARY-TASK-TEXT-7f3a';
+    const { leader, calls } = fakeLeader({
+      verbs: {
+        'new-session': ok('new session (erase)'),
+        model: ok('bedrock-camp:global.anthropic.claude-sonnet-5-5\n'),
+      },
+      commands: [
+        [/^intent-arm /, ok('{"ok":true,"steps":3,"run":"2026-10-04T00-00-00-run"}\n')],
+        [
+          /^cost --json --all$/,
+          () =>
+            ok(
+              JSON.stringify({
+                scoops: [
+                  {
+                    type: 'scoop',
+                    turns: 1,
+                    usage: { totalTokens: 1, cost: { total: ++costCalls === 1 ? 0.1 : 0.4 } },
+                  },
+                ],
+              })
+            ),
+        ],
+        [/^playwright-cli tab-list$/, ok('[T1] https://example.com/ "Example"')],
+        [
+          /^find '\/tmp\/intent-arm'/,
+          ok('/tmp/intent-arm/run/result.json\n/tmp/intent-arm/run/transcript.md\n'),
+        ],
+        [/^base64 '\/tmp\/intent-arm\/run\/result\.json'$/, ok(b64(`{"answer":"${canary}"}`))],
+        [/^base64 '\/tmp\/intent-arm\/run\/transcript\.md'$/, ok(b64(`goal: ${canary}`))],
+        ...leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT))).commands,
+        [/^base64 /, ok('UE5H')],
+      ],
+    });
+    const task = { id: 't', task: `Do ${canary}.`, slicc: { timeoutSeconds: 120 } };
+    const result = await runTask({
+      leader,
+      task,
+      runId: 'r1',
+      model: 'claude-sonnet-5-5',
+      arm: ARM,
+      capture: { pollMs: 5 },
+    });
+    expect(calls.some((c) => c.kind === 'cli' && c.args[0] === 'prompt')).toBe(false);
+    const wipes = calls.filter(
+      (c) => c.kind === 'exec' && /^rm -rf '\/tmp\/intent/.test(c.command)
+    );
+    expect(wipes.map((c) => c.command)).toEqual([
+      "rm -rf '/tmp/intent-arm'",
+      "rm -rf '/tmp/intent'",
+    ]);
+    const goal = calls.find(
+      (c) => c.kind === 'exec' && c.command === "base64 -d > '/tmp/bench/r1/goal.txt'"
+    );
+    expect(Buffer.from(goal.opts.stdin, 'base64').toString()).toBe(buildPrompt(task));
+    const run = calls.find((c) => c.kind === 'exec' && c.command.startsWith('intent-arm '));
+    expect(run.command).not.toContain(canary);
+    expect(run.opts).toMatchObject({ timeoutMs: 120000, interrupt: true });
+    expect(result.finalText).toBe('scoop says hi');
+    expect(result.arm.name).toBe('intent-budget');
+    expect(result.arm.result).toEqual({ ok: true, steps: 3, run: '2026-10-04T00-00-00-run' });
+    expect(result.arm.files.map((f) => f.path)).toEqual([
+      '/tmp/intent-arm/run/result.json',
+      '/tmp/intent-arm/run/transcript.md',
+    ]);
+    expect(result.costUsd).toBeCloseTo(0.3);
+    // Nothing the record keeps quotes the task: the files ride only in the trace.
+    expect(JSON.stringify(traceFromResult(result).metrics)).not.toContain(canary);
   });
 });

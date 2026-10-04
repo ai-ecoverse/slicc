@@ -29,6 +29,8 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges each r
 | `scripts/publish.mjs`        | Stage run for HF `ai-ecoverse/slicc-bench`: enc traces/sets, report |
 | `dataset/README.md`          | Dataset card template; `publish.mjs` fills `<!-- report -->`        |
 | `scripts/run.mjs`            | CLI: plan, run, judge, resume; writes records/traces/results/report |
+| `scripts/leak-check.mjs`     | Fail when a plaintext out-dir file quotes task text (pre-upload)    |
+| `arms/arms.json`             | Arms: a skill's driver runs each task instead of the cone prompt    |
 | `tasks/smoke.json`           | Two short live tasks; PR smoke run uses the first                   |
 | `tasks/subsets/*.json`       | Frozen task-id lists for `--tasks @name` (explore-20 ⊂ -40; ids)    |
 
@@ -39,7 +41,8 @@ Driven from outside through the Go `slicc` CLI against the leader's join URL; no
 1. `run.mjs` stages `/workspace/skills` for the condition with `slicc exec`; builtin skills stash in `/workspace/.bench-skills-builtin`. Conditions: `none`, `builtin`, or either `+` extras under `/workspace/bench-skills/<name>/`. **`none` = no bundled skills** via `flags set no-default-skills` — [details](../../docs/bench-runner.md#none-skills-condition).
 2. Per task, `runTask` stages files, closes tabs, runs `slicc new-session --erase` (drops conversation **and** memories), `slicc model <alias>`, and for `alias@level` `slicc thinking <level>` (`config.thinking` = request, `config.thinking_effective` = what ran; mismatch errors), then `slicc prompt --allsettled 2m -` ([details](../../docs/slicc-cli-details.md#prompt---allsettled)) with the task plus upstream's `FINAL ANSWER:` instruction. Skills check after `new-session`. Timeout → SIGINT; exits 130 only after `abort_ack` (exit 1 if unconfirmed in 12s; SIGKILL at 20s). [Interrupt](../../docs/bench-runner.md#interrupt-and-spend).
 3. While the cone works: poll `playwright-cli tab-list`, screenshot on tab change (or every 15 s). Spend = `cost --json --all` delta (authoritative vs `session export`). Judge trajectory from `session export` (chunked past 8 MiB — [transcript](../../docs/bench-runner.md#transcript-collection)). After interrupt, read spend until flat or 3 min; giving up → `leader_down` + lane restart. Loop order: skills → repeat → task → model.
-4. `resumeAction()` from stored digests/judge — `done`; `rejudge` (changed judge/rubric/weights); `run` (agent failed, task text changed, or `config.default_skills` mismatch). Errored runs are reported but exit 1 so CI can't green on missing runs. Scores: judged only; time/cost: every finish.
+4. **Arm mode** (`--arm <name>`, `arms/arms.json`): instead of the cone prompt, `runTask` writes the task to `/tmp/bench/<run>/goal.txt` and execs the arm's driver (`intent-arm … --private --goal-file`), so the task stays off the command line and the driver prints numbers only. The arm's skills are the extra set `arm` (skills `builtin+arm`); its `setup` runs once per staged leader. The answer is the scoop's last message; the driver's files (`files`, which hold task text) are read into the trace only, which is encrypted for upstream sets. `config.arm` pairs arm runs with cone runs by task. [Details](../../docs/bench-runner.md#arm-mode-and-the-leak-check).
+5. `resumeAction()` from stored digests/judge — `done`; `rejudge` (changed judge/rubric/weights); `run` (agent failed, task text changed, or `config.default_skills` mismatch). Errored runs are reported but exit 1 so CI can't green on missing runs. Scores: judged only; time/cost: every finish.
 
 ## Leader lifecycle and diagnostics
 
