@@ -198,8 +198,9 @@ skill's own driver instead of the cone: for the intent skill, `intent-arm` runs
 a Sonnet scoop that browses only through `intent`, with kev on the leader's GPU
 as System 1. Per task, `runTask` wipes the driver's files and scratch from the
 previous task, writes the task plus `FINAL_INSTRUCTION` to
-`/tmp/bench/<run>/goal.txt`, and execs `<command> --model <alias> --time-limit
-<timeout − 60> --json --goal-file <path>` with the run's timeout, interrupt and
+`/tmp/bench/<run>/goal.txt`, and execs `<command> --model <alias> [--thinking
+<level>] --time-limit <timeout − 60> --json --goal-file <path>` (a model spec
+`alias@level` sets the driver agent's thinking; the cone only starts the driver) with the run's timeout, interrupt and
 cost watch. The arm's commands run `--private`, so the driver's stdout carries
 numbers only. The answer the judge reads is the scoop's last assistant message. The
 driver's one-shot scoop is usually dropped by the time the transcript export

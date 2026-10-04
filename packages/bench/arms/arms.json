@@ -14,5 +14,21 @@
     "command": "intent-arm --tool intent --s1-model 4b-vision --require-gpu --retrieve budget --private",
     "files": "/tmp/intent-arm",
     "scratch": ["/tmp/intent"]
+  },
+  "intent-agent-full": {
+    "description": "ai-ecoverse/skills intent (#473): a Sonnet scoop that browses only through `intent`, with kev-4b-vision as System 1 on the leader's GPU; with the whole shell (curl, python3, convert, open --view, \u2026), where playwright-cli, playwright and puppeteer are reached only through `intent <command> --intent`",
+    "skills": ["intent", "decide-quickly"],
+    "setup": ["intent prepare", "intent pull --model 4b-vision"],
+    "command": "intent-arm --tool intent --s1-model 4b-vision --require-gpu --toolset full --private",
+    "files": "/tmp/intent-arm",
+    "scratch": ["/tmp/intent"]
+  },
+  "intent-budget-full": {
+    "description": "intent-agent with RETRIEVE answering from the top texts by kev up to a character budget; with the whole shell (curl, python3, convert, open --view, \u2026), where playwright-cli, playwright and puppeteer are reached only through `intent <command> --intent`",
+    "skills": ["intent", "decide-quickly"],
+    "setup": ["intent prepare", "intent pull --model 4b-vision"],
+    "command": "intent-arm --tool intent --s1-model 4b-vision --require-gpu --retrieve budget --toolset full --private",
+    "files": "/tmp/intent-arm",
+    "scratch": ["/tmp/intent"]
   }
 }

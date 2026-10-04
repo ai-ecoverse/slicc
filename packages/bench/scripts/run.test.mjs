@@ -8,6 +8,7 @@ import {
   ARMS_FILE,
   ageSeconds,
   checkArmConditions,
+  checkArmModels,
   DEFAULT_MODELS,
   defaultSkillsMatch,
   guardrails,
@@ -1680,5 +1681,18 @@ describe('arm runs', () => {
       /intent pull --model 4b-vision/
     );
     q.mockRestore();
+  });
+});
+
+describe('arm thinking levels', () => {
+  it('refuses @max for an arm before anything runs, and accepts the levels agent has', () => {
+    const arm = { name: 'intent-agent' };
+    expect(() => checkArmModels(arm, ['claude-sonnet-5-5@max'])).toThrow(
+      /cannot run claude-sonnet-5-5@max/
+    );
+    expect(() =>
+      checkArmModels(arm, ['claude-sonnet-5-5', 'gpt-6.1-sol@low', 'm@xhigh'])
+    ).not.toThrow();
+    expect(() => checkArmModels(null, ['m@max'])).not.toThrow();
   });
 });

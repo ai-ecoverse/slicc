@@ -63,6 +63,13 @@ export function buildPrompt(task) {
  * read back into the run's trace, which is encrypted for upstream sets: those files hold task text.
  */
 export const ARM_SKILL_SET = 'arm';
+/**
+ * Thinking levels an arm's agent takes (`agent --thinking`, which stops at xhigh): `max` is the
+ * cone's xhigh plus a max-effort override that `agent` has no flag for, so an arm refuses it
+ * rather than run or label it as something else.
+ */
+export const ARM_THINKING_LEVELS = ['default', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+
 /** Seconds the driver gets less than the run's timeout, so it ends on its own and reports. */
 export const ARM_TIME_MARGIN_S = 60;
 /** At most this many bytes of the driver's files go into one trace. */
@@ -93,9 +100,16 @@ export function validateArm(name, arm) {
  * carries numbers only, no answer, URL or error text.
  */
 export function armCommand(arm, { goalFile, model, timeoutSeconds }) {
-  const { alias } = parseModelSpec(model);
+  const { alias, thinking } = parseModelSpec(model);
   const limit = Math.max(60, timeoutSeconds - ARM_TIME_MARGIN_S);
-  return `${arm.command} --model ${quote(alias)} --time-limit ${limit} --json --goal-file ${quote(goalFile)}`;
+  // `alias@level` reaches the driver's agent: the cone only starts the driver, so setting its
+  // thinking level would change nothing the arm does. A plain alias leaves the agent's default.
+  if (!ARM_THINKING_LEVELS.includes(thinking))
+    throw new Error(
+      `an arm's agent takes thinking ${ARM_THINKING_LEVELS.filter((l) => l !== 'default').join(', ')}, not ${thinking}`
+    );
+  const level = thinking === 'default' ? '' : ` --thinking ${quote(thinking)}`;
+  return `${arm.command} --model ${quote(alias)}${level} --time-limit ${limit} --json --goal-file ${quote(goalFile)}`;
 }
 
 /** The answer the driver wrote itself (answer.txt, else transcript.md), or ''. */
