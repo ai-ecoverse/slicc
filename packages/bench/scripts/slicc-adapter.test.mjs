@@ -2176,6 +2176,9 @@ describe('arm mode', () => {
     expect(
       armCommand(ARM, { goalFile: '/g', model: 'm@default', timeoutSeconds: 600 })
     ).not.toContain('--thinking');
+    expect(() => armCommand(ARM, { goalFile: '/g', model: 'm@max', timeoutSeconds: 600 })).toThrow(
+      /not max/
+    );
   });
 
   it('reads the driver result, the scoop answer, and the answer in result.json', () => {
