@@ -64,6 +64,7 @@ export function getSharedState(browser: PlaywrightBrowserAPI, fs: VirtualFS): Pl
   if (!state) {
     state = {
       snapshots: new Map(),
+      tabRefs: new Map(),
       appTabId: null,
       harRecorder: null,
       sessionDirsCreated: new Set(),
@@ -138,6 +139,15 @@ export const AUTO_SNAPSHOT_COMMANDS = new Set([
   'dialog-dismiss',
   'drop',
 ]);
+
+/**
+ * Auto-snapshot commands whose stdout gains a `Snapshot: <path>` line, so the
+ * caller can read the page it just changed. `goto`/`navigate` are left out:
+ * `goto --discover` prints JSON that callers parse.
+ */
+export const SNAPSHOT_NOTE_COMMANDS = new Set(
+  [...AUTO_SNAPSHOT_COMMANDS].filter((command) => command !== 'goto' && command !== 'navigate')
+);
 
 /** Format an ISO timestamp to be safe for filenames (replace : with -). */
 export function filenameSafeTimestamp(date: Date): string {

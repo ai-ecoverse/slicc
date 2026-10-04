@@ -4,15 +4,24 @@
 
 import { isExtensionRealm } from '../../../../base/runtime-env.js';
 import { ensureSessionDirs } from '../session-log.js';
-import { renderNode, takeSnapshot } from '../snapshot.js';
 import {
-  base64ToBytes,
-  filenameSafeTimestamp,
-  parsePageJson,
-  requireTab,
-  resolveFrame,
-} from '../state.js';
-import type { PlaywrightHandler, PlaywrightState, TabHandle, TabSnapshot } from '../types.js';
+  callOnElement,
+  framePrefixFor,
+  recordRefSeq,
+  renderNode,
+  requireTopFrameRef,
+  resolveSnapshotRef,
+  tabRefState,
+  takeSnapshot,
+} from '../snapshot.js';
+import { base64ToBytes, filenameSafeTimestamp, requireTab, resolveFrame } from '../state.js';
+import type {
+  PlaywrightHandler,
+  PlaywrightState,
+  SnapshotRef,
+  TabHandle,
+  TabSnapshot,
+} from '../types.js';
 
 // Named via the handler context rather than imported from `cdp/` so this
 // module stays inside the shell layer (see layer-stack import direction).
@@ -37,80 +46,45 @@ async function takeFrameSnapshot(
   targetId: string,
   frame: FrameInfo
 ): Promise<string> {
-  const tree = await page.getAccessibilityTreeForFrame(frame.frameId);
-  const refToSelector = new Map<string, string>();
-  const refToBackendNodeId = new Map<string, number>();
-  const refToFrameId = new Map<string, string>();
-  const lines = renderNode(tree, refToSelector, refToBackendNodeId, { value: 0 }, '', 'f1');
-  for (const ref of refToSelector.keys()) refToFrameId.set(ref, frame.frameId);
+  const refState = tabRefState(state, targetId);
+  const tree = await page.getAccessibilityTreeForFrame(frame.frameId, {
+    refFloor: refState.floor,
+  });
+  recordRefSeq(refState, tree);
+  const refs = new Map<string, SnapshotRef>();
+  const lines = renderNode(tree, refs, '', framePrefixFor(refState, frame.frameId), frame.frameId);
 
   const output = lines.join('\n');
   state.snapshots.set(targetId, {
     url: frame.url,
     title: frame.name,
-    refToSelector,
-    refToBackendNodeId,
-    refToFrameId,
+    refs,
     content: output,
     timestamp: Date.now(),
   });
   return output;
 }
 
-/** Resolve a clip rect from a ref via its backendNodeId (preferred, reliable). */
-async function clipFromBackendNode(
-  page: TabHandle,
-  backendNodeId: number
-): Promise<ScreenshotClip | undefined> {
-  await page.send('DOM.enable');
-  await page.send('Runtime.enable');
-  const resolveResult = await page.send('DOM.resolveNode', { backendNodeId });
-  const obj = resolveResult['object'] as { objectId?: string } | undefined;
-  if (!obj?.objectId) return undefined;
-  const boxResult = await page.send('Runtime.callFunctionOn', {
-    objectId: obj.objectId,
-    functionDeclaration: `function() {
-        this.scrollIntoView({ block: 'center' });
-        const r = this.getBoundingClientRect();
-        return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height };
-      }`,
-    returnByValue: true,
-  });
-  return (boxResult['result'] as { value?: ScreenshotClip })?.value;
-}
-
-/** Resolve a clip rect from a ref via its CSS selector (fallback). */
-async function clipFromSelector(
-  page: TabHandle,
-  selector: string
-): Promise<ScreenshotClip | undefined> {
-  const rectJson = await page.evaluate(
-    `(function() {
-      const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
-      if (!el) return null;
-      el.scrollIntoView({ block: 'center' });
-      const r = el.getBoundingClientRect();
-      return JSON.stringify({ x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height });
-    })()`
-  );
-  return rectJson ? parsePageJson<ScreenshotClip>(rectJson, 'element clip rect') : undefined;
-}
-
-/** Resolve the bounding box to clip a screenshot to, for a ref like `e5`. */
+/**
+ * Resolve the document-coordinate rect to clip a screenshot to, for a ref
+ * like `e5`. Scrolls the element into view first.
+ */
 async function resolveElementClip(
   page: TabHandle,
   snapshot: TabSnapshot,
   ref: string
 ): Promise<ScreenshotClip | undefined> {
-  const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-  if (backendNodeId) {
-    return clipFromBackendNode(page, backendNodeId);
-  }
-  const selector = snapshot.refToSelector.get(ref);
-  if (!selector) {
-    throw new Error(`Unknown ref "${ref}"`);
-  }
-  return clipFromSelector(page, selector);
+  const { objectId, entry } = await resolveSnapshotRef(page, snapshot, ref);
+  requireTopFrameRef(entry, ref, 'screenshot');
+  return (await callOnElement(
+    page,
+    objectId,
+    `function() {
+        this.scrollIntoView({ block: 'center' });
+        const r = this.getBoundingClientRect();
+        return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height };
+      }`
+  )) as ScreenshotClip | undefined;
 }
 
 export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, flags, onTab }) => {
@@ -146,7 +120,7 @@ export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, f
     });
     if (!boxes) return text;
     const { annotateBoxes } = await loadSnapshotFeatures();
-    return annotateBoxes(page, snapshot.refToBackendNodeId, text);
+    return annotateBoxes(page, snapshot, text);
   });
   if (depth !== undefined) {
     const { limitSnapshotDepth } = await loadSnapshotFeatures();
@@ -232,7 +206,12 @@ async function resolveRefClipOrError(
   if (!snapshot) {
     throw new Error('No snapshot available. Run "snapshot" first.');
   }
-  const clip = await resolveElementClip(page, snapshot, ref);
+  let clip: ScreenshotClip | undefined;
+  try {
+    clip = await resolveElementClip(page, snapshot, ref);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
   if (!clip || clip.width <= 0 || clip.height <= 0) {
     return {
       error:

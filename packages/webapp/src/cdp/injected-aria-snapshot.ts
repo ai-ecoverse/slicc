@@ -19,22 +19,120 @@
  *
  * Modifications for SLICC:
  * - Condensed into a single self-contained injectable script string
- * - Removed incremental snapshot, codegen, ref tracking, and matching logic
+ * - Removed incremental snapshot, codegen, and matching logic
+ * - Ref tracking kept in Playwright's shape (an element keeps its ref while
+ *   its role and name hold, and new elements get the next number) so refs
+ *   do not shift when the page inserts an element; see ARIA_REF_STORE_KEY
  * - Simplified to output AccessibilityNode tree compatible with SLICC's types
  * - Removed CSS tokenizer dependency (simplified CSS content parsing)
  * - Skip aria-owns targets during the DOM walk and emit them under the owner
- *   (Chrome AX reparenting) so ordinal backendNodeId join stays aligned
+ *   (Chrome AX reparenting), matching the tree Chrome's AX domain reports
  */
 
 /**
- * A self-contained JavaScript string that can be injected into any page
- * via Runtime.evaluate to produce an accessibility tree.
- *
- * Returns a JSON-serializable tree of { role, name, value?, description?, children? }
- * compatible with SLICC's AccessibilityNode interface.
+ * `Symbol.for` key of the per-window ref store the snapshot script keeps:
+ * `{ seq, byEl: WeakMap<Element, {role, name, ref}>, byRef: Map<ref, WeakRef<Element>> }`.
+ * The store lives as long as the document, so a ref names one element for
+ * that element's lifetime instead of "the Nth ref in tree order".
  */
-export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
+const ARIA_REF_STORE_KEY = 'slicc.ariaRefs';
+
+/**
+ * Roles that get a ref even without an accessible name. Every other role
+ * needs a name; `generic` never gets one. Iframes always get one so stitched
+ * child-frame refs can hang off a stable prefix.
+ */
+const ALWAYS_REF_ROLES = ['textbox', 'button', 'link', 'checkbox', 'radio', 'iframe'];
+
+/**
+ * Build the snapshot expression for `Runtime.evaluate`.
+ *
+ * `refFloor` is the highest ref number the caller has handed out for this
+ * tab. A fresh document starts its counter above it, so a ref from the page
+ * before a navigation can never name an element on the new one.
+ *
+ * Returns a JSON-serializable tree of
+ * `{ role, name, ref?, value?, description?, children? }` compatible with
+ * SLICC's AccessibilityNode interface; the root also carries `refSeq`, the
+ * page's counter after this snapshot.
+ */
+export function ariaSnapshotExpression(refFloor = 0): string {
+  const floor = Number.isSafeInteger(refFloor) && refFloor > 0 ? refFloor : 0;
+  return `(${INJECTED_ARIA_SNAPSHOT_FUNCTION})(${floor})`;
+}
+
+/**
+ * Expression that evaluates to the live element behind a page-local ref
+ * (`e12`, no frame prefix), or `null` when the document has no such ref or
+ * the element left the DOM. Must run in the same world as the snapshot.
+ */
+export function ariaRefLookupExpression(ref: string): string {
+  return `(function(ref) {
+  var store = window[Symbol.for(${JSON.stringify(ARIA_REF_STORE_KEY)})];
+  var held = store && store.byRef.get(ref);
+  var el = held && (typeof held.deref === 'function' ? held.deref() : held);
+  return el && el.isConnected ? el : null;
+})(${JSON.stringify(ref)})`;
+}
+
+/**
+ * Expression that evaluates to `{ [ref]: [x, y, width, height] }` —
+ * viewport-relative CSS pixels, rounded — for every page-local ref that
+ * still names a connected element. Must run in the same world as the snapshot.
+ */
+export function ariaRefRectsExpression(refs: string[]): string {
+  return `(function(refs) {
+  var store = window[Symbol.for(${JSON.stringify(ARIA_REF_STORE_KEY)})];
+  var out = {};
+  if (!store) return out;
+  for (var i = 0; i < refs.length; i++) {
+    var held = store.byRef.get(refs[i]);
+    var el = held && (typeof held.deref === 'function' ? held.deref() : held);
+    if (!el || !el.isConnected) continue;
+    var r = el.getBoundingClientRect();
+    out[refs[i]] = [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
+  }
+  return out;
+})(${JSON.stringify(refs)})`;
+}
+
+const INJECTED_ARIA_SNAPSHOT_FUNCTION = `function(refFloor) {
   'use strict';
+
+  // ===== Stable refs (from ariaSnapshot.ts computeAriaRef) =====
+
+  var storeKey = Symbol.for(${JSON.stringify(ARIA_REF_STORE_KEY)});
+  var store = window[storeKey];
+  if (!store) {
+    store = { seq: 0, byEl: new WeakMap(), byRef: new Map() };
+    Object.defineProperty(window, storeKey, { value: store, configurable: true });
+  }
+  if (store.seq < refFloor) store.seq = refFloor;
+  var liveRefs = new Map();
+  var kAlwaysRefRoles = ${JSON.stringify(ALWAYS_REF_ROLES)};
+
+  function assignRef(element, role, name) {
+    if (role === 'generic') return undefined;
+    if (!name && kAlwaysRefRoles.indexOf(role) < 0) return undefined;
+    var cached = store.byEl.get(element);
+    var ref;
+    if (cached && cached.role === role && cached.name === name) {
+      ref = cached.ref;
+    } else {
+      ref = 'e' + (++store.seq);
+      store.byEl.set(element, { role: role, name: name, ref: ref });
+    }
+    liveRefs.set(ref, element);
+    return ref;
+  }
+
+  function commitRefs() {
+    var byRef = new Map();
+    liveRefs.forEach(function(el, ref) {
+      byRef.set(ref, typeof WeakRef === 'function' ? new WeakRef(el) : el);
+    });
+    store.byRef = byRef;
+  }
 
   // ===== DOM Utilities =====
 
@@ -725,9 +823,8 @@ export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
     var root = { role: 'RootWebArea', name: '', children: [] };
 
     // Chrome reparents aria-owns targets under the owner (after the owner's
-    // DOM children). Collect them so the DOM walk skips them — otherwise an
-    // earlier DOM occurrence marks them visited and ordinal join to
-    // Accessibility.getFullAXTree swaps same-named siblings (#3755 review).
+    // DOM children). Collect them so the DOM walk skips them and emits them
+    // only under their owner, as Chrome's AX tree does (#3755 review).
     var ariaOwned = new Set();
     try {
       var owners = rootElement.ownerDocument.querySelectorAll('[aria-owns]');
@@ -758,9 +855,11 @@ export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
 
       // Emit placeholder for iframes/frames — don't recurse into their document
       if (element.nodeName === 'IFRAME' || element.nodeName === 'FRAME') {
+        var iframeName = element.getAttribute('title') || element.getAttribute('name') || '';
         var iframeNode = {
           role: 'iframe',
-          name: element.getAttribute('title') || element.getAttribute('name') || '',
+          name: iframeName,
+          ref: assignRef(element, 'iframe', iframeName),
           children: [],
           value: element.getAttribute('src') || ''
         };
@@ -814,7 +913,7 @@ export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
       if (!role || role === 'presentation' || role === 'none') return null;
 
       var name = normalizeWhiteSpace(getElementAccessibleName(element, false));
-      var result = { role: role, name: name, children: [] };
+      var result = { role: role, name: name, ref: assignRef(element, role, name), children: [] };
 
       if (kAriaCheckedRoles.indexOf(role) >= 0) {
         var checked = getAriaChecked(element);
@@ -883,6 +982,7 @@ export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
 
   function toAccessibilityNode(ariaNode) {
     var result = { role: ariaNode.role, name: ariaNode.name || '' };
+    if (ariaNode.ref) result.ref = ariaNode.ref;
     if (ariaNode.value) result.value = String(ariaNode.value);
     var descParts = [];
     if (ariaNode.checked === true) descParts.push('checked');
@@ -913,8 +1013,11 @@ export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
   // ===== Main =====
   try {
     var root = generateAriaTree(document.body || document.documentElement);
-    return toAccessibilityNode(root);
+    commitRefs();
+    var tree = toAccessibilityNode(root);
+    tree.refSeq = store.seq;
+    return tree;
   } catch(e) {
     return { role: 'RootWebArea', name: '', description: 'Error: ' + (e.message || String(e)) };
   }
-})()`;
+}`;

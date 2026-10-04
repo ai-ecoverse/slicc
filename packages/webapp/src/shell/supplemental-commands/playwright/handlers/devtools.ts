@@ -2,8 +2,19 @@
  * Developer tools subcommands: generate-locator, highlight.
  */
 
+import { callOnElement, requireSnapshotRef, resolveSnapshotRef } from '../snapshot.js';
 import { requireTab } from '../state.js';
-import type { PlaywrightHandler } from '../types.js';
+import type { CmdResult, PlaywrightHandler, TabSnapshot } from '../types.js';
+
+/** The "unknown ref" result for a ref the snapshot never printed, before taking a tab hold. */
+function unknownRefResult(snapshot: TabSnapshot, ref: string): CmdResult | null {
+  try {
+    requireSnapshotRef(snapshot, ref);
+    return null;
+  } catch (err) {
+    return { stdout: '', stderr: `${(err as Error).message}\n`, exitCode: 1 };
+  }
+}
 
 export const generateLocatorHandler: PlaywrightHandler = async ({
   browser,
@@ -27,36 +38,16 @@ export const generateLocatorHandler: PlaywrightHandler = async ({
       exitCode: 1,
     };
   }
+  const unknown = unknownRefResult(snapshot, ref);
+  if (unknown) return unknown;
 
-  const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-  if (!backendNodeId) {
-    const selector = snapshot.refToSelector.get(ref);
-    if (!selector) {
-      return { stdout: '', stderr: `Unknown ref "${ref}"\n`, exitCode: 1 };
-    }
-    // ponytail: CSS selector fallback — returns page.locator() with CSS selector
-    return {
-      stdout: `page.locator(${JSON.stringify(selector.split(',')[0].trim())})\n`,
-      stderr: '',
-      exitCode: 0,
-    };
-  }
-
-  let locator = '';
-  await onTab(tab.targetId, async ({ sessionId, transport }) => {
-    await transport.send('DOM.enable', {}, sessionId);
-    const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId);
-    const obj = resolveResult['object'] as { objectId?: string } | undefined;
-    if (!obj?.objectId) {
-      const selector = snapshot.refToSelector.get(ref)?.split(',')[0].trim() ?? '';
-      locator = `page.locator(${JSON.stringify(selector)})`;
-      return;
-    }
-    const callResult = await transport.send(
-      'Runtime.callFunctionOn',
-      {
-        objectId: obj.objectId,
-        functionDeclaration: `function() {
+  const locator = await onTab(tab.targetId, async (page) => {
+    const { objectId, entry } = await resolveSnapshotRef(page, snapshot, ref);
+    const props = JSON.parse(
+      ((await callOnElement(
+        page,
+        objectId,
+        `function() {
           const el = this;
           const testId = el.getAttribute('data-testid');
           const label =
@@ -65,33 +56,18 @@ export const generateLocatorHandler: PlaywrightHandler = async ({
           const placeholder = el.getAttribute('placeholder');
           const id = el.id;
           return JSON.stringify({ testId, label, placeholder, id });
-        }`,
-        returnByValue: true,
-      },
-      sessionId
-    );
-    const props = JSON.parse((callResult['result'] as { value?: string })?.value ?? '{}') as {
-      testId?: string;
-      label?: string;
-      placeholder?: string;
-      id?: string;
-    };
+        }`
+      )) as string | undefined) ?? '{}'
+    ) as { testId?: string; label?: string; placeholder?: string; id?: string };
 
-    // ponytail: role-based locators (getByRole) deferred — would need the full ARIA
-    // snapshot's role+name data threaded through, not just the DOM element properties.
-    // Current priority: testId > label > placeholder > id > CSS selector.
-    if (props.testId) {
-      locator = `page.getByTestId(${JSON.stringify(props.testId)})`;
-    } else if (props.label) {
-      locator = `page.getByLabel(${JSON.stringify(props.label)})`;
-    } else if (props.placeholder) {
-      locator = `page.getByPlaceholder(${JSON.stringify(props.placeholder)})`;
-    } else if (props.id) {
-      locator = `page.locator(${JSON.stringify(`#${props.id}`)})`;
-    } else {
-      const selector = snapshot.refToSelector.get(ref)?.split(',')[0].trim() ?? '';
-      locator = `page.locator(${JSON.stringify(selector)})`;
-    }
+    // Priority: testId > label > placeholder > id > role + accessible name.
+    if (props.testId) return `page.getByTestId(${JSON.stringify(props.testId)})`;
+    if (props.label) return `page.getByLabel(${JSON.stringify(props.label)})`;
+    if (props.placeholder) return `page.getByPlaceholder(${JSON.stringify(props.placeholder)})`;
+    if (props.id) return `page.locator(${JSON.stringify(`#${props.id}`)})`;
+    return entry.name
+      ? `page.getByRole(${JSON.stringify(entry.role)}, { name: ${JSON.stringify(entry.name)} })`
+      : `page.getByRole(${JSON.stringify(entry.role)})`;
   });
 
   return { stdout: locator + '\n', stderr: '', exitCode: 0 };
@@ -146,62 +122,26 @@ export const highlightHandler: PlaywrightHandler = async ({
       exitCode: 1,
     };
   }
+  const unknown = unknownRefResult(snapshot, ref);
+  if (unknown) return unknown;
 
-  const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-
-  await onTab(tab.targetId, async ({ sessionId, transport }) => {
-    if (backendNodeId) {
-      await transport.send('DOM.enable', {}, sessionId);
-      const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId);
-      const obj = resolveResult['object'] as { objectId?: string } | undefined;
-      if (!obj?.objectId) {
-        throw new Error(`Could not resolve element for ref "${ref}"`);
-      }
-      await transport.send(
-        'Runtime.callFunctionOn',
-        {
-          objectId: obj.objectId,
-          functionDeclaration: hide
-            ? `function() {
-                this.style.outline = '';
-                this.style.background = '';
-                this.removeAttribute('data-slicc-highlight');
-              }`
-            : `function(s) {
-                this.style.cssText += '; ' + s;
-                this.setAttribute('data-slicc-highlight', '1');
-              }`,
-          arguments: hide ? [] : [{ value: style }],
-          returnByValue: true,
-        },
-        sessionId
-      );
-    } else {
-      const selector = snapshot.refToSelector.get(ref)?.split(',')[0].trim();
-      if (!selector) throw new Error(`Unknown ref "${ref}"`);
-      const script = hide
-        ? `(function(){
-            var el = document.querySelector(${JSON.stringify(selector)});
-            if(el){
-              el.style.outline='';
-              el.style.background='';
-              el.removeAttribute('data-slicc-highlight');
-            }
-          })()`
-        : `(function(){
-            var el = document.querySelector(${JSON.stringify(selector)});
-            if(el){
-              var styleVal = ${JSON.stringify(style)};
-              el.style.cssText += '; ' + styleVal;
-              el.setAttribute('data-slicc-highlight','1');
-            }
-          })()`;
-      await transport.send(
-        'Runtime.evaluate',
-        { expression: script, returnByValue: true },
-        sessionId
-      );
-    }
+  await onTab(tab.targetId, async (page) => {
+    const { objectId } = await resolveSnapshotRef(page, snapshot, ref);
+    await callOnElement(
+      page,
+      objectId,
+      hide
+        ? `function() {
+            this.style.outline = '';
+            this.style.background = '';
+            this.removeAttribute('data-slicc-highlight');
+          }`
+        : `function(s) {
+            this.style.cssText += '; ' + s;
+            this.setAttribute('data-slicc-highlight', '1');
+          }`,
+      hide ? [] : [style]
+    );
   });
 
   return {

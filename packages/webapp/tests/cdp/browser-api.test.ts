@@ -1623,10 +1623,7 @@ describe('BrowserAPI', () => {
       expect(tree.children![0].description).toBe('["composer"]');
     });
 
-    // Google Flights, 2026-09-22: CDP reports the combobox as "Where from? "
-    // while the injected snapshot trims it to "Where from?". An exact join
-    // left the ref without a backendNodeId, so click/fill missed.
-    it('joins backendNodeIds when CDP names carry extra whitespace', async () => {
+    it('keeps page-minted refs and the root ref counter', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({
@@ -1634,142 +1631,117 @@ describe('BrowserAPI', () => {
             type: 'object',
             value: {
               role: 'RootWebArea',
-              name: 'Flights',
+              name: 'Bahn',
+              refSeq: 33,
               children: [
-                { role: 'combobox', name: 'Where from?' },
-                { role: 'button', name: 'Search for flights' },
+                { role: 'textbox', name: 'Auftragsnummer', ref: 'e28' },
+                { role: 'button', name: 'Suchen', ref: 'e33' },
+                { role: 'button', name: 'Forged', ref: 'not-a-ref' },
               ],
             },
           },
-        })
-        .mockResolvedValueOnce({
-          nodes: [
-            {
-              role: { value: 'combobox' },
-              name: { value: 'Where from? ' },
-              backendDOMNodeId: 2719,
-            },
-            {
-              role: { value: 'button' },
-              name: { value: '  Search  for\nflights ' },
-              backendDOMNodeId: 2800,
-            },
-          ],
         });
 
       const tree = await page.getAccessibilityTree();
-      expect(tree.children![0].backendNodeId).toBe(2719);
-      expect(tree.children![1].backendNodeId).toBe(2800);
+      expect(tree.refSeq).toBe(33);
+      expect(tree.children!.map((c) => c.ref)).toEqual(['e28', 'e33', undefined]);
+      // No second tree to join against: one evaluate, no Accessibility domain.
+      const methods = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      expect(methods).not.toContain('Accessibility.getFullAXTree');
     });
 
-    // Drug Wars / #3755: several "BUY" buttons share role+name. Joining by
-    // first-match alone stamped every ref with the first button's id, so
-    // --boxes and click all hit the first element.
-    it('joins same-named elements to distinct backendNodeIds in document order', async () => {
+    it('passes the ref floor into the snapshot expression', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({
-          result: {
-            type: 'object',
-            value: {
-              role: 'RootWebArea',
-              name: 'Drug Wars',
-              children: [
-                { role: 'button', name: 'BUY' },
-                { role: 'button', name: 'BUY' },
-                { role: 'button', name: 'BUY' },
-              ],
-            },
-          },
-        })
-        .mockResolvedValueOnce({
-          nodes: [
-            {
-              role: { value: 'button' },
-              name: { value: 'BUY' },
-              backendDOMNodeId: 101,
-            },
-            {
-              role: { value: 'button' },
-              name: { value: 'BUY' },
-              backendDOMNodeId: 102,
-            },
-            {
-              role: { value: 'button' },
-              name: { value: 'BUY' },
-              backendDOMNodeId: 103,
-            },
-          ],
-        });
+        .mockResolvedValueOnce({ result: { type: 'object', value: { role: 'RootWebArea' } } });
 
-      const tree = await page.getAccessibilityTree();
-      expect(tree.children!.map((c) => c.backendNodeId)).toEqual([101, 102, 103]);
+      await page.getAccessibilityTree({ refFloor: 41 });
+      const evaluate = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c) => c[0] === 'Runtime.evaluate'
+      )!;
+      expect((evaluate[1] as { expression: string }).expression).toMatch(/\)\(41\)$/);
+    });
+  });
+
+  describe('resolveAriaRef', () => {
+    let page: TabPage;
+
+    beforeEach(async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-1' });
+      page = await tabOf(api);
     });
 
-    // aria-owns target earlier in the DOM than its owner: Chrome's AX tree
-    // reparents the owned button after the owner's DOM children. Flat CDP
-    // payload order can still list the owned node first; walking childIds
-    // (and the injected tree applying the same reparenting) keeps ordinal
-    // pairing aligned — otherwise the two BUY buttons swap backendNodeIds.
-    it('joins same-named nodes in aria-owns AX hierarchy order, not flat DOM order', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({
-          result: {
-            type: 'object',
-            value: {
-              role: 'RootWebArea',
-              name: 'Owns',
-              children: [
-                {
-                  role: 'group',
-                  name: 'Owner',
-                  children: [
-                    { role: 'button', name: 'BUY' }, // DOM child
-                    { role: 'button', name: 'BUY' }, // aria-owns target (reparented)
-                  ],
-                },
-              ],
-            },
-          },
-        })
-        .mockResolvedValueOnce({
-          // Flat list is DOM order (owned id 101 before DOM-child id 102), but
-          // childIds put the owned button after the DOM child under the group.
-          nodes: [
-            {
-              nodeId: '1',
-              role: { value: 'RootWebArea' },
-              name: { value: 'Owns' },
-              childIds: ['2'],
-            },
-            {
-              nodeId: '2',
-              role: { value: 'group' },
-              name: { value: 'Owner' },
-              childIds: ['4', '3'],
-              backendDOMNodeId: 90,
-            },
-            {
-              nodeId: '3',
-              role: { value: 'button' },
-              name: { value: 'BUY' },
-              backendDOMNodeId: 101, // owned (earlier in DOM / flat list)
-              childIds: [],
-            },
-            {
-              nodeId: '4',
-              role: { value: 'button' },
-              name: { value: 'BUY' },
-              backendDOMNodeId: 102, // DOM child of owner
-              childIds: [],
-            },
-          ],
-        });
+    function respond(evaluateResult: unknown, describeResult: unknown = {}) {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Runtime.evaluate') return evaluateResult;
+        if (method === 'DOM.describeNode') return describeResult;
+        if (method === 'Page.createIsolatedWorld') return { executionContextId: 77 };
+        return {};
+      });
+    }
 
-      const tree = await page.getAccessibilityTree();
-      const buys = tree.children![0].children!;
-      expect(buys.map((c) => c.backendNodeId)).toEqual([102, 101]);
+    function evaluateCall() {
+      return (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c) => c[0] === 'Runtime.evaluate'
+      )!;
+    }
+
+    it('resolves a top-frame ref to its element handle and backend node id', async () => {
+      respond(
+        { result: { type: 'object', subtype: 'node', objectId: 'obj-1' } },
+        { node: { backendNodeId: 501 } }
+      );
+      await expect(page.resolveAriaRef('e33')).resolves.toEqual({
+        objectId: 'obj-1',
+        backendNodeId: 501,
+      });
+      const params = evaluateCall()[1] as { expression: string; returnByValue: boolean };
+      expect(params.returnByValue).toBe(false);
+      expect(params.expression).toContain('"e33"');
+      expect(params).not.toHaveProperty('contextId');
+    });
+
+    it("looks child-frame refs up in that frame's isolated world", async () => {
+      respond(
+        { result: { type: 'object', subtype: 'node', objectId: 'obj-2' } },
+        { node: { backendNodeId: 9 } }
+      );
+      await page.resolveAriaRef('e3', 'frame-1');
+      expect(mockClient.send).toHaveBeenCalledWith(
+        'Page.createIsolatedWorld',
+        expect.objectContaining({ frameId: 'frame-1' }),
+        'sess-1'
+      );
+      expect((evaluateCall()[1] as { contextId: number }).contextId).toBe(77);
+    });
+
+    it('throws StaleAriaRefError when the element is gone', async () => {
+      respond({ result: { type: 'object', subtype: 'null', value: null } });
+      await expect(page.resolveAriaRef('e30')).rejects.toMatchObject({
+        name: 'StaleAriaRefError',
+        ref: 'e30',
+      });
+    });
+
+    it('throws StaleAriaRefError when the node has no backend id', async () => {
+      respond({ result: { type: 'object', subtype: 'node', objectId: 'obj-3' } }, { node: {} });
+      await expect(page.resolveAriaRef('e30')).rejects.toMatchObject({
+        name: 'StaleAriaRefError',
+      });
+    });
+
+    it('surfaces a page exception instead of calling the ref stale', async () => {
+      respond({
+        result: {},
+        exceptionDetails: { text: 'Uncaught', exception: { description: 'boom' } },
+      });
+      await expect(page.resolveAriaRef('e1')).rejects.toThrow('Resolving ref e1 failed: boom');
+    });
+
+    it('reads every live rect in one evaluate', async () => {
+      respond({ result: { type: 'object', value: { e1: [1, 2, 3, 4] } } });
+      await expect(page.ariaRefRects(['e1', 'e2'])).resolves.toEqual({ e1: [1, 2, 3, 4] });
+      await expect(page.ariaRefRects([])).resolves.toEqual({});
     });
   });
 

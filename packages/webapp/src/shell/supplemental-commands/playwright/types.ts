@@ -119,15 +119,35 @@ export interface NetworkEntry {
   timestamp: number;
 }
 
+/** One ref a snapshot printed, and where to look it up again. */
+export interface SnapshotRef {
+  role: string;
+  name: string;
+  /** The ref the page minted (`e3` for the printed `f1e3`). */
+  localRef: string;
+  /** Child frame the ref lives in; absent for the top frame. */
+  frameId?: string;
+}
+
 /** Per-tab snapshot: accessibility tree with element refs. */
 export interface TabSnapshot {
   url: string;
   title: string;
-  refToSelector: Map<string, string>;
-  refToBackendNodeId: Map<string, number>;
-  refToFrameId: Map<string, string>;
+  /** Every ref the snapshot printed, keyed by its printed form (`e12`, `f1e3`). */
+  refs: Map<string, SnapshotRef>;
   content: string;
   timestamp: number;
+}
+
+/**
+ * Per-tab ref bookkeeping that outlives any one snapshot, so refs never get
+ * reused for a different element after a navigation.
+ */
+export interface TabRefState {
+  /** Highest ref number any document in this tab has minted. */
+  floor: number;
+  /** frameId → `f<n>` prefix, assigned on first sight and never reused. */
+  framePrefixes: Map<string, string>;
 }
 
 /** One active mock route entry for a tab. */
@@ -150,6 +170,8 @@ export interface RouteEntry {
 export interface PlaywrightState {
   /** Per-tab snapshots keyed by targetId */
   snapshots: Map<string, TabSnapshot>;
+  /** Per-tab ref counters and frame prefixes keyed by targetId */
+  tabRefs: Map<string, TabRefState>;
   /** App tab ID to exclude */
   appTabId: string | null;
   /** HAR recorder instance (created lazily) */

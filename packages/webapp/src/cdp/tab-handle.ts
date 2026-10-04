@@ -20,20 +20,37 @@
 
 import { createLogger } from '../base/logger.js';
 import { abortableDelay, abortWaiter, throwIfAborted } from './command-abort.js';
-import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';
+import {
+  ariaRefLookupExpression,
+  ariaRefRectsExpression,
+  ariaSnapshotExpression,
+} from './injected-aria-snapshot.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import { type AbortWaiter, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type {
   AccessibilityNode,
+  AccessibilityTreeOptions,
   BoundingBox,
   EvaluateOptions,
   FrameEvaluateOptions,
   FrameInfo,
+  ResolvedAriaRef,
   WaitForSelectorOptions,
 } from './types.js';
 
 const log = createLogger('tab-handle');
+
+/**
+ * A snapshot ref that no longer names a live element: the element left the
+ * DOM, or the document navigated and never minted that ref.
+ */
+export class StaleAriaRefError extends Error {
+  override readonly name = 'StaleAriaRefError';
+  constructor(readonly ref: string) {
+    super(`Ref "${ref}" is no longer on the page`);
+  }
+}
 
 /**
  * A CDP message payload (params or result) — a protocol-defined JSON object
@@ -540,7 +557,25 @@ export class TabHandle {
     expression: string,
     options?: FrameEvaluateOptions
   ): Promise<unknown> {
-    const world: ExecutionWorld = options?.world === 'main' ? 'main' : 'isolated';
+    const result = await this.evaluateRawInFrame(frameId, expression, {
+      world: options?.world === 'main' ? 'main' : 'isolated',
+      awaitPromise: options?.awaitPromise ?? true,
+      returnByValue: options?.returnByValue ?? true,
+    });
+    return (result['result'] as { value?: unknown })?.value;
+  }
+
+  /**
+   * `Runtime.evaluate` in a frame's execution context, returning the raw
+   * result (so callers can ask for a remote object instead of a value).
+   * Retries once with a fresh context when the frame navigated in between.
+   */
+  private async evaluateRawInFrame(
+    frameId: string,
+    expression: string,
+    options: { world: ExecutionWorld; awaitPromise: boolean; returnByValue: boolean }
+  ): Promise<CdpPayload> {
+    const { world } = options;
 
     let contextId: number;
     try {
@@ -557,8 +592,8 @@ export class TabHandle {
     const evaluateParams = {
       expression,
       contextId,
-      awaitPromise: options?.awaitPromise ?? true,
-      returnByValue: options?.returnByValue ?? true,
+      awaitPromise: options.awaitPromise,
+      returnByValue: options.returnByValue,
     };
 
     let result: CdpPayload;
@@ -572,7 +607,7 @@ export class TabHandle {
     }
 
     const failure = evaluationFailure(result);
-    if (failure === null) return (result['result'] as { value?: unknown })?.value;
+    if (failure === null) return result;
 
     // The frame may have navigated between resolving the context and using
     // it — invalidate and try once with a fresh one.
@@ -586,7 +621,7 @@ export class TabHandle {
     if (retryFailure !== null) {
       throw new Error(`Evaluation in frame ${frameId} failed: ${retryFailure}`);
     }
-    return (retry['result'] as { value?: unknown })?.value;
+    return retry;
   }
 
   /** The execution context id for a frame + world, creating/re-reading it as needed. */
@@ -791,45 +826,83 @@ export class TabHandle {
    * Uses an injected JavaScript approach (ported from Playwright's
    * ariaSnapshot.ts) instead of CDP's Accessibility domain, so it works on any
    * browser engine (Chrome, WebKit, etc.).
+   *
+   * Nodes that can be acted on carry a page-minted `ref`; the root carries
+   * `refSeq`. Pass the tab's highest handed-out ref number as `refFloor` so a
+   * new document never reuses a ref from the previous one.
    */
-  async getAccessibilityTree(): Promise<AccessibilityNode> {
-    const rawResult = await this.evaluate(INJECTED_ARIA_SNAPSHOT_SCRIPT, {
-      awaitPromise: false,
-      returnByValue: true,
-    });
-    if (!rawResult || typeof rawResult !== 'object') return { role: 'RootWebArea', name: '' };
-
-    const tree = normalizeInjectedTree(rawResult as CdpPayload);
-
-    // Annotate the tree with backendNodeId values from the CDP Accessibility
-    // domain. The injected script runs in page context and cannot access CDP
-    // backendNodeIds, so we fetch them separately and match by role+name in
-    // shared AX hierarchy order (nth duplicate, after aria-owns reparenting,
-    // gets the nth AX id).
-    try {
-      const axResult = await this.send('Accessibility.getFullAXTree');
-      const nodes = axResult['nodes'] as Array<CdpPayload> | undefined;
-      if (Array.isArray(nodes)) annotateTreeWithBackendNodeIds(tree, buildAxNodeIndex(nodes));
-    } catch {
-      // Accessibility domain not available in this context (e.g. WebKit, some
-      // extension targets). Fall through — the CSS selector fallback works.
-    }
-
-    return tree;
-  }
-
-  /**
-   * The accessibility tree for a specific frame.
-   * With no `frameId`, delegates to {@link getAccessibilityTree}.
-   */
-  async getAccessibilityTreeForFrame(frameId?: string): Promise<AccessibilityNode> {
-    if (!frameId) return this.getAccessibilityTree();
-    const rawResult = await this.evaluateInFrame(frameId, INJECTED_ARIA_SNAPSHOT_SCRIPT, {
+  async getAccessibilityTree(options?: AccessibilityTreeOptions): Promise<AccessibilityNode> {
+    const rawResult = await this.evaluate(ariaSnapshotExpression(options?.refFloor), {
       awaitPromise: false,
       returnByValue: true,
     });
     if (!rawResult || typeof rawResult !== 'object') return { role: 'RootWebArea', name: '' };
     return normalizeInjectedTree(rawResult as CdpPayload);
+  }
+
+  /**
+   * The accessibility tree for a specific frame, built in that frame's
+   * isolated world (where {@link resolveAriaRef} later looks its refs up).
+   * With no `frameId`, delegates to {@link getAccessibilityTree}.
+   */
+  async getAccessibilityTreeForFrame(
+    frameId?: string,
+    options?: AccessibilityTreeOptions
+  ): Promise<AccessibilityNode> {
+    if (!frameId) return this.getAccessibilityTree(options);
+    const rawResult = await this.evaluateInFrame(
+      frameId,
+      ariaSnapshotExpression(options?.refFloor),
+      { awaitPromise: false, returnByValue: true }
+    );
+    if (!rawResult || typeof rawResult !== 'object') return { role: 'RootWebArea', name: '' };
+    return normalizeInjectedTree(rawResult as CdpPayload);
+  }
+
+  /**
+   * Resolve a page-local snapshot ref (`e12`, no frame prefix) to its live
+   * element: a remote object handle plus its backend node id.
+   *
+   * The lookup runs in the world the snapshot was taken in — the main world
+   * for the top frame, the frame's isolated world for a child frame. Throws
+   * {@link StaleAriaRefError} when the document has no such ref (it
+   * navigated) or the element has left the DOM; a ref never falls back to a
+   * look-alike element.
+   */
+  async resolveAriaRef(ref: string, frameId?: string): Promise<ResolvedAriaRef> {
+    const expression = ariaRefLookupExpression(ref);
+    let result: CdpPayload;
+    if (frameId) {
+      result = await this.evaluateRawInFrame(frameId, expression, {
+        world: 'isolated',
+        awaitPromise: false,
+        returnByValue: false,
+      });
+    } else {
+      await this.send('Runtime.enable');
+      result = await this.send('Runtime.evaluate', { expression, returnByValue: false });
+      const failure = evaluationFailure(result);
+      if (failure !== null) throw new Error(`Resolving ref ${ref} failed: ${failure}`);
+    }
+    const handle = result['result'] as { objectId?: string; subtype?: string } | undefined;
+    if (!handle?.objectId || handle.subtype !== 'node') throw new StaleAriaRefError(ref);
+
+    await this.send('DOM.enable');
+    const described = await this.send('DOM.describeNode', { objectId: handle.objectId });
+    const backendNodeId = (described['node'] as { backendNodeId?: unknown } | undefined)
+      ?.backendNodeId;
+    if (typeof backendNodeId !== 'number') throw new StaleAriaRefError(ref);
+    return { objectId: handle.objectId, backendNodeId };
+  }
+
+  /**
+   * Viewport-relative `[x, y, width, height]` rects for top-frame refs, in one
+   * round trip. Refs whose element is gone are omitted.
+   */
+  async ariaRefRects(refs: string[]): Promise<Record<string, number[]>> {
+    if (refs.length === 0) return {};
+    const value = await this.evaluate(ariaRefRectsExpression(refs), { awaitPromise: false });
+    return value && typeof value === 'object' ? (value as Record<string, number[]>) : {};
   }
 
   // ---------------------------------------------------------------------
@@ -963,120 +1036,6 @@ function isDestroyedContextError(err: unknown): boolean {
 }
 
 /**
- * Build a lookup map from (role, name) → backendDOMNodeId[] from CDP
- * Accessibility.getFullAXTree nodes.
- *
- * Keys are `${role}|${name}`. Duplicate role+name pairs (e.g. several "BUY"
- * buttons) keep every id in AX hierarchy order (DFS over `childIds`, which
- * reflects aria-owns reparenting) so {@link annotateTreeWithBackendNodeIds}
- * can pair the nth ARIA node with the nth AX node. Falls back to the flat
- * payload order when `childIds` are absent (tests / older engines).
- */
-function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number[]> {
-  const index = new Map<string, number[]>();
-  const pushNode = (n: CdpPayload): void => {
-    const backendNodeId = typeof n['backendDOMNodeId'] === 'number' ? n['backendDOMNodeId'] : null;
-    if (backendNodeId === null) return;
-    const roleObj = n['role'] as CdpPayload | undefined;
-    const nameObj = n['name'] as CdpPayload | undefined;
-    const role = typeof roleObj?.['value'] === 'string' ? roleObj['value'].toLowerCase() : '';
-    const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
-    if (!role) return;
-    const key = axIndexKey(role, name);
-    const list = index.get(key);
-    if (list) list.push(backendNodeId);
-    else index.set(key, [backendNodeId]);
-  };
-
-  const ordered = walkAxNodesInHierarchyOrder(nodes);
-  for (const n of ordered) pushNode(n);
-  return index;
-}
-
-/**
- * Pre-order walk following each node's `childIds` — Chrome's AX hierarchy,
- * including aria-owns reparenting. Flat payload order can differ.
- */
-function walkAxNodesInHierarchyOrder(nodes: Array<CdpPayload>): Array<CdpPayload> {
-  const hasChildIds = nodes.some(
-    (n) => Array.isArray(n['childIds']) && (n['childIds'] as unknown[]).length > 0
-  );
-  if (!hasChildIds) return nodes;
-
-  const byId = new Map<string, CdpPayload>();
-  const childOf = new Set<string>();
-  for (const n of nodes) {
-    const id = n['nodeId'];
-    if (id === undefined || id === null) continue;
-    byId.set(String(id), n);
-    const childIds = n['childIds'];
-    if (Array.isArray(childIds)) {
-      for (const cid of childIds) childOf.add(String(cid));
-    }
-  }
-
-  const ordered: CdpPayload[] = [];
-  const seen = new Set<string>();
-  const visit = (n: CdpPayload): void => {
-    const id = n['nodeId'];
-    const key = id === undefined || id === null ? '' : String(id);
-    if (key) {
-      if (seen.has(key)) return;
-      seen.add(key);
-    }
-    ordered.push(n);
-    const childIds = n['childIds'];
-    if (!Array.isArray(childIds)) return;
-    for (const cid of childIds) {
-      const child = byId.get(String(cid));
-      if (child) visit(child);
-    }
-  };
-
-  for (const n of nodes) {
-    const id = n['nodeId'];
-    if (id === undefined || id === null) continue;
-    if (!childOf.has(String(id))) visit(n);
-  }
-  // Orphans with no nodeId / not reached from a root — keep them after.
-  for (const n of nodes) {
-    const id = n['nodeId'];
-    const key = id === undefined || id === null ? '' : String(id);
-    if (!key || !seen.has(key)) ordered.push(n);
-  }
-  return ordered;
-}
-
-/**
- * Join key for the two accessibility trees. The injected ARIA snapshot
- * collapses and trims whitespace in accessible names, and CDP's
- * Accessibility domain reports them raw. Google Flights labels its inputs
- * "Where from? " (trailing space), so an exact match dropped the
- * backendNodeId, and click/fill then missed with the CSS fallback too.
- */
-function axIndexKey(role: string, name: string): string {
-  return `${role.toLowerCase()}|${name.replace(/\s+/g, ' ').trim()}`;
-}
-
-/**
- * Walk the injected ARIA tree and stamp each node with the next unused
- * backendNodeId for its role+name from the CDP Accessibility index. Lists
- * are consumed in place so duplicate names resolve in shared AX hierarchy
- * order (both trees apply aria-owns reparenting before this walk).
- */
-function annotateTreeWithBackendNodeIds(
-  node: AccessibilityNode,
-  index: Map<string, number[]>
-): void {
-  const key = axIndexKey(node.role, node.name);
-  const list = index.get(key);
-  if (list && list.length > 0) node.backendNodeId = list.shift();
-  if (node.children) {
-    for (const child of node.children) annotateTreeWithBackendNodeIds(child, index);
-  }
-}
-
-/**
  * Normalize the raw tree returned by the injected aria snapshot script
  * into the AccessibilityNode format expected by SLICC consumers.
  */
@@ -1091,6 +1050,9 @@ function normalizeInjectedTree(raw: CdpPayload): AccessibilityNode {
 
   const description = normalizeAccessibilityText(raw.description);
   if (description !== '') node.description = description;
+
+  if (typeof raw.ref === 'string' && /^e[0-9]+$/.test(raw.ref)) node.ref = raw.ref;
+  if (typeof raw.refSeq === 'number' && Number.isSafeInteger(raw.refSeq)) node.refSeq = raw.refSeq;
 
   if (Array.isArray(raw.children) && raw.children.length > 0) {
     node.children = (raw.children as CdpPayload[])

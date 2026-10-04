@@ -32,7 +32,7 @@ playwright-cli snapshot --tab=E9A3F
 playwright-cli click --tab=E9A3F e5
 playwright-cli fill --tab=E9A3F e12 "hello world"
 
-# 4. Re-snapshot after interactions (refs change)
+# 4. Each action prints "Snapshot: <path>" — read it to see what changed
 playwright-cli snapshot --tab=E9A3F
 ```
 
@@ -46,7 +46,7 @@ playwright-cli snapshot --tab=E9A3F
 
 - `frames --tab=<targetId>` lists frame IDs. A frame ID is not a tab target ID; never pass it to `--tab`.
 - Use `--tab=<targetId> --frame=<frameId>` with `eval`, `eval-file`, or `snapshot` to target a child frame, including cross-origin frames.
-- A frame-scoped `snapshot` prints only that frame's accessibility subtree. Its frame-prefixed refs work with `click`, `fill`, `dblclick`, `hover`, `select`, `check`, and `uncheck`; do not pass `--frame` to those commands. Other ref commands require refs from a top-level snapshot.
+- A frame-scoped `snapshot` prints only that frame's accessibility subtree. Its frame-prefixed refs (`f1e5`) work with every ref command except `drag`, `screenshot`, and `snapshot --boxes`; do not pass `--frame` to those commands.
 
 ## Common Failure Modes
 
@@ -59,7 +59,8 @@ playwright-cli snapshot --tab=E9A3F
   `fill --tab=<id> e1 -- --dash-looking`.
 - `is not an element ref` — a screenshot's positional is a main-frame element ref (`e5`); the output
   path is `--filename=<path>`. Frame-prefixed refs (`f1e5`) clip only with `click`-family commands.
-- Refs are tied to **one tab + one snapshot**. They do not carry across tabs, navigations, or reloads.
+- `Unknown ref` / `is no longer on the page` — that element was removed or renamed, or the page navigated. Re-run `snapshot` for current refs; a ref is never re-pointed at a different element.
+- Refs are tied to **one tab + one page load**. They do not carry across tabs, navigations, or reloads.
 
 ## Element Refs
 
@@ -67,7 +68,7 @@ Snapshots assign short ref IDs (`e1`, `e2`, ...) to interactive elements. Use th
 
 When present, accessibility states appear after the ref in Playwright aria-snapshot form — `[checked]`, `[checked=mixed]`, `[expanded]` / `[expanded=false]`, `[selected]`, `[pressed]`, `[disabled]`, `[level=N]` — so a re-snapshot shows whether a radio, disclosure, tab, or toggle changed.
 
-Refs are invalidated after any state-changing command. Always re-snapshot to get fresh refs.
+A ref names one element for as long as that element stays on the page with the same role and name. When the page adds an element, it gets a new ref and the existing refs do not shift, so `fill e28 …; fill e30 …; click e31` keeps hitting the elements you read. A ref whose element is gone fails loudly instead of acting on whatever took its place.
 
 ## Commands
 
@@ -373,9 +374,9 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 
 ## Tips
 
-- **Refs change after every interaction** — always re-snapshot before clicking or filling.
+- **Refs are stable per element** — chain actions on refs from one snapshot freely. Re-snapshot (or read the `Snapshot: <path>` file an action prints) to see elements the page added.
 - `open` and `tab-new` open tabs in the **background** by default. Capture the targetId from the output. To open in the **foreground** add `--foreground`/`--fg`; to raise an **already-open** tab use `tab-select <index>`.
-- After `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, `select`, `check`, `uncheck`, `drag`, or `dialog-*`, take a fresh `snapshot --tab=<id>` before using refs again.
+- After `goto`, `go-back`, `go-forward`, or `reload`, take a fresh `snapshot --tab=<id>`: the new page has new refs.
 - Unexpected JavaScript dialogs are auto-dismissed on attached pages.
 - Use `eval --tab=<id>` for DOM operations not covered by built-in commands; save results with `--filename=path`.
 - The SLICC app tab and Chrome internal UI tabs are automatically excluded from `tab-list`.

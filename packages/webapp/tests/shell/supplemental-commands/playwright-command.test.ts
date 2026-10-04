@@ -109,6 +109,18 @@ function createMockBrowser(overrides: Record<string, unknown> = {}): MockBrowser
         },
       ],
     }),
+    // Resolves refs the mock tab stamped (see stampMockRefs); anything else is
+    // stale, like an element that left the page.
+    resolveAriaRef: vi.fn(async (ref: string, frameId?: string) => {
+      const backendNodeId = mockRefStore(browser, frameId).get(ref);
+      if (backendNodeId === undefined) {
+        throw Object.assign(new Error(`Ref "${ref}" is no longer on the page`), {
+          name: 'StaleAriaRefError',
+        });
+      }
+      return { objectId: `obj-${ref}`, backendNodeId };
+    }),
+    ariaRefRects: vi.fn().mockResolvedValue({}),
     getTransport: vi.fn().mockReturnValue({
       send: vi.fn().mockResolvedValue({}),
     }),
@@ -136,6 +148,57 @@ function createMockBrowser(overrides: Record<string, unknown> = {}): MockBrowser
     ...overrides,
   } as unknown as MockBrowser;
   return browser;
+}
+
+interface MockAxNode {
+  role?: unknown;
+  name?: unknown;
+  ref?: string;
+  backendNodeId?: number;
+  children?: MockAxNode[];
+}
+
+/** Per-browser, per-frame (`''` = top frame) ref → backend node id, as the page's ref store. */
+const mockRefStores = new WeakMap<object, Map<string, Map<string, number>>>();
+
+function mockRefStore(browser: object, frameId: string | undefined): Map<string, number> {
+  let frames = mockRefStores.get(browser);
+  if (!frames) {
+    frames = new Map();
+    mockRefStores.set(browser, frames);
+  }
+  const key = frameId ?? '';
+  let store = frames.get(key);
+  if (!store) {
+    store = new Map();
+    frames.set(key, store);
+  }
+  return store;
+}
+
+/**
+ * Stand in for the injected script's ref minting: give every node that would
+ * get a ref (named, or an always-ref role; never text) the next `e<n>`, keep
+ * refs already stamped, and record each ref's mock `backendNodeId` so
+ * `resolveAriaRef` can find it. Mutates the tree, so a mock that returns the
+ * same tree object keeps its refs across snapshots — like a live page.
+ */
+function stampMockRefs<T>(tree: T, store: Map<string, number>): T {
+  if (!tree || typeof tree !== 'object') return tree;
+  let seq = Math.max(0, ...[...store.keys()].map((r) => Number(r.slice(1))));
+  const always = ['textbox', 'button', 'link', 'checkbox', 'radio', 'iframe'];
+  const visit = (node: MockAxNode): void => {
+    const role = String(node.role ?? '').toLowerCase();
+    const named = typeof node.name === 'string' ? node.name !== '' : node.name != null;
+    const wantsRef =
+      !['text', 'generic', 'rootwebarea', 'none', 'presentation'].includes(role) &&
+      (named || always.includes(role));
+    if (wantsRef && !node.ref) node.ref = `e${++seq}`;
+    if (node.ref) store.set(node.ref, node.backendNodeId ?? 0);
+    node.children?.forEach(visit);
+  };
+  visit(tree as MockAxNode);
+  return tree;
 }
 
 /**
@@ -174,8 +237,15 @@ function mockTabHandle(browser: MockBrowser, targetId: string): unknown {
     insertText: (...a: unknown[]) => call('insertText')(...a),
     waitForSelector: (...a: unknown[]) => call('waitForSelector')(...a),
     getFrameTree: (...a: unknown[]) => call('getFrameTree')(...a),
-    getAccessibilityTree: (...a: unknown[]) => call('getAccessibilityTree')(...a),
-    getAccessibilityTreeForFrame: (...a: unknown[]) => call('getAccessibilityTreeForFrame')(...a),
+    getAccessibilityTree: async (...a: unknown[]) =>
+      stampMockRefs(await call('getAccessibilityTree')(...a), mockRefStore(browser, undefined)),
+    getAccessibilityTreeForFrame: async (frameId: string, ...a: unknown[]) =>
+      stampMockRefs(
+        await call('getAccessibilityTreeForFrame')(frameId, ...a),
+        mockRefStore(browser, frameId)
+      ),
+    resolveAriaRef: (...a: unknown[]) => call('resolveAriaRef')(...a),
+    ariaRefRects: (...a: unknown[]) => call('ariaRefRects')(...a),
     clickByBackendNodeId: (...a: unknown[]) => call('clickByBackendNodeId')(...a),
     dblclickByBackendNodeId: (...a: unknown[]) => call('dblclickByBackendNodeId')(...a),
     hoverByBackendNodeId: (...a: unknown[]) => call('hoverByBackendNodeId')(...a),
@@ -691,6 +761,67 @@ describe('playwright-cli click', () => {
     expect(result.stdout).toContain('Clicked e1');
   });
 
+  // bahn.de, 2026-10-04: filling the order number made the page insert an
+  // "Eingabe löschen" button above the surname box. Refs were positional, so
+  // the agent's next `fill`/`click` landed one element early. Refs now name
+  // elements, so the follow-up commands hit what the agent read.
+  it('keeps refs on their elements when the page inserts one above them', async () => {
+    const order = { role: 'textbox', name: 'Auftragsnummer', backendNodeId: 28, children: [] };
+    const surname = { role: 'textbox', name: 'Nachname', backendNodeId: 30, children: [] };
+    const search = { role: 'button', name: 'Suchen', backendNodeId: 31, children: [] };
+    const clear = { role: 'button', name: 'Eingabe löschen', backendNodeId: 29, children: [] };
+    const getAccessibilityTree = vi
+      .fn()
+      .mockResolvedValueOnce({
+        role: 'RootWebArea',
+        name: 'Bahn',
+        children: [order, surname, search],
+      })
+      .mockResolvedValue({
+        role: 'RootWebArea',
+        name: 'Bahn',
+        children: [order, clear, surname, search],
+      });
+    browser = createMockBrowser({ getAccessibilityTree });
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://www.bahn.de/buchung/auftragssuche', title: 'Auftragssuche' })
+    );
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+
+    const snap = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    expect(snap.stdout).toContain('textbox "Nachname" [ref=e2]');
+    expect(snap.stdout).toContain('button "Suchen" [ref=e3]');
+
+    await cmd.execute(['fill', 'e1', '381638049278', '--tab=tab-1'], mockCtx);
+    const fill = await cmd.execute(['fill', 'e2', 'Trieloff', '--tab=tab-1'], mockCtx);
+    const click = await cmd.execute(['click', 'e3', '--tab=tab-1'], mockCtx);
+
+    expect(fill.exitCode).toBe(0);
+    expect(click.exitCode).toBe(0);
+    const clicked = (browser.clickByBackendNodeId as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0]
+    );
+    // fill focuses by clicking: order box, surname box, then the search button.
+    expect(clicked).toEqual([28, 30, 31]);
+    expect(clicked).not.toContain(29);
+  });
+
+  it('points action output at the auto-saved snapshot', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['click', 'e1', '--tab=tab-1'], mockCtx);
+    expect(result.stdout).toMatch(
+      /^Clicked e1\nSnapshot: \/\.playwright\/snapshots\/page-.*\.yml\n$/
+    );
+  });
+
+  it('leaves goto output untouched (callers parse --discover JSON)', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['goto', 'https://example.com', '--tab=tab-1'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain('Snapshot:');
+  });
+
   it('requires a snapshot before the first click (no auto-snapshot without prior state)', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // No snapshot taken — click must fail immediately
@@ -854,52 +985,6 @@ describe('playwright-cli type and fill', () => {
         (c.params['functionDeclaration'] as string).includes('nativeSetter')
     );
     expect(fallbackCall).toBeUndefined();
-  });
-
-  it('clears contenteditable elements in the selector fallback path', async () => {
-    browser = createMockBrowser({
-      getAccessibilityTree: vi.fn().mockResolvedValue({
-        role: 'RootWebArea',
-        name: 'Test Page',
-        children: [
-          {
-            role: 'textbox',
-            name: 'Editor',
-            children: [],
-          },
-        ],
-      }),
-    });
-    (browser.evaluate as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(JSON.stringify({ url: 'https://example.com', title: 'Test Page' }))
-      .mockResolvedValueOnce(undefined) // clear call
-      .mockResolvedValueOnce('hello'); // value read-back (matches, so no fallback)
-
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
-    const result = await cmd.execute(['fill', 'e1', 'hello', '--tab=tab-1'], mockCtx);
-    const clickedSelector = (browser.click as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
-    const clearScript = (browser.evaluate as ReturnType<typeof vi.fn>).mock.calls
-      .map((call) => call[0])
-      .find(
-        (script) =>
-          typeof script === 'string' &&
-          script.includes('isContentEditable') &&
-          script.includes('textContent')
-      ) as string | undefined;
-
-    expect(result.exitCode).toBe(0);
-    expect(browser.click).toHaveBeenCalled();
-    // fill uses Input.insertText (single whole-token frame) so the
-    // node-server proxy's per-frame unmask gate can replace a masked
-    // secret in one shot — keystroke-by-keystroke type() would fragment it.
-    expect(browser.insertText).toHaveBeenCalledWith('hello');
-    expect(browser.type).not.toHaveBeenCalled();
-    expect(clickedSelector).toContain('[contenteditable]');
-    expect(clickedSelector).toContain(',');
-    expect(clearScript).toBeDefined();
-    expect(clearScript).toContain(`document.querySelector(${JSON.stringify(clickedSelector)})`);
-    expect(clearScript).toContain('isContentEditable');
   });
 });
 
@@ -3878,28 +3963,31 @@ describe('iframe support', () => {
     expect(result.stdout).toContain('https://app.example.com/frame');
   });
 
-  it('click in iframe ref calls evaluateInFrame', async () => {
+  it('click in iframe ref runs on the frame element', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // Take snapshot first to populate refs
     await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     const result = await cmd.execute(['click', 'f1e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Clicked f1e1 (in iframe)');
-    expect(browser.evaluateInFrame).toHaveBeenCalledWith(
-      'frame-1',
-      expect.stringContaining('document.querySelector')
+    // The frame's own element, looked up in that frame — not a selector.
+    expect(browser.resolveAriaRef).toHaveBeenCalledWith('e1', 'frame-1');
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Runtime.callFunctionOn',
+      expect.objectContaining({ objectId: 'obj-e1' })
     );
+    expect(browser.clickByBackendNodeId).not.toHaveBeenCalled();
   });
 
-  it('fill in iframe ref calls evaluateInFrame', async () => {
+  it('fill in iframe ref runs on the frame element', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     const result = await cmd.execute(['fill', 'f1e1', 'test text', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Filled f1e1 with: test text (in iframe)');
-    expect(browser.evaluateInFrame).toHaveBeenCalledWith(
-      'frame-1',
-      expect.stringContaining('test text')
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Runtime.callFunctionOn',
+      expect.objectContaining({ objectId: 'obj-e1', arguments: [{ value: 'test text' }] })
     );
   });
 });
@@ -4168,6 +4256,34 @@ const DROP_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+/**
+ * bahn.de Auftragssuche shape (2026-10-04): typing an order number inserts a
+ * clear button between the order box and the surname box.
+ */
+const INSERTING_FORM_HTML = `<!DOCTYPE html>
+<html>
+<head><title>Auftragssuche</title></head>
+<body>
+  <input id="order" aria-label="Auftragsnummer">
+  <span id="slot"></span>
+  <input id="surname" aria-label="Nachname der reisenden Person">
+  <button id="search">Suchen</button>
+  <script>
+    document.getElementById('order').addEventListener('input', function () {
+      if (document.getElementById('clear')) return;
+      var clear = document.createElement('button');
+      clear.id = 'clear';
+      clear.textContent = 'Eingabe löschen';
+      clear.addEventListener('click', function () { window.__clearClicked = true; });
+      document.getElementById('slot').appendChild(clear);
+    });
+    document.getElementById('search').addEventListener('click', function () {
+      window.__searched = document.getElementById('surname').value;
+    });
+  </script>
+</body>
+</html>`;
+
 // -- Conditional integration tests -------------------------------------------
 
 const chromePath = findChromeExecutable();
@@ -4211,6 +4327,9 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       } else if (req.url === '/drop.html') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(DROP_HTML);
+      } else if (req.url === '/form.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(INSERTING_FORM_HTML);
       } else {
         res.writeHead(404);
         res.end('Not found');
@@ -4356,6 +4475,76 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     await waitForFixtureLoaded(targetId);
     return targetId;
   }
+
+  // The real page, the real injected script, and real ref resolution: refs
+  // read before the page inserted an element still hit their elements, and a
+  // ref from before a reload fails instead of hitting the new page.
+  it('keeps refs on their elements when the page inserts one, and drops them on reload', async () => {
+    const url = `http://127.0.0.1:${serverPort}/form.html`;
+    const targetId = await browser.createPage(url);
+    const deadline = Date.now() + FIXTURE_LOAD_TIMEOUT_MS;
+    await browser.withTab(targetId, async (page) => {
+      while (Date.now() < deadline) {
+        try {
+          const ready = await page.evaluate(
+            `document.readyState === 'complete' && Boolean(document.getElementById('search'))`
+          );
+          if (ready === true || ready === 'true') return;
+        } catch {
+          /* about:blank teardown */
+        }
+        await new Promise((r) => setTimeout(r, FIXTURE_LOAD_POLL_MS));
+      }
+      throw new Error('form page did not finish loading');
+    });
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+
+    const snap = await cmd.execute(['snapshot', `--tab=${targetId}`], mockCtx);
+    expect(snap.exitCode).toBe(0);
+    const refOf = (pattern: RegExp): string => {
+      const match = snap.stdout.match(pattern);
+      if (!match) throw new Error(`no ref for ${pattern} in:\n${snap.stdout}`);
+      return match[1];
+    };
+    const order = refOf(/textbox "Auftragsnummer" \[ref=(e[0-9]+)\]/);
+    const surname = refOf(/textbox "Nachname der reisenden Person" \[ref=(e[0-9]+)\]/);
+    const search = refOf(/button "Suchen" \[ref=(e[0-9]+)\]/);
+
+    // One chain on refs from that one snapshot, as an agent writes it.
+    for (const argv of [
+      ['fill', order, '381638049278'],
+      ['fill', surname, 'Trieloff'],
+      ['click', search],
+    ]) {
+      const result = await cmd.execute([...argv, `--tab=${targetId}`], mockCtx);
+      if (result.exitCode !== 0) throw new Error(`${argv.join(' ')} failed: ${result.stderr}`);
+    }
+
+    const state = await cmd.execute(
+      [
+        'eval',
+        `--tab=${targetId}`,
+        `JSON.stringify({ clear: !!document.getElementById('clear'), clicked: !!window.__clearClicked, searched: window.__searched, surname: document.getElementById('surname').value })`,
+      ],
+      mockCtx
+    );
+    expect(JSON.parse(state.stdout.trim())).toEqual({
+      clear: true,
+      clicked: false,
+      searched: 'Trieloff',
+      surname: 'Trieloff',
+    });
+
+    const reloaded = await cmd.execute(['goto', url, `--tab=${targetId}`], mockCtx);
+    expect(reloaded.exitCode).toBe(0);
+    const stale = await cmd.execute(['click', search, `--tab=${targetId}`], mockCtx);
+    expect(stale.exitCode).toBe(1);
+    expect(stale.stderr).toMatch(/Unknown ref|no longer on the page/);
+  });
 
   it('snapshot includes iframe content with frame-prefixed refs', async () => {
     const targetId = await openMainPage();
@@ -5736,12 +5925,8 @@ describe('playwright-cli drop', () => {
     expect(result.stderr).toContain('drop requires a ref');
   });
 
-  it('drop dispatches dragover and drop events onto element via backendNodeId', async () => {
+  it("drop dispatches dragover and drop events onto the ref's element", async () => {
     const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
-    transport.send.mockImplementation(async (method: string) => {
-      if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-drop-1' } };
-      return {};
-    });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // First take a snapshot so the ref is known
@@ -5752,27 +5937,19 @@ describe('playwright-cli drop', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Dropped onto e1');
-    expect(transport.send).toHaveBeenCalledWith(
-      'DOM.resolveNode',
-      expect.objectContaining({ backendNodeId: expect.any(Number) }),
-      'session-1'
-    );
+    expect(browser.resolveAriaRef).toHaveBeenCalledWith('e1', undefined);
     expect(transport.send).toHaveBeenCalledWith(
       'Runtime.callFunctionOn',
       expect.objectContaining({
-        objectId: 'obj-drop-1',
+        objectId: 'obj-e1',
         functionDeclaration: expect.stringContaining('DragEvent'),
       }),
       'session-1'
     );
   });
 
-  it('drop with --path reads file from VFS via backendNodeId', async () => {
+  it('drop with --path reads file from VFS', async () => {
     const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
-    transport.send.mockImplementation(async (method: string) => {
-      if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-drop-2' } };
-      return {};
-    });
     fs._files.set('/workspace/file.txt', 'hello world');
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -5783,15 +5960,11 @@ describe('playwright-cli drop', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(fs.readFile).toHaveBeenCalledWith('/workspace/file.txt', { encoding: 'binary' });
-    expect(transport.send).toHaveBeenCalledWith(
-      'DOM.resolveNode',
-      expect.objectContaining({ backendNodeId: expect.any(Number) }),
-      'session-1'
-    );
+    expect(browser.resolveAriaRef).toHaveBeenCalledWith('e1', undefined);
     expect(transport.send).toHaveBeenCalledWith(
       'Runtime.callFunctionOn',
       expect.objectContaining({
-        objectId: 'obj-drop-2',
+        objectId: 'obj-e1',
         functionDeclaration: expect.stringContaining('DragEvent'),
       }),
       'session-1'
@@ -6039,16 +6212,22 @@ describe('playwright-cli generate-locator', () => {
     expect(result.stderr).toContain('--tab');
   });
 
-  it('generates locator using backendNodeId + element properties', async () => {
+  it("generates locator from the ref's element properties", async () => {
     const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
-    transport.send
-      .mockResolvedValueOnce({}) // DOM.enable
-      .mockResolvedValueOnce({ object: { objectId: 'obj-1' } }) // DOM.resolveNode
-      .mockResolvedValueOnce({
-        result: {
-          value: JSON.stringify({ testId: 'submit-btn', label: null, placeholder: null, id: '' }),
-        },
-      }); // Runtime.callFunctionOn
+    transport.send.mockImplementation(async (method: string) =>
+      method === 'Runtime.callFunctionOn'
+        ? {
+            result: {
+              value: JSON.stringify({
+                testId: 'submit-btn',
+                label: null,
+                placeholder: null,
+                id: '',
+              }),
+            },
+          }
+        : {}
+    );
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
@@ -6057,33 +6236,9 @@ describe('playwright-cli generate-locator', () => {
     expect(result.stdout).toContain('page.getByTestId("submit-btn")');
   });
 
-  it('falls back to CSS selector when no backendNodeId', async () => {
-    // Build a snapshot state manually by using getSharedState
-    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-    state.snapshots.set('tab-1', {
-      url: 'https://example.com',
-      title: 'Test',
-      refToSelector: new Map([['e1', 'button.my-btn']]),
-      refToBackendNodeId: new Map(),
-      refToFrameId: new Map(),
-      content: '',
-      timestamp: Date.now(),
-    });
-
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], mockCtx);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('page.locator("button.my-btn")');
-  });
-
   it('returns error for unknown ref', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
-    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-    // Clear backendNodeId map so no match
-    const snap = state.snapshots.get('tab-1');
-    if (snap) snap.refToBackendNodeId.clear();
-
     const result = await cmd.execute(['generate-locator', 'e99', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Unknown ref');
@@ -6137,24 +6292,23 @@ describe('playwright-cli upload', () => {
     expect(transportCalls.some((c) => c.method === 'DOM.resolveNode')).toBe(false);
   });
 
-  it('uploads via DOM.resolveNode + Runtime.callFunctionOn when a snapshot ref is given', async () => {
+  it("uploads onto the ref's element via Runtime.callFunctionOn when a snapshot ref is given", async () => {
     fs._files.set('/workspace/photo.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
 
     const transportCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
     const mockTransport = {
       send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
         transportCalls.push({ method, params });
-        if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-file-input' } };
         return { result: { value: 1 } };
       }),
     };
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    // Take a snapshot first so e3 (backendNodeId 44) is in the snapshot map.
+    // Take a snapshot first so e3 is in the snapshot map.
     await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
-    // e3 is the "Search" textbox with backendNodeId 44 in the mock accessibility tree.
+    // e3 is the "Search" textbox in the mock accessibility tree.
     const result = await cmd.execute(
       ['upload', 'e3', '/workspace/photo.png', '--tab=tab-1'],
       mockCtx
@@ -6163,15 +6317,13 @@ describe('playwright-cli upload', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Uploaded 1 file(s): photo.png');
 
-    // Must have called DOM.resolveNode with the snapshot backendNodeId.
-    const resolveCall = transportCalls.find((c) => c.method === 'DOM.resolveNode');
-    expect(resolveCall).toBeDefined();
-    expect(resolveCall!.params['backendNodeId']).toBe(44);
+    // Must have resolved the snapshot ref to its element.
+    expect(browser.resolveAriaRef).toHaveBeenCalledWith('e3', undefined);
 
     // Must have called Runtime.callFunctionOn (not Runtime.evaluate).
     const callFnCall = transportCalls.find((c) => c.method === 'Runtime.callFunctionOn');
     expect(callFnCall).toBeDefined();
-    expect(callFnCall!.params['objectId']).toBe('obj-file-input');
+    expect(callFnCall!.params['objectId']).toBe('obj-e3');
 
     // Must NOT have fallen through to the Runtime.evaluate activeElement path.
     expect(transportCalls.some((c) => c.method === 'Runtime.evaluate')).toBe(false);
@@ -6275,12 +6427,8 @@ describe('playwright-cli highlight', () => {
     );
   });
 
-  it('highlights element by ref using backendNodeId', async () => {
+  it("highlights the ref's element", async () => {
     const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
-    transport.send
-      .mockResolvedValueOnce({}) // DOM.enable
-      .mockResolvedValueOnce({ object: { objectId: 'obj-1' } }) // DOM.resolveNode
-      .mockResolvedValueOnce({}); // Runtime.callFunctionOn (highlight)
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
@@ -6289,18 +6437,12 @@ describe('playwright-cli highlight', () => {
     expect(result.stdout).toContain('Highlighted e1');
     expect(transport.send).toHaveBeenCalledWith(
       'Runtime.callFunctionOn',
-      expect.objectContaining({ objectId: 'obj-1' }),
+      expect.objectContaining({ objectId: 'obj-e1' }),
       'session-1'
     );
   });
 
   it('--hide with ref removes highlight from specific element', async () => {
-    const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
-    transport.send
-      .mockResolvedValueOnce({}) // DOM.enable
-      .mockResolvedValueOnce({ object: { objectId: 'obj-1' } }) // DOM.resolveNode
-      .mockResolvedValueOnce({}); // Runtime.callFunctionOn (remove highlight)
-
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     const result = await cmd.execute(['highlight', 'e1', '--hide', '--tab=tab-1'], mockCtx);

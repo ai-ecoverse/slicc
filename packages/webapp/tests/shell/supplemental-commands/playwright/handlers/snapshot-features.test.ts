@@ -13,7 +13,12 @@ import {
 } from '../../../../../src/shell/supplemental-commands/playwright/handlers/snapshot.js';
 import { openHandler } from '../../../../../src/shell/supplemental-commands/playwright/handlers/tabs.js';
 import { takeSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/snapshot.js';
-import { createHandlerCtx, createPlaywrightState } from '../../../helpers/playwright-harness.js';
+import {
+  createHandlerCtx,
+  createPlaywrightState,
+  makeTabSnapshot,
+  snapshotRefs,
+} from '../../../helpers/playwright-harness.js';
 
 const SNAPSHOT_TEXT = [
   'Page URL: https://x',
@@ -41,17 +46,9 @@ vi.mock('../../../../../src/shell/supplemental-commands/playwright/session-log.j
 
 const TAB = 'tab-1';
 
-function mockTakeSnapshot(refToBackendNodeId = new Map<string, number>()): void {
+function mockTakeSnapshot(...printed: string[]): void {
   vi.mocked(takeSnapshot).mockResolvedValue({
-    snapshot: {
-      url: 'https://x',
-      title: 't',
-      content: SNAPSHOT_TEXT,
-      timestamp: 0,
-      refToSelector: new Map(),
-      refToBackendNodeId,
-      refToFrameId: new Map(),
-    },
+    snapshot: makeTabSnapshot({ content: SNAPSHOT_TEXT, refs: snapshotRefs(...printed) }),
     output: SNAPSHOT_TEXT,
   });
 }
@@ -59,6 +56,8 @@ function mockTakeSnapshot(refToBackendNodeId = new Map<string, number>()): void 
 function makeBrowser(opts?: {
   evaluateResult?: unknown;
   transportSend?: (method: string, params?: Record<string, unknown>) => unknown;
+  /** Live rects by page-local ref, as `page.ariaRefRects` reports them. */
+  rects?: Record<string, number[]>;
 }) {
   const screenshot = vi.fn(async () => btoa('img'));
   const evaluate = vi.fn(async () => opts?.evaluateResult ?? null);
@@ -71,8 +70,12 @@ function makeBrowser(opts?: {
     async (method: string, params?: Record<string, unknown>) =>
       (opts?.transportSend?.(method, params) as Record<string, unknown>) ?? {}
   );
+  const ariaRefRects = vi.fn(async (refs: string[]) =>
+    Object.fromEntries(refs.filter((r) => opts?.rects?.[r]).map((r) => [r, opts!.rects![r]]))
+  );
   let tabLockHeldFor: string | null = null;
   const page = {
+    ariaRefRects,
     targetId: TAB,
     sessionId: 'session-1',
     transport: { send: transportSend },
@@ -107,6 +110,7 @@ function makeBrowser(opts?: {
     setViewportOverride,
     navigate,
     transportSend,
+    ariaRefRects,
     lockHeldFor: () => tabLockHeldFor,
   };
 }
@@ -143,35 +147,10 @@ describe('snapshot --depth', () => {
 });
 
 describe('snapshot --boxes', () => {
-  it('resolves rects through backendNodeIds so text-labelled and duplicate-name elements work', async () => {
-    // Two elements whose reconstructed CSS selectors would collide or miss —
-    // identity comes from the snapshot's backendNodeIds instead.
-    mockTakeSnapshot(
-      new Map([
-        ['e1', 101],
-        ['e2', 102],
-      ])
-    );
-    const rects: Record<number, number[]> = {
-      101: [0, 0, 50, 20],
-      102: [10, 20, 120, 40],
-    };
-    let resolvedBackendId = 0;
-    const { browser, transportSend } = makeBrowser({
-      transportSend: (method, params) => {
-        if (method === 'DOM.resolveNode') {
-          resolvedBackendId = params?.['backendNodeId'] as number;
-          // e1's node has detached — no objectId, so its line stays bare.
-          return resolvedBackendId === 101
-            ? {}
-            : { object: { objectId: `obj-${resolvedBackendId}` } };
-        }
-        if (method === 'Runtime.callFunctionOn') {
-          return { result: { value: rects[resolvedBackendId] } };
-        }
-        return {};
-      },
-    });
+  it('annotates the refs whose elements are still on the page', async () => {
+    mockTakeSnapshot('e1', 'e2');
+    // e1's element has left the DOM, so the page reports no rect for it.
+    const { browser, ariaRefRects } = makeBrowser({ rects: { e2: [10, 20, 120, 40] } });
     const result = await snapshotHandler(
       createHandlerCtx({ browser, flags: { tab: TAB, boxes: 'true' } })
     );
@@ -179,12 +158,30 @@ describe('snapshot --boxes', () => {
     expect(result.stdout).toContain('[ref=e2] [box=10,20,120,40]');
     // e1 did not resolve — its line stays unannotated rather than lying.
     expect(result.stdout).toContain('[ref=e1]\n');
-    // Through the handle: the session is bound, not a third argument.
-    expect(transportSend).toHaveBeenCalledWith('DOM.resolveNode', { backendNodeId: 102 });
+    // One page round trip for every top-frame ref.
+    expect(ariaRefRects).toHaveBeenCalledOnce();
+    expect(ariaRefRects).toHaveBeenCalledWith(['e1', 'e2']);
   });
 
-  // #3755: three same-named BUY buttons must keep distinct boxes once the
-  // accessibility join stamps distinct backendNodeIds (see browser-api.test).
+  it('leaves child-frame refs unannotated', async () => {
+    const framed = [SNAPSHOT_TEXT, '    - iframe [ref=e3]', '      - link "Pay" [ref=f1e2]'].join(
+      '\n'
+    );
+    vi.mocked(takeSnapshot).mockResolvedValue({
+      snapshot: makeTabSnapshot({ content: framed, refs: snapshotRefs('e2', 'e3', 'f1e2') }),
+      output: framed,
+    });
+    const { browser, ariaRefRects } = makeBrowser({ rects: { e2: [1, 2, 3, 4] } });
+    const result = await snapshotHandler(
+      createHandlerCtx({ browser, flags: { tab: TAB, boxes: 'true' } })
+    );
+    expect(ariaRefRects).toHaveBeenCalledWith(['e2', 'e3']);
+    expect(result.stdout).toContain('[ref=e2] [box=1,2,3,4]');
+    expect(result.stdout).toContain('[ref=f1e2]\n');
+  });
+
+  // #3755: three same-named BUY buttons keep distinct boxes — each ref names
+  // its own element on the page.
   it('annotates three same-named buttons with distinct boxes', async () => {
     const buySnapshot = [
       'Page URL: https://x',
@@ -196,38 +193,11 @@ describe('snapshot --boxes', () => {
       '  - button "BUY" [ref=e3]',
     ].join('\n');
     vi.mocked(takeSnapshot).mockResolvedValue({
-      snapshot: {
-        url: 'https://x',
-        title: 'Drug Wars',
-        content: buySnapshot,
-        timestamp: 0,
-        refToSelector: new Map(),
-        refToBackendNodeId: new Map([
-          ['e1', 101],
-          ['e2', 102],
-          ['e3', 103],
-        ]),
-        refToFrameId: new Map(),
-      },
+      snapshot: makeTabSnapshot({ content: buySnapshot, refs: snapshotRefs('e1', 'e2', 'e3') }),
       output: buySnapshot,
     });
-    const rects: Record<number, number[]> = {
-      101: [924, 212, 45, 32],
-      102: [924, 263, 45, 32],
-      103: [924, 314, 45, 32],
-    };
-    let resolvedBackendId = 0;
     const { browser } = makeBrowser({
-      transportSend: (method, params) => {
-        if (method === 'DOM.resolveNode') {
-          resolvedBackendId = params?.['backendNodeId'] as number;
-          return { object: { objectId: `obj-${resolvedBackendId}` } };
-        }
-        if (method === 'Runtime.callFunctionOn') {
-          return { result: { value: rects[resolvedBackendId] } };
-        }
-        return {};
-      },
+      rects: { e1: [924, 212, 45, 32], e2: [924, 263, 45, 32], e3: [924, 314, 45, 32] },
     });
     const result = await snapshotHandler(
       createHandlerCtx({ browser, flags: { tab: TAB, boxes: 'true' } })

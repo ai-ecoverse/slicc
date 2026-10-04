@@ -23,6 +23,7 @@ import {
   getSharedState,
   PLAYWRIGHT_FLAG_SPEC,
   parseFlags,
+  SNAPSHOT_NOTE_COMMANDS,
 } from './playwright/state.js';
 import type { CmdResult, PlaywrightHandlerCtx } from './playwright/types.js';
 import { type KnownFlagSpec, parseKnownFlags } from './subcommand-flags.js';
@@ -359,6 +360,10 @@ export function createPlaywrightCommand(
       // Session logging is best-effort — never fail the command
     }
 
-    return withContentionNote(browser, lockStatsBefore, contendedTargetId, result);
+    const noted =
+      snapshotPath && SNAPSHOT_NOTE_COMMANDS.has(subcommand)
+        ? { ...result, stdout: `${result.stdout}Snapshot: ${snapshotPath}\n` }
+        : result;
+    return withContentionNote(browser, lockStatsBefore, contendedTargetId, noted);
   });
 }
