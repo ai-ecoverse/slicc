@@ -2,8 +2,8 @@
 /**
  * leak-check — fail when a plaintext file in a bench out dir contains task text.
  *
- * Upstream sets (BU Bench) must never be published in plaintext: their traces are written
- * encrypted (`.json.enc`). Everything else in the out dir is uploaded as is, so it must not quote
+ * Encrypted sets (BU Bench) must never be published in plaintext: their traces are written
+ * encrypted (`.json.enc`). Sets from the repo are public and are not checked. Everything else in the out dir is uploaded as is, so it must not quote
  * a task: an arm's driver files, an error message, a log line. This runs before every upload.
  * It reports the file and the task id, never the text.
  *
@@ -78,6 +78,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const needles = [];
   for (const spec of values.set ?? []) {
     const set = await (deps.loadSet ?? loadSet)(spec);
+    // Only sets published encrypted are secret: a repo task set (smoke.json) is public and its
+    // traces are plaintext by design.
+    if (!set.encrypted) continue;
     for (const t of set.tasks) needles.push(...needlesFor(t.id, t.task));
   }
   for (const c of values.canary ?? []) needles.push({ id: 'canary', text: collapse(c) });

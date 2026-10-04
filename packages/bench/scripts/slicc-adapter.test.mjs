@@ -7,8 +7,11 @@ import {
   ARM_TIME_MARGIN_S,
   armAnswer,
   armCommand,
+  armConversation,
+  armTurns,
   assertStagedSkills,
   buildPrompt,
+  collectArmFiles,
   costTotals,
   decodeTranscriptPart,
   expectedSkillNames,
@@ -2255,5 +2258,89 @@ describe('arm mode', () => {
     expect(result.costUsd).toBeCloseTo(0.3);
     // Nothing the record keeps quotes the task: the files ride only in the trace.
     expect(JSON.stringify(traceFromResult(result).metrics)).not.toContain(canary);
+  });
+});
+
+describe('arm helpers', () => {
+  const msg = (role, text, timestamp, extra = {}) => ({
+    role,
+    timestamp,
+    content:
+      text == null
+        ? []
+        : [
+            { type: 'text', text },
+            { type: 'tool-call', name: 'bash' },
+          ],
+    ...extra,
+  });
+  const DOC = {
+    conversations: [
+      { id: 'cone', kind: 'cone', messages: [msg('assistant', 'cone talk', 9)] },
+      { id: 'old', kind: 'scoop', messages: [msg('assistant', 'earlier scoop', 1)] },
+      { id: 'quiet', kind: 'scoop', messages: [msg('user', 'only a user turn', 5)] },
+      {
+        id: 'arm',
+        kind: 'scoop',
+        messages: [msg('assistant', 'FINAL ANSWER: 42', 3), msg('assistant', '', 4)],
+      },
+    ],
+  };
+
+  it('finds the arm scoop that spoke last, its turns and its last words', () => {
+    expect(armConversation(DOC).id).toBe('arm');
+    expect(armTurns(DOC)).toBe(2);
+    expect(lastScoopAssistantText(DOC)).toBe('FINAL ANSWER: 42');
+    expect(armConversation(null)).toBeNull();
+    expect(armTurns(undefined)).toBe(0);
+  });
+
+  it('judges an arm run by its scoop: a provider error there is a run error, and steps are its turns', () => {
+    const dead = {
+      conversations: [
+        { id: 'cone', kind: 'cone', messages: [msg('assistant', 'fine', 1)] },
+        {
+          id: 'arm',
+          kind: 'scoop',
+          messages: [msg('assistant', null, 2, { stopReason: 'error', errorMessage: 'HTTP 503' })],
+        },
+      ],
+    };
+    expect(lastTurnProviderError({ arm: { name: 'x' }, transcript: dead })).toBe('HTTP 503');
+    expect(lastTurnProviderError({ transcript: dead })).toBeNull();
+    const t = traceFromResult({ arm: { name: 'x' }, transcript: DOC, durationMs: 1000 });
+    expect(t.metrics.steps).toBe(2);
+  });
+
+  it('collects the driver files within a byte budget, skipping odd paths and failed reads', async () => {
+    const { leader } = fakeLeader({
+      commands: [
+        [
+          /^find '\/tmp\/d'/,
+          ok('/tmp/d/a.txt\n/tmp/d/bad name.txt\n/tmp/d/gone.txt\n/tmp/d/big.txt\n'),
+        ],
+        [/^base64 '\/tmp\/d\/a\.txt'$/, ok('QUFB\n')],
+        [/^base64 '\/tmp\/d\/gone\.txt'$/, fail('no such file')],
+        [/^base64 '\/tmp\/d\/big\.txt'$/, ok('QUFBQUFBQUFB')],
+      ],
+    });
+    expect(await collectArmFiles(leader, '/tmp/d', { maxBytes: 8 })).toEqual({
+      files: [{ path: '/tmp/d/a.txt', base64: 'QUFB' }],
+      truncated: true,
+    });
+    const { leader: none } = fakeLeader({ commands: [[/^find /, fail('no dir')]] });
+    expect(await collectArmFiles(none, '/tmp/d')).toEqual({ files: [], truncated: false });
+  });
+
+  it('rejects arms that are not objects, and reads no answer from a broken result.json', () => {
+    expect(validateArm('a', null)).toEqual(['arm a is not an object']);
+    expect(
+      armAnswer([
+        { path: '/tmp/x/result.json', base64: Buffer.from('not json').toString('base64') },
+      ])
+    ).toBe('');
+    expect(
+      armAnswer([{ path: '/tmp/x/result.json', base64: Buffer.from('{}').toString('base64') }])
+    ).toBe('');
   });
 });

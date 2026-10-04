@@ -135,6 +135,7 @@ export function parseCli(argv) {
       `--deadline-minutes ${deadlineMinutes} leaves no time for a run: one takes up to ${runMinutes} (the timeout plus ${RUN_OVERHEAD_MS / 60_000} for the restart, collection and judge)`
     );
   const shard = parseShard(values.shard);
+  const arm = values.arm ? loadArm(values.arm, values['arms-file']) : null;
   const money = (flag) => {
     const v = Number(values[flag]);
     if (!Number.isFinite(v) || v < 0) throw new Error(`--${flag} must be 0 (none) or dollars`);
@@ -144,7 +145,9 @@ export function parseCli(argv) {
     help: values.help,
     sets: values.set ?? [],
     models,
-    skills: list(values.skills).map(parseSkillsCondition),
+    skills: list(values.skills)
+      .map(parseSkillsCondition)
+      .map((c) => withArm(c, arm)),
     repeats,
     taskIds: values.tasks ? resolveTaskIds(list(values.tasks)) : null,
     limit: values.limit ? Number.parseInt(values.limit, 10) : null,
@@ -163,8 +166,17 @@ export function parseCli(argv) {
     deadlineMinutes,
     maxTaskCost: money('max-task-cost'),
     maxCost: money('max-cost'),
-    arm: values.arm ? loadArm(values.arm, values['arms-file']) : null,
+    arm,
   };
+}
+
+/**
+ * A condition as an arm runs it: the arm's name joins the condition's, so records, traces, run
+ * ids, result keys and resume never pool two arms (or an arm with the cone) that share
+ * `builtin+arm`. Staging still reads `builtin` and `extras`.
+ */
+export function withArm(condition, arm) {
+  return arm ? { ...condition, name: `${condition.name}.${arm.name}` } : condition;
 }
 
 /** An arm's setup command (a model download) may take this long. */
@@ -510,12 +522,7 @@ export function runIdFor(taskId, model, skills, repeat, now = Date.now()) {
 async function runOne(r, ctx) {
   const { leader, opts, judge } = ctx;
   const config = runConfig(opts.harness, r.model, r.condition, opts.arm);
-  const runId = runIdFor(
-    r.task.id,
-    r.model,
-    opts.arm ? `${config.skills}-${opts.arm.name}` : config.skills,
-    r.repeat
-  );
+  const runId = runIdFor(r.task.id, r.model, config.skills, r.repeat);
   const record = {
     benchmark: r.set.benchmark,
     task_id: r.task.id,
@@ -597,10 +604,16 @@ export function defaultSkillsMatch(recorded, expected) {
  * - `done`: nothing changed.
  * A rejudge needs the saved trace; without it the run starts over.
  */
-export function resumeAction(record, task, { judge, judgeModel, traceExists, defaultSkills }) {
+export function resumeAction(
+  record,
+  task,
+  { judge, judgeModel, traceExists, defaultSkills, arm = null }
+) {
   if (!record) return 'run';
   const d = taskDigests(task);
   if (!record.digests || record.digests.task_sha !== d.task_sha) return 'run';
+  // A record from another arm (or from the cone) is not this run's.
+  if ((record.config?.arm ?? null) !== (arm ?? null)) return 'run';
   if (!defaultSkillsMatch(record.config?.default_skills, defaultSkills)) return 'run';
   if (record.error && record.error_stage !== 'judge') return 'run';
   if (!judge) return 'done';
@@ -897,6 +910,7 @@ async function processRun(i, r, runs, ctx, say) {
     judgeModel: opts.judgeModel,
     traceExists: before.traceExists,
     defaultSkills: Boolean(r.condition.builtin),
+    arm: opts.arm?.name ?? null,
   });
   if (action === 'done') {
     say(

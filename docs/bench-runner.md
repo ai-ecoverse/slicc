@@ -208,6 +208,11 @@ numbers only. The answer the judge reads is the scoop's last assistant message
 The arm's skills are copied from `skills-ref` (only the ones the arm lists,
 without `evals/`) and staged as the extra set `arm`, so the skills condition is
 `builtin+arm`; `run.mjs` refuses an arm with a condition lacking `+arm`. The
+arm's name joins the condition's in records and traces
+(`builtin+arm.intent-budget`), so result keys, paths and resume keep two arms,
+or an arm and the cone, apart; `config.arm` names it too, and resume reruns a
+record whose arm differs. In arm mode the provider-error check and the step
+count read the arm's scoop, not the cone, which only started the driver. The
 arm's `setup` (for intent: `intent prepare`, `intent pull --model 4b-vision`)
 runs after staging, so once per fresh leader.
 
@@ -217,7 +222,8 @@ text. They go into the run's trace (`result.arm.files`), which is written
 encrypted for upstream sets like `bu-v2`, never into records. `leak-check.mjs`
 enforces it: before each shard's upload and before the report job uploads or
 publishes, it scans every plaintext file in the out dir for windows of every
-task's text (URLs excluded) and fails the step on a match, reporting only the
+encrypted set's task text (URLs excluded; repo sets such as `smoke.json` are
+public) and fails the step on a match, reporting only the
 file and task id. A shard that fails it is not uploaded.
 
 ## Publishing pipeline

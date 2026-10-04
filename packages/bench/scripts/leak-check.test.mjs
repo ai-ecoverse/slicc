@@ -18,6 +18,10 @@ describe('leak-check', () => {
       expect(x.text).not.toContain('https://');
     }
     expect(needlesFor('t2', 'Say hi.')).toEqual([]);
+    expect(needlesFor('t3', null)).toEqual([]);
+    const mid = 'a'.repeat(40);
+    expect(needlesFor('t4', mid)).toEqual([{ id: 't4', text: mid }]);
+    expect(collapse(undefined)).toBe('');
   });
 
   it('finds a quote of any part of a task, whatever its whitespace or case', () => {
@@ -35,7 +39,7 @@ describe('leak-check', () => {
   it('passes an out dir whose task text is only in encrypted traces, and fails a plaintext copy', async () => {
     const out = mkdtempSync(join(tmpdir(), 'leak-'));
     const canary = 'CANARY-7f3a-the-arm-driver-wrote-this-into-its-files';
-    const set = { tasks: [{ id: 'bu2-x', task: `${TASK} ${canary}` }] };
+    const set = { encrypted: true, tasks: [{ id: 'bu2-x', task: `${TASK} ${canary}` }] };
     mkdirSync(join(out, 'records/BU_Bench_V2/builtin+arm/m'), { recursive: true });
     writeFileSync(
       join(out, 'records/BU_Bench_V2/builtin+arm/m/bu2-x-r1.json'),
@@ -58,6 +62,27 @@ describe('leak-check', () => {
     const lines = err.mock.calls.map((c) => c[0]).join('\n');
     expect(lines).toContain('transcript.md quotes task');
     expect(lines).not.toContain(canary);
+    err.mockRestore();
+  });
+});
+
+describe('leak-check main', () => {
+  it('needs --out, checks only encrypted sets, and reads only plaintext text files', async () => {
+    await expect(main([], {})).rejects.toThrow(/--out/);
+    const out = mkdtempSync(join(tmpdir(), 'leak-'));
+    mkdirSync(join(out, 'traces/S'), { recursive: true });
+    writeFileSync(join(out, 'traces/S/smoke-001-r1.json'), `{"task":"${TASK}"}`);
+    writeFileSync(join(out, 'shot.png'), TASK);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const publicSet = { encrypted: false, tasks: [{ id: 'smoke-001', task: TASK }] };
+    expect(await main(['--out', out, '--set', 'smoke'], { loadSet: async () => publicSet })).toBe(
+      0
+    );
+    const secret = { ...publicSet, encrypted: true };
+    expect(await main(['--out', out, '--set', 'bu-v2'], { loadSet: async () => secret })).toBe(1);
+    expect(err.mock.calls.map((c) => c[0]).join('\n')).toMatch(
+      /1 plaintext files, 3 needles, 1 leak/
+    );
     err.mockRestore();
   });
 });

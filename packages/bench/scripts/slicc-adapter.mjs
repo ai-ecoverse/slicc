@@ -118,35 +118,43 @@ export function parseArmResult(stdout) {
     const text = lines.slice(i).join('\n');
     if (!text.trimStart().startsWith('{')) continue;
     try {
-      const v = JSON.parse(text);
-      if (v && typeof v === 'object') return v;
+      return JSON.parse(text);
     } catch {}
   }
   return null;
 }
 
-/** The agent's last words when an arm ran it in a scoop: the last assistant text of the scoop
- * conversation that spoke last (the cone only started the driver). */
-export function lastScoopAssistantText(doc) {
+/**
+ * The conversation an arm's agent ran in: the scoop whose last assistant message came last (the
+ * cone only started the driver, through `exec`).
+ */
+export function armConversation(doc) {
   let best = null;
   for (const c of doc?.conversations ?? []) {
     if (c.kind === 'cone') continue;
-    const msgs = c.messages ?? [];
-    for (let i = msgs.length - 1; i >= 0; i -= 1) {
-      const m = msgs[i];
-      if (m.role !== 'assistant') continue;
-      const text = (m.content ?? [])
-        .filter((p) => p.type === 'text')
-        .map((p) => p.text ?? '')
-        .join('')
-        .trim();
-      if (!text) continue;
-      const at = Number(m.timestamp ?? 0);
-      if (!best || at >= best.at) best = { at, text };
-      break;
-    }
+    const last = (c.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
+    if (!last) continue;
+    const at = Number(last.timestamp ?? 0);
+    if (!best || at >= best.at) best = { at, c };
   }
-  return best?.text ?? '';
+  return best?.c ?? null;
+}
+
+const textOf = (m) =>
+  (m?.content ?? [])
+    .filter((p) => p.type === 'text')
+    .map((p) => p.text ?? '')
+    .join('')
+    .trim();
+
+/** The agent's last words when an arm ran it in a scoop. */
+export function lastScoopAssistantText(doc) {
+  const msgs = (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant');
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const text = textOf(msgs[i]);
+    if (text) return text;
+  }
+  return '';
 }
 
 /** The files under the driver's directory for this run, base64, up to ARM_FILES_MAX_BYTES. */
@@ -248,9 +256,12 @@ export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
  * which were then judged at about 0.2).
  */
 export function lastTurnProviderError(result) {
-  // The cone's conversation, selected by kind as in lastConeAssistantText: a scoop can be listed first.
-  const cone = (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
-  const last = (cone?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
+  // The agent's conversation: the arm's scoop in arm mode, else the cone, selected by kind as in
+  // lastConeAssistantText (a scoop can be listed first).
+  const agent = result?.arm
+    ? armConversation(result?.transcript)
+    : (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
+  const last = (agent?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
   if (last?.stopReason !== 'error') return null;
   return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
 }
@@ -937,6 +948,10 @@ export function transcriptSummary(info) {
   return summary;
 }
 
+/** Assistant turns of the arm's scoop. */
+export const armTurns = (doc) =>
+  (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant').length;
+
 /** A run's result → the trace shape `judge.mjs` reads. */
 export function traceFromResult(result) {
   const t = transcriptSteps(result.transcript);
@@ -955,7 +970,8 @@ export function traceFromResult(result) {
     screenshots: result.screenshots ?? [],
     outputFilesText: null,
     metrics: {
-      steps: t.assistantTurns || result.turns || 0,
+      // In arm mode the agent's turns are the arm scoop's: the cone only started the driver.
+      steps: (result.arm ? armTurns(result.transcript) : t.assistantTurns) || result.turns || 0,
       duration: result.durationMs / 1000,
       cost: result.costUsd,
       tokens: result.tokens,
