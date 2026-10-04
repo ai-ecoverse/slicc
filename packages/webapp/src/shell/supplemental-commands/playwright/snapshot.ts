@@ -198,10 +198,14 @@ export async function callOnElement(
 
 export async function resolveAppTabId(browser: BrowserAPI, state: PlaywrightState): Promise<void> {
   if (state.appTabId) return;
-  const pages = await browser.listPages();
+  await findAppTab(state, await browser.listPages());
+}
+
+/** Point `state.appTabId` at the SLICC app tab among `pages`, if there is one. */
+async function findAppTab(state: PlaywrightState, pages: PageInfo[]): Promise<void> {
   const appOrigin = await resolveAppOrigin();
   const appTab = pages.find((p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'));
-  if (appTab) state.appTabId = appTab.targetId;
+  state.appTabId = appTab ? appTab.targetId : null;
 }
 
 /**
@@ -257,7 +261,6 @@ export async function getActionablePages(
   browser: BrowserAPI,
   state: PlaywrightState
 ): Promise<PageInfo[]> {
-  await resolveAppTabId(browser, state);
   // Use listAllTargets when available (includes remote tray targets).
   // In standalone mode the worker-side BrowserAPI has no trayTargetProvider, so
   // listAllTargets() returns local-only. When a tray is configured, supplement via
@@ -265,7 +268,46 @@ export async function getActionablePages(
   // The tray-configured gate keeps the no-tray common case to a single local call
   // (no per-command BroadcastChannel round-trip, no 3s-timeout exposure).
   const pages = await listAllTargetsWithRemote(browser);
+  // A cached app tab that is gone (the app reopened in a new tab) would let
+  // the new app tab into the list; look it up again from this listing.
+  if (!state.appTabId || !pages.some((p) => p.targetId === state.appTabId)) {
+    await findAppTab(state, pages);
+  }
   return pages.filter((page) => isActionablePage(state, page));
+}
+
+/** The tab's number, assigned now if it has none yet. */
+export function tabNumberFor(state: PlaywrightState, targetId: string): number {
+  let number = state.tabNumbers.get(targetId);
+  if (number === undefined) {
+    number = ++state.lastTabNumber;
+    state.tabNumbers.set(targetId, number);
+  }
+  return number;
+}
+
+/**
+ * Number the listed tabs and sort them by number.
+ *
+ * Browsers list tabs in no stable order — Chrome's `Target.getTargets` puts
+ * a new tab mid-list, and the extension float follows the tab strip — so a
+ * position in the list names a different tab as soon as one opens. A tab
+ * keeps its number while it is open; a new tab gets the next number. Local
+ * tabs missing from the listing are forgotten (closed); remote tabs keep
+ * their number through a listing that missed them, since a slow follower
+ * drops out of one listing without closing anything.
+ */
+export function numberTabs(
+  state: PlaywrightState,
+  pages: PageInfo[]
+): Array<PageInfo & { number: number }> {
+  const listed = new Set(pages.map((page) => page.targetId));
+  for (const targetId of [...state.tabNumbers.keys()]) {
+    if (!listed.has(targetId) && !targetId.includes(':')) state.tabNumbers.delete(targetId);
+  }
+  return pages
+    .map((page) => ({ ...page, number: tabNumberFor(state, page.targetId) }))
+    .sort((a, b) => a.number - b.number);
 }
 
 interface FrameInfo {

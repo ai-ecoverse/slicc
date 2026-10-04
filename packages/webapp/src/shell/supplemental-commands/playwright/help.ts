@@ -92,10 +92,12 @@ Commands:
   go-back --tab=<id>     Navigate back
   go-forward --tab=<id>  Navigate forward
   reload --tab=<id>      Reload current tab
-  tab-list               List open tabs (each line is prefixed by its 1-based index for tab-select)
-  tab-select <index>     Bring an EXISTING tab to the front / foreground (switch the user's active
-                         tab to it) by its 1-based index from tab-list. This is how you focus,
-                         activate, raise, or switch to a tab that is already open.
+  tab-list               List open tabs: [targetId] url "title" (tab N). A tab keeps its number N
+                         while it is open; new tabs get the next number, so numbers never shift.
+  tab-select <N> | --tab=<id>
+                         Bring an EXISTING tab to the front / foreground (switch the user's active
+                         tab to it) by its tab number from tab-list or by targetId. This is how you
+                         focus, activate, raise, or switch to a tab that is already open.
   tab-new [url] [--foreground|--fg] [--runtime=<id>] [--mobile]
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open new tab. Default: background. --foreground (or --fg) brings the new

@@ -4,7 +4,7 @@
 
 import { createLogger } from '../../../../base/logger.js';
 import { fetchAndDiscover } from '../discover.js';
-import { getActionablePages, resolveAppTabId } from '../snapshot.js';
+import { getActionablePages, numberTabs, resolveAppTabId, tabNumberFor } from '../snapshot.js';
 import { requireTab } from '../state.js';
 import { armTeleportWatcher, cleanupTeleportWatcher } from '../teleport.js';
 import type { PlaywrightHandler, PlaywrightHandlerCtx } from '../types.js';
@@ -109,6 +109,8 @@ export const openHandler: PlaywrightHandler = async ({
   } else {
     targetId = await browser.createPage(initialUrl);
   }
+  // Number it now, so tabs this shell opens are numbered in opening order.
+  tabNumberFor(state, targetId);
 
   // Generic-mobile-device emulation (metrics + touch-layout viewport +
   // Android Chrome UA so sites serve their mobile layout, which is usually
@@ -179,10 +181,11 @@ export const openHandler: PlaywrightHandler = async ({
 };
 
 export const tabListHandler: PlaywrightHandler = async ({ browser, state }) => {
-  const pages = await getActionablePages(browser, state);
+  const pages = numberTabs(state, await getActionablePages(browser, state));
   if (pages.length === 0) {
     return { stdout: 'No tabs open\n', stderr: '', exitCode: 0 };
   }
+  // The number goes last: callers parse lines that start with `[targetId]`.
   const lines = pages.map((p) => {
     const isActive = !!p.active;
     const isRemote = p.targetId.includes(':');
@@ -190,7 +193,7 @@ export const tabListHandler: PlaywrightHandler = async ({ browser, state }) => {
     const remoteSuffix = isRemote
       ? ` [remote:${p.targetId.substring(0, p.targetId.indexOf(':'))}]`
       : '';
-    return `[${p.targetId}] ${p.url} "${p.title}"${activeMarker}${remoteSuffix}`;
+    return `[${p.targetId}] ${p.url} "${p.title}" (tab ${p.number})${activeMarker}${remoteSuffix}`;
   });
   return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
 };
@@ -223,6 +226,7 @@ export const tabCloseHandler: PlaywrightHandler = async ({ browser, state, flags
   state.routes.delete(tab.targetId);
   state.lastMousePosition.delete(tab.targetId);
   state.tabRefs.delete(tab.targetId);
+  state.tabNumbers.delete(tab.targetId);
   return { stdout: `Closed tab ${tab.targetId}\n`, stderr: '', exitCode: 0 };
 };
 
@@ -230,32 +234,54 @@ export const tabSelectHandler: PlaywrightHandler = async ({
   browser,
   state,
   positional,
+  flags,
   onTab,
 }) => {
-  if (positional.length === 0) {
-    return { stdout: '', stderr: 'tab-select requires a tab index\n', exitCode: 1 };
-  }
-  const indexStr = positional[0];
-  if (!/^[0-9]+$/.test(indexStr)) {
-    return { stdout: '', stderr: 'tab-select index must be a positive integer\n', exitCode: 1 };
-  }
-  const index = parseInt(indexStr, 10);
-  if (index < 1) {
-    return { stdout: '', stderr: 'tab-select index must be a positive integer\n', exitCode: 1 };
-  }
-  const pages = await getActionablePages(browser, state);
-  if (index > pages.length) {
+  const byId = flags['tab'];
+  const numberStr = positional[0];
+  if (byId && numberStr) {
     return {
       stdout: '',
-      stderr: `tab-select index ${index} out of range (${pages.length} tab${pages.length === 1 ? '' : 's'} open)\n`,
+      stderr: 'tab-select takes a tab number or --tab=<targetId>, not both\n',
       exitCode: 1,
     };
   }
-  const targetId = pages[index - 1].targetId;
+  if (!byId && !numberStr) {
+    return {
+      stdout: '',
+      stderr: 'tab-select requires a tab number from tab-list or --tab=<targetId>\n',
+      exitCode: 1,
+    };
+  }
+  if (numberStr && !/^[1-9][0-9]*$/.test(numberStr)) {
+    return {
+      stdout: '',
+      stderr: 'tab-select tab number must be a positive integer\n',
+      exitCode: 1,
+    };
+  }
+  const pages = numberTabs(state, await getActionablePages(browser, state));
+  let targetId: string;
+  if (byId) {
+    targetId = byId;
+  } else {
+    const number = parseInt(numberStr, 10);
+    const page = pages.find((p) => p.number === number);
+    if (!page) {
+      return {
+        stdout: '',
+        stderr: `tab-select: no open tab is numbered ${number} (it was closed, or this shell never listed it). Run tab-list for current numbers, or pass --tab=<targetId>.\n`,
+        exitCode: 1,
+      };
+    }
+    targetId = page.targetId;
+  }
   // Through the handle, not a raw send: raising a window is browser-global
   // state and `bringToFront` is what takes the bridge-wide lock for it.
   await onTab(targetId, (page) => page.bringToFront());
-  return { stdout: `Selected tab ${index} [targetId: ${targetId}]\n`, stderr: '', exitCode: 0 };
+  const number = pages.find((p) => p.targetId === targetId)?.number;
+  const label = number === undefined ? 'tab' : `tab ${number}`;
+  return { stdout: `Selected ${label} [targetId: ${targetId}]\n`, stderr: '', exitCode: 0 };
 };
 
 export const resizeHandler: PlaywrightHandler = async ({

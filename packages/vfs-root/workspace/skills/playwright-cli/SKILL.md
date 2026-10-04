@@ -38,7 +38,7 @@ playwright-cli snapshot --tab=E9A3F
 
 ## Tab IDs
 
-- `tab-list` shows all tabs with their targetIds. The user's active tab is marked `(active)`.
+- `tab-list` shows all tabs with their targetIds and a stable `(tab N)` number. In the extension the user's active tab is marked `(active)`; standalone Chrome does not report it.
 - `tab-new` / `open` return the new tab's targetId — capture it for subsequent commands.
 - Use `--tab=<targetId>` on ALL commands that operate on a tab.
 
@@ -98,7 +98,7 @@ opening in the background.
 **Bringing a tab to the foreground (activate / focus / raise / switch to a tab):**
 
 - **New tab** → `open <url> --foreground` (or `tab-new <url> --fg`).
-- **Existing tab** → `tab-select <index>` (1-based index from `tab-list`).
+- **Existing tab** → `tab-select --tab=<targetId>`, or `tab-select <N>` with the `(tab N)` number from `tab-list`. Numbers stick to their tab while it is open (new tabs get the next number), so they do not shift when other agents open or close tabs.
 
 `--mobile` opens the tab with generic mobile-device emulation (viewport,
 device pixel ratio, touch, Android Chrome UA), sticky for the tab's lifetime —
@@ -284,10 +284,11 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 ### Tab Management
 
 ```bash
-playwright-cli tab-list                  # List tabs with targetIds + (active) marker
+playwright-cli tab-list                  # List tabs with targetIds, (tab N), (active) marker
 playwright-cli tab-new [url]             # New tab, returns targetId
 playwright-cli tab-close --tab=<id>      # Close specific tab
-playwright-cli tab-select <index>        # Select (bring to front) tab by 1-based index
+playwright-cli tab-select --tab=<id>     # Select (bring to front) a tab by targetId
+playwright-cli tab-select <N>            # ... or by its (tab N) number from tab-list
 ```
 
 ### Cookies
@@ -375,7 +376,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 ## Tips
 
 - **Refs are stable per element** — chain actions on refs from one snapshot freely. Re-snapshot (or read the `Snapshot: <path>` file an action prints) to see elements the page added.
-- `open` and `tab-new` open tabs in the **background** by default. Capture the targetId from the output. To open in the **foreground** add `--foreground`/`--fg`; to raise an **already-open** tab use `tab-select <index>`.
+- `open` and `tab-new` open tabs in the **background** by default. Capture the targetId from the output. To open in the **foreground** add `--foreground`/`--fg`; to raise an **already-open** tab use `tab-select --tab=<id>` (or `tab-select <N>`).
 - After `goto`, `go-back`, `go-forward`, or `reload`, take a fresh `snapshot --tab=<id>`: the new page has new refs.
 - Unexpected JavaScript dialogs are auto-dismissed on attached pages.
 - Use `eval --tab=<id>` for DOM operations not covered by built-in commands; save results with `--filename=path`.

@@ -337,7 +337,7 @@
     },
     "tab-select": {
       "args": ["index"],
-      "flags": {}
+      "flags": { "tab": "string" }
     },
     "pdf": {
       "args": [],
