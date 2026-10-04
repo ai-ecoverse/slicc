@@ -27,6 +27,8 @@ export function createPlaywrightState(): PlaywrightState {
     routes: new Map(),
     routeCleanup: new Map(),
     lastMousePosition: new Map(),
+    tabNumbers: new Map(),
+    lastTabNumber: 0,
   };
 }
 

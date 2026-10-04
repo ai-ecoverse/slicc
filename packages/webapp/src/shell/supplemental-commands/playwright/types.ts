@@ -159,6 +159,10 @@ export interface PlaywrightState {
   routeCleanup: Map<string, () => void>;
 
   lastMousePosition: Map<string, { x: number; y: number }>;
+
+  tabNumbers: Map<string, number>;
+
+  lastTabNumber: number;
 }
 
 export interface TeleportStorageSnapshot {

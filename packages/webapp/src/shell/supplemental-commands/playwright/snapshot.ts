@@ -157,10 +157,13 @@ export async function callOnElement(
 
 export async function resolveAppTabId(browser: BrowserAPI, state: PlaywrightState): Promise<void> {
   if (state.appTabId) return;
-  const pages = await browser.listPages();
+  await findAppTab(state, await browser.listPages());
+}
+
+async function findAppTab(state: PlaywrightState, pages: PageInfo[]): Promise<void> {
   const appOrigin = await resolveAppOrigin();
   const appTab = pages.find((p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'));
-  if (appTab) state.appTabId = appTab.targetId;
+  state.appTabId = appTab ? appTab.targetId : null;
 }
 
 async function resolveAppOrigin(): Promise<string> {
@@ -201,10 +204,50 @@ export async function getActionablePages(
   browser: BrowserAPI,
   state: PlaywrightState
 ): Promise<PageInfo[]> {
-  await resolveAppTabId(browser, state);
+  return (await listPagesForTabs(browser, state)).actionable;
+}
 
+export async function listNumberedTabs(
+  browser: BrowserAPI,
+  state: PlaywrightState
+): Promise<Array<PageInfo & { number: number }>> {
+  const { all, actionable } = await listPagesForTabs(browser, state);
+  return numberTabs(state, actionable, all);
+}
+
+async function listPagesForTabs(
+  browser: BrowserAPI,
+  state: PlaywrightState
+): Promise<{ all: PageInfo[]; actionable: PageInfo[] }> {
   const pages = await listAllTargetsWithRemote(browser);
-  return pages.filter((page) => isActionablePage(state, page));
+
+  if (!state.appTabId || !pages.some((p) => p.targetId === state.appTabId)) {
+    await findAppTab(state, pages);
+  }
+  return { all: pages, actionable: pages.filter((page) => isActionablePage(state, page)) };
+}
+
+export function tabNumberFor(state: PlaywrightState, targetId: string): number {
+  let number = state.tabNumbers.get(targetId);
+  if (number === undefined) {
+    number = ++state.lastTabNumber;
+    state.tabNumbers.set(targetId, number);
+  }
+  return number;
+}
+
+export function numberTabs(
+  state: PlaywrightState,
+  pages: PageInfo[],
+  present: PageInfo[] = pages
+): Array<PageInfo & { number: number }> {
+  const listed = new Set(present.map((page) => page.targetId));
+  for (const targetId of [...state.tabNumbers.keys()]) {
+    if (!listed.has(targetId) && !targetId.includes(':')) state.tabNumbers.delete(targetId);
+  }
+  return pages
+    .map((page) => ({ ...page, number: tabNumberFor(state, page.targetId) }))
+    .sort((a, b) => a.number - b.number);
 }
 
 interface FrameInfo {

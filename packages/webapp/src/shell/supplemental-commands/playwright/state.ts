@@ -66,6 +66,8 @@ export function getSharedState(browser: PlaywrightBrowserAPI, fs: VirtualFS): Pl
       routes: new Map(),
       routeCleanup: new Map(),
       lastMousePosition: new Map(),
+      tabNumbers: new Map(),
+      lastTabNumber: 0,
     };
     statesByFs.set(fs, state);
   }
