@@ -25,6 +25,28 @@ function useJavaScriptCoreStacks(): void {
       .join('\n');
 }
 
+function useFirefoxReleaseStacks(): void {
+  ErrorWithPrepare.prepareStackTrace = (_error, frames) => {
+    const sync = frames.slice(
+      0,
+      Math.max(
+        1,
+        frames.findIndex((frame) => frame.isAsync())
+      )
+    );
+    return sync
+      .map(
+        (frame) =>
+          `${frame.getFunctionName() ?? ''}@${frame.getFileName()}:${frame.getLineNumber()}:${frame.getColumnNumber()}`
+      )
+      .join('\n');
+  };
+}
+
+function useNoStacks(): void {
+  ErrorWithPrepare.prepareStackTrace = () => '';
+}
+
 function useV8Stacks(): void {
   ErrorWithPrepare.prepareStackTrace = undefined;
 }
@@ -59,6 +81,8 @@ async function readBoth(
 describe.each([
   ['JavaScriptCore', useJavaScriptCoreStacks],
   ['V8', useV8Stacks],
+  ['release-Firefox (no async frames)', useFirefoxReleaseStacks],
+  ['no', useNoStacks],
 ])('ZenFS Async mirror with %s stack traces', (_engine, useStacks) => {
   it('renames a file, in the backend and in the sync mirror', async () => {
     useStacks();
@@ -122,6 +146,30 @@ describe.each([
     expect(mirrored).toEqual([['/a', '/b']]);
     expect(await readBoth(backend, '/b', 4)).toEqual(['sync', 'sync']);
     expect(() => backend.statSync('/a')).toThrow(/no such file/);
+  });
+
+  it('throws a top-level mirror failure even while another mirrored call is in flight', async () => {
+    useStacks();
+    const backend = await makeBackend();
+    await backend.createFile('/a.lock', mode);
+    await backend.write('/a.lock', text('a'), 0);
+    await backend.createFile('/other', mode);
+    const mirror = (backend as unknown as { _sync: { writeSync: (...args: unknown[]) => void } })
+      ._sync;
+    const writeSync = mirror.writeSync.bind(mirror);
+    mirror.writeSync = (...args) => {
+      if (args[0] === '/other') throw new Error('mirror rejected the write');
+      writeSync(...args);
+    };
+    try {
+      const rename = backend.rename('/a.lock', '/a');
+      const write = backend.write('/other', text('x'), 0);
+      await expect(write).rejects.toThrow(/Out of sync/);
+      await expect(rename).resolves.toBeUndefined();
+    } finally {
+      mirror.writeSync = writeSync;
+    }
+    expect(await readBoth(backend, '/a', 1)).toEqual(['a', 'a']);
   });
 
   it('throws a mirror failure that no outer call will repair (out of sync)', async () => {

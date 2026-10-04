@@ -14,7 +14,7 @@ index 1e20478..51f47b7 100644
                  if (metadata.size < data.byteLength)
                      data.fill(0, metadata.size);
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 26aaf3a..5c61eda 100644
+index 26aaf3a..3d85fc1 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
 @@ -54,7 +54,10 @@ var __disposeResources = (this && this.__disposeResources) || (function (Suppres
@@ -35,9 +35,9 @@ index 26aaf3a..5c61eda 100644
          }
 +        /**
 +         * PATCH(slicc#3783, upstream zen-fs/core#325): a `*Sync` method has already updated the mirror, so
-+         * the queued async call it schedules runs the backend's own method,
-+         * not the mirroring wrapper (which used to apply the change a second
-+         * time and rely on swallowing the failure).
++         * the queued async call it schedules runs the backend's own method
++         * (against the unmirrored view), not the mirroring wrapper, which
++         * would apply the change to the mirror a second time.
 +         * @internal
 +         */
 +        _replay(key, ...args) {
@@ -379,18 +379,63 @@ index 26aaf3a..5c61eda 100644
          }
          /**
           * @internal
-@@ -258,42 +472,96 @@ export function Async(FS) {
+@@ -258,37 +472,65 @@ export function Async(FS) {
          _patchAsync() {
              const noPatch = ['read', 'readdir', 'stat', 'exists'];
              const toPatch = _asyncFSKeys.filter(key => !noPatch.includes(key));
--            for (const key of toPatch) {
--                // TS does not narrow the union based on the key
++            // PATCH(slicc#3783, upstream zen-fs/core#325): upstream decided from stack traces
++            // whether a call was nested in another mirrored call ("in the loop"),
++            // which depends on the engine's frame format and on async frames
++            // being captured at all (JavaScriptCore names no arrow wrapper;
++            // release Firefox records no async frames unless DevTools is
++            // attached). A nested mirror update that failed was then thrown, and
++            // every rename of a file failed: IndexFS.rename writes the new path
++            // before the outer rename has moved the mirror's entry.
++            //
++            // No stacks now: whether a call is nested is known from how it was
++            // made. A backend method runs against `unmirrored`, a view of this
++            // file system whose patched methods are `nested` ones. A nested call
++            // updates the mirror best-effort: a failure there is expected while
++            // the outer call is mid-flight (the rename's write above), and the
++            // outer call mirrors the whole change when it returns. It still
++            // mirrors what it can, such as the bytes a replayed rename copies to
++            // a path the mirror keeps as metadata only. A top-level call's
++            // update must succeed; a failure is thrown, out of sync.
++            const originals = {};
++            const nested = {};
++            const unmirrored = new Proxy(this, {
++                get: (target, prop) => typeof prop === 'string' && Object.hasOwn(nested, prop)
++                    ? nested[prop]
++                    : Reflect.get(target, prop, target),
++            });
++            this._zenfsOriginals = originals;
++            const updateMirror = (key, args) => {
++                if (!this._isInitialized) {
++                    this._skippedCacheUpdates++;
++                    return;
++                }
++                // PATCH(slicc#3441, upstream zen-fs/core#322): keep large bodies out of the mirror.
++                if (this._mirrorMetaOnly(key, args))
++                    return;
++                if (key === 'write')
++                    this._prepareMetaWrite(args[0], args[2]);
++                this._sync?.[`${key}Sync`]?.(...args);
++                this._followMetaOnly(key, args);
++            };
+             for (const key of toPatch) {
+                 // TS does not narrow the union based on the key
 -                const originalMethod = this[key].bind(this);
 -                function isInLoop(depth, error) {
 -                    if (!error) {
 -                        error = new Error();
 -                        Error.captureStackTrace(error, isInLoop);
--                    }
++                const method = this[key];
++                originals[key] = (...args) => method.apply(unmirrored, args);
++                nested[key] = async (...args) => {
++                    const result = await originals[key](...args);
++                    try {
++                        updateMirror(key, args);
+                     }
 -                    if (!error.stack)
 -                        return false;
 -                    const stack = error.stack.split('\n').slice(depth).join('\n');
@@ -398,117 +443,32 @@ index 26aaf3a..5c61eda 100644
 -                    return (stack.includes(`at <computed> [as ${key}]`)
 -                        || stack.includes(`at async <computed> [as ${key}]`)
 -                        || stack.includes(`${key}Sync `));
-+            // PATCH(slicc#3783, upstream zen-fs/core#325): whether a call is "in the loop" is read
-+            // from stack traces. Upstream matched V8's frame text only (`at
-+            // <computed> [as write]`), so in JavaScriptCore and SpiderMonkey no
-+            // call ever was: a mirror update that fails because an outer call
-+            // is mid-flight (IndexFS.rename writing the new path before the
-+            // mirror has it) threw ENOENT instead of being skipped, and every
-+            // rename of a file failed. Each wrapper is now a function with a
-+            // literal name, `zenfsMirror_<key>`, which every engine prints in
-+            // its stack frames (a computed or assigned name is not printed by
-+            // JavaScriptCore), and the frames are compared in any format.
-+            const wrapperName = (key) => `zenfsMirror_${key}`;
-+            const isFrameOf = (key, line) => line.includes(wrapperName(key))
-+                || line.includes(`<computed> [as ${key}]`)
-+                || line.includes(`${key}Sync `)
-+                || line.includes(`${key}Sync@`);
-+            /** A stack's frames, without V8's leading `Error: message` line. */
-+            const framesOf = (error) => {
-+                const lines = (error?.stack ?? '').split('\n').filter(Boolean);
-+                const v8 = lines.slice(1).some(line => /^\s*at /.test(line));
-+                if (v8 && !/^\s*at /.test(lines[0] ?? ''))
-+                    lines.shift();
-+                return lines;
-+            };
-+            const isOwnFrame = (key, line) => line.includes(wrapperName(key)) || line.includes(`<computed> [as ${key}]`);
-+            /** The frames below this call's own wrapper frame. */
-+            const callersOf = (key, error) => {
-+                const frames = framesOf(error);
-+                return frames.slice(frames.findIndex(line => isOwnFrame(key, line)) + 1);
-+            };
-+            /** Called (awaited) from another call of the same method, or from its sync counterpart. */
-+            const isNested = (key) => callersOf(key, new Error()).some(line => isFrameOf(key, line));
-+            /**
-+             * The mirror update failed while an outer mirrored call (any method) is
-+             * in flight beneath this one: IndexFS.rename writes the new path before
-+             * the outer rename has moved the mirror's entry, and the outer call
-+             * mirrors the whole change when it returns. A failure with no outer
-+             * mirrored call is a real one and is thrown, out of sync.
-+             */
-+            const failedInLoop = (key, error) => callersOf(key, error)
-+                .some(line => line.includes('zenfsMirror_') || line.includes('<computed> [as '));
-+            const mirrored = async (key, originalMethod, args) => {
-+                const result = await originalMethod(...args);
-+                if (isNested(key))
-+                    return result;
-+                if (!this._isInitialized) {
-+                    this._skippedCacheUpdates++;
-+                    return result;
-                 }
+-                }
 -                this[key] = async (...args) => {
 -                    const result = await originalMethod(...args);
 -                    if (isInLoop(2))
-+                try {
-+                    // PATCH(slicc#3441, upstream zen-fs/core#322): keep large bodies out of the mirror.
-+                    if (this._mirrorMetaOnly(key, args))
-                         return result;
+-                        return result;
 -                    if (!this._isInitialized) {
 -                        this._skippedCacheUpdates++;
-+                    if (key === 'write')
-+                        this._prepareMetaWrite(args[0], args[2]);
-+                    this._sync?.[`${key}Sync`]?.(...args);
-+                    this._followMetaOnly(key, args);
-+                }
-+                catch (e) {
-+                    if (failedInLoop(key, e))
-                         return result;
--                    }
--                    try {
+-                        return result;
++                    catch {
++                        // The outer call mirrors the whole change.
+                     }
++                    return result;
++                };
++                this[key] = async (...args) => {
++                    const result = await originals[key](...args);
+                     try {
 -                        // @ts-expect-error 2556 - The type of `args` is not narrowed
 -                        this._sync?.[`${key}Sync`]?.(...args);
--                    }
--                    catch (e) {
++                        updateMirror(key, args);
+                     }
+                     catch (e) {
 -                        if (isInLoop(3, e))
 -                            return result;
--                        e.message += ' (Out of sync!)';
--                        throw err(e);
--                    }
--                    return result;
--                };
-+                    e.message += ' (Out of sync!)';
-+                    throw err(e);
-+                }
-+                return result;
-+            };
-+            const originals = {};
-+            this._zenfsOriginals = originals;
-+            const wrappers = {
-+                async zenfsMirror_rename(...args) { return await mirrored('rename', originals.rename, args); },
-+                async zenfsMirror_stat(...args) { return await mirrored('stat', originals.stat, args); },
-+                async zenfsMirror_touch(...args) { return await mirrored('touch', originals.touch, args); },
-+                async zenfsMirror_createFile(...args) { return await mirrored('createFile', originals.createFile, args); },
-+                async zenfsMirror_unlink(...args) { return await mirrored('unlink', originals.unlink, args); },
-+                async zenfsMirror_rmdir(...args) { return await mirrored('rmdir', originals.rmdir, args); },
-+                async zenfsMirror_mkdir(...args) { return await mirrored('mkdir', originals.mkdir, args); },
-+                async zenfsMirror_readdir(...args) { return await mirrored('readdir', originals.readdir, args); },
-+                async zenfsMirror_exists(...args) { return await mirrored('exists', originals.exists, args); },
-+                async zenfsMirror_link(...args) { return await mirrored('link', originals.link, args); },
-+                async zenfsMirror_sync(...args) { return await mirrored('sync', originals.sync, args); },
-+                async zenfsMirror_read(...args) { return await mirrored('read', originals.read, args); },
-+                async zenfsMirror_write(...args) { return await mirrored('write', originals.write, args); },
-+                async zenfsMirror_ioctl(...args) { return await mirrored('ioctl', originals.ioctl, args); },
-+            };
-+            for (const key of toPatch) {
-+                // TS does not narrow the union based on the key
-+                originals[key] = this[key].bind(this);
-+                const wrapper = wrappers[wrapperName(key)];
-+                if (!wrapper)
-+                    throw new Error(`Async: no mirror wrapper for ${key}`);
-+                this[key] = wrapper;
-             }
-             debug(`Async: patched ${toPatch.length} methods`);
-         }
+                         e.message += ' (Out of sync!)';
+                         throw err(e);
+                     }
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
 index 44f7ed2..faea5dc 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js
