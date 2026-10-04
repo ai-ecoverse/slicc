@@ -93,14 +93,28 @@ export interface NetworkEntry {
   timestamp: number;
 }
 
+export interface SnapshotRef {
+  role: string;
+  name: string;
+
+  localRef: string;
+
+  frameId?: string;
+}
+
 export interface TabSnapshot {
   url: string;
   title: string;
-  refToSelector: Map<string, string>;
-  refToBackendNodeId: Map<string, number>;
-  refToFrameId: Map<string, string>;
+
+  refs: Map<string, SnapshotRef>;
   content: string;
   timestamp: number;
+}
+
+export interface TabRefState {
+  floor: number;
+
+  framePrefixes: Map<string, string>;
 }
 
 export interface RouteEntry {
@@ -119,6 +133,8 @@ export interface RouteEntry {
 
 export interface PlaywrightState {
   snapshots: Map<string, TabSnapshot>;
+
+  tabRefs: Map<string, TabRefState>;
 
   appTabId: string | null;
 

@@ -10,6 +10,7 @@ import {
   getSharedState,
   PLAYWRIGHT_FLAG_SPEC,
   parseFlags,
+  SNAPSHOT_NOTE_COMMANDS,
 } from './playwright/state.js';
 import type { CmdResult, PlaywrightHandlerCtx } from './playwright/types.js';
 import { type KnownFlagSpec, parseKnownFlags } from './subcommand-flags.js';
@@ -243,7 +244,18 @@ export function createPlaywrightCommand(
       scratchDir: unitScratchDir,
       sessionRoot,
 
-      onTab: (targetId, fn) => browser.withTab(targetId, fn, { signal: ctx.signal }),
+      onTab: (targetId, fn) =>
+        browser.withTab(
+          targetId,
+          async (page) => {
+            try {
+              return await fn(page);
+            } finally {
+              await page.releaseObjects?.().catch(() => undefined);
+            }
+          },
+          { signal: ctx.signal }
+        ),
       signal: ctx.signal,
     });
 
@@ -264,6 +276,10 @@ export function createPlaywrightCommand(
       });
     } catch {}
 
-    return withContentionNote(browser, lockStatsBefore, contendedTargetId, result);
+    const noted =
+      snapshotPath && SNAPSHOT_NOTE_COMMANDS.has(subcommand)
+        ? { ...result, stdout: `${result.stdout}Snapshot: ${snapshotPath}\n` }
+        : result;
+    return withContentionNote(browser, lockStatsBefore, contendedTargetId, noted);
   });
 }

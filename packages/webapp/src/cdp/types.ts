@@ -127,5 +127,16 @@ export interface AccessibilityNode {
   description?: string;
   children?: AccessibilityNode[];
 
-  backendNodeId?: number;
+  ref?: string;
+
+  refSeq?: number;
+}
+
+export interface AccessibilityTreeOptions {
+  refFloor?: number;
+}
+
+export interface ResolvedAriaRef {
+  objectId: string;
+  backendNodeId: number;
 }

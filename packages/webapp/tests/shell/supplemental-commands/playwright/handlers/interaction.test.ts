@@ -18,21 +18,18 @@ import type {
   PlaywrightState,
   TabSnapshot,
 } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
-import { createHandlerCtx, createPlaywrightState } from '../../../helpers/playwright-harness.js';
+import {
+  createHandlerCtx,
+  createPlaywrightState,
+  makeTabSnapshot,
+  resolveAriaRefMock,
+  snapshotRefs,
+} from '../../../helpers/playwright-harness.js';
 
 const TAB = 'tab-1';
 
-function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
-  return {
-    url: 'https://x',
-    title: 't',
-    content: '',
-    timestamp: 0,
-    refToSelector: new Map(),
-    refToBackendNodeId: new Map(),
-    refToFrameId: new Map(),
-    ...over,
-  };
+function makeSnapshot(...printed: string[]): TabSnapshot {
+  return makeTabSnapshot({ refs: snapshotRefs(...printed) });
 }
 
 function stateWithSnapshot(snapshot?: TabSnapshot): PlaywrightState {
@@ -41,7 +38,7 @@ function stateWithSnapshot(snapshot?: TabSnapshot): PlaywrightState {
   return state;
 }
 
-function makeBrowser() {
+function makeBrowser(nodeIds: Record<string, number> = {}) {
   const send = vi.fn(async (_m: string, _p?: Record<string, unknown>) => {
     if (_m === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
     if (_m === 'Runtime.callFunctionOn') return { result: { value: '' } };
@@ -49,6 +46,7 @@ function makeBrowser() {
   });
   const spies = {
     send,
+    resolveAriaRef: resolveAriaRefMock(nodeIds),
     click: vi.fn(async () => undefined),
     type: vi.fn(async () => undefined),
     insertText: vi.fn(async () => undefined),
@@ -67,6 +65,7 @@ function makeBrowser() {
     sessionId: 'session-1',
     transport: { send },
     send: (method: string, params?: Record<string, unknown>) => send(method, params),
+    resolveAriaRef: spies.resolveAriaRef,
     click: spies.click,
     type: spies.type,
     insertText: spies.insertText,
@@ -116,31 +115,29 @@ describe('interaction handlers — argument validation', () => {
 });
 
 describe('clickHandler', () => {
-  it('clicks via backendNodeId and invalidates the snapshot', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({ refToBackendNodeId: new Map([['e5', 42]]) });
-    const state = stateWithSnapshot(snapshot);
+  it('clicks the element the ref resolves to and invalidates the snapshot', async () => {
+    const { browser, spies } = makeBrowser({ e5: 42 });
+    const state = stateWithSnapshot(makeSnapshot('e5'));
     const result = await clickHandler(
-      createHandlerCtx({ browser, state, positional: ['e5'], flags: { tab: TAB } })
+      createHandlerCtx({
+        browser,
+        state,
+        positional: ['e5'],
+        flags: { tab: TAB, modifiers: 'Shift,Meta' },
+      })
     );
     expect(result.stdout).toBe('Clicked e5\n');
-    expect(spies.clickByBackendNodeId).toHaveBeenCalledWith(42, 0);
+    expect(spies.resolveAriaRef).toHaveBeenCalledWith('e5', undefined);
+    expect(spies.clickByBackendNodeId).toHaveBeenCalledWith(42, 12);
     expect(state.snapshots.has(TAB)).toBe(false);
   });
 
   it('clicks the third of three same-named button refs', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({
-      refToBackendNodeId: new Map([
-        ['e1', 101],
-        ['e2', 102],
-        ['e3', 103],
-      ]),
-    });
+    const { browser, spies } = makeBrowser({ e1: 101, e2: 102, e3: 103 });
     const result = await clickHandler(
       createHandlerCtx({
         browser,
-        state: stateWithSnapshot(snapshot),
+        state: stateWithSnapshot(makeSnapshot('e1', 'e2', 'e3')),
         positional: ['e3'],
         flags: { tab: TAB },
       })
@@ -150,41 +147,43 @@ describe('clickHandler', () => {
     expect(spies.clickByBackendNodeId).toHaveBeenCalledWith(103, 0);
   });
 
-  it('falls back to a CSS selector and parses --modifiers', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({ refToSelector: new Map([['e5', '#btn']]) });
+  it('clicks an iframe ref in its own frame', async () => {
+    const { browser, spies } = makeBrowser({ e5: 9 });
     const result = await clickHandler(
       createHandlerCtx({
         browser,
-        state: stateWithSnapshot(snapshot),
-        positional: ['e5'],
-        flags: { tab: TAB, modifiers: 'Shift,Meta' },
-      })
-    );
-    expect(result.stdout).toBe('Clicked e5\n');
-    expect(spies.click).toHaveBeenCalledWith('#btn', 12);
-  });
-
-  it('routes clicks into an iframe ref', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({
-      refToFrameId: new Map([['f1e5', 'frame-1']]),
-      refToSelector: new Map([['f1e5', '#a']]),
-    });
-    const result = await clickHandler(
-      createHandlerCtx({
-        browser,
-        state: stateWithSnapshot(snapshot),
+        state: stateWithSnapshot(makeSnapshot('f1e5')),
         positional: ['f1e5'],
         flags: { tab: TAB },
       })
     );
     expect(result.stdout).toContain('(in iframe)');
-    expect(spies.evaluateInFrame).toHaveBeenCalled();
+    expect(spies.resolveAriaRef).toHaveBeenCalledWith('e5', 'frame-1');
+    expect(spies.send).toHaveBeenCalledWith(
+      'Runtime.callFunctionOn',
+      expect.objectContaining({ objectId: 'obj-e5' })
+    );
+    expect(spies.clickByBackendNodeId).not.toHaveBeenCalled();
+  });
+
+  it('refuses a ref whose element left the page', async () => {
+    const { browser, spies } = makeBrowser({});
+    await expect(
+      clickHandler(
+        createHandlerCtx({
+          browser,
+          state: stateWithSnapshot(makeSnapshot('e31')),
+          positional: ['e31'],
+          flags: { tab: TAB },
+        })
+      )
+    ).rejects.toThrow('Ref "e31" (button) is no longer on the page');
+    expect(spies.clickByBackendNodeId).not.toHaveBeenCalled();
+    expect(spies.click).not.toHaveBeenCalled();
   });
 
   it('rejects an unknown ref and a missing snapshot', async () => {
-    const { browser } = makeBrowser();
+    const { browser, spies } = makeBrowser({ e9: 1 });
     await expect(
       clickHandler(
         createHandlerCtx({
@@ -195,6 +194,7 @@ describe('clickHandler', () => {
         })
       )
     ).rejects.toThrow('Unknown ref');
+    expect(spies.resolveAriaRef).not.toHaveBeenCalled();
 
     await expect(
       clickHandler(
@@ -290,10 +290,9 @@ describe('keyboard + type handlers', () => {
 });
 
 describe('fillHandler', () => {
-  it('fills via backendNodeId with the React fallback and submits', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({ refToBackendNodeId: new Map([['e5', 7]]) });
-    const state = stateWithSnapshot(snapshot);
+  it('fills the resolved element with the React fallback and submits', async () => {
+    const { browser, spies } = makeBrowser({ e5: 7 });
+    const state = stateWithSnapshot(makeSnapshot('e5'));
     const result = await fillHandler(
       createHandlerCtx({
         browser,
@@ -316,31 +315,48 @@ describe('fillHandler', () => {
     expect(state.snapshots.has(TAB)).toBe(false);
   });
 
-  it('fills via the CSS selector fallback', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({ refToSelector: new Map([['e5', '#in']]) });
+  it('fills an iframe ref in its own frame', async () => {
+    const { browser, spies } = makeBrowser({ e2: 5 });
     const result = await fillHandler(
       createHandlerCtx({
         browser,
-        state: stateWithSnapshot(snapshot),
-        positional: ['e5', 'text'],
+        state: stateWithSnapshot(makeSnapshot('f3e2')),
+        positional: ['f3e2', 'text'],
         flags: { tab: TAB },
       })
     );
-    expect(result.stdout).toBe('Filled e5 with: text\n');
-    expect(spies.click).toHaveBeenCalledWith('#in');
-    expect(spies.insertText).toHaveBeenCalledWith('text');
+    expect(result.stdout).toBe('Filled f3e2 with: text (in iframe)\n');
+    expect(spies.resolveAriaRef).toHaveBeenCalledWith('e2', 'frame-3');
+    expect(spies.send).toHaveBeenCalledWith(
+      'Runtime.callFunctionOn',
+      expect.objectContaining({ objectId: 'obj-e2', arguments: [{ value: 'text' }] })
+    );
+    expect(spies.insertText).not.toHaveBeenCalled();
+  });
+
+  it('fails loudly on a stale ref instead of filling a neighbour', async () => {
+    const { browser, spies } = makeBrowser({ e31: 8 });
+    await expect(
+      fillHandler(
+        createHandlerCtx({
+          browser,
+          state: stateWithSnapshot(makeSnapshot('e30', 'e31')),
+          positional: ['e30', 'Trieloff'],
+          flags: { tab: TAB },
+        })
+      )
+    ).rejects.toThrow('Ref "e30" (button) is no longer on the page');
+    expect(spies.insertText).not.toHaveBeenCalled();
   });
 });
 
 describe('pointer + form handlers', () => {
-  it('dblclick uses backendNodeId', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({ refToBackendNodeId: new Map([['e5', 3]]) });
+  it('dblclick uses the resolved backend node', async () => {
+    const { browser, spies } = makeBrowser({ e5: 3 });
     const result = await dblclickHandler(
       createHandlerCtx({
         browser,
-        state: stateWithSnapshot(snapshot),
+        state: stateWithSnapshot(makeSnapshot('e5')),
         positional: ['e5'],
         flags: { tab: TAB },
       })
@@ -349,13 +365,12 @@ describe('pointer + form handlers', () => {
     expect(spies.dblclickByBackendNodeId).toHaveBeenCalledWith(3, 'left', 0);
   });
 
-  it('hover uses backendNodeId', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({ refToBackendNodeId: new Map([['e5', 3]]) });
+  it('hover uses the resolved backend node', async () => {
+    const { browser, spies } = makeBrowser({ e5: 3 });
     const result = await hoverHandler(
       createHandlerCtx({
         browser,
-        state: stateWithSnapshot(snapshot),
+        state: stateWithSnapshot(makeSnapshot('e5')),
         positional: ['e5'],
         flags: { tab: TAB },
       })
@@ -364,13 +379,12 @@ describe('pointer + form handlers', () => {
     expect(spies.hoverByBackendNodeId).toHaveBeenCalledWith(3);
   });
 
-  it('select sets a value by backendNodeId', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({ refToBackendNodeId: new Map([['e5', 3]]) });
+  it('select sets a value on the resolved backend node', async () => {
+    const { browser, spies } = makeBrowser({ e5: 3 });
     const result = await selectHandler(
       createHandlerCtx({
         browser,
-        state: stateWithSnapshot(snapshot),
+        state: stateWithSnapshot(makeSnapshot('e5')),
         positional: ['e5', 'opt', 'two'],
         flags: { tab: TAB },
       })
@@ -379,13 +393,35 @@ describe('pointer + form handlers', () => {
     expect(spies.selectByBackendNodeId).toHaveBeenCalledWith(3, 'opt two');
   });
 
+  it('iframe dblclick, hover, and select run on the frame element', async () => {
+    for (const [handler, positional, expected] of [
+      [dblclickHandler, ['f1e4'], 'Double-clicked f1e4 (in iframe)\n'],
+      [hoverHandler, ['f1e4'], 'Hovered f1e4 (in iframe)\n'],
+      [selectHandler, ['f1e4', 'b'], 'Selected "b" on f1e4 (in iframe)\n'],
+    ] as const) {
+      const { browser, spies } = makeBrowser({ e4: 4 });
+      const result = await handler(
+        createHandlerCtx({
+          browser,
+          state: stateWithSnapshot(makeSnapshot('f1e4')),
+          positional: [...positional],
+          flags: { tab: TAB },
+        })
+      );
+      expect(result.stdout).toBe(expected);
+      expect(spies.send).toHaveBeenCalledWith(
+        'Runtime.callFunctionOn',
+        expect.objectContaining({ objectId: 'obj-e4' })
+      );
+    }
+  });
+
   it('check reports toggled vs already-checked', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({ refToBackendNodeId: new Map([['e5', 3]]) });
+    const { browser, spies } = makeBrowser({ e5: 3 });
     const toggled = await checkHandler(
       createHandlerCtx({
         browser,
-        state: stateWithSnapshot(snapshot),
+        state: stateWithSnapshot(makeSnapshot('e5')),
         positional: ['e5'],
         flags: { tab: TAB },
       })
@@ -393,24 +429,21 @@ describe('pointer + form handlers', () => {
     expect(toggled.stdout).toBe('Checked e5\n');
 
     spies.setCheckedByBackendNodeId.mockResolvedValueOnce('already');
+    const state = stateWithSnapshot(makeSnapshot('e5'));
     const already = await checkHandler(
-      createHandlerCtx({
-        browser,
-        state: stateWithSnapshot(snapshot),
-        positional: ['e5'],
-        flags: { tab: TAB },
-      })
+      createHandlerCtx({ browser, state, positional: ['e5'], flags: { tab: TAB } })
     );
     expect(already.stdout).toBe('e5 already checked\n');
+
+    expect(state.snapshots.has(TAB)).toBe(true);
   });
 
   it('uncheck reports toggled state', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({ refToBackendNodeId: new Map([['e5', 3]]) });
+    const { browser, spies } = makeBrowser({ e5: 3 });
     const result = await uncheckHandler(
       createHandlerCtx({
         browser,
-        state: stateWithSnapshot(snapshot),
+        state: stateWithSnapshot(makeSnapshot('e5')),
         positional: ['e5'],
         flags: { tab: TAB },
       })
@@ -419,18 +452,45 @@ describe('pointer + form handlers', () => {
     expect(spies.setCheckedByBackendNodeId).toHaveBeenCalledWith(3, false);
   });
 
-  it('drag connects two backendNodeIds and rejects missing endpoints', async () => {
-    const { browser, spies } = makeBrowser();
-    const snapshot = makeSnapshot({
-      refToBackendNodeId: new Map([
-        ['e1', 1],
-        ['e2', 2],
-      ]),
-    });
+  it('iframe check/uncheck toggle in the frame and report no-ops', async () => {
+    const { browser, spies } = makeBrowser({ e4: 4 });
+    spies.send.mockImplementation(async (method: string) =>
+      method === 'Runtime.callFunctionOn' ? { result: { value: 'toggled' } } : {}
+    );
+    const checked = await checkHandler(
+      createHandlerCtx({
+        browser,
+        state: stateWithSnapshot(makeSnapshot('f1e4')),
+        positional: ['f1e4'],
+        flags: { tab: TAB },
+      })
+    );
+    expect(checked.stdout).toBe('Checked f1e4 (in iframe)\n');
+    expect(spies.send).toHaveBeenCalledWith(
+      'Runtime.callFunctionOn',
+      expect.objectContaining({ objectId: 'obj-e4', arguments: [{ value: true }] })
+    );
+
+    spies.send.mockImplementation(async (method: string) =>
+      method === 'Runtime.callFunctionOn' ? { result: { value: 'already' } } : {}
+    );
+    const already = await uncheckHandler(
+      createHandlerCtx({
+        browser,
+        state: stateWithSnapshot(makeSnapshot('f1e4')),
+        positional: ['f1e4'],
+        flags: { tab: TAB },
+      })
+    );
+    expect(already.stdout).toBe('f1e4 already unchecked\n');
+  });
+
+  it('drag connects two resolved nodes and rejects missing endpoints', async () => {
+    const { browser, spies } = makeBrowser({ e1: 1, e2: 2 });
     const ok = await dragHandler(
       createHandlerCtx({
         browser,
-        state: stateWithSnapshot(snapshot),
+        state: stateWithSnapshot(makeSnapshot('e1', 'e2')),
         positional: ['e1', 'e2'],
         flags: { tab: TAB },
       })
@@ -442,11 +502,26 @@ describe('pointer + form handlers', () => {
       dragHandler(
         createHandlerCtx({
           browser,
-          state: stateWithSnapshot(makeSnapshot({ refToBackendNodeId: new Map([['e2', 2]]) })),
+          state: stateWithSnapshot(makeSnapshot('e2')),
           positional: ['e1', 'e2'],
           flags: { tab: TAB },
         })
       )
     ).rejects.toThrow('Unknown ref "e1"');
+  });
+
+  it('drag refuses iframe refs (their coordinates live in another frame)', async () => {
+    const { browser, spies } = makeBrowser({ e1: 1, e2: 2 });
+    await expect(
+      dragHandler(
+        createHandlerCtx({
+          browser,
+          state: stateWithSnapshot(makeSnapshot('e1', 'f1e2')),
+          positional: ['e1', 'f1e2'],
+          flags: { tab: TAB },
+        })
+      )
+    ).rejects.toThrow('drag does not support iframe refs ("f1e2")');
+    expect(spies.dragByBackendNodeIds).not.toHaveBeenCalled();
   });
 });

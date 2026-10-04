@@ -53,6 +53,7 @@ export function getSharedState(browser: PlaywrightBrowserAPI, fs: VirtualFS): Pl
   if (!state) {
     state = {
       snapshots: new Map(),
+      tabRefs: new Map(),
       appTabId: null,
       harRecorder: null,
       sessionDirsCreated: new Set(),
@@ -121,6 +122,10 @@ export const AUTO_SNAPSHOT_COMMANDS = new Set([
   'dialog-dismiss',
   'drop',
 ]);
+
+export const SNAPSHOT_NOTE_COMMANDS = new Set(
+  [...AUTO_SNAPSHOT_COMMANDS].filter((command) => command !== 'goto' && command !== 'navigate')
+);
 
 export function filenameSafeTimestamp(date: Date): string {
   return date.toISOString().replace(/:/g, '-');

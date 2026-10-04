@@ -7,7 +7,6 @@ import {
   mouseupHandler,
   mousewheelHandler,
 } from '../../../../../src/shell/supplemental-commands/playwright/handlers/mouse.js';
-import type { TabSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
 import {
   allBytesFixture,
   countReplacementSeqs,
@@ -15,6 +14,8 @@ import {
   createMockBrowser,
   createMockTransport,
   createPlaywrightState,
+  makeTabSnapshot,
+  snapshotRefs,
   vfsLikeReadFile,
 } from '../../../helpers/playwright-harness.js';
 
@@ -29,42 +30,30 @@ function decodeBase64(base64: string): Uint8Array {
 
 function droppedFiles(calls: TransportCall[]): DroppedFile[] {
   const callFn = calls.find((c) => c.method === 'Runtime.callFunctionOn');
-  if (callFn) {
-    const args = callFn.params['arguments'] as Array<{ value: unknown }> | undefined;
-    return (args?.[0]?.value ?? []) as DroppedFile[];
-  }
-  const expression = calls.find((c) => c.method === 'Runtime.evaluate')?.params['expression'] as
-    | string
-    | undefined;
-  const match = expression?.match(/var filesData = (\[[\s\S]*?\]);/);
-  return match ? (JSON.parse(match[1]) as DroppedFile[]) : [];
+  const args = callFn?.params['arguments'] as Array<{ value: unknown }> | undefined;
+  return (args?.[0]?.value ?? []) as DroppedFile[];
 }
 
-function captureTransport(): {
-  transport: ReturnType<typeof createMockTransport>;
+function captureBrowser(): {
+  browser: ReturnType<typeof createMockBrowser>;
   calls: TransportCall[];
 } {
   const calls: TransportCall[] = [];
-  const transport = createMockTransport((method, params) => {
-    calls.push({ method, params: (params ?? {}) as Record<string, unknown> });
-    if (method === 'DOM.resolveNode') return { object: { objectId: 'o1' } };
-    if (method === 'Runtime.callFunctionOn') return { result: { value: 'DIV' } };
-    return {};
+  const browser = createMockBrowser({
+    nodeIds: { e5: 9 },
+    sendCdpImpl: (method, params) => {
+      calls.push({ method, params: (params ?? {}) as Record<string, unknown> });
+      if (method === 'Runtime.callFunctionOn') return { result: { value: 'DIV' } };
+      return {};
+    },
   });
-  return { transport, calls };
+  return { browser, calls };
 }
 
-function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
-  return {
-    url: 'https://x',
-    title: 't',
-    content: '',
-    timestamp: 0,
-    refToSelector: new Map(),
-    refToBackendNodeId: new Map(),
-    refToFrameId: new Map(),
-    ...over,
-  };
+function stateWithRefs(...printed: string[]) {
+  const state = createPlaywrightState();
+  state.snapshots.set(TAB, makeTabSnapshot({ refs: snapshotRefs(...printed) }));
+  return state;
 }
 
 describe('mousemove handler', () => {
@@ -228,19 +217,13 @@ describe('drop handler', () => {
     expect(r.stderr).toContain('--data format must be');
   });
 
-  it('drops a VFS file via backendNodeId', async () => {
-    const transport = createMockTransport((method) => {
-      if (method === 'DOM.resolveNode') return { object: { objectId: 'o1' } };
-      if (method === 'Runtime.callFunctionOn') return { result: { value: 'DIV' } };
-      return {};
-    });
-    const { browser } = createMockBrowser({ transport });
-    const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+  it('drops a VFS file onto the resolved element', async () => {
+    const { browser, calls } = captureBrowser();
+    const state = stateWithRefs('e5');
     const readFile = vi.fn(async () => 'file-bytes');
     const r = await dropHandler(
       createHandlerCtx({
-        browser,
+        browser: browser.browser,
         state,
         positional: ['e5'],
         flags: { tab: TAB, path: '/upload.txt' },
@@ -249,42 +232,58 @@ describe('drop handler', () => {
     );
     expect(r.stdout).toBe('Dropped onto e5\n');
     expect(readFile).toHaveBeenCalledWith('/upload.txt', { encoding: 'binary' });
+    expect(calls.find((c) => c.method === 'Runtime.callFunctionOn')?.params['objectId']).toBe(
+      'obj-e5'
+    );
     expect(state.snapshots.has(TAB)).toBe(false);
   });
 
-  it('surfaces a drop exception from the page', async () => {
-    const transport = createMockTransport((method) => {
-      if (method === 'DOM.resolveNode') return { object: { objectId: 'o1' } };
-      if (method === 'Runtime.callFunctionOn') return { exceptionDetails: { text: 'nope' } };
-      return {};
-    });
-    const { browser } = createMockBrowser({ transport });
-    const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
-    await expect(
-      dropHandler(createHandlerCtx({ browser, state, positional: ['e5'], flags: { tab: TAB } }))
-    ).rejects.toThrow('nope');
-  });
-
-  it('falls back to a CSS selector when no backendNodeId exists', async () => {
-    const transport = createMockTransport(() => ({}));
-    const { browser } = createMockBrowser({ transport });
-    const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToSelector: new Map([['e5', '#zone']]) }));
+  it('drops onto an iframe ref in its own frame', async () => {
+    const { browser, calls } = captureBrowser();
     const r = await dropHandler(
       createHandlerCtx({
-        browser,
-        state,
-        positional: ['e5'],
+        browser: browser.browser,
+        state: stateWithRefs('f1e5'),
+        positional: ['f1e5'],
         flags: { tab: TAB, data: 'text/plain=hi' },
       })
     );
-    expect(r.stdout).toBe('Dropped onto e5\n');
-    expect(transport.send).toHaveBeenCalledWith(
-      'Runtime.evaluate',
-      expect.objectContaining({ expression: expect.stringContaining('#zone') }),
-      'session-1'
-    );
+    expect(r.stdout).toBe('Dropped onto f1e5\n');
+    expect(browser.page.resolveAriaRef).toHaveBeenCalledWith('e5', 'frame-1');
+    expect(calls.some((c) => c.method === 'Runtime.callFunctionOn')).toBe(true);
+  });
+
+  it('surfaces a drop exception from the page', async () => {
+    const { browser } = createMockBrowser({
+      nodeIds: { e5: 9 },
+      sendCdpImpl: (method) =>
+        method === 'Runtime.callFunctionOn' ? { exceptionDetails: { text: 'nope' } } : {},
+    });
+    await expect(
+      dropHandler(
+        createHandlerCtx({
+          browser,
+          state: stateWithRefs('e5'),
+          positional: ['e5'],
+          flags: { tab: TAB },
+        })
+      )
+    ).rejects.toThrow('nope');
+  });
+
+  it('refuses a ref whose element left the page', async () => {
+    const { browser, calls } = captureBrowser();
+    await expect(
+      dropHandler(
+        createHandlerCtx({
+          browser: browser.browser,
+          state: stateWithRefs('e6'),
+          positional: ['e6'],
+          flags: { tab: TAB, data: 'text/plain=hi' },
+        })
+      )
+    ).rejects.toThrow('Ref "e6" (button) is no longer on the page');
+    expect(calls.some((c) => c.method === 'Runtime.callFunctionOn')).toBe(false);
   });
 
   it('rejects a missing snapshot and an unknown ref', async () => {
@@ -300,22 +299,26 @@ describe('drop handler', () => {
       )
     ).rejects.toThrow('No snapshot');
 
-    const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot());
     await expect(
-      dropHandler(createHandlerCtx({ browser, state, positional: ['e9'], flags: { tab: TAB } }))
+      dropHandler(
+        createHandlerCtx({
+          browser,
+          state: stateWithRefs(),
+          positional: ['e9'],
+          flags: { tab: TAB },
+        })
+      )
     ).rejects.toThrow('Unknown ref');
   });
 });
 
 describe('drop --path binary fidelity (#2883)', () => {
-  it('drops the 0x00..0xFF fixture byte-exactly via backendNodeId', async () => {
+  it('drops the 0x00..0xFF fixture byte-exactly', async () => {
     const fixture = allBytesFixture();
     const files = new Map<string, string | Uint8Array>([['/allbytes.bin', fixture]]);
-    const { transport, calls } = captureTransport();
-    const { browser } = createMockBrowser({ transport });
-    const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+    const { browser: mock, calls } = captureBrowser();
+    const { browser } = mock;
+    const state = stateWithRefs('e5');
 
     const r = await dropHandler(
       createHandlerCtx({
@@ -328,7 +331,7 @@ describe('drop --path binary fidelity (#2883)', () => {
     );
 
     expect(r.exitCode).toBe(0);
-    expect(calls.some((c) => c.method === 'DOM.resolveNode')).toBe(true);
+    expect(calls.some((c) => c.method === 'Runtime.callFunctionOn')).toBe(true);
     const dropped = droppedFiles(calls);
     expect(dropped).toHaveLength(1);
     expect(dropped[0].type).toBe('application/octet-stream');
@@ -338,41 +341,12 @@ describe('drop --path binary fidelity (#2883)', () => {
     expect(Array.from(decoded)).toEqual(Array.from(fixture));
   });
 
-  it('drops the 0x00..0xFF fixture byte-exactly via the CSS selector fallback', async () => {
-    const fixture = allBytesFixture();
-    const files = new Map<string, string | Uint8Array>([['/clip.mp4', fixture]]);
-    const { transport, calls } = captureTransport();
-    const { browser } = createMockBrowser({ transport });
-    const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToSelector: new Map([['e5', '#zone']]) }));
-
-    const r = await dropHandler(
-      createHandlerCtx({
-        browser,
-        state,
-        positional: ['e5'],
-        flags: { tab: TAB, path: '/clip.mp4' },
-        fs: { readFile: vfsLikeReadFile(files) },
-      })
-    );
-
-    expect(r.exitCode).toBe(0);
-    expect(calls.some((c) => c.method === 'Runtime.evaluate')).toBe(true);
-    const dropped = droppedFiles(calls);
-    expect(dropped[0].type).toBe('video/mp4');
-    const decoded = decodeBase64(dropped[0].base64);
-    expect(decoded.length).toBe(256);
-    expect(countReplacementSeqs(decoded)).toBe(0);
-    expect(Array.from(decoded)).toEqual(Array.from(fixture));
-  });
-
   it('still drops ASCII and valid UTF-8 text unchanged', async () => {
     const text = 'hello café — plain ASCII plus valid UTF-8';
     const files = new Map<string, string | Uint8Array>([['/note.txt', text]]);
-    const { transport, calls } = captureTransport();
-    const { browser } = createMockBrowser({ transport });
-    const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+    const { browser: mock, calls } = captureBrowser();
+    const { browser } = mock;
+    const state = stateWithRefs('e5');
 
     const r = await dropHandler(
       createHandlerCtx({
@@ -393,10 +367,8 @@ describe('drop --path binary fidelity (#2883)', () => {
   });
 
   it('fails instead of dropping a payload a text decode already mangled', async () => {
-    const { transport } = captureTransport();
-    const { browser } = createMockBrowser({ transport });
-    const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+    const { browser } = captureBrowser().browser;
+    const state = stateWithRefs('e5');
 
     await expect(
       dropHandler(

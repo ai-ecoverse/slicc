@@ -1,19 +1,34 @@
 import { createLogger } from '../base/logger.js';
 import { abortableDelay, abortWaiter, throwIfAborted } from './command-abort.js';
-import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';
+import {
+  ariaRefLookupExpression,
+  ariaRefRectsExpression,
+  ariaSnapshotExpression,
+} from './injected-aria-snapshot.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import { type AbortWaiter, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type {
   AccessibilityNode,
+  AccessibilityTreeOptions,
   BoundingBox,
   EvaluateOptions,
   FrameEvaluateOptions,
   FrameInfo,
+  ResolvedAriaRef,
   WaitForSelectorOptions,
 } from './types.js';
 
 const log = createLogger('tab-handle');
+
+const ELEMENT_OBJECT_GROUP = 'slicc-element-handles';
+
+export class StaleAriaRefError extends Error {
+  override readonly name = 'StaleAriaRefError';
+  constructor(readonly ref: string) {
+    super(`Ref "${ref}" is no longer on the page`);
+  }
+}
 
 export type CdpPayload = { [key: string]: unknown };
 
@@ -104,6 +119,8 @@ export interface ViewportOptions {
 export type TabPage = { [K in keyof TabHandle]: TabHandle[K] };
 
 export class TabHandle {
+  private holdsElementObjects = false;
+
   constructor(
     private readonly host: TabHost,
 
@@ -314,7 +331,25 @@ export class TabHandle {
     expression: string,
     options?: FrameEvaluateOptions
   ): Promise<unknown> {
-    const world: ExecutionWorld = options?.world === 'main' ? 'main' : 'isolated';
+    const result = await this.evaluateRawInFrame(frameId, expression, {
+      world: options?.world === 'main' ? 'main' : 'isolated',
+      awaitPromise: options?.awaitPromise ?? true,
+      returnByValue: options?.returnByValue ?? true,
+    });
+    return (result['result'] as { value?: unknown })?.value;
+  }
+
+  private async evaluateRawInFrame(
+    frameId: string,
+    expression: string,
+    options: {
+      world: ExecutionWorld;
+      awaitPromise: boolean;
+      returnByValue: boolean;
+      objectGroup?: string;
+    }
+  ): Promise<CdpPayload> {
+    const { world } = options;
 
     let contextId: number;
     try {
@@ -331,8 +366,9 @@ export class TabHandle {
     const evaluateParams = {
       expression,
       contextId,
-      awaitPromise: options?.awaitPromise ?? true,
-      returnByValue: options?.returnByValue ?? true,
+      awaitPromise: options.awaitPromise,
+      returnByValue: options.returnByValue,
+      ...(options.objectGroup ? { objectGroup: options.objectGroup } : {}),
     };
 
     let result: CdpPayload;
@@ -346,7 +382,7 @@ export class TabHandle {
     }
 
     const failure = evaluationFailure(result);
-    if (failure === null) return (result['result'] as { value?: unknown })?.value;
+    if (failure === null) return result;
 
     this.host.frameContexts(this.sessionId, world).delete(frameId);
     if (!isDestroyedContextError(new Error(failure))) {
@@ -358,7 +394,7 @@ export class TabHandle {
     if (retryFailure !== null) {
       throw new Error(`Evaluation in frame ${frameId} failed: ${retryFailure}`);
     }
-    return (retry['result'] as { value?: unknown })?.value;
+    return retry;
   }
 
   private async resolveFrameContext(frameId: string, world: ExecutionWorld): Promise<number> {
@@ -520,32 +556,72 @@ export class TabHandle {
     return frames;
   }
 
-  async getAccessibilityTree(): Promise<AccessibilityNode> {
-    const rawResult = await this.evaluate(INJECTED_ARIA_SNAPSHOT_SCRIPT, {
-      awaitPromise: false,
-      returnByValue: true,
-    });
-    if (!rawResult || typeof rawResult !== 'object') return { role: 'RootWebArea', name: '' };
-
-    const tree = normalizeInjectedTree(rawResult as CdpPayload);
-
-    try {
-      const axResult = await this.send('Accessibility.getFullAXTree');
-      const nodes = axResult['nodes'] as Array<CdpPayload> | undefined;
-      if (Array.isArray(nodes)) annotateTreeWithBackendNodeIds(tree, buildAxNodeIndex(nodes));
-    } catch {}
-
-    return tree;
-  }
-
-  async getAccessibilityTreeForFrame(frameId?: string): Promise<AccessibilityNode> {
-    if (!frameId) return this.getAccessibilityTree();
-    const rawResult = await this.evaluateInFrame(frameId, INJECTED_ARIA_SNAPSHOT_SCRIPT, {
+  async getAccessibilityTree(options?: AccessibilityTreeOptions): Promise<AccessibilityNode> {
+    const rawResult = await this.evaluate(ariaSnapshotExpression(options?.refFloor), {
       awaitPromise: false,
       returnByValue: true,
     });
     if (!rawResult || typeof rawResult !== 'object') return { role: 'RootWebArea', name: '' };
     return normalizeInjectedTree(rawResult as CdpPayload);
+  }
+
+  async getAccessibilityTreeForFrame(
+    frameId?: string,
+    options?: AccessibilityTreeOptions
+  ): Promise<AccessibilityNode> {
+    if (!frameId) return this.getAccessibilityTree(options);
+    const rawResult = await this.evaluateInFrame(
+      frameId,
+      ariaSnapshotExpression(options?.refFloor),
+      { awaitPromise: false, returnByValue: true }
+    );
+    if (!rawResult || typeof rawResult !== 'object') return { role: 'RootWebArea', name: '' };
+    return normalizeInjectedTree(rawResult as CdpPayload);
+  }
+
+  async resolveAriaRef(ref: string, frameId?: string): Promise<ResolvedAriaRef> {
+    const expression = ariaRefLookupExpression(ref);
+    const objectGroup = ELEMENT_OBJECT_GROUP;
+    this.holdsElementObjects = true;
+    let result: CdpPayload;
+    if (frameId) {
+      result = await this.evaluateRawInFrame(frameId, expression, {
+        world: 'isolated',
+        awaitPromise: false,
+        returnByValue: false,
+        objectGroup,
+      });
+    } else {
+      await this.send('Runtime.enable');
+      result = await this.send('Runtime.evaluate', {
+        expression,
+        returnByValue: false,
+        objectGroup,
+      });
+      const failure = evaluationFailure(result);
+      if (failure !== null) throw new Error(`Resolving ref ${ref} failed: ${failure}`);
+    }
+    const handle = result['result'] as { objectId?: string; subtype?: string } | undefined;
+    if (!handle?.objectId || handle.subtype !== 'node') throw new StaleAriaRefError(ref);
+
+    await this.send('DOM.enable');
+    const described = await this.send('DOM.describeNode', { objectId: handle.objectId });
+    const backendNodeId = (described['node'] as { backendNodeId?: unknown } | undefined)
+      ?.backendNodeId;
+    if (typeof backendNodeId !== 'number') throw new StaleAriaRefError(ref);
+    return { objectId: handle.objectId, backendNodeId };
+  }
+
+  async releaseObjects(): Promise<void> {
+    if (!this.holdsElementObjects) return;
+    this.holdsElementObjects = false;
+    await this.send('Runtime.releaseObjectGroup', { objectGroup: ELEMENT_OBJECT_GROUP });
+  }
+
+  async ariaRefRects(refs: string[]): Promise<Record<string, number[]>> {
+    if (refs.length === 0) return {};
+    const value = await this.evaluate(ariaRefRectsExpression(refs), { awaitPromise: false });
+    return value && typeof value === 'object' ? (value as Record<string, number[]>) : {};
   }
 
   private async clickAt(x: number, y: number, modifiers: number): Promise<void> {
@@ -570,7 +646,11 @@ export class TabHandle {
   private async resolveNodeObjectId(backendNodeId: number): Promise<string> {
     await this.send('DOM.enable');
     await this.send('Runtime.enable');
-    const resolveResult = await this.send('DOM.resolveNode', { backendNodeId });
+    this.holdsElementObjects = true;
+    const resolveResult = await this.send('DOM.resolveNode', {
+      backendNodeId,
+      objectGroup: ELEMENT_OBJECT_GROUP,
+    });
     const object = resolveResult['object'] as { objectId?: string } | undefined;
     if (!object?.objectId) {
       throw new Error(`Could not resolve backend node ${backendNodeId} to a DOM element`);
@@ -662,93 +742,6 @@ function isDestroyedContextError(err: unknown): boolean {
   );
 }
 
-function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number[]> {
-  const index = new Map<string, number[]>();
-  const pushNode = (n: CdpPayload): void => {
-    const backendNodeId = typeof n['backendDOMNodeId'] === 'number' ? n['backendDOMNodeId'] : null;
-    if (backendNodeId === null) return;
-    const roleObj = n['role'] as CdpPayload | undefined;
-    const nameObj = n['name'] as CdpPayload | undefined;
-    const role = typeof roleObj?.['value'] === 'string' ? roleObj['value'].toLowerCase() : '';
-    const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
-    if (!role) return;
-    const key = axIndexKey(role, name);
-    const list = index.get(key);
-    if (list) list.push(backendNodeId);
-    else index.set(key, [backendNodeId]);
-  };
-
-  const ordered = walkAxNodesInHierarchyOrder(nodes);
-  for (const n of ordered) pushNode(n);
-  return index;
-}
-
-function walkAxNodesInHierarchyOrder(nodes: Array<CdpPayload>): Array<CdpPayload> {
-  const hasChildIds = nodes.some(
-    (n) => Array.isArray(n['childIds']) && (n['childIds'] as unknown[]).length > 0
-  );
-  if (!hasChildIds) return nodes;
-
-  const byId = new Map<string, CdpPayload>();
-  const childOf = new Set<string>();
-  for (const n of nodes) {
-    const id = n['nodeId'];
-    if (id === undefined || id === null) continue;
-    byId.set(String(id), n);
-    const childIds = n['childIds'];
-    if (Array.isArray(childIds)) {
-      for (const cid of childIds) childOf.add(String(cid));
-    }
-  }
-
-  const ordered: CdpPayload[] = [];
-  const seen = new Set<string>();
-  const visit = (n: CdpPayload): void => {
-    const id = n['nodeId'];
-    const key = id === undefined || id === null ? '' : String(id);
-    if (key) {
-      if (seen.has(key)) return;
-      seen.add(key);
-    }
-    ordered.push(n);
-    const childIds = n['childIds'];
-    if (!Array.isArray(childIds)) return;
-    for (const cid of childIds) {
-      const child = byId.get(String(cid));
-      if (child) visit(child);
-    }
-  };
-
-  for (const n of nodes) {
-    const id = n['nodeId'];
-    if (id === undefined || id === null) continue;
-    if (!childOf.has(String(id))) visit(n);
-  }
-
-  for (const n of nodes) {
-    const id = n['nodeId'];
-    const key = id === undefined || id === null ? '' : String(id);
-    if (!key || !seen.has(key)) ordered.push(n);
-  }
-  return ordered;
-}
-
-function axIndexKey(role: string, name: string): string {
-  return `${role.toLowerCase()}|${name.replace(/\s+/g, ' ').trim()}`;
-}
-
-function annotateTreeWithBackendNodeIds(
-  node: AccessibilityNode,
-  index: Map<string, number[]>
-): void {
-  const key = axIndexKey(node.role, node.name);
-  const list = index.get(key);
-  if (list && list.length > 0) node.backendNodeId = list.shift();
-  if (node.children) {
-    for (const child of node.children) annotateTreeWithBackendNodeIds(child, index);
-  }
-}
-
 function normalizeInjectedTree(raw: CdpPayload): AccessibilityNode {
   const role = normalizeAccessibilityText(raw.role, 'unknown');
   const name = normalizeAccessibilityText(raw.name);
@@ -760,6 +753,9 @@ function normalizeInjectedTree(raw: CdpPayload): AccessibilityNode {
 
   const description = normalizeAccessibilityText(raw.description);
   if (description !== '') node.description = description;
+
+  if (typeof raw.ref === 'string' && /^e[0-9]+$/.test(raw.ref)) node.ref = raw.ref;
+  if (typeof raw.refSeq === 'number' && Number.isSafeInteger(raw.refSeq)) node.refSeq = raw.refSeq;
 
   if (Array.isArray(raw.children) && raw.children.length > 0) {
     node.children = (raw.children as CdpPayload[])

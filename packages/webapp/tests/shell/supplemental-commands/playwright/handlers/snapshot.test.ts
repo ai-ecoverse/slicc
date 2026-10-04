@@ -8,8 +8,14 @@ import {
   snapshotHandler,
 } from '../../../../../src/shell/supplemental-commands/playwright/handlers/snapshot.js';
 import { buildSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/snapshot.js';
-import type { TabSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
-import { createHandlerCtx, createPlaywrightState } from '../../../helpers/playwright-harness.js';
+import type { TabRefState } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
+import {
+  createHandlerCtx,
+  createPlaywrightState,
+  makeTabSnapshot,
+  resolveAriaRefMock,
+  snapshotRefs,
+} from '../../../helpers/playwright-harness.js';
 
 vi.mock('../../../../../src/shell/supplemental-commands/playwright/snapshot.js', async () => ({
   ...(await vi.importActual(
@@ -31,6 +37,7 @@ function makeBrowser(opts?: {
   frameTree?: { role: string; name: string; children?: unknown[] };
   screenshotB64?: string;
   evaluateResult?: unknown;
+  nodeIds?: Record<string, number>;
 }) {
   const send = vi.fn(
     async (m: string, p?: Record<string, unknown>) =>
@@ -52,6 +59,7 @@ function makeBrowser(opts?: {
     evaluate,
     getFrameTree,
     getAccessibilityTreeForFrame,
+    resolveAriaRef: resolveAriaRefMock(opts?.nodeIds),
   };
   const browser = {
     withTab: async <T>(_t: string, fn: (tab: typeof page) => Promise<T>) => fn(page),
@@ -68,58 +76,92 @@ function makeBrowser(opts?: {
   };
 }
 
-function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
-  return {
-    url: 'https://x',
-    title: 't',
-    content: '',
-    timestamp: 0,
-    refToSelector: new Map(),
-    refToBackendNodeId: new Map(),
-    refToFrameId: new Map(),
-    ...over,
-  };
+function makeSnapshot(...printed: string[]) {
+  return makeTabSnapshot({ refs: snapshotRefs(...printed) });
+}
+
+function freshRefState(floor = 0): TabRefState {
+  return { floor, framePrefixes: new Map() };
 }
 
 const okFs = (): Partial<VirtualFS> => ({ writeFile: vi.fn(async () => undefined) });
 
 describe('buildSnapshot', () => {
-  it('stitches unnamed iframe content beneath its placeholder', async () => {
-    const frameUrl = 'https://app.example.com/frame';
-    const getAccessibilityTreeForFrame = vi.fn(async () => ({
-      role: 'RootWebArea',
-      name: 'Frame Content',
-      children: [{ role: 'button', name: 'Frame Button', backendNodeId: 7, children: [] }],
-    }));
-    const page = {
+  const frameUrl = 'https://app.example.com/frame';
+
+  function stitchedPage(frames: Array<{ frameId: string; parentFrameId?: string; url: string }>) {
+    return {
       evaluate: vi.fn(async () =>
         JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
       ),
       getAccessibilityTree: vi.fn(async () => ({
         role: 'RootWebArea',
         name: 'Test Page',
+        refSeq: 2,
         children: [
-          { role: 'link', name: 'iframe docs', value: frameUrl, children: [] },
-          { role: 'iframe', name: '', value: frameUrl, children: [] },
+          { role: 'link', name: 'iframe docs', ref: 'e1', value: frameUrl, children: [] },
+          { role: 'iframe', name: '', ref: 'e2', value: frameUrl, children: [] },
         ],
       })),
-      getFrameTree: vi.fn(async () => [
-        { frameId: 'main', url: 'https://example.com' },
-        { frameId: 'frame-1', parentFrameId: 'main', url: frameUrl },
-      ]),
-      getAccessibilityTreeForFrame,
+      getFrameTree: vi.fn(async () => frames),
+      getAccessibilityTreeForFrame: vi.fn(async () => ({
+        role: 'RootWebArea',
+        name: 'Frame Content',
+        refSeq: 5,
+        children: [{ role: 'button', name: 'Frame Button', ref: 'e5', children: [] }],
+      })),
     };
+  }
 
-    const result = await buildSnapshot(page as never);
+  it('stitches unnamed iframe content beneath its placeholder', async () => {
+    const page = stitchedPage([
+      { frameId: 'main', url: 'https://example.com' },
+      { frameId: 'frame-1', parentFrameId: 'main', url: frameUrl },
+    ]);
+
+    const result = await buildSnapshot(page as never, freshRefState());
 
     expect(result.text).toContain(
       `  - link "iframe docs" [ref=e1]: "${frameUrl}"\n` +
-        `  - iframe: "${frameUrl}"\n` +
+        `  - iframe [ref=e2]: "${frameUrl}"\n` +
         '    - rootwebarea "Frame Content"\n' +
-        '      - button "Frame Button" [ref=f1e1]'
+        '      - button "Frame Button" [ref=f1e5]'
     );
-    expect(getAccessibilityTreeForFrame).toHaveBeenCalledOnce();
-    expect(result.refToFrameId.get('f1e1')).toBe('frame-1');
+    expect(page.getAccessibilityTreeForFrame).toHaveBeenCalledOnce();
+    expect(result.refs.get('f1e5')).toEqual({
+      role: 'button',
+      name: 'Frame Button',
+      localRef: 'e5',
+      frameId: 'frame-1',
+    });
+  });
+
+  it('passes the tab floor to every tree and raises it past what the page minted', async () => {
+    const page = stitchedPage([
+      { frameId: 'main', url: 'https://example.com' },
+      { frameId: 'frame-1', parentFrameId: 'main', url: frameUrl },
+    ]);
+    const refState = freshRefState(1);
+
+    await buildSnapshot(page as never, refState);
+
+    expect(page.getAccessibilityTree).toHaveBeenCalledWith({ refFloor: 1 });
+    expect(page.getAccessibilityTreeForFrame).toHaveBeenCalledWith('frame-1', { refFloor: 2 });
+    expect(refState.floor).toBe(5);
+  });
+
+  it("keeps a frame's prefix when another frame is stitched ahead of it", async () => {
+    const refState = freshRefState();
+    refState.framePrefixes.set('frame-old', 'f1');
+    const page = stitchedPage([
+      { frameId: 'main', url: 'https://example.com' },
+      { frameId: 'frame-old', parentFrameId: 'main', url: frameUrl },
+    ]);
+
+    const result = await buildSnapshot(page as never, refState);
+
+    expect(result.text).toContain('[ref=f1e5]');
+    expect(result.refs.get('f1e5')?.frameId).toBe('frame-old');
   });
 });
 
@@ -159,7 +201,7 @@ describe('snapshotHandler', () => {
       frameTree: {
         role: 'RootWebArea',
         name: 'Frame Content',
-        children: [{ role: 'button', name: 'Frame Button', backendNodeId: 7, children: [] }],
+        children: [{ role: 'button', name: 'Frame Button', ref: 'e1', children: [] }],
       },
     });
     const state = createPlaywrightState();
@@ -171,8 +213,8 @@ describe('snapshotHandler', () => {
     expect(r.stdout).toContain('- rootwebarea "Frame Content"');
     expect(r.stdout).toContain('- button "Frame Button" [ref=f1e1]');
     expect(r.stdout).not.toContain('SNAPSHOT-TEXT');
-    expect(getAccessibilityTreeForFrame).toHaveBeenCalledWith('frame-1');
-    expect(state.snapshots.get(TAB)?.refToFrameId.get('f1e1')).toBe('frame-1');
+    expect(getAccessibilityTreeForFrame).toHaveBeenCalledWith('frame-1', { refFloor: 0 });
+    expect(state.snapshots.get(TAB)?.refs.get('f1e1')?.frameId).toBe('frame-1');
   });
 
   it('rejects an unknown --frame with an actionable frames command', async () => {
@@ -301,10 +343,10 @@ describe('screenshotHandler', () => {
     expect(writeFile).toHaveBeenCalledWith('/workspace/out.png', expect.anything());
   });
 
-  it('clips to an element resolved by backendNodeId', async () => {
+  it('clips to the element the ref resolves to', async () => {
     const { browser, screenshot } = makeBrowser({
+      nodeIds: { e5: 9 },
       sendImpl: (m) => {
-        if (m === 'DOM.resolveNode') return { object: { objectId: 'o1' } };
         if (m === 'Runtime.callFunctionOn') {
           return { result: { value: { x: 1, y: 2, width: 3, height: 4 } } };
         }
@@ -312,7 +354,7 @@ describe('screenshotHandler', () => {
       },
     });
     const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+    state.snapshots.set(TAB, makeSnapshot('e5'));
     const r = await screenshotHandler(
       createHandlerCtx({ browser, state, positional: ['e5'], flags: { tab: TAB }, fs: okFs() })
     );
@@ -323,22 +365,22 @@ describe('screenshotHandler', () => {
   });
 
   it('fails loudly when the element clip cannot be resolved — never a silent viewport frame', async () => {
-    const { browser, screenshot } = makeBrowser({ evaluateResult: null });
+    const { browser, screenshot } = makeBrowser();
     const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToSelector: new Map([['e5', '#a']]) }));
+    state.snapshots.set(TAB, makeSnapshot('e5'));
     const r = await screenshotHandler(
       createHandlerCtx({ browser, state, positional: ['e5'], flags: { tab: TAB }, fs: okFs() })
     );
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain('could not resolve element e5');
+    expect(r.stderr).toContain('Ref "e5" (button) is no longer on the page');
     expect(r.stderr).toContain('snapshot');
     expect(screenshot).not.toHaveBeenCalled();
   });
 
   it('fails loudly when the resolved element box has zero size', async () => {
     const { browser, screenshot } = makeBrowser({
+      nodeIds: { e5: 9 },
       sendImpl: (m) => {
-        if (m === 'DOM.resolveNode') return { object: { objectId: 'o1' } };
         if (m === 'Runtime.callFunctionOn') {
           return { result: { value: { x: 1, y: 2, width: 0, height: 0 } } };
         }
@@ -346,7 +388,7 @@ describe('screenshotHandler', () => {
       },
     });
     const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+    state.snapshots.set(TAB, makeSnapshot('e5'));
     const r = await screenshotHandler(
       createHandlerCtx({ browser, state, positional: ['e5'], flags: { tab: TAB }, fs: okFs() })
     );

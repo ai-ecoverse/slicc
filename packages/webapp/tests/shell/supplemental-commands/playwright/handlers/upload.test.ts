@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { uploadHandler } from '../../../../../src/shell/supplemental-commands/playwright/handlers/upload.js';
-import type { TabSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
 import {
   allBytesFixture,
   countReplacementSeqs,
@@ -8,6 +7,8 @@ import {
   createMockBrowser,
   createMockTransport,
   createPlaywrightState,
+  makeTabSnapshot,
+  snapshotRefs,
   vfsLikeReadFile,
 } from '../../../helpers/playwright-harness.js';
 
@@ -17,17 +18,8 @@ function decodeUploadedBase64(base64: string): Uint8Array {
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 }
 
-function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
-  return {
-    url: 'https://x',
-    title: 't',
-    content: '',
-    timestamp: 0,
-    refToSelector: new Map(),
-    refToBackendNodeId: new Map(),
-    refToFrameId: new Map(),
-    ...over,
-  };
+function makeSnapshot(...printed: string[]) {
+  return makeTabSnapshot({ refs: snapshotRefs(...printed) });
 }
 
 type TransportCall = { method: string; params: Record<string, unknown> };
@@ -35,17 +27,17 @@ type TransportCall = { method: string; params: Record<string, unknown> };
 function captureTransport(): {
   transport: ReturnType<typeof createMockTransport>;
   calls: TransportCall[];
+  record: (method: string, params?: Record<string, unknown>) => unknown;
 } {
   const calls: TransportCall[] = [];
-  const transport = createMockTransport((method, params) => {
+  const record = (method: string, params?: Record<string, unknown>) => {
     calls.push({ method, params: (params ?? {}) as Record<string, unknown> });
-    if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-file-input' } };
     if (method === 'Runtime.callFunctionOn' || method === 'Runtime.evaluate') {
       return { result: { value: 1 } };
     }
     return {};
-  });
-  return { transport, calls };
+  };
+  return { transport: createMockTransport(record), calls, record };
 }
 
 function filesFromTransport(calls: TransportCall[]): Array<{
@@ -98,10 +90,14 @@ describe('uploadHandler binary fidelity (#2878)', () => {
   it('uploads the 0x00..0xFF fixture through a snapshot ref without U+FFFD', async () => {
     const fixture = allBytesFixture();
     const files = new Map<string, string | Uint8Array>([['/allbytes.bin', fixture]]);
-    const { transport, calls } = captureTransport();
-    const { browser } = createMockBrowser({ transport });
+    const { transport, calls, record } = captureTransport();
+    const { browser, page } = createMockBrowser({
+      transport,
+      sendCdpImpl: record,
+      nodeIds: { e2: 99 },
+    });
     const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e2', 99]]) }));
+    state.snapshots.set(TAB, makeSnapshot('e2'));
 
     const result = await uploadHandler(
       createHandlerCtx({
@@ -114,8 +110,9 @@ describe('uploadHandler binary fidelity (#2878)', () => {
     );
 
     expect(result.exitCode).toBe(0);
-    const resolveCall = calls.find((c) => c.method === 'DOM.resolveNode');
-    expect(resolveCall?.params['backendNodeId']).toBe(99);
+    expect(page.resolveAriaRef).toHaveBeenCalledWith('e2', undefined);
+    const callFn = calls.find((c) => c.method === 'Runtime.callFunctionOn');
+    expect(callFn?.params['objectId']).toBe('obj-e2');
     expect(calls.some((c) => c.method === 'Runtime.evaluate')).toBe(false);
 
     const uploaded = filesFromTransport(calls);
@@ -163,7 +160,7 @@ describe('uploadHandler ref argv', () => {
 
   it('rejects an unknown snapshot ref instead of opening it as a path', async () => {
     const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e1', 1]]) }));
+    state.snapshots.set(TAB, makeSnapshot('e1'));
     const result = await uploadHandler(
       createHandlerCtx({
         state,
@@ -178,7 +175,7 @@ describe('uploadHandler ref argv', () => {
 
   it('still requires a file path after consuming the ref', async () => {
     const state = createPlaywrightState();
-    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e3', 44]]) }));
+    state.snapshots.set(TAB, makeSnapshot('e3'));
     const result = await uploadHandler(
       createHandlerCtx({
         state,

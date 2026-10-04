@@ -5,6 +5,8 @@ import type { VirtualFS } from '../../../src/fs/index.js';
 import type {
   PlaywrightHandlerCtx,
   PlaywrightState,
+  SnapshotRef,
+  TabSnapshot,
 } from '../../../src/shell/supplemental-commands/playwright/types.js';
 
 type EventListener = (params: Record<string, unknown>) => unknown;
@@ -12,6 +14,7 @@ type EventListener = (params: Record<string, unknown>) => unknown;
 export function createPlaywrightState(): PlaywrightState {
   return {
     snapshots: new Map(),
+    tabRefs: new Map(),
     appTabId: null,
     harRecorder: null,
     sessionDirsCreated: new Set(),
@@ -25,6 +28,33 @@ export function createPlaywrightState(): PlaywrightState {
     routeCleanup: new Map(),
     lastMousePosition: new Map(),
   };
+}
+
+export function snapshotRefs(...printed: string[]): Map<string, SnapshotRef> {
+  return new Map(
+    printed.map((ref): [string, SnapshotRef] => {
+      const framed = ref.match(/^f([0-9]+)(e[0-9]+)$/);
+      return framed
+        ? [ref, { role: 'button', name: '', localRef: framed[2], frameId: `frame-${framed[1]}` }]
+        : [ref, { role: 'button', name: '', localRef: ref }];
+    })
+  );
+}
+
+export function makeTabSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
+  return { url: 'https://x', title: 't', content: '', timestamp: 0, refs: new Map(), ...over };
+}
+
+export function resolveAriaRefMock(nodeIds: Record<string, number> = {}) {
+  return vi.fn(async (localRef: string, _frameId?: string) => {
+    const backendNodeId = nodeIds[localRef];
+    if (backendNodeId === undefined) {
+      throw Object.assign(new Error(`Ref "${localRef}" is no longer on the page`), {
+        name: 'StaleAriaRefError',
+      });
+    }
+    return { objectId: `obj-${localRef}`, backendNodeId };
+  });
 }
 
 export interface MockTransport {
@@ -104,12 +134,15 @@ export interface MockTabPage {
   sessionId: string;
   transport: CDPTransport;
   send: ReturnType<typeof vi.fn>;
+  resolveAriaRef: ReturnType<typeof resolveAriaRefMock>;
 }
 
 export function createMockBrowser(opts?: {
   sessionId?: string;
   transport?: MockTransport;
   sendCdpImpl?: (method: string, params?: Record<string, unknown>) => unknown;
+
+  nodeIds?: Record<string, number>;
 }): MockBrowser {
   const transport = opts?.transport ?? createMockTransport();
   const sessionId = opts?.sessionId ?? 'session-1';
@@ -122,6 +155,7 @@ export function createMockBrowser(opts?: {
     sessionId,
     transport: transport.transport,
     send: sendCDP,
+    resolveAriaRef: resolveAriaRefMock(opts?.nodeIds),
   };
   const browser = {
     withTab: async <T>(targetId: string, fn: (tab: MockTabPage) => Promise<T>) => {
