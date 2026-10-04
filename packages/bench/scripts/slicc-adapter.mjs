@@ -93,9 +93,12 @@ export function validateArm(name, arm) {
  * carries numbers only, no answer, URL or error text.
  */
 export function armCommand(arm, { goalFile, model, timeoutSeconds }) {
-  const { alias } = parseModelSpec(model);
+  const { alias, thinking } = parseModelSpec(model);
   const limit = Math.max(60, timeoutSeconds - ARM_TIME_MARGIN_S);
-  return `${arm.command} --model ${quote(alias)} --time-limit ${limit} --json --goal-file ${quote(goalFile)}`;
+  // `alias@level` reaches the driver's agent: the cone only starts the driver, so setting its
+  // thinking level would change nothing the arm does. A plain alias leaves the agent's default.
+  const level = thinking === 'default' ? '' : ` --thinking ${quote(thinking)}`;
+  return `${arm.command} --model ${quote(alias)}${level} --time-limit ${limit} --json --goal-file ${quote(goalFile)}`;
 }
 
 /** The driver's own answer from its result.json among the collected files, or ''. */
