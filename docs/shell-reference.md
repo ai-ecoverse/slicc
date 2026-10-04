@@ -86,6 +86,8 @@ just-bash ships bash's complete `help` topic table while implementing only part 
 | `times`           | no per-process CPU accounting; use `time <command>`                                                                                |
 | `ulimit`          | interpreter limits are fixed at boot; see `df` and `meminfo`                                                                       |
 
+**`timeout` and `xargs`** forward the current environment into the child command (just-bash patch hunk, [vercel-labs/just-bash#530](https://github.com/vercel-labs/just-bash/issues/530)). Exported variables, injected secrets, and `HOME` therefore survive `timeout 5 printenv X` and `echo X | xargs printenv` the same way they already survive `time`. Upstream 3.4.2 omitted `env` on those two `ctx.exec` calls, so a wrapped `.jsh` that read `$HOME` or a provider key saw an empty environment.
+
 **`umask`** is a real builtin (a just-bash patch hunk, vercel-labs/just-bash#475). `umask` prints the mask (`0022` by default), `-S` prints it symbolically (`u=rwx,g=rx,o=rx`), and `-p` prints it in reusable form. It takes octal (`umask 077`) or symbolic modes (`umask u=rwx,g=,o=`, `umask g-w`), with bash's messages and exit codes. Files the shell creates get `0666 & ~umask` and directories `0777 & ~umask`: redirections, `touch`, `mkdir`, and `mkdir -p` (whose parents also keep `u+wx`). Existing files keep their mode. The mask is shell state, like the working directory:
 
 - `( … )`, `$( … )` and scripts run by path get their own copy;
