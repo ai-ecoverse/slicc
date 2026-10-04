@@ -74,18 +74,17 @@ Programs, installed with `ipk install -g` into the real install path:
    - a separate mobile origin with COOP/COEP;
    - COOP/COEP alongside DIP for WebKit user agents only;
    - the in-app route below, where the app's own server sets the headers.
-2. **File rename failed on WebKit** (fixed in #3785, issue #3783). `rename()`
-   of a file failed with ENOENT, which broke `mv`, `>` over an existing file
-   from wasm bash ("File exists") and `git init` (lock + rename of
-   `.git/config`). The cause was in ZenFS's `Async` mixin: it decides from
-   `error.stack` whether a call is nested in another, and matched V8's frame
-   text only. The patch names the wrappers so every engine prints them
+2. **File rename failed on WebKit and Firefox** (fixed in #3785 and #3788,
+   issue #3783). `rename()` of a file failed with ENOENT, which broke `mv`,
+   `>` over an existing file from wasm bash ("File exists") and `git init`
+   (lock + rename of `.git/config`). The cause was in ZenFS's `Async` mixin:
+   it decided from `error.stack` whether a call is nested in another, which
+   only works in V8. JavaScriptCore names no arrow wrapper, and release
+   Firefox captures no async frames unless DevTools is attached (measured on
+   Firefox 157 for Android). #3785 fixed WebKit by reading frames in any
+   format; #3788 reads no stacks at all, so it works in every engine
    (upstream: [zen-fs/core#325](https://github.com/zen-fs/core/issues/325)).
-   Desktop Safari had the same bug. **Firefox still fails**: release builds
-   capture no async frames, so a stack taken after `await` shows only the
-   current function and nesting can't be read from it at all (measured on
-   Firefox 157 for Android, below). A fix that works there can't use stack
-   traces.
+   Desktop Safari and desktop Firefox had the same bug.
 3. **A 4 GiB shared-memory maximum threw on WebKit** (fixed in #3782).
    `rustc.wasm` imports a shared memory with `maximum: 65536` pages, and
    WebKit refused it with `RangeError: Out of memory`; 32,768 pages (2 GiB)
@@ -204,7 +203,7 @@ screen:
   it: isolated with COOP + COEP (not with DIP), SAB, threads, service workers,
   OPFS, Memory64 and JSPI all present; the scalar wasm loop is ~1.7× slower than
   Chrome's (664 ms vs 384 ms). SLICC boots there, coreutils and bash with fork
-  run, but **file rename still fails** (blocker 2, above).
+  run, and file rename works since #3788 (blocker 2, above).
 
 ## Routes
 
@@ -214,7 +213,7 @@ screen:
 | iOS Safari                                | Works once the leader origin sends COOP + COEP `require-corp` for WebKit, plus blockers 2–3.                                                                                                                                            |
 | Android Chrome / Trusted Web Activity     | **Works today**, measured: the hosted leader is isolated as deployed (DIP), and bash, git, Python, rustc and zig run. Memory is the limit: ~2 GB live on a 3.6 GB phone. The kernel freezes after ~1 min in the background and resumes. |
 | Android System WebView                    | Blocked, measured: never cross-origin isolated, so no wasm realm ([crbug 40914606](https://issues.chromium.org/issues/40914606), Won't Fix). Use a Trusted Web Activity.                                                                |
-| GeckoView (Firefox for Android)           | Isolated with COOP/COEP (not DIP); runs bash with fork. Needs a non-stack-trace fix for file rename first.                                                                                                                              |
+| GeckoView (Firefox for Android)           | Isolated with COOP/COEP (not DIP); runs bash with fork; file rename works since #3788. Wasm ~1.7× slower than Chrome.                                                                                                                   |
 | Native wasm runtimes                      | Not recommended (below).                                                                                                                                                                                                                |
 
 ### The in-app route in more detail
@@ -277,8 +276,5 @@ Gecko with JIT, but only in browser apps, and no major vendor ships one as of 20
    hang, the Asyncify/OMG memory spike. The Simulator can't answer these.
 4. **Android:** done (above). Chrome needs nothing new; a TWA is the in-app
    route.
-5. **Firefox / GeckoView rename:** decide whether Firefox matters enough for a
-   ZenFS fix that doesn't read stack traces.
-
-Blockers 2 (rename) and 3 (memory maximum) were plain bugs and are fixed in
-#3785 and #3782, independently of these decisions.
+   Blockers 2 (rename) and 3 (memory maximum) were plain bugs and are fixed in
+   #3785, #3788 and #3782, independently of these decisions.
