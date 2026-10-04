@@ -76,7 +76,7 @@ Interpreting a new run: a previously-PASS group now FAILing = a **REGRESSION** �
 
 - Don't trust screenshot dimensions from a flooded `hexdump`/`xxd` of the PNG — read the **IHDR** width/height directly (bytes 16–23, big-endian, after the 8-byte signature). The runner does this; if you check by hand, do the same.
 - Don't rely on `open <vfs-path>` — it renders `about:blank`. Use a `data:text/html;base64,...` URL.
-- Don't run interaction commands against stale refs — `select`/`check`/`drag` need a **fresh** snapshot (and even then ref resolution is the known bug, not your mistake).
+- Don't expect a stale ref to hit a look-alike — a ref whose element left the page (or a ref from before a navigation) fails with `no longer on the page` / `Unknown ref`. Re-snapshot and use the new refs.
 - Don't `open --view` the screenshots just to compare them — that burns context; compare md5 + IHDR bytes instead.
 - Don't test Storage on a `data:` URL — opaque origins won't persist cookies/localStorage. Use a real origin.
 - Don't mark a flaky `mousewheel` timeout as a hard FAIL — retry once before recording it.

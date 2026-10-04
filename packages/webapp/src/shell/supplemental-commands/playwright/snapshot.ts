@@ -5,8 +5,15 @@
 
 import { normalizeAccessibilityText } from '../../../base/normalize-accessibility-text.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
-import { listAllTargetsWithRemote } from './state.js';
-import type { PlaywrightHandlerCtx, PlaywrightState, TabHandle, TabSnapshot } from './types.js';
+import { listAllTargetsWithRemote, parseRef } from './state.js';
+import type {
+  PlaywrightHandlerCtx,
+  PlaywrightState,
+  SnapshotRef,
+  TabHandle,
+  TabRefState,
+  TabSnapshot,
+} from './types.js';
 
 // BrowserAPI / PageInfo / AccessibilityNode are named via PlaywrightHandlerCtx
 // (same shell layer) rather than imported from `cdp/`, so this module stays
@@ -14,21 +21,10 @@ import type { PlaywrightHandlerCtx, PlaywrightState, TabHandle, TabSnapshot } fr
 type BrowserAPI = PlaywrightHandlerCtx['browser'];
 type PageInfo = Awaited<ReturnType<BrowserAPI['listPages']>>[number];
 type AccessibilityNode = Awaited<ReturnType<TabHandle['getAccessibilityTree']>>;
+type ResolvedAriaRef = Awaited<ReturnType<TabHandle['resolveAriaRef']>>;
 
 export function escapeYaml(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-}
-
-export function escapeCssAttr(str: string): string {
-  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-const SKIP_REF_ROLES = ['none', 'presentation', 'generic', 'rootwebarea'];
-const REF_ROLES = ['textbox', 'button', 'link', 'checkbox', 'radio'];
-
-function nodeNeedsRef(role: string, name: string): boolean {
-  if (SKIP_REF_ROLES.includes(role)) return false;
-  return !!name || REF_ROLES.includes(role);
 }
 
 /**
@@ -53,41 +49,20 @@ export function formatAriaStates(description: string | undefined): string {
   return parts.length > 0 ? ` ${parts.join(' ')}` : '';
 }
 
-/** Build the CSS selector recorded for a ref, given its role and accessible name. */
-function buildRefSelector(role: string, name: string): string {
-  const escapedName = escapeCssAttr(name);
-  if (role === 'button' && name) {
-    return [
-      `button[aria-label="${escapedName}"]`,
-      `button[title="${escapedName}"]`,
-      `[role="button"][aria-label="${escapedName}"]`,
-      `[role="button"][title="${escapedName}"]`,
-      `input[type="button"][value="${escapedName}"]`,
-      `input[type="submit"][value="${escapedName}"]`,
-      `input[type="reset"][value="${escapedName}"]`,
-    ].join(', ');
-  }
-  if (role === 'link' && name) {
-    return `a[aria-label="${escapedName}"], a[title="${escapedName}"], [role="link"][aria-label="${escapedName}"], [role="link"][title="${escapedName}"]`;
-  }
-  if (role === 'textbox') {
-    return name
-      ? `input[aria-label="${escapedName}"], textarea[aria-label="${escapedName}"], [contenteditable][aria-label="${escapedName}"], input[placeholder="${escapedName}"], textarea[placeholder="${escapedName}"], [contenteditable][placeholder="${escapedName}"], input[title="${escapedName}"], textarea[title="${escapedName}"], [contenteditable][title="${escapedName}"]`
-      : `input, textarea, [contenteditable]`;
-  }
-  if (role === 'checkbox') return `input[type="checkbox"]`;
-  if (role === 'radio') return `input[type="radio"]`;
-  if (name) return `[aria-label="${escapedName}"], [title="${escapedName}"]`;
-  return `[role="${role}"]`;
-}
-
+/**
+ * Render an accessibility tree as aria-snapshot YAML lines, recording every
+ * printed ref in `refs`.
+ *
+ * Refs come from the page (`node.ref`), which keeps one per element for as
+ * long as its role and name hold — so an element inserted above does not
+ * shift the refs below it. Text runs never get a ref.
+ */
 export function renderNode(
   node: AccessibilityNode,
-  refToSelector: Map<string, string>,
-  refToBackendNodeId: Map<string, number>,
-  counter: { value: number },
+  refs: Map<string, SnapshotRef>,
   indent: string = '',
-  framePrefix: string = ''
+  framePrefix: string = '',
+  frameId?: string
 ): string[] {
   const lines: string[] = [];
   const role = normalizeAccessibilityText(node.role, 'unknown').toLowerCase();
@@ -95,13 +70,9 @@ export function renderNode(
   const value = normalizeAccessibilityText(node.value);
 
   let ref = '';
-  if (nodeNeedsRef(role, name)) {
-    ref = framePrefix + `e${++counter.value}`;
-    // Store backendNodeId for reliable ref-based clicking
-    if (node.backendNodeId) {
-      refToBackendNodeId.set(ref, node.backendNodeId);
-    }
-    refToSelector.set(ref, buildRefSelector(role, name));
+  if (node.ref && role !== 'text') {
+    ref = framePrefix + node.ref;
+    refs.set(ref, { role, name, localRef: node.ref, ...(frameId ? { frameId } : {}) });
   }
 
   let line = `${indent}- ${role}`;
@@ -115,12 +86,114 @@ export function renderNode(
 
   if (node.children) {
     for (const child of node.children) {
-      lines.push(
-        ...renderNode(child, refToSelector, refToBackendNodeId, counter, indent + '  ', framePrefix)
-      );
+      lines.push(...renderNode(child, refs, indent + '  ', framePrefix, frameId));
     }
   }
   return lines;
+}
+
+/** The tab's ref bookkeeping, created on first use. */
+export function tabRefState(state: PlaywrightState, targetId: string): TabRefState {
+  let refState = state.tabRefs.get(targetId);
+  if (!refState) {
+    refState = { floor: 0, framePrefixes: new Map() };
+    state.tabRefs.set(targetId, refState);
+  }
+  return refState;
+}
+
+/** The `f<n>` prefix for a child frame: assigned on first sight, then fixed. */
+export function framePrefixFor(refState: TabRefState, frameId: string): string {
+  let prefix = refState.framePrefixes.get(frameId);
+  if (!prefix) {
+    prefix = `f${refState.framePrefixes.size + 1}`;
+    refState.framePrefixes.set(frameId, prefix);
+  }
+  return prefix;
+}
+
+/** Raise the tab's ref floor to cover a tree the page just returned. */
+export function recordRefSeq(refState: TabRefState, tree: AccessibilityNode): void {
+  if (typeof tree.refSeq === 'number' && tree.refSeq > refState.floor) {
+    refState.floor = tree.refSeq;
+  }
+}
+
+/** The tab's latest snapshot, or the agent-facing "snapshot first" error. */
+export function requireTabSnapshot(state: PlaywrightState, targetId: string): TabSnapshot {
+  const snapshot = state.snapshots.get(targetId);
+  if (!snapshot) throw new Error('No snapshot available. Run "snapshot" first.');
+  return snapshot;
+}
+
+/**
+ * Look a ref up in the tab's latest snapshot, or throw the agent-facing error.
+ * Never guesses: a ref missing from the snapshot is not matched by position,
+ * role, or name.
+ */
+export function requireSnapshotRef(snapshot: TabSnapshot, ref: string): SnapshotRef {
+  const entry = snapshot.refs.get(ref);
+  if (entry) return entry;
+  throw new Error(
+    `Unknown ref "${ref}": not in this tab's latest snapshot (the element was removed or ` +
+      'renamed, or the page navigated). Run "snapshot" for current refs.'
+  );
+}
+
+/**
+ * Resolve a ref from the tab's latest snapshot to its live element. Throws
+ * rather than act on anything else when that element is gone.
+ */
+export async function resolveSnapshotRef(
+  page: TabHandle,
+  snapshot: TabSnapshot,
+  ref: string
+): Promise<ResolvedAriaRef & { entry: SnapshotRef }> {
+  const entry = requireSnapshotRef(snapshot, ref);
+  try {
+    const resolved = await page.resolveAriaRef(entry.localRef, entry.frameId);
+    return { ...resolved, entry };
+  } catch (err) {
+    if (err instanceof Error && err.name === 'StaleAriaRefError') {
+      const label = entry.name ? `${entry.role} "${entry.name}"` : entry.role;
+      throw new Error(
+        `Ref "${ref}" (${label}) is no longer on the page. Run "snapshot" for current refs.`
+      );
+    }
+    throw err;
+  }
+}
+
+/** Reject a child-frame ref for a command that works in top-frame coordinates. */
+export function requireTopFrameRef(entry: SnapshotRef, ref: string, command: string): void {
+  if (entry.frameId || parseRef(ref).isIframe) {
+    throw new Error(`${command} does not support iframe refs ("${ref}")`);
+  }
+}
+
+/**
+ * Call `functionDeclaration` with the resolved element as `this`, turning a
+ * page exception into a throw.
+ */
+export async function callOnElement(
+  page: TabHandle,
+  objectId: string,
+  functionDeclaration: string,
+  args: unknown[] = []
+): Promise<unknown> {
+  const result = await page.send('Runtime.callFunctionOn', {
+    objectId,
+    functionDeclaration,
+    arguments: args.map((value) => ({ value })),
+    returnByValue: true,
+  });
+  const details = result['exceptionDetails'] as
+    | { text?: string; exception?: { description?: string } }
+    | undefined;
+  if (details) {
+    throw new Error(details.exception?.description ?? details.text ?? 'Element call failed');
+  }
+  return (result['result'] as { value?: unknown } | undefined)?.value;
 }
 
 export async function resolveAppTabId(browser: BrowserAPI, state: PlaywrightState): Promise<void> {
@@ -229,37 +302,20 @@ function findMatchingChildFrame(
   });
 }
 
-/** Render a child frame's accessibility tree and merge its refs into the parent maps. */
+/** Render a child frame's accessibility tree, recording its refs under the frame's prefix. */
 async function renderChildFrame(
   page: TabHandle,
   frameId: string,
   indent: string,
-  framePrefix: string,
-  refToSelector: Map<string, string>,
-  refToBackendNodeId: Map<string, number>,
-  refToFrameId: Map<string, string>
+  refs: Map<string, SnapshotRef>,
+  refState: TabRefState
 ): Promise<string[]> {
   try {
-    const frameTree = await page.getAccessibilityTreeForFrame(frameId);
-    const frameRefToSelector = new Map<string, string>();
-    const frameRefToBackendNodeId = new Map<string, number>();
-    const frameLines = renderNode(
-      frameTree,
-      frameRefToSelector,
-      frameRefToBackendNodeId,
-      { value: 0 },
-      indent,
-      framePrefix
-    );
-    for (const [ref, selector] of frameRefToSelector) {
-      refToSelector.set(ref, selector);
-      refToFrameId.set(ref, frameId);
-    }
-    for (const [ref, nodeId] of frameRefToBackendNodeId) {
-      refToBackendNodeId.set(ref, nodeId);
-      refToFrameId.set(ref, frameId);
-    }
-    return frameLines;
+    const frameTree = await page.getAccessibilityTreeForFrame(frameId, {
+      refFloor: refState.floor,
+    });
+    recordRefSeq(refState, frameTree);
+    return renderNode(frameTree, refs, indent, framePrefixFor(refState, frameId), frameId);
   } catch {
     // Cross-origin frames or other failures — keep the placeholder
     return [];
@@ -271,9 +327,8 @@ async function stitchIframeContent(
   page: TabHandle,
   content: string,
   baseUrl: string,
-  refToSelector: Map<string, string>,
-  refToBackendNodeId: Map<string, number>,
-  refToFrameId: Map<string, string>
+  refs: Map<string, SnapshotRef>,
+  refState: TabRefState
 ): Promise<string> {
   if (typeof page.getFrameTree !== 'function') return content;
   try {
@@ -281,7 +336,6 @@ async function stitchIframeContent(
     const childFrames = frames.filter((f) => f.parentFrameId);
     if (childFrames.length === 0) return content;
 
-    let frameIndex = 0;
     const stitchedLines: string[] = [];
     const matchedFrameIds = new Set<string>();
 
@@ -303,16 +357,13 @@ async function stitchIframeContent(
       if (!matchedFrame) continue;
       matchedFrameIds.add(matchedFrame.frameId);
 
-      frameIndex++;
       stitchedLines.push(
         ...(await renderChildFrame(
           page,
           matchedFrame.frameId,
           iframeMatch[1] + '  ',
-          `f${frameIndex}`,
-          refToSelector,
-          refToBackendNodeId,
-          refToFrameId
+          refs,
+          refState
         ))
       );
     }
@@ -325,44 +376,34 @@ async function stitchIframeContent(
 
 /**
  * Build the accessibility snapshot data for one tab, from its own session
- * handle. Returns raw snapshot fields without touching `state` — callers decide
- * whether to persist to memory and/or write to a file.
+ * handle. Returns raw snapshot fields without touching `state.snapshots` —
+ * callers decide whether to persist to memory and/or write to a file. Raises
+ * `refState.floor` past every ref the page minted.
  */
 export async function buildSnapshot(
   page: TabHandle,
+  refState: TabRefState,
   options?: { noIframes?: boolean }
 ): Promise<{
   url: string;
   title: string;
   text: string;
-  refToSelector: Map<string, string>;
-  refToBackendNodeId: Map<string, number>;
-  refToFrameId: Map<string, string>;
+  refs: Map<string, SnapshotRef>;
 }> {
   const pageInfo = await page.evaluate(
     `JSON.stringify({ url: location.href, title: document.title })`
   );
   const { url, title } = JSON.parse(pageInfo as string);
-  const tree = await page.getAccessibilityTree();
-  const refToSelector = new Map<string, string>();
-  const refToBackendNodeId = new Map<string, number>();
-  const refToFrameId = new Map<string, string>();
-  const counter = { value: 0 };
-  const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
-  let content = snapshotLines.join('\n');
+  const tree = await page.getAccessibilityTree({ refFloor: refState.floor });
+  recordRefSeq(refState, tree);
+  const refs = new Map<string, SnapshotRef>();
+  let content = renderNode(tree, refs).join('\n');
 
   if (!options?.noIframes) {
-    content = await stitchIframeContent(
-      page,
-      content,
-      url,
-      refToSelector,
-      refToBackendNodeId,
-      refToFrameId
-    );
+    content = await stitchIframeContent(page, content, url, refs, refState);
   }
 
-  return { url, title, text: content, refToSelector, refToBackendNodeId, refToFrameId };
+  return { url, title, text: content, refs };
 }
 
 export async function takeSnapshot(
@@ -371,20 +412,13 @@ export async function takeSnapshot(
   targetId: string,
   options?: { noIframes?: boolean }
 ): Promise<{ snapshot: TabSnapshot; output: string }> {
-  const { url, title, text, refToSelector, refToBackendNodeId, refToFrameId } = await buildSnapshot(
+  const { url, title, text, refs } = await buildSnapshot(
     page,
+    tabRefState(state, targetId),
     options
   );
 
-  const snapshot: TabSnapshot = {
-    url,
-    title,
-    refToSelector,
-    refToBackendNodeId,
-    refToFrameId,
-    content: text,
-    timestamp: Date.now(),
-  };
+  const snapshot: TabSnapshot = { url, title, refs, content: text, timestamp: Date.now() };
   state.snapshots.set(targetId, snapshot);
 
   const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', text].join('\n');

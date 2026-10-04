@@ -10,7 +10,7 @@
 
 import { takeSnapshot } from '../snapshot.js';
 import { parsePageJson, requireTab } from '../state.js';
-import type { PlaywrightHandler, TabHandle } from '../types.js';
+import type { PlaywrightHandler, TabHandle, TabSnapshot } from '../types.js';
 
 /**
  * Keep only snapshot node lines above `depth` nesting levels (2-space indent
@@ -36,44 +36,23 @@ export function limitSnapshotDepth(text: string, depth: number): string {
 
 /**
  * Append `[box=x,y,w,h]` (viewport-relative CSS pixels, per
- * getBoundingClientRect) to every main-frame ref line.
+ * getBoundingClientRect) to every top-frame ref line.
  *
- * Rects are resolved through each ref's backendNodeId — the element identity
- * the snapshot already recorded — NOT the reconstructed CSS selectors, which
- * miss text-labelled elements (`button[aria-label="Buy"]` does not match
- * `<button>Buy</button>`) and collapse duplicate accessible names onto one
- * element. Frame-prefixed refs are skipped: their rects live in another
- * frame's coordinate space. A ref whose node is gone stays unannotated.
+ * Rects come from the element each ref names on the page, read in one round
+ * trip. Frame-prefixed refs are skipped: their rects live in another frame's
+ * coordinate space. A ref whose element is gone stays unannotated.
  */
 export async function annotateBoxes(
   page: TabHandle,
-  refToBackendNodeId: Map<string, number>,
+  snapshot: TabSnapshot,
   text: string
 ): Promise<string> {
-  await page.send('DOM.enable');
-  await page.send('Runtime.enable');
-
-  const boxes: Record<string, number[]> = {};
-  for (const [ref, backendNodeId] of refToBackendNodeId) {
-    if (ref.startsWith('f')) continue;
-    try {
-      const resolved = await page.send('DOM.resolveNode', { backendNodeId });
-      const objectId = (resolved['object'] as { objectId?: string } | undefined)?.objectId;
-      if (!objectId) continue;
-      const rect = await page.send('Runtime.callFunctionOn', {
-        objectId,
-        functionDeclaration: `function() {
-            const r = this.getBoundingClientRect();
-            return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
-          }`,
-        returnByValue: true,
-      });
-      const value = (rect['result'] as { value?: number[] } | undefined)?.value;
-      if (value) boxes[ref] = value;
-    } catch {
-      // Node detached since the snapshot — leave the line unannotated.
-    }
-  }
+  const topFrameRefs = [...snapshot.refs.values()]
+    .filter((entry) => !entry.frameId)
+    .map((entry) => entry.localRef);
+  const boxes = await page.ariaRefRects(topFrameRefs);
+  // Top-frame refs print as their local form (`e12`); frame refs carry an
+  // `f<n>` prefix, so they never match a key here.
   return text.replace(/\[ref=([a-z0-9]+)\]/g, (token, ref: string) =>
     boxes[ref] ? `${token} [box=${boxes[ref].join(',')}]` : token
   );

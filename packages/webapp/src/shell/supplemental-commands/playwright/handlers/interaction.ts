@@ -5,8 +5,13 @@
 
 import { keyEventParams, pressKeyParams } from '../keyboard.js';
 import {
+  callOnElement,
+  requireTabSnapshot,
+  requireTopFrameRef,
+  resolveSnapshotRef,
+} from '../snapshot.js';
+import {
   CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
-  parseRef,
   REACT_FILL_FALLBACK_FUNCTION,
   READ_INPUT_VALUE_FUNCTION,
   requireTab,
@@ -52,66 +57,24 @@ async function verifyFillAndApplyFallback(
   }
 }
 
-/** Fill via backendNodeId: click to focus, clear, insertText, verify+fallback. */
-async function fillByBackendNodeId(
+/** Fill a resolved element: click to focus, clear, insertText, verify+fallback. */
+async function fillElement(
   page: TabHandle,
-  backendNodeId: number,
+  target: { backendNodeId: number; objectId: string },
   fillText: string
 ): Promise<void> {
-  await page.clickByBackendNodeId(backendNodeId);
-  await page.send('DOM.enable');
-  await page.send('Runtime.enable');
-  const resolveResult = await page.send('DOM.resolveNode', { backendNodeId });
-  const obj = resolveResult['object'] as { objectId?: string } | undefined;
-  if (obj?.objectId) {
-    await page.send('Runtime.callFunctionOn', {
-      objectId: obj.objectId,
-      functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
-      returnByValue: true,
-    });
-  }
+  await page.clickByBackendNodeId(target.backendNodeId);
+  await page.send('Runtime.callFunctionOn', {
+    objectId: target.objectId,
+    functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
+    returnByValue: true,
+  });
   // Single Input.insertText frame so the per-frame whole-token
   // unmask gate in the node-server CDP proxy can replace a
   // masked secret with its real value (a per-character
   // Input.dispatchKeyEvent loop fragments the token).
   await page.insertText(fillText);
-  if (obj?.objectId) {
-    await verifyFillAndApplyFallback(page, obj.objectId, fillText);
-  }
-}
-
-/** Fill via CSS selector fallback: click, clear, insertText, verify+fallback. */
-async function fillBySelectorFallback(
-  page: TabHandle,
-  selector: string,
-  fillText: string
-): Promise<void> {
-  await page.click(selector);
-  await page.evaluate(
-    `(function() {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (el) { return (${CLEAR_FOCUSABLE_ELEMENT_FUNCTION}).call(el); }
-      return false;
-    })()`
-  );
-  await page.insertText(fillText);
-  const firstSel = selector.split(',')[0].trim();
-  const currentValue = (await page.evaluate(
-    `(function() {
-      const el = document.querySelector(${JSON.stringify(firstSel)});
-      if (!el) return '';
-      return (${READ_INPUT_VALUE_FUNCTION}).call(el);
-    })()`
-  )) as string;
-  if (currentValue !== fillText) {
-    await page.evaluate(
-      `(function() {
-        const el = document.querySelector(${JSON.stringify(firstSel)});
-        if (!el) return;
-        (${REACT_FILL_FALLBACK_FUNCTION}).call(el, ${JSON.stringify(fillText)});
-      })()`
-    );
-  }
+  await verifyFillAndApplyFallback(page, target.objectId, fillText);
 }
 
 export const clickHandler: PlaywrightHandler = async ({
@@ -131,47 +94,21 @@ export const clickHandler: PlaywrightHandler = async ({
   const ref = positional[0];
   const modifiers = parseModifiersBitmask(flags['modifiers']);
   const output = await onTab(tab.targetId, async (page) => {
-    const snapshot = state.snapshots.get(tab.targetId);
-    if (!snapshot) {
-      throw new Error('No snapshot available. Run "snapshot" first.');
-    }
-
-    // Handle iframe-routed clicks
-    const { isIframe } = parseRef(ref);
-    const frameId = snapshot.refToFrameId?.get(ref);
-    if (isIframe && frameId) {
-      const selector = snapshot.refToSelector.get(ref);
-      if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
-      const firstSelector = selector.split(',')[0].trim();
-      await page.evaluateInFrame(
-        frameId,
-        `(function() {
-                  var el = document.querySelector(${JSON.stringify(firstSelector)});
-                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
-                  el.scrollIntoView({ block: 'center' });
-                  el.click();
-                })()`
+    const snapshot = requireTabSnapshot(state, tab.targetId);
+    const target = await resolveSnapshotRef(page, snapshot, ref);
+    if (target.entry.frameId) {
+      await callOnElement(
+        page,
+        target.objectId,
+        `function() {
+          this.scrollIntoView({ block: 'center' });
+          this.click();
+        }`
       );
       state.snapshots.delete(tab.targetId);
       return `Clicked ${ref} (in iframe)`;
     }
-
-    // Prefer backendNodeId for reliable clicking
-    const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-    if (backendNodeId) {
-      await page.clickByBackendNodeId(backendNodeId, modifiers);
-      state.snapshots.delete(tab.targetId);
-      return `Clicked ${ref}`;
-    }
-
-    // Fall back to CSS selector
-    const selector = snapshot.refToSelector.get(ref);
-    if (!selector) {
-      throw new Error(
-        `Unknown ref "${ref}". Available: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`
-      );
-    }
-    await page.click(selector, modifiers);
+    await page.clickByBackendNodeId(target.backendNodeId, modifiers);
     state.snapshots.delete(tab.targetId);
     return `Clicked ${ref}`;
   });
@@ -211,55 +148,27 @@ export const fillHandler: PlaywrightHandler = async ({
   const ref = positional[0];
   const fillText = positional.slice(1).join(' ');
   const output = await onTab(tab.targetId, async (page) => {
-    const snapshot = state.snapshots.get(tab.targetId);
-    if (!snapshot) {
-      throw new Error('No snapshot available. Run "snapshot" first.');
-    }
-
-    // Handle iframe-routed fill
-    const { isIframe: isFillIframe } = parseRef(ref);
-    const fillFrameId = snapshot.refToFrameId?.get(ref);
-    if (isFillIframe && fillFrameId) {
-      const selector = snapshot.refToSelector.get(ref);
-      if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
-      const firstSelector = selector.split(',')[0].trim();
-      await page.evaluateInFrame(
-        fillFrameId,
-        `(function() {
-                  var el = document.querySelector(${JSON.stringify(firstSelector)});
-                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
-                  el.scrollIntoView({ block: 'center' });
-                  el.focus();
-                  el.value = '';
-                  el.value = ${JSON.stringify(fillText)};
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                })()`
+    const snapshot = requireTabSnapshot(state, tab.targetId);
+    const target = await resolveSnapshotRef(page, snapshot, ref);
+    if (target.entry.frameId) {
+      await callOnElement(
+        page,
+        target.objectId,
+        `function(text) {
+          this.scrollIntoView({ block: 'center' });
+          this.focus();
+          this.value = '';
+          this.value = text;
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+        }`,
+        [fillText]
       );
       state.snapshots.delete(tab.targetId);
       if (flags['submit'] === 'true') await sendEnterKey(page);
       return `Filled ${ref} with: ${fillText} (in iframe)`;
     }
-
-    // Prefer backendNodeId for reliable element targeting
-    const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-    if (backendNodeId) {
-      await fillByBackendNodeId(page, backendNodeId, fillText);
-      state.snapshots.delete(tab.targetId);
-      if (flags['submit'] === 'true') await sendEnterKey(page);
-      return `Filled ${ref} with: ${fillText}`;
-    }
-
-    // Fall back to CSS selector
-    const selector = snapshot.refToSelector.get(ref);
-    if (!selector) {
-      throw new Error(`Unknown ref "${ref}"`);
-    }
-    // Single Input.insertText frame so the per-frame whole-token
-    // unmask gate in the node-server CDP proxy can replace a
-    // masked secret with its real value (a per-character
-    // Input.dispatchKeyEvent loop fragments the token).
-    await fillBySelectorFallback(page, selector, fillText);
+    await fillElement(page, target, fillText);
     state.snapshots.delete(tab.targetId);
     if (flags['submit'] === 'true') await sendEnterKey(page);
     return `Filled ${ref} with: ${fillText}`;
@@ -334,36 +243,21 @@ export const dblclickHandler: PlaywrightHandler = async ({
   const button = (positional[1] || 'left') as 'left' | 'right' | 'middle';
   const modifiers = parseModifiersBitmask(flags['modifiers']);
   const output = await onTab(tab.targetId, async (page) => {
-    const snapshot = state.snapshots.get(tab.targetId);
-    if (!snapshot) {
-      throw new Error('No snapshot available. Run "snapshot" first.');
-    }
-
-    // Handle iframe-routed dblclick
-    const { isIframe: isDblIframe } = parseRef(ref);
-    const dblFrameId = snapshot.refToFrameId?.get(ref);
-    if (isDblIframe && dblFrameId) {
-      const selector = snapshot.refToSelector.get(ref);
-      if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
-      const firstSelector = selector.split(',')[0].trim();
-      await page.evaluateInFrame(
-        dblFrameId,
-        `(function() {
-                  var el = document.querySelector(${JSON.stringify(firstSelector)});
-                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
-                  el.scrollIntoView({ block: 'center' });
-                  el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-                })()`
+    const snapshot = requireTabSnapshot(state, tab.targetId);
+    const target = await resolveSnapshotRef(page, snapshot, ref);
+    if (target.entry.frameId) {
+      await callOnElement(
+        page,
+        target.objectId,
+        `function() {
+          this.scrollIntoView({ block: 'center' });
+          this.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        }`
       );
       state.snapshots.delete(tab.targetId);
       return `Double-clicked ${ref} (in iframe)`;
     }
-
-    const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-    if (!backendNodeId) {
-      throw new Error(`Unknown ref "${ref}"`);
-    }
-    await page.dblclickByBackendNodeId(backendNodeId, button, modifiers);
+    await page.dblclickByBackendNodeId(target.backendNodeId, button, modifiers);
     state.snapshots.delete(tab.targetId);
     return `Double-clicked ${ref}`;
   });
@@ -386,35 +280,20 @@ export const hoverHandler: PlaywrightHandler = async ({
   }
   const ref = positional[0];
   const output = await onTab(tab.targetId, async (page) => {
-    const snapshot = state.snapshots.get(tab.targetId);
-    if (!snapshot) {
-      throw new Error('No snapshot available. Run "snapshot" first.');
-    }
-
-    // Handle iframe-routed hover
-    const { isIframe: isHoverIframe } = parseRef(ref);
-    const hoverFrameId = snapshot.refToFrameId?.get(ref);
-    if (isHoverIframe && hoverFrameId) {
-      const selector = snapshot.refToSelector.get(ref);
-      if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
-      const firstSelector = selector.split(',')[0].trim();
-      await page.evaluateInFrame(
-        hoverFrameId,
-        `(function() {
-                  var el = document.querySelector(${JSON.stringify(firstSelector)});
-                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
-                  el.scrollIntoView({ block: 'center' });
-                  el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                })()`
+    const snapshot = requireTabSnapshot(state, tab.targetId);
+    const target = await resolveSnapshotRef(page, snapshot, ref);
+    if (target.entry.frameId) {
+      await callOnElement(
+        page,
+        target.objectId,
+        `function() {
+          this.scrollIntoView({ block: 'center' });
+          this.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        }`
       );
       return `Hovered ${ref} (in iframe)`;
     }
-
-    const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-    if (!backendNodeId) {
-      throw new Error(`Unknown ref "${ref}"`);
-    }
-    await page.hoverByBackendNodeId(backendNodeId);
+    await page.hoverByBackendNodeId(target.backendNodeId);
     return `Hovered ${ref}`;
   });
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
@@ -437,151 +316,68 @@ export const selectHandler: PlaywrightHandler = async ({
   const ref = positional[0];
   const value = positional.slice(1).join(' ');
   const output = await onTab(tab.targetId, async (page) => {
-    const snapshot = state.snapshots.get(tab.targetId);
-    if (!snapshot) {
-      throw new Error('No snapshot available. Run "snapshot" first.');
-    }
-
-    // Handle iframe-routed select
-    const { isIframe: isSelectIframe } = parseRef(ref);
-    const selectFrameId = snapshot.refToFrameId?.get(ref);
-    if (isSelectIframe && selectFrameId) {
-      const selector = snapshot.refToSelector.get(ref);
-      if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
-      const firstSelector = selector.split(',')[0].trim();
-      await page.evaluateInFrame(
-        selectFrameId,
-        `(function() {
-                  var el = document.querySelector(${JSON.stringify(firstSelector)});
-                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
-                  el.value = ${JSON.stringify(value)};
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                })()`
+    const snapshot = requireTabSnapshot(state, tab.targetId);
+    const target = await resolveSnapshotRef(page, snapshot, ref);
+    if (target.entry.frameId) {
+      await callOnElement(
+        page,
+        target.objectId,
+        `function(value) {
+          this.value = value;
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+        }`,
+        [value]
       );
       state.snapshots.delete(tab.targetId);
       return `Selected "${value}" on ${ref} (in iframe)`;
     }
-
-    const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-    if (!backendNodeId) {
-      throw new Error(`Unknown ref "${ref}"`);
-    }
-    await page.selectByBackendNodeId(backendNodeId, value);
+    await page.selectByBackendNodeId(target.backendNodeId, value);
     state.snapshots.delete(tab.targetId);
     return `Selected "${value}" on ${ref}`;
   });
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const checkHandler: PlaywrightHandler = async ({
-  browser,
-  state,
-  positional,
-  flags,
-  onTab,
-}) => {
-  if (positional.length === 0) {
-    return { stdout: '', stderr: 'check requires a ref (e.g. e5)\n', exitCode: 1 };
-  }
-  const tab = requireTab(flags);
-  if ('error' in tab) {
-    return { stdout: '', stderr: tab.error, exitCode: 1 };
-  }
-  const ref = positional[0];
-  const output = await onTab(tab.targetId, async (page) => {
-    const snapshot = state.snapshots.get(tab.targetId);
-    if (!snapshot) {
-      throw new Error('No snapshot available. Run "snapshot" first.');
-    }
+/** In-frame check/uncheck: flip `checked` and fire the events a user toggle would. */
+const SET_CHECKED_IN_FRAME_FUNCTION = `function(checked) {
+  if (this.checked === checked) return 'already';
+  this.checked = checked;
+  this.dispatchEvent(new Event('change', { bubbles: true }));
+  this.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  return 'toggled';
+}`;
 
-    // Handle iframe-routed check
-    const { isIframe: isCheckIframe } = parseRef(ref);
-    const checkFrameId = snapshot.refToFrameId?.get(ref);
-    if (isCheckIframe && checkFrameId) {
-      const selector = snapshot.refToSelector.get(ref);
-      if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
-      const firstSelector = selector.split(',')[0].trim();
-      await page.evaluateInFrame(
-        checkFrameId,
-        `(function() {
-                  var el = document.querySelector(${JSON.stringify(firstSelector)});
-                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
-                  if (!el.checked) {
-                    el.checked = true;
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                  }
-                })()`
-      );
+/** Shared body of check/uncheck. */
+function setCheckedHandler(checked: boolean): PlaywrightHandler {
+  const verb = checked ? 'check' : 'uncheck';
+  const past = checked ? 'Checked' : 'Unchecked';
+  return async ({ state, positional, flags, onTab }) => {
+    if (positional.length === 0) {
+      return { stdout: '', stderr: `${verb} requires a ref (e.g. e5)\n`, exitCode: 1 };
+    }
+    const tab = requireTab(flags);
+    if ('error' in tab) {
+      return { stdout: '', stderr: tab.error, exitCode: 1 };
+    }
+    const ref = positional[0];
+    const output = await onTab(tab.targetId, async (page) => {
+      const snapshot = requireTabSnapshot(state, tab.targetId);
+      const target = await resolveSnapshotRef(page, snapshot, ref);
+      const inFrame = Boolean(target.entry.frameId);
+      const action = inFrame
+        ? await callOnElement(page, target.objectId, SET_CHECKED_IN_FRAME_FUNCTION, [checked])
+        : await page.setCheckedByBackendNodeId(target.backendNodeId, checked);
+      if (action === 'already') return `${ref} already ${past.toLowerCase()}`;
       state.snapshots.delete(tab.targetId);
-      return `Checked ${ref} (in iframe)`;
-    }
+      return inFrame ? `${past} ${ref} (in iframe)` : `${past} ${ref}`;
+    });
+    return { stdout: output + '\n', stderr: '', exitCode: 0 };
+  };
+}
 
-    const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-    if (!backendNodeId) {
-      throw new Error(`Unknown ref "${ref}"`);
-    }
-    const action = await page.setCheckedByBackendNodeId(backendNodeId, true);
-    if (action === 'toggled') state.snapshots.delete(tab.targetId);
-    return action === 'already' ? `${ref} already checked` : `Checked ${ref}`;
-  });
-  return { stdout: output + '\n', stderr: '', exitCode: 0 };
-};
+export const checkHandler: PlaywrightHandler = setCheckedHandler(true);
 
-export const uncheckHandler: PlaywrightHandler = async ({
-  browser,
-  state,
-  positional,
-  flags,
-  onTab,
-}) => {
-  if (positional.length === 0) {
-    return { stdout: '', stderr: 'uncheck requires a ref (e.g. e5)\n', exitCode: 1 };
-  }
-  const tab = requireTab(flags);
-  if ('error' in tab) {
-    return { stdout: '', stderr: tab.error, exitCode: 1 };
-  }
-  const ref = positional[0];
-  const output = await onTab(tab.targetId, async (page) => {
-    const snapshot = state.snapshots.get(tab.targetId);
-    if (!snapshot) {
-      throw new Error('No snapshot available. Run "snapshot" first.');
-    }
-
-    // Handle iframe-routed uncheck
-    const { isIframe: isUncheckIframe } = parseRef(ref);
-    const uncheckFrameId = snapshot.refToFrameId?.get(ref);
-    if (isUncheckIframe && uncheckFrameId) {
-      const selector = snapshot.refToSelector.get(ref);
-      if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
-      const firstSelector = selector.split(',')[0].trim();
-      await page.evaluateInFrame(
-        uncheckFrameId,
-        `(function() {
-                  var el = document.querySelector(${JSON.stringify(firstSelector)});
-                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
-                  if (el.checked) {
-                    el.checked = false;
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                  }
-                })()`
-      );
-      state.snapshots.delete(tab.targetId);
-      return `Unchecked ${ref} (in iframe)`;
-    }
-
-    const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-    if (!backendNodeId) {
-      throw new Error(`Unknown ref "${ref}"`);
-    }
-    const action = await page.setCheckedByBackendNodeId(backendNodeId, false);
-    if (action === 'toggled') state.snapshots.delete(tab.targetId);
-    return action === 'already' ? `${ref} already unchecked` : `Unchecked ${ref}`;
-  });
-  return { stdout: output + '\n', stderr: '', exitCode: 0 };
-};
+export const uncheckHandler: PlaywrightHandler = setCheckedHandler(false);
 
 export const dragHandler: PlaywrightHandler = async ({
   browser,
@@ -600,19 +396,12 @@ export const dragHandler: PlaywrightHandler = async ({
   const startRef = positional[0];
   const endRef = positional[1];
   const output = await onTab(tab.targetId, async (page) => {
-    const snapshot = state.snapshots.get(tab.targetId);
-    if (!snapshot) {
-      throw new Error('No snapshot available. Run "snapshot" first.');
-    }
-    const startNode = snapshot.refToBackendNodeId.get(startRef);
-    const endNode = snapshot.refToBackendNodeId.get(endRef);
-    if (!startNode) {
-      throw new Error(`Unknown ref "${startRef}"`);
-    }
-    if (!endNode) {
-      throw new Error(`Unknown ref "${endRef}"`);
-    }
-    await page.dragByBackendNodeIds(startNode, endNode);
+    const snapshot = requireTabSnapshot(state, tab.targetId);
+    const start = await resolveSnapshotRef(page, snapshot, startRef);
+    requireTopFrameRef(start.entry, startRef, 'drag');
+    const end = await resolveSnapshotRef(page, snapshot, endRef);
+    requireTopFrameRef(end.entry, endRef, 'drag');
+    await page.dragByBackendNodeIds(start.backendNodeId, end.backendNodeId);
     state.snapshots.delete(tab.targetId);
     return `Dragged ${startRef} to ${endRef}`;
   });

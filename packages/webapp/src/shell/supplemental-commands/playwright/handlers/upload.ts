@@ -14,6 +14,7 @@
 
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import { readVfsFileBytes } from '../binary.js';
+import { callOnElement, requireSnapshotRef, resolveSnapshotRef } from '../snapshot.js';
 import { isElementRef, requireTab } from '../state.js';
 import type { PlaywrightHandler, TabSnapshot } from '../types.js';
 
@@ -56,8 +57,10 @@ function parseUploadArgs(
   if (!snapshot) {
     return { error: 'No snapshot available. Run "snapshot" first.\n' };
   }
-  if (!snapshot.refToBackendNodeId.has(targetRef)) {
-    return { error: `Unknown ref "${targetRef}"\n` };
+  try {
+    requireSnapshotRef(snapshot, targetRef);
+  } catch (err) {
+    return { error: `${err instanceof Error ? err.message : String(err)}\n` };
   }
   if (filePaths.length === 0) {
     return { error: 'upload requires at least one file path\n' };
@@ -93,48 +96,28 @@ export const uploadHandler: PlaywrightHandler = async ({
   }
 
   if (targetRef) {
-    const backendNodeId = snapshot!.refToBackendNodeId.get(targetRef)!;
-    await onTab(tab.targetId, async ({ sessionId, transport }) => {
-      await transport.send('DOM.enable', {}, sessionId);
-      const { object } = (await transport.send(
-        'DOM.resolveNode',
-        { backendNodeId },
-        sessionId
-      )) as { object: { objectId: string } };
-      const result = (await transport.send(
-        'Runtime.callFunctionOn',
-        {
-          objectId: object.objectId,
-          functionDeclaration: `function(filesData) {
-            const el = this;
-            if (el.tagName !== 'INPUT' || el.type !== 'file') {
-              throw new Error('Element ' + el.tagName + ' is not a file input');
-            }
-            const dt = new DataTransfer();
-            for (const f of filesData) {
-              const bytes = Uint8Array.from(atob(f.base64), c => c.charCodeAt(0));
-              dt.items.add(new File([bytes], f.name, { type: f.type }));
-            }
-            el.files = dt.files;
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            return el.files.length;
-          }`,
-          arguments: [{ value: files }],
-          returnByValue: true,
-        },
-        sessionId
-      )) as {
-        result: { value: unknown };
-        exceptionDetails?: { exception?: { description?: string }; text?: string };
-      };
-      if (result.exceptionDetails) {
-        const msg =
-          result.exceptionDetails.exception?.description ??
-          result.exceptionDetails.text ??
-          'Upload failed';
-        throw new Error(msg);
-      }
+    await onTab(tab.targetId, async (page) => {
+      const { objectId } = await resolveSnapshotRef(page, snapshot!, targetRef);
+      await callOnElement(
+        page,
+        objectId,
+        `function(filesData) {
+          const el = this;
+          if (el.tagName !== 'INPUT' || el.type !== 'file') {
+            throw new Error('Element ' + el.tagName + ' is not a file input');
+          }
+          const dt = new DataTransfer();
+          for (const f of filesData) {
+            const bytes = Uint8Array.from(atob(f.base64), c => c.charCodeAt(0));
+            dt.items.add(new File([bytes], f.name, { type: f.type }));
+          }
+          el.files = dt.files;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return el.files.length;
+        }`,
+        [files]
+      );
     });
   } else {
     await onTab(tab.targetId, async ({ sessionId, transport }) => {

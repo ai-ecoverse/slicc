@@ -5,7 +5,7 @@
  */
 
 import type { VirtualFS } from '../../../fs/index.js';
-import { buildSnapshot } from './snapshot.js';
+import { buildSnapshot, tabRefState } from './snapshot.js';
 import { filenameSafeTimestamp, isAlreadyExistsError } from './state.js';
 import type { CmdResult, PlaywrightHandlerCtx, PlaywrightState, TabSnapshot } from './types.js';
 
@@ -54,7 +54,9 @@ export async function ensureSessionDirs(
 /**
  * Take a fresh snapshot, persist it to `<root>/snapshots/`, and update
  * `state.snapshots` so subsequent commands can resolve refs without requiring a
- * manual re-snapshot. Returns the VFS path written, or null on any error.
+ * manual re-snapshot. Refs are stable per element, so a ref from the caller's
+ * previous snapshot still names the same element here — or is missing, and
+ * fails loudly. Returns the VFS path written, or null on any error.
  */
 export async function autoSaveSnapshot(
   browser: BrowserAPI,
@@ -65,18 +67,9 @@ export async function autoSaveSnapshot(
 ): Promise<string | null> {
   try {
     return await browser.withTab(targetId, async (page) => {
-      const { url, title, text, refToSelector, refToBackendNodeId, refToFrameId } =
-        await buildSnapshot(page);
+      const { url, title, text, refs } = await buildSnapshot(page, tabRefState(state, targetId));
 
-      const snapshot: TabSnapshot = {
-        url,
-        title,
-        refToSelector,
-        refToBackendNodeId,
-        refToFrameId,
-        content: text,
-        timestamp: Date.now(),
-      };
+      const snapshot: TabSnapshot = { url, title, refs, content: text, timestamp: Date.now() };
       state.snapshots.set(targetId, snapshot);
 
       const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', text].join('\n');

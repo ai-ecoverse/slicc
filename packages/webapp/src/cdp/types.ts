@@ -188,6 +188,24 @@ export interface AccessibilityNode {
   value?: string;
   description?: string;
   children?: AccessibilityNode[];
-  /** CDP backend node ID — used to resolve this node back to a DOM element for clicking. */
-  backendNodeId?: number;
+  /**
+   * Page-minted ref (`e12`). Stable for the element's lifetime while its role
+   * and name hold; resolve it back with `TabHandle.resolveAriaRef`.
+   */
+  ref?: string;
+  /** Root only: the page's ref counter after this snapshot. */
+  refSeq?: number;
+}
+
+/** Options for TabHandle.getAccessibilityTree(). */
+export interface AccessibilityTreeOptions {
+  /** Highest ref number already handed out for this tab; a new document counts on from here. */
+  refFloor?: number;
+}
+
+/** A snapshot ref resolved to its live element. */
+export interface ResolvedAriaRef {
+  /** Remote object handle in the world the snapshot ran in. */
+  objectId: string;
+  backendNodeId: number;
 }

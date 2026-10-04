@@ -8,7 +8,8 @@
 
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import { readVfsFileBytes } from '../binary.js';
-import { parseRef, requireTab } from '../state.js';
+import { callOnElement, requireTabSnapshot, resolveSnapshotRef } from '../snapshot.js';
+import { requireTab } from '../state.js';
 import type { PlaywrightHandler } from '../types.js';
 
 type MouseButton = 'left' | 'right' | 'middle';
@@ -257,99 +258,10 @@ export const dropHandler: PlaywrightHandler = async ({
     return this.tagName;
   }`;
 
-  const output = await onTab(tab.targetId, async ({ sessionId, transport }) => {
-    const snapshot = state.snapshots.get(tab.targetId);
-    if (!snapshot) {
-      throw new Error('No snapshot available. Run "snapshot" first.');
-    }
-
-    // Prefer backendNodeId for stable targeting (same pattern as click, upload)
-    const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-    if (backendNodeId) {
-      await transport.send('DOM.enable', {}, sessionId);
-      const resolveResult = (await transport.send(
-        'DOM.resolveNode',
-        { backendNodeId },
-        sessionId
-      )) as { object: { objectId: string } };
-      const result = (await transport.send(
-        'Runtime.callFunctionOn',
-        {
-          objectId: resolveResult.object.objectId,
-          functionDeclaration: dropFunctionDeclaration,
-          arguments: [{ value: files }, { value: dataItems }],
-          returnByValue: true,
-        },
-        sessionId
-      )) as {
-        result: { value: unknown };
-        exceptionDetails?: { exception?: { description?: string }; text?: string };
-      };
-      if (result.exceptionDetails) {
-        const msg =
-          result.exceptionDetails.exception?.description ??
-          result.exceptionDetails.text ??
-          'Drop failed';
-        throw new Error(msg);
-      }
-      state.snapshots.delete(tab.targetId);
-      return `Dropped onto ${ref}`;
-    }
-
-    // Fallback to CSS selector for when snapshot has no backendNodeId
-    const { isIframe } = parseRef(ref);
-    const frameId = snapshot.refToFrameId?.get(ref);
-
-    let selector: string;
-    if (isIframe && frameId) {
-      const s = snapshot.refToSelector.get(ref);
-      if (!s) throw new Error(`Unknown ref "${ref}" in iframe`);
-      selector = s.split(',')[0].trim();
-    } else {
-      const s = snapshot.refToSelector.get(ref);
-      if (!s) {
-        throw new Error(
-          `Unknown ref "${ref}". Available: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`
-        );
-      }
-      selector = s.split(',')[0].trim();
-    }
-
-    const filesJson = JSON.stringify(files);
-    const dataJson = JSON.stringify(dataItems);
-    const script = `(function() {
-  var el = document.querySelector(${JSON.stringify(selector)});
-  if (!el) throw new Error('Element not found for ref ${ref}: ' + ${JSON.stringify(selector)});
-  var dt = new DataTransfer();
-  var filesData = ${filesJson};
-  for (var i = 0; i < filesData.length; i++) {
-    var f = filesData[i];
-    var bytes = Uint8Array.from(atob(f.base64), function(c) { return c.charCodeAt(0); });
-    var file = new File([bytes], f.name, { type: f.type });
-    dt.items.add(file);
-  }
-  var dataItems = ${dataJson};
-  for (var j = 0; j < dataItems.length; j++) {
-    var d = dataItems[j];
-    dt.items.add(d.value, d.mimeType);
-  }
-  el.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
-  el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
-  return true;
-})()`;
-
-    const result = (await transport.send(
-      'Runtime.evaluate',
-      { expression: script, returnByValue: true, awaitPromise: false },
-      sessionId
-    )) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
-    if (result.exceptionDetails) {
-      const msg =
-        result.exceptionDetails.exception?.description ??
-        result.exceptionDetails.text ??
-        'Drop failed';
-      throw new Error(msg);
-    }
+  const output = await onTab(tab.targetId, async (page) => {
+    const snapshot = requireTabSnapshot(state, tab.targetId);
+    const { objectId } = await resolveSnapshotRef(page, snapshot, ref);
+    await callOnElement(page, objectId, dropFunctionDeclaration, [files, dataItems]);
     state.snapshots.delete(tab.targetId);
     return `Dropped onto ${ref}`;
   });
