@@ -73,8 +73,11 @@ on:
         description: "Bedrock model that judges a run whose judgement is still invalid after the first judge's repairs (none: no fallback)"
         default: 'global.openai.gpt-5.6-sol'
       skills-ref:
-        description: 'ai-ecoverse/skills ref for the ecoverse skills condition'
+        description: 'ai-ecoverse/skills ref for the ecoverse skills condition and for an arm'
         default: 'main'
+      arm:
+        description: "Run each task through an arm (packages/bench/arms/arms.json) instead of prompting the cone; its skills come from skills-ref, staged as the 'arm' set (use skills builtin+arm)"
+        default: ''
       shards:
         description: 'Matrix jobs; each takes every Nth task (1-20)'
         default: '3'
@@ -212,12 +215,13 @@ jobs:
       BENCH_MAX_TASK_COST: ${{ github.event_name == 'workflow_dispatch' && inputs.max-task-cost || '2' }}
       BENCH_MAX_COST: ${{ github.event_name == 'workflow_dispatch' && inputs.max-cost || '10' }}
       BENCH_SHARD: ${{ matrix.shard }}/${{ github.event_name == 'workflow_dispatch' && inputs.shards || '1' }}
+      BENCH_ARM: ${{ github.event_name == 'workflow_dispatch' && inputs.arm || '' }}
       SLICC_VERSION: ${{ needs.plan.outputs.slicc-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Check out ai-ecoverse/skills for the ecoverse condition
-        if: contains(env.BENCH_SKILLS, 'ecoverse')
+      - name: Check out ai-ecoverse/skills for the ecoverse condition or an arm
+        if: contains(env.BENCH_SKILLS, 'ecoverse') || env.BENCH_ARM != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ai-ecoverse/skills
@@ -227,11 +231,27 @@ jobs:
       - name: Mount table
         id: mounts
         run: |
-          if [ -d bench-skills-repo/skills ]; then
-            echo "mounts=$GITHUB_WORKSPACE/bench-skills-repo/skills:/workspace/bench-skills/ecoverse" >> "$GITHUB_OUTPUT"
-          else
-            echo "mounts=" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          mounts=()
+          if [ -d bench-skills-repo/skills ] && [[ "$BENCH_SKILLS" == *ecoverse* ]]; then
+            mounts+=("$GITHUB_WORKSPACE/bench-skills-repo/skills:/workspace/bench-skills/ecoverse")
           fi
+          # An arm's skills only (arms.json `skills`), not the whole repo: mounted as the `arm` set.
+          if [ -n "$BENCH_ARM" ]; then
+            arm_dir="$RUNNER_TEMP/arm-skills"
+            mkdir -p "$arm_dir"
+            for s in $(node -e 'const a=require("./packages/bench/arms/arms.json")[process.argv[1]]; if(!a) process.exit(1); console.log(a.skills.join(" "))' "$BENCH_ARM"); do
+              [ -d "bench-skills-repo/skills/$s" ] || { echo "::error::arm $BENCH_ARM needs skills/$s, missing at skills-ref"; exit 1; }
+              cp -r "bench-skills-repo/skills/$s" "$arm_dir/$s"
+              rm -rf "$arm_dir/$s/evals"
+            done
+            mounts+=("$arm_dir:/workspace/bench-skills/arm")
+          fi
+          {
+            echo "mounts<<EOF"
+            printf '%s\n' "${mounts[@]+"${mounts[@]}"}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       # node-server needs Node >= 22.19; the GCP image ships an older apt nodejs.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -346,6 +366,7 @@ jobs:
           for set in $BENCH_SETS; do args+=(--set "$set"); done
           if [ -n "$BENCH_TASKS" ]; then args+=(--tasks "$BENCH_TASKS"); fi
           if [ -n "$BENCH_LIMIT" ]; then args+=(--limit "$BENCH_LIMIT"); fi
+          if [ -n "$BENCH_ARM" ]; then args+=(--arm "$BENCH_ARM"); fi
           node packages/bench/scripts/run.mjs "${args[@]}"
 
       # Each leader's side of its connections, for diagnosing a leader that stops answering:
@@ -385,8 +406,22 @@ jobs:
             SLICC_GW_HOME="$home" node packages/github-workflow/scripts/stop-leader.mjs || true
           done
 
-      - name: Upload the shard
+      # Upstream task text is published only encrypted. Nothing in the out dir may quote a task in
+      # plaintext (an arm driver's files, an error message, a log line): a leak fails the shard and
+      # the shard is not uploaded.
+      - name: Check the out dir for plaintext task text
+        id: leak-check
         if: always()
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/bench-out"
+          [ -d "$out" ] || exit 0
+          args=(--out "$out")
+          for set in $BENCH_SETS; do args+=(--set "$set"); done
+          node packages/bench/scripts/leak-check.mjs "${args[@]}"
+
+      - name: Upload the shard
+        if: always() && steps.leak-check.outcome != 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-${{ github.run_id }}-shard-${{ matrix.shard }}
@@ -428,6 +463,14 @@ jobs:
           fi
           if [ ${#shards[@]} -eq 0 ]; then echo "::error::no shard left an artifact"; exit 1; fi
           node packages/bench/scripts/merge.mjs --out "$RUNNER_TEMP/bench-out" "${shards[@]}"
+
+      # The merged report is checked like each shard before anything leaves the job.
+      - name: Check the report for plaintext task text
+        run: |
+          set -euo pipefail
+          args=(--out "$RUNNER_TEMP/bench-out")
+          for set in $BENCH_SETS; do args+=(--set "$set"); done
+          node packages/bench/scripts/leak-check.mjs "${args[@]}"
 
       - name: Upload the report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
