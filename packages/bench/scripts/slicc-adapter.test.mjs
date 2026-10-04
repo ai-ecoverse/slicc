@@ -14,6 +14,8 @@ import {
   collectArmFiles,
   costTotals,
   decodeTranscriptPart,
+  driverSections,
+  driverSteps,
   expectedSkillNames,
   exportTranscript,
   exportTranscriptCommand,
@@ -2209,7 +2211,10 @@ describe('arm mode', () => {
           ok('/tmp/intent-arm/run/result.json\n/tmp/intent-arm/run/transcript.md\n'),
         ],
         [/^base64 '\/tmp\/intent-arm\/run\/result\.json'$/, ok(b64(`{"answer":"${canary}"}`))],
-        [/^base64 '\/tmp\/intent-arm\/run\/transcript\.md'$/, ok(b64(`goal: ${canary}`))],
+        [
+          /^base64 '\/tmp\/intent-arm\/run\/transcript\.md'$/,
+          ok(b64(`## user\ngoal: ${canary}\n## assistant\nFINAL ANSWER: from the driver`)),
+        ],
         ...leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT))).commands,
         [/^base64 /, ok('UE5H')],
       ],
@@ -2238,7 +2243,8 @@ describe('arm mode', () => {
     const run = calls.find((c) => c.kind === 'exec' && c.command.startsWith('intent-arm '));
     expect(run.command).not.toContain(canary);
     expect(run.opts).toMatchObject({ timeoutMs: 120000, interrupt: true });
-    expect(result.finalText).toBe('scoop says hi');
+
+    expect(result.finalText).toBe('FINAL ANSWER: from the driver');
     expect(result.arm.name).toBe('intent-budget');
     expect(result.arm.result).toEqual({ ok: true, steps: 3, run: '2026-10-04T00-00-00-run' });
     expect(result.arm.files.map((f) => f.path)).toEqual([
@@ -2332,5 +2338,104 @@ describe('arm helpers', () => {
     expect(
       armAnswer([{ path: '/tmp/x/result.json', base64: Buffer.from('{}').toString('base64') }])
     ).toBe('');
+  });
+});
+
+describe('arm driver transcript', () => {
+  const MD = [
+    '# Agent session: s1',
+    '## Prompt',
+    'Do the task.',
+    '## user',
+    'Do the task.',
+    '## assistant',
+    'Looking.',
+    '### tool: bash',
+    'intent --intent "open https://example.com"',
+    '## tool result',
+    'opened example.com',
+    '## assistant',
+    'Found it.',
+    '',
+    'FINAL ANSWER: 42',
+  ].join('\n');
+  const file = (path, text) => ({ path, base64: Buffer.from(text).toString('base64') });
+  const files = [
+    file('/tmp/intent-arm/r/transcript.md', MD),
+    file('/tmp/intent-arm/r/result.json', JSON.stringify({ answer: 'Found it.' })),
+  ];
+
+  it('splits a driver transcript into sections, assistant text without its tool calls', () => {
+    const secs = driverSections(MD);
+    expect(secs.map((x) => x.role)).toEqual([
+      'prompt',
+      'user',
+      'assistant',
+      'tool result',
+      'assistant',
+    ]);
+    expect(secs[2].text).toBe('Looking.');
+    expect(secs[2].body).toContain('### tool: bash');
+    expect(driverSteps(files)).toHaveLength(4);
+    expect(driverSteps([])).toEqual([]);
+  });
+
+  it('answers from answer.txt, else the transcript, else the result.json prefix', () => {
+    expect(armAnswer([file('/x/answer.txt', ' FINAL ANSWER: full \n'), ...files])).toBe(
+      'FINAL ANSWER: full'
+    );
+    expect(armAnswer(files)).toBe('Found it.\n\nFINAL ANSWER: 42');
+    expect(armAnswer([files[1]])).toBe('Found it.');
+  });
+
+  it('judges from the driver transcript when the export lost the scoop', () => {
+    const result = {
+      arm: { name: 'x', files },
+      transcript: { conversations: [{ id: 'cone', kind: 'cone', messages: [] }] },
+      finalText: 'FINAL ANSWER: 42',
+      durationMs: 1000,
+    };
+    const t = traceFromResult(result);
+    expect(t.steps[0]).toMatch(/^## scoop · user/);
+    expect(t.steps.some((x) => x.includes('FINAL ANSWER: 42'))).toBe(true);
+    expect(t.metrics.steps).toBe(2);
+  });
+});
+
+describe('arm runs on a reused leader', () => {
+  const file = (path, text) => ({ path, base64: Buffer.from(text).toString('base64') });
+  const MD = ['## user', 'Task two.', '## assistant', 'Done.', '', 'FINAL ANSWER: two'].join('\n');
+  const scoop = (id, text, timestamp, extra = {}) => ({
+    id,
+    kind: 'scoop',
+    messages: [{ role: 'assistant', timestamp, content: [{ type: 'text', text }], ...extra }],
+  });
+
+  const STALE = {
+    conversations: [
+      { id: 'cone', kind: 'cone', messages: [] },
+      scoop('old', 'FINAL ANSWER: one', 1_000, { stopReason: 'error', errorMessage: 'HTTP 500' }),
+    ],
+  };
+  const result = {
+    arm: { name: 'x', startedAt: 5_000, files: [file('/tmp/intent-arm/r2/transcript.md', MD)] },
+    transcript: STALE,
+    finalText: 'FINAL ANSWER: two',
+    durationMs: 1000,
+  };
+
+  it("never takes an earlier task's scoop for this run's", () => {
+    expect(armConversation(STALE, 5_000)).toBeNull();
+    expect(armConversation(STALE).id).toBe('old');
+    expect(lastScoopAssistantText(STALE, 5_000)).toBe('');
+    expect(lastTurnProviderError(result)).toBeNull();
+  });
+
+  it('judges from the current driver transcript even when a leftover scoop is in the export', () => {
+    const t = traceFromResult(result);
+    expect(t.steps.join('\n')).toContain('FINAL ANSWER: two');
+    expect(t.steps.join('\n')).not.toContain('FINAL ANSWER: one');
+    expect(t.metrics.steps).toBe(1);
+    expect(armAnswer(result.arm.files)).toBe('Done.\n\nFINAL ANSWER: two');
   });
 });

@@ -55,14 +55,59 @@ export function armCommand(arm, { goalFile, model, timeoutSeconds }) {
   return `${arm.command} --model ${quote(alias)} --time-limit ${limit} --json --goal-file ${quote(goalFile)}`;
 }
 
+export function driverAnswer(files) {
+  const text = (name) => {
+    const f = (files ?? []).find((x) => x.path.endsWith(name));
+    return f ? Buffer.from(f.base64, 'base64').toString('utf8') : null;
+  };
+
+  const full = text('/answer.txt');
+  if (full?.trim()) return full.trim();
+  const md = text('/transcript.md');
+  const last = md
+    ? driverSections(md)
+        .filter((x) => x.role === 'assistant' && x.text)
+        .at(-1)
+    : null;
+  return last?.text ?? '';
+}
+
 export function armAnswer(files) {
+  const own = driverAnswer(files);
+  if (own) return own;
   const f = (files ?? []).find((x) => x.path.endsWith('/result.json'));
   if (!f) return '';
   try {
-    return String(JSON.parse(Buffer.from(f.base64, 'base64').toString('utf8')).answer ?? '');
+    return String(JSON.parse(Buffer.from(f.base64, 'base64').toString('utf8'))?.answer ?? '');
   } catch {
     return '';
   }
+}
+
+export function driverSections(md) {
+  const out = [];
+  let cur = null;
+  for (const line of String(md).split('\n')) {
+    const m = /^## (user|assistant|tool result|tool|prompt)\b/i.exec(line);
+    if (m) {
+      if (cur) out.push(cur);
+      cur = { role: m[1].toLowerCase(), lines: [] };
+    } else if (cur) cur.lines.push(line);
+  }
+  if (cur) out.push(cur);
+  return out.map((x) => {
+    const body = x.lines.join('\n');
+    const text = (x.role === 'assistant' ? body.split(/\n### tool:/)[0] : body).trim();
+    return { role: x.role, text, body: body.trim() };
+  });
+}
+
+export function driverSteps(files) {
+  const f = (files ?? []).find((x) => x.path.endsWith('/transcript.md'));
+  if (!f) return [];
+  return driverSections(Buffer.from(f.base64, 'base64').toString('utf8'))
+    .filter((x) => x.role !== 'prompt')
+    .map((x) => `## scoop · ${x.role}\n${clip(x.body)}`);
 }
 
 export function parseArmResult(stdout) {
@@ -79,13 +124,14 @@ export function parseArmResult(stdout) {
   return null;
 }
 
-export function armConversation(doc) {
+export function armConversation(doc, since = 0) {
   let best = null;
   for (const c of doc?.conversations ?? []) {
     if (c.kind === 'cone') continue;
     const last = (c.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
     if (!last) continue;
     const at = Number(last.timestamp ?? 0);
+    if (since && !(at >= since)) continue;
     if (!best || at >= best.at) best = { at, c };
   }
   return best?.c ?? null;
@@ -98,8 +144,8 @@ const textOf = (m) =>
     .join('')
     .trim();
 
-export function lastScoopAssistantText(doc) {
-  const msgs = (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant');
+export function lastScoopAssistantText(doc, since = 0) {
+  const msgs = (armConversation(doc, since)?.messages ?? []).filter((m) => m.role === 'assistant');
   for (let i = msgs.length - 1; i >= 0; i -= 1) {
     const text = textOf(msgs[i]);
     if (text) return text;
@@ -188,7 +234,7 @@ export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export function lastTurnProviderError(result) {
   const agent = result?.arm
-    ? armConversation(result?.transcript)
+    ? armConversation(result?.transcript, result.arm.startedAt ?? 0)
     : (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
   const last = (agent?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
   if (last?.stopReason !== 'error') return null;
@@ -754,11 +800,17 @@ export function transcriptSummary(info) {
   return summary;
 }
 
-export const armTurns = (doc) =>
-  (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant').length;
+export const armTurns = (doc, files, since = 0) =>
+  driverSteps(files).filter((x) => x.startsWith('## scoop · assistant')).length ||
+  (armConversation(doc, since)?.messages ?? []).filter((m) => m.role === 'assistant').length;
 
 export function traceFromResult(result) {
   const t = transcriptSteps(result.transcript);
+
+  if (result.arm) {
+    const steps = driverSteps(result.arm.files);
+    if (steps.length) t.steps = steps;
+  }
   const finalResult =
     result.finalText?.trim() ||
     (result.timedOut ? 'The run was stopped at the time limit before the cone answered.' : '') ||
@@ -774,7 +826,12 @@ export function traceFromResult(result) {
     screenshots: result.screenshots ?? [],
     outputFilesText: null,
     metrics: {
-      steps: (result.arm ? armTurns(result.transcript) : t.assistantTurns) || result.turns || 0,
+      steps:
+        (result.arm
+          ? armTurns(result.transcript, result.arm.files, result.arm.startedAt ?? 0)
+          : t.assistantTurns) ||
+        result.turns ||
+        0,
       duration: result.durationMs / 1000,
       cost: result.costUsd,
       tokens: result.tokens,
@@ -1108,14 +1165,18 @@ function startAgent(leader, { arm, goalFile, task, model, timeout, signal }) {
       });
 }
 
-async function collectArmRun(leader, arm, reply, transcript) {
+async function collectArmRun(leader, arm, reply, transcript, started) {
   if (!arm) return null;
   const files = arm.files ? await collectArmFiles(leader, arm.files) : null;
   return {
-    finalText: lastScoopAssistantText(transcript) || armAnswer(files?.files),
+    finalText:
+      driverAnswer(files?.files) ||
+      lastScoopAssistantText(transcript, started) ||
+      armAnswer(files?.files),
     record: {
       arm: {
         name: arm.name ?? null,
+        startedAt: started,
         result: parseArmResult(reply.stdout),
         files: files?.files ?? [],
         filesTruncated: Boolean(files?.truncated),
@@ -1237,7 +1298,7 @@ export async function runTask({
     const { transcript, transcriptExport, resumedAfterSettle } = collected;
     await closeTabs(leader).catch(() => {});
     const { taken, images } = await readShots(leader, shots);
-    const armOut = await collectArmRun(leader, arm, reply, transcript);
+    const armOut = await collectArmRun(leader, arm, reply, transcript, started);
     health.after = await leaderHealth(leader, now);
     const done = now();
     return {
