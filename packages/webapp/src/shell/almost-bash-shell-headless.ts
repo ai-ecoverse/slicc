@@ -1,4 +1,3 @@
-import { readOAuthExtras } from '@slicc/shared-ts';
 import type {
   BashExecResult,
   ByteString,
@@ -6,7 +5,6 @@ import type {
   CommandContext,
   CommandName,
   ExecResult,
-  ResolvedCommandContext,
 } from 'just-bash';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 
@@ -15,24 +13,22 @@ import type { SupplementalCommandsConfig } from './supplemental-commands/index.j
 type BrowserAPI = NonNullable<SupplementalCommandsConfig['browserAPI']>;
 
 import { createLogger } from '../base/logger.js';
-import { SUDOERS_D_DIR, type SudoersPolicy, sanitizeGrantPattern } from '../base/sudoers.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
-import { FsError } from '../fs/types.js';
 import { GitCommands } from '../git/git-commands.js';
+import { ensureFreshGithubToken, githubOAuthDomains } from '../git/github-oauth.js';
 import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
-import { getRegisteredProviderConfig } from '../providers/index.js';
-import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
+import { CommandGate, type ShellSudoConfig } from './command-gate.js';
 import { filesystemExecutionLimits } from './filesystem-budgets.js';
-import { carriedEnv, runOnGnuBash, SHELL_CHOICE_ENV } from './gnu-bash.js';
+import { GnuBashFallback } from './gnu-bash-fallback.js';
 import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
 import { isInstalledProgramPath } from './ipk/wasm-programs.js';
-import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
+import { JshCommandRegistry } from './jsh-command-registry.js';
+import { DEFAULT_SHELL_PATH, type JshDiscoveryFS } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
-import { executeJsCode, executeJshFile } from './jsh-executor.js';
+import { executeJshFile } from './jsh-executor.js';
 import { EMPTY_BYTES, stdinAsText } from './just-bash-compat.js';
-import { parseShellArgs } from './parse-shell-args.js';
 import {
   applyCapturedPipeStatus,
   attachPipeStatus,
@@ -56,15 +52,11 @@ import {
   type StreamingFetch,
 } from './proxied-fetch.js';
 import { clearReadByteProvenance } from './request-body-provenance.js';
+import { OUTPUT_TEE_ENV, RUN_PID_ENV, runPidFromEnv } from './run-env.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { settleOnAbort } from './settle-on-abort.js';
-import {
-  commandSudoSubject,
-  enforceCommandSudo,
-  SUDO_REFUSED_EXIT_CODE,
-} from './sudo/command-guard.js';
 import { extractLeadingCommentReason, SUDO_REASON_ENV } from './sudo/command-reason.js';
-import { GITHUB_DOMAINS, PLUMBING } from './supplemental-commands/git-credential-command.js';
+import { PLUMBING } from './supplemental-commands/git-credential-command.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
 import { sayStdioPlugin } from './supplemental-commands/say-stdio-rewrite.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
@@ -73,7 +65,8 @@ import { createSupplementalCommands } from './supplemental-commands.js';
 import { emitShellCommand } from './telemetry-hook.js';
 import type { TerminalPort } from './terminal-port.js';
 import { VfsAdapter } from './vfs-adapter.js';
-import { buildWorkflowRunArgv, type WorkflowCommandEntry } from './workflow-discovery.js';
+
+export type { ShellSudoConfig };
 
 export interface HeadlessShellOptions {
   fs: VirtualFS;
@@ -121,18 +114,6 @@ export interface HeadlessShellOptions {
   >['executionLimitProfile'];
 
   executionLimits?: NonNullable<ConstructorParameters<typeof Bash>[0]>['executionLimits'];
-}
-
-export interface ShellSudoConfig {
-  getPolicy: () => SudoersPolicy | null;
-
-  broker: SudoBroker;
-
-  persistCommandGrant?: (pattern: string) => Promise<void>;
-
-  transparentGating?: boolean;
-
-  defaultDisposition?: import('../base/sudoers.js').DefaultDisposition;
 }
 
 export interface HeadlessShellLike {
@@ -189,39 +170,11 @@ function getFsWatcher(fs: unknown): FsWatcher | null {
   return null;
 }
 
-async function ensureFreshGithubToken(opts?: { force?: boolean }): Promise<void> {
-  const github = getRegisteredProviderConfig('github');
-  if (!github) return;
-  if (opts?.force) {
-    await github.onSilentRenew?.();
-    return;
-  }
-  await github.getValidAccessToken?.();
-}
-
-function githubOAuthDomains(): string[] {
-  const github = getRegisteredProviderConfig('github');
-  if (!github) return GITHUB_DOMAINS;
-  const extras = typeof localStorage === 'undefined' ? [] : readOAuthExtras(localStorage).github;
-  return [...(github.oauthTokenDomains ?? GITHUB_DOMAINS), ...(extras ?? [])];
-}
-
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
   signal?: AbortSignal;
 };
 
 const log = createLogger('almost-bash-shell');
-
-const RUN_PID_ENV = '__SLICC_RUN_PID';
-
-const OUTPUT_TEE_ENV = '__SLICC_OUTPUT_TEE__';
-
-function runPidFromEnv(runEnv?: ReadonlyMap<string, string>): number | undefined {
-  const raw = runEnv?.get(RUN_PID_ENV);
-  if (raw === undefined) return undefined;
-  const pid = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
-}
 
 function stripRunPid(env: Record<string, string>): Record<string, string> {
   if (
@@ -283,20 +236,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   private initialJshSync: Promise<void> | null = null;
   protected readonly ownsScriptCatalog: boolean;
-
-  protected registeredJshCommands = new Map<string, string>();
-
-  protected registeredWorkflowCommands = new Set<string>();
-
-  protected registeredWasmCommands = new Set<string>();
-
-  private jshSyncInflight: Promise<void> | null = null;
-
-  private jshSyncDirty = false;
-
-  private pendingCommandGrants: string[] = [];
-
-  private pendingSudoBypasses = new Map<string, number>();
+  private readonly commandGate: CommandGate;
+  private jshRegistry!: JshCommandRegistry;
+  private gnuBashFallback!: GnuBashFallback;
 
   private pendingEnvWrites = new Map<string, string | null>();
 
@@ -360,11 +302,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       syncScriptCommands: () => this.syncJshCommands(),
       getStaticBuiltins: () => [...this.staticBuiltinNames],
 
-      getScriptRegisteredNames: () => [
-        ...this.registeredJshCommands.keys(),
-        ...this.registeredWorkflowCommands,
-        ...this.registeredWasmCommands,
-      ],
+      getScriptRegisteredNames: () => this.jshRegistry.scriptRegisteredNames(),
       fs: options.fs,
       fetch: fetchFn,
       streamFetch,
@@ -385,9 +323,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
             broker: options.sudo.broker,
 
             persistGrant: async (pattern) => {
-              this.pendingCommandGrants.push(pattern);
+              this.commandGate.queueGrant(pattern);
             },
-            suppressNextGate: (subject) => this.registerSudoBypass(subject),
+            suppressNextGate: (subject) => this.commandGate.registerSudoBypass(subject),
           }
         : undefined,
 
@@ -414,6 +352,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     this.vfsAdapter = new VfsAdapter(options.fs);
     this.progress = new ProgressEmitter({ scrubLabel: options.scrubProgressLabel });
     this.allowedCommands = AlmostBashShellHeadless.buildAllowedCommandSet(options);
+    this.commandGate = new CommandGate({
+      getSudo: () => this.options.sudo,
+      fs: options.fs,
+    });
     const initialCwd = options.cwd ?? '/';
     const initialEnv = AlmostBashShellHeadless.buildInitialEnv(options, initialCwd);
 
@@ -536,8 +478,67 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
+    this.bindCollaborators(options);
 
     this.startInitialJshSync();
+  }
+
+  private bindCollaborators(options: HeadlessShellOptions): void {
+    const self = this;
+    this.jshRegistry = new JshCommandRegistry({
+      get bash() {
+        return self.bash;
+      },
+      scriptCatalog: this.scriptCatalog,
+      discoveryFs: options.jshDiscoveryFs ?? options.fs,
+      vfsAdapter: this.vfsAdapter,
+      get cwd() {
+        return self.cwd;
+      },
+      get lastEnv() {
+        return self.lastEnv;
+      },
+      get umask() {
+        return self.umask;
+      },
+      builtinCommandNames: this.builtinCommandNames,
+      isCommandAllowed: (name) => this.isCommandAllowed(name),
+      wrapCommandForDispatch: (command) => this.wrapCommandForDispatch(command),
+      path: () => this.lastEnv.PATH,
+      buildJshProcessConfig: (runPid) => this.buildJshProcessConfig(runPid),
+      gateNativeCommand: this.gateNativeCommand,
+      gitIdentity: () => this.gitCommands.identity(),
+    });
+    this.gnuBashFallback = new GnuBashFallback({
+      gnuBash: options.gnuBash === true,
+      get lastEnv() {
+        return self.lastEnv;
+      },
+      get cwd() {
+        return self.cwd;
+      },
+      get umask() {
+        return self.umask;
+      },
+      vfsAdapter: this.vfsAdapter,
+      get bash() {
+        return self.bash;
+      },
+      scriptCatalog: this.scriptCatalog,
+      outputTees: this.outputTees,
+      gateNativeCommand: this.gateNativeCommand,
+      buildJshProcessConfig: (runPid) => this.buildJshProcessConfig(runPid),
+      gitIdentity: () => this.gitCommands.identity(),
+      flushPendingCommandGrants: () => this.commandGate.flushPendingCommandGrants(),
+      applyPendingEnvWrites: () => this.applyPendingEnvWrites(),
+      syncJshCommands: () => this.syncJshCommands(),
+      adoptCwd: (cwd) => {
+        this.cwd = cwd;
+      },
+      adoptEnv: (env) => {
+        this.lastEnv = env;
+      },
+    });
   }
 
   getBash(): Bash {
@@ -570,16 +571,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   }
 
   async getJshCommandNames(): Promise<string[]> {
-    return [...(await this.getFilteredJshCommands()).keys()];
+    return this.jshRegistry.getJshCommandNames();
   }
 
   async syncJshCommands(): Promise<void> {
-    if (this.jshSyncInflight !== null) {
-      this.jshSyncDirty = true;
-      return this.jshSyncInflight;
-    }
-    this.jshSyncInflight = this.doSyncJshCommands();
-    return this.jshSyncInflight;
+    return this.jshRegistry.syncJshCommands();
   }
 
   cancelActiveCommand(): void {
@@ -651,10 +647,6 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   protected async renderMediaPreview(_items: MediaPreviewItem[]): Promise<void> {
     throw new Error('terminal preview is unavailable in headless mode');
-  }
-
-  private currentScanRoots(): string[] {
-    return pathToScanRoots(this.lastEnv.PATH);
   }
 
   private startInitialJshSync(): void {
@@ -733,8 +725,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     clearReadByteProvenance();
 
     await this.waitForInitialJshSync(signal);
-    if (await this.usesGnuBash()) {
-      return this.runOnGnuBash(command, signal, runPid, stdin, outputTeeId, capturePipeStatus);
+    if (await this.gnuBashFallback.usesGnuBash()) {
+      return this.gnuBashFallback.runOnGnuBash(
+        command,
+        signal,
+        runPid,
+        stdin,
+        outputTeeId,
+        capturePipeStatus
+      );
     }
 
     const sudoReason = extractLeadingCommentReason(command);
@@ -770,7 +769,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       this.endScriptRun(scriptRun);
     }
 
-    await this.flushPendingCommandGrants();
+    await this.commandGate.flushPendingCommandGrants();
     result = applyCapturedPipeStatus(result, capturePipeStatus);
     if (typeof result.umask === 'number') this.umask = result.umask;
     if (result.env) {
@@ -787,7 +786,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
 
     if (result.exitCode === 127) {
-      const jshResult = await this.tryJshFallback(command, runPid);
+      const jshResult = await this.jshRegistry.tryJshFallback(command, runPid);
       if (jshResult) {
         void this.syncJshCommands().catch(() => undefined);
         return jshResult;
@@ -812,83 +811,6 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     this.pendingEnvWrites.clear();
   }
 
-  private async usesGnuBash(): Promise<boolean> {
-    if (!this.options.gnuBash || this.lastEnv[SHELL_CHOICE_ENV] === 'just-bash') return false;
-    if (typeof SharedArrayBuffer !== 'function') return false;
-    return (await this.scriptCatalog.getWasmCommands()).has('bash');
-  }
-
-  private async runOnGnuBash(
-    command: string,
-    signal: AbortSignal | undefined,
-    runPid: number | undefined,
-    stdin: ByteString,
-    outputTeeId: string | undefined,
-    capturePipeStatus: boolean
-  ): Promise<BashExecResult & { pipeStatus?: number[] }> {
-    const { runWasmCommand, withoutRealmDefaults } = await import(
-      './supplemental-commands/wasm/run.js'
-    );
-    const sudoReason = extractLeadingCommentReason(command);
-    const env: Record<string, string> = {
-      ...this.lastEnv,
-      ...(runPid === undefined ? {} : { [RUN_PID_ENV]: String(runPid) }),
-      ...(sudoReason ? { [SUDO_REASON_ENV]: sudoReason } : {}),
-    };
-    const tee = outputTeeId === undefined ? undefined : this.outputTees.get(outputTeeId);
-    const run = await runOnGnuBash(command, {
-      env,
-      run: (args, runEnv, fds) =>
-        runWasmCommand(args, this.wasmContext(runEnv, signal, stdin), {
-          processConfig: this.buildJshProcessConfig(runPid),
-          gate: this.gateNativeCommand,
-          onOutput: tee,
-          fds,
-          commands: () => this.scriptCatalog.getWasmCommands(),
-          gitIdentity: () => this.gitCommands.identity(),
-        }),
-    });
-    const pathBefore = this.lastEnv.PATH;
-    if (run.state) {
-      this.cwd = run.state.cwd;
-
-      this.lastEnv = carriedEnv(withoutRealmDefaults(run.state.env, env), [
-        RUN_PID_ENV,
-        SUDO_REASON_ENV,
-        OUTPUT_TEE_ENV,
-      ]);
-    }
-
-    if (this.lastEnv.PATH !== pathBefore) await this.syncJshCommands().catch(() => undefined);
-    await this.flushPendingCommandGrants();
-    this.applyPendingEnvWrites();
-    return {
-      stdout: run.stdout,
-      stderr: run.stderr,
-      exitCode: run.exitCode,
-      env: { ...this.lastEnv },
-      ...(capturePipeStatus && run.state ? { pipeStatus: run.state.pipeStatus } : {}),
-    };
-  }
-
-  private wasmContext(
-    env: Record<string, string>,
-    signal: AbortSignal | undefined,
-    stdin: ByteString
-  ): CommandContext {
-    return {
-      fs: this.vfsAdapter,
-      cwd: this.cwd,
-      env: new Map(Object.entries(env)),
-      exportedEnv: env,
-      stdin,
-      signal,
-
-      exec: (cmd: string, opts: Parameters<Bash['exec']>[1]) =>
-        this.bash.exec(cmd, { ...opts, umask: this.umask }),
-    } as unknown as CommandContext;
-  }
-
   private readonly gateNativeCommand = async (
     name: string,
     args: string[],
@@ -898,18 +820,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       return { stderr: `bash: ${name}: command not found\n`, exitCode: 127 };
     }
 
-    if (!this.isTransparentGatingEnabled() || PLUMBING.has(name)) return null;
-    const denial = await this.gateCommandDispatch(name, args, env[SUDO_REASON_ENV]);
+    if (!this.commandGate.isTransparentGatingEnabled() || PLUMBING.has(name)) return null;
+    const denial = await this.commandGate.gateCommandDispatch(name, args, env[SUDO_REASON_ENV]);
     return denial ? { stderr: denial.stderr, exitCode: denial.exitCode } : null;
   };
 
-  private isTransparentGatingEnabled(): boolean {
-    const sudo = this.options.sudo;
-    return !!sudo && sudo.transparentGating !== false;
-  }
-
   private wrapCommandForDispatch(command: Command): Command {
-    const inner = this.wrapCommandForSudo(command);
+    const inner = this.commandGate.wrapCommandForSudo(command);
     const wrapped =
       command.name === 'timeout'
         ? wrapTimeoutForProgress(inner, this.progress)
@@ -977,243 +894,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
   }
 
-  private wrapCommandForSudo(command: Command): Command {
-    if (!this.isTransparentGatingEnabled() || PLUMBING.has(command.name)) return command;
-    const guard = (args: string[], reason?: string) =>
-      this.gateCommandDispatch(command.name, args, reason);
-    return {
-      ...command,
-      async execute(args: string[], ctx: ResolvedCommandContext): Promise<ExecResult> {
-        const denial = await guard(args, ctx.env?.get(SUDO_REASON_ENV));
-        if (denial) return denial;
-        return command.execute(args, ctx);
-      },
-    };
-  }
-
-  private async gateCommandDispatch(
-    name: string,
-    args: string[],
-    reason?: string
-  ): Promise<ExecResult | null> {
-    const sudo = this.options.sudo;
-    if (!sudo) return null;
-
-    const subject = commandSudoSubject(name, args);
-
-    if (this.consumeSudoBypass(subject)) {
-      return null;
-    }
-
-    const policy = sudo.getPolicy();
-    if (!policy) return null;
-
-    const result = await enforceCommandSudo(subject, {
-      policy,
-      broker: sudo.broker,
-
-      persistGrant: async (pattern) => {
-        this.pendingCommandGrants.push(pattern);
-      },
-      defaultDisposition: sudo.defaultDisposition,
-      ...(reason ? { reason } : {}),
-    });
-    if (result.allowed) return null;
-
-    return {
-      stdout: '',
-      stderr: `${result.message}\n`,
-      exitCode: result.exitCode ?? SUDO_REFUSED_EXIT_CODE,
-    };
-  }
-
-  private registerSudoBypass(subject: string): void {
-    const key = subject.trim();
-    if (!key) return;
-    this.pendingSudoBypasses.set(key, (this.pendingSudoBypasses.get(key) ?? 0) + 1);
-  }
-
-  private consumeSudoBypass(subject: string): boolean {
-    const count = this.pendingSudoBypasses.get(subject);
-    if (!count) return false;
-    if (count === 1) {
-      this.pendingSudoBypasses.delete(subject);
-    } else {
-      this.pendingSudoBypasses.set(subject, count - 1);
-    }
-    return true;
-  }
-
-  private async flushPendingCommandGrants(): Promise<void> {
-    if (this.pendingCommandGrants.length === 0) return;
-    const grants = this.pendingCommandGrants;
-    this.pendingCommandGrants = [];
-    for (const pattern of grants) {
-      try {
-        await this.persistCommandGrant(pattern);
-      } catch {}
-    }
-  }
-
-  private async persistCommandGrant(pattern: string): Promise<void> {
-    const sink = this.options.sudo?.persistCommandGrant;
-    if (sink) {
-      await sink(pattern);
-      return;
-    }
-    const safe = sanitizeGrantPattern(pattern);
-    if (!safe) return;
-    const path = `${SUDOERS_D_DIR}/granted`;
-    const fs = this.options.fs;
-    let existing = '';
-    try {
-      if (await fs.exists(path)) {
-        existing = (await fs.readFile(path)) as string;
-      }
-    } catch (err) {
-      if (!(err instanceof FsError && err.code === 'ENOENT')) throw err;
-    }
-    const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
-    await fs.writeFile(path, `${prefix}NOPASSWD Cmnd  ${safe}\n`);
-  }
-
   private isCommandAllowed(name: string): boolean {
     return this.allowedCommands === null || this.allowedCommands.has(PLUMBING.get(name) ?? name);
-  }
-
-  private async doSyncJshCommands(): Promise<void> {
-    try {
-      const jshIndex = await this.scriptCatalog.getJshIndex(this.currentScanRoots());
-      const jshMap = jshIndex.commands;
-      for (const collision of jshIndex.collisions) {
-        log.warn(
-          `jsh command '${collision.name}' is provided by more than one skill; using ${collision.winnerPath} (${collision.reason}), shadowed ${collision.shadowedPaths.join(', ')}`
-        );
-      }
-      const wfMap = await this.getFilteredWorkflowCommands();
-      const wasmMap = await this.scriptCatalog.getWasmCommands();
-
-      for (const [name, scriptPath] of jshMap) {
-        if (!this.isCommandAllowed(name)) continue;
-        if (this.builtinCommandNames.has(name) && !this.registeredJshCommands.has(name)) continue;
-        if (this.registeredJshCommands.get(name) === scriptPath) continue;
-        this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
-        this.registeredJshCommands.set(name, scriptPath);
-        this.builtinCommandNames.add(name);
-      }
-
-      const wasmNames = [...wasmMap.keys()].filter((name) => this.isCommandAllowed(name));
-      this.registerLateScriptNames(wasmNames, this.registeredWasmCommands);
-      this.registerLateScriptNames(wfMap.keys(), this.registeredWorkflowCommands);
-    } finally {
-      this.jshSyncInflight = null;
-      if (this.jshSyncDirty) {
-        this.jshSyncDirty = false;
-        void this.syncJshCommands().catch(() => undefined);
-      }
-    }
-  }
-
-  private registerLateScriptNames(names: Iterable<string>, registered: Set<string>): void {
-    const scriptSources = [
-      this.registeredJshCommands,
-      this.registeredWasmCommands,
-      this.registeredWorkflowCommands,
-    ];
-    for (const name of names) {
-      if (registered.has(name)) continue;
-      if (scriptSources.some((source) => source !== registered && source.has(name))) {
-        registered.add(name);
-        continue;
-      }
-      if (this.builtinCommandNames.has(name)) continue;
-      this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
-      registered.add(name);
-      this.builtinCommandNames.add(name);
-    }
-  }
-
-  private makeScriptCommand(name: string): Command {
-    const catalog = this.scriptCatalog;
-    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
-    const cmdName = name;
-    const executeInner = async (args: string[], ctx: CommandContext): Promise<ExecResult> => {
-      const execFn: typeof ctx.exec =
-        ctx.exec ??
-        ((cmd, opts) =>
-          this.bash.exec(cmd, {
-            env: opts?.env ?? Object.fromEntries(ctx.env),
-            cwd: opts?.cwd ?? ctx.cwd,
-            args: opts?.args,
-            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
-          }));
-
-      const jshMap = await catalog.getJshCommands(this.currentScanRoots());
-      const jshPath = jshMap.get(cmdName);
-      if (jshPath) {
-        let code: string;
-        try {
-          const raw = await discoveryFs.readFile(jshPath, { encoding: 'utf-8' });
-          code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-        } catch {
-          return { stdout: '', stderr: `jsh: cannot read script '${jshPath}'\n`, exitCode: 127 };
-        }
-        return executeJsCode(
-          code,
-          ['node', jshPath, ...args],
-          { fs: ctx.fs, cwd: ctx.cwd, env: ctx.env, stdin: ctx.stdin, exec: execFn },
-          this.buildJshProcessConfig(runPidFromEnv(ctx.env))
-        );
-      }
-
-      const wasm = (await catalog.getWasmCommands()).get(cmdName);
-      if (wasm) {
-        const { runWasmCommand } = await import('./supplemental-commands/wasm/run.js');
-        return runWasmCommand(
-          wasm.script
-            ? [cmdName, ...args]
-            : [
-                '--argv0',
-                wasm.argv0,
-                '--module',
-                wasm.wasm,
-                wasm.glue,
-                ...(wasm.args ?? []),
-                ...args,
-              ],
-          ctx,
-          {
-            processConfig: this.buildJshProcessConfig(runPidFromEnv(ctx.env)),
-            gate: this.gateNativeCommand,
-            defaults: wasm.env,
-            commands: () => catalog.getWasmCommands(),
-            gitIdentity: () => this.gitCommands.identity(),
-          }
-        );
-      }
-
-      const wfMap = await catalog.getWorkflowCommands();
-      const wf = wfMap.get(cmdName);
-      if (wf) {
-        const argv = buildWorkflowRunArgv(wf.path, args);
-        return execFn(argv[0], { args: argv.slice(1), cwd: ctx.cwd });
-      }
-
-      return { stdout: '', stderr: `${cmdName}: command no longer exists\n`, exitCode: 127 };
-    };
-    return {
-      name,
-
-      trusted: true,
-      async execute(args: string[], ctx) {
-        try {
-          return await executeInner(args, ctx);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          return { stdout: '', stderr: `${cmdName}: ${message}\n`, exitCode: 1 };
-        }
-      },
-    };
   }
 
   private createGitCustomCommand(): Command {
@@ -1255,83 +937,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     });
   }
 
-  private async getFilteredJshCommands(): Promise<Map<string, string>> {
-    const all = await this.scriptCatalog.getJshCommands(this.currentScanRoots());
-    const filtered = new Map<string, string>();
-    for (const [name, path] of all) {
-      if (this.builtinCommandNames.has(name)) continue;
-      if (!this.isCommandAllowed(name)) continue;
-      filtered.set(name, path);
-    }
-    return filtered;
-  }
-
-  private async getFilteredWorkflowCommands(): Promise<Map<string, WorkflowCommandEntry>> {
-    const all = await this.scriptCatalog.getWorkflowCommands();
-    const filtered = new Map<string, WorkflowCommandEntry>();
-    for (const [name, entry] of all) {
-      if (!this.isCommandAllowed(name)) continue;
-      filtered.set(name, entry);
-    }
-    return filtered;
-  }
-
   async getWorkflowCommandNames(): Promise<string[]> {
-    return [...(await this.getFilteredWorkflowCommands()).keys()];
-  }
-
-  private async tryJshFallback(command: string, runPid?: number): Promise<BashExecResult | null> {
-    const trimmed = command.trim();
-    const firstSpace = trimmed.indexOf(' ');
-    const cmdName = firstSpace >= 0 ? trimmed.slice(0, firstSpace) : trimmed;
-    const argsStr = firstSpace >= 0 ? trimmed.slice(firstSpace + 1).trim() : '';
-
-    const jshMap = await this.getFilteredJshCommands();
-    const scriptPath = jshMap.get(cmdName);
-    if (!scriptPath) return null;
-
-    const args = argsStr ? parseShellArgs(argsStr) : [];
-
-    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
-    let code: string;
-    try {
-      const raw = await discoveryFs.readFile(scriptPath, { encoding: 'utf-8' });
-      code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    } catch {
-      return {
-        stdout: '',
-        stderr: `jsh: cannot read script '${scriptPath}'\n`,
-        exitCode: 127,
-        env: this.lastEnv,
-      };
-    }
-
-    const argv = ['node', scriptPath, ...args];
-    const result = await executeJsCode(
-      code,
-      argv,
-      {
-        fs: this.vfsAdapter,
-        cwd: this.cwd,
-        env: new Map(Object.entries(this.lastEnv)),
-        stdin: EMPTY_BYTES,
-        exec: (cmd, opts) =>
-          this.bash.exec(cmd, {
-            env: opts?.env ?? this.lastEnv,
-            cwd: opts?.cwd ?? this.cwd,
-            umask: this.umask,
-            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
-          }),
-      },
-      this.buildJshProcessConfig(runPid)
-    );
-
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-      env: this.lastEnv,
-    };
+    return this.jshRegistry.getWorkflowCommandNames();
   }
 
   protected buildJshProcessConfig(runPid?: number): JshProcessConfig | undefined {
