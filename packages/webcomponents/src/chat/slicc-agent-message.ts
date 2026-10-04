@@ -128,6 +128,14 @@ slicc-agent-message .dots i:nth-child(3) { animation-delay: .32s; }
 @keyframes slicc-am-bdot { 0%, 75%, 100% { transform: translateY(0); opacity: .45; } 38% { transform: translateY(-8px); opacity: 1; } }
 slicc-agent-message .tw-caret { display: inline-block; width: 2px; height: 1.05em; vertical-align: -2px; margin-left: 1px; background: var(--ink); animation: slicc-am-cblink .9s steps(1) infinite; }
 @keyframes slicc-am-cblink { 50% { opacity: 0; } }
+/* A streaming bubble with no prose yet (waiting on the model, typically
+   between tool rounds) holds only the caret. In flow, that caret gives the
+   bubble a line box, so the transcript grows by a line plus the bubble margin
+   on every model wait and shrinks again when the next tool runs. Out of flow,
+   the bubble collapses like any other empty bubble and the caret blinks in
+   the margin gap above it. */
+slicc-agent-message .body:has(> .tw-caret--solo) { position: relative; }
+slicc-agent-message .tw-caret--solo { position: absolute; left: 0; bottom: 1px; margin-left: 0; }
 `;
 
 const STYLE_ID = 'slicc-agent-message-style';
@@ -426,10 +434,21 @@ export class SliccAgentMessage extends HTMLElement {
         // Keep the caret last after a body re-render.
         this.#body.appendChild(this.#caret);
       }
+      this.#caret.classList.toggle('tw-caret--solo', this.#bodyIsBlank());
     } else if (this.#caret) {
       this.#caret.remove();
       this.#caret = null;
     }
+  }
+
+  /** Whether the body renders nothing but the caret (no elements, no visible text). */
+  #bodyIsBlank(): boolean {
+    for (const node of this.#body.childNodes) {
+      if (node === this.#caret) continue;
+      if (node.nodeType === Node.ELEMENT_NODE) return false;
+      if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()) return false;
+    }
+    return true;
   }
 
   #syncTimestamp(): void {
