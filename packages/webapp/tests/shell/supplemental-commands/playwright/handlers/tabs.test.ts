@@ -100,6 +100,22 @@ describe('stable tab numbers', () => {
     ]);
   });
 
+  // Codex review on #3802: a tab on a page tab-list hides is still open.
+  it('keeps the number of a tab that visits a hidden chrome:// page', async () => {
+    const { browser, listing } = makeBrowser([page('A'), page('B')]);
+    const state = createPlaywrightState();
+    await listTabs(createHandlerCtx({ browser, state }));
+
+    listing.pages = [page('A', 'chrome://settings/'), page('B')];
+    expect(await listTabs(createHandlerCtx({ browser, state }))).toEqual([{ id: 'B', number: 2 }]);
+    listing.pages = [page('A'), page('B'), page('C')];
+    expect(await listTabs(createHandlerCtx({ browser, state }))).toEqual([
+      { id: 'A', number: 1 },
+      { id: 'B', number: 2 },
+      { id: 'C', number: 3 },
+    ]);
+  });
+
   it('keeps tab-list lines parseable as `[targetId] url "title"`', async () => {
     const { browser } = makeBrowser([{ ...page('T1', 'https://a/'), title: 'A', active: true }]);
     const { stdout } = await tabListHandler(

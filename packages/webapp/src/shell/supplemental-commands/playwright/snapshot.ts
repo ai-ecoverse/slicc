@@ -261,6 +261,23 @@ export async function getActionablePages(
   browser: BrowserAPI,
   state: PlaywrightState
 ): Promise<PageInfo[]> {
+  return (await listPagesForTabs(browser, state)).actionable;
+}
+
+/** Tabs to show, numbered (see {@link numberTabs}) and sorted by number. */
+export async function listNumberedTabs(
+  browser: BrowserAPI,
+  state: PlaywrightState
+): Promise<Array<PageInfo & { number: number }>> {
+  const { all, actionable } = await listPagesForTabs(browser, state);
+  return numberTabs(state, actionable, all);
+}
+
+/** Every listed page, and the ones an agent may drive (no app tab, no Chrome UI). */
+async function listPagesForTabs(
+  browser: BrowserAPI,
+  state: PlaywrightState
+): Promise<{ all: PageInfo[]; actionable: PageInfo[] }> {
   // Use listAllTargets when available (includes remote tray targets).
   // In standalone mode the worker-side BrowserAPI has no trayTargetProvider, so
   // listAllTargets() returns local-only. When a tray is configured, supplement via
@@ -273,7 +290,7 @@ export async function getActionablePages(
   if (!state.appTabId || !pages.some((p) => p.targetId === state.appTabId)) {
     await findAppTab(state, pages);
   }
-  return pages.filter((page) => isActionablePage(state, page));
+  return { all: pages, actionable: pages.filter((page) => isActionablePage(state, page)) };
 }
 
 /** The tab's number, assigned now if it has none yet. */
@@ -287,21 +304,25 @@ export function tabNumberFor(state: PlaywrightState, targetId: string): number {
 }
 
 /**
- * Number the listed tabs and sort them by number.
+ * Number the listed tabs and sort them by number. `present` is every page
+ * the browser listed, filtered or not: a tab sitting on a hidden page
+ * (`chrome://settings`) is still open and keeps its number for when it
+ * comes back.
  *
  * Browsers list tabs in no stable order — Chrome's `Target.getTargets` puts
  * a new tab mid-list, and the extension float follows the tab strip — so a
  * position in the list names a different tab as soon as one opens. A tab
  * keeps its number while it is open; a new tab gets the next number. Local
- * tabs missing from the listing are forgotten (closed); remote tabs keep
+ * tabs missing from `present` are forgotten (closed); remote tabs keep
  * their number through a listing that missed them, since a slow follower
  * drops out of one listing without closing anything.
  */
 export function numberTabs(
   state: PlaywrightState,
-  pages: PageInfo[]
+  pages: PageInfo[],
+  present: PageInfo[] = pages
 ): Array<PageInfo & { number: number }> {
-  const listed = new Set(pages.map((page) => page.targetId));
+  const listed = new Set(present.map((page) => page.targetId));
   for (const targetId of [...state.tabNumbers.keys()]) {
     if (!listed.has(targetId) && !targetId.includes(':')) state.tabNumbers.delete(targetId);
   }

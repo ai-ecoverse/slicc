@@ -4,7 +4,7 @@
 
 import { createLogger } from '../../../../base/logger.js';
 import { fetchAndDiscover } from '../discover.js';
-import { getActionablePages, numberTabs, resolveAppTabId, tabNumberFor } from '../snapshot.js';
+import { listNumberedTabs, resolveAppTabId, tabNumberFor } from '../snapshot.js';
 import { requireTab } from '../state.js';
 import { armTeleportWatcher, cleanupTeleportWatcher } from '../teleport.js';
 import type { PlaywrightHandler, PlaywrightHandlerCtx } from '../types.js';
@@ -181,7 +181,7 @@ export const openHandler: PlaywrightHandler = async ({
 };
 
 export const tabListHandler: PlaywrightHandler = async ({ browser, state }) => {
-  const pages = numberTabs(state, await getActionablePages(browser, state));
+  const pages = await listNumberedTabs(browser, state);
   if (pages.length === 0) {
     return { stdout: 'No tabs open\n', stderr: '', exitCode: 0 };
   }
@@ -260,7 +260,7 @@ export const tabSelectHandler: PlaywrightHandler = async ({
       exitCode: 1,
     };
   }
-  const pages = numberTabs(state, await getActionablePages(browser, state));
+  const pages = await listNumberedTabs(browser, state);
   let targetId: string;
   if (byId) {
     targetId = byId;
