@@ -1,11 +1,11 @@
 /**
- * `AlmostBashShellHeadless` — the worker-safe shell base class.
+ * `AlmostBashShellHeadless` — the worker-safe shell orchestrator.
  *
- * The agent's `bash` tool calls run here. Owns just-bash,
- * the VFS adapter, custom commands (git, mount, supplemental), the
- * `.jsh` discovery + sync loop, and the `executeCommand` /
- * `executeScriptFile` primitives. Zero DOM in this class's own code
- * (`setInterval`, `IndexedDB`-backed VFS only). Shell-command
+ * The agent's `bash` tool calls run here. Owns just-bash, the VFS
+ * adapter, cwd/env, and `runCommand`. Script discovery, sudo/grants,
+ * and the GNU-bash path live on collaborators (`JshCommandRegistry`,
+ * `CommandGate`, `GnuBashFallback`). Zero DOM in this class's own
+ * code (`setInterval`, `IndexedDB`-backed VFS only). Shell-command
  * telemetry is emitted through the dependency-inverted
  * `telemetry-hook.ts` sink (the UI registers `trackShellCommand`)
  * rather than importing `ui/telemetry.ts` directly, so the shell no
@@ -29,7 +29,6 @@
  * envelope emit.
  */
 
-import { readOAuthExtras } from '@slicc/shared-ts';
 import type {
   BashExecResult,
   ByteString,
@@ -37,7 +36,6 @@ import type {
   CommandContext,
   CommandName,
   ExecResult,
-  ResolvedCommandContext,
 } from 'just-bash';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 // The shell only FORWARDS a BrowserAPI (to the supplemental commands and
@@ -50,24 +48,22 @@ import type { SupplementalCommandsConfig } from './supplemental-commands/index.j
 type BrowserAPI = NonNullable<SupplementalCommandsConfig['browserAPI']>;
 
 import { createLogger } from '../base/logger.js';
-import { SUDOERS_D_DIR, type SudoersPolicy, sanitizeGrantPattern } from '../base/sudoers.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
-import { FsError } from '../fs/types.js';
 import { GitCommands } from '../git/git-commands.js';
+import { ensureFreshGithubToken, githubOAuthDomains } from '../git/github-oauth.js';
 import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
-import { getRegisteredProviderConfig } from '../providers/index.js';
-import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
+import { CommandGate, type ShellSudoConfig } from './command-gate.js';
 import { filesystemExecutionLimits } from './filesystem-budgets.js';
-import { carriedEnv, runOnGnuBash, SHELL_CHOICE_ENV } from './gnu-bash.js';
+import { GnuBashFallback } from './gnu-bash-fallback.js';
 import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
 import { isInstalledProgramPath } from './ipk/wasm-programs.js';
-import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
+import { JshCommandRegistry } from './jsh-command-registry.js';
+import { DEFAULT_SHELL_PATH, type JshDiscoveryFS } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
-import { executeJsCode, executeJshFile } from './jsh-executor.js';
+import { executeJshFile } from './jsh-executor.js';
 import { EMPTY_BYTES, stdinAsText } from './just-bash-compat.js';
-import { parseShellArgs } from './parse-shell-args.js';
 import {
   applyCapturedPipeStatus,
   attachPipeStatus,
@@ -91,15 +87,11 @@ import {
   type StreamingFetch,
 } from './proxied-fetch.js';
 import { clearReadByteProvenance } from './request-body-provenance.js';
+import { OUTPUT_TEE_ENV, RUN_PID_ENV, runPidFromEnv } from './run-env.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { settleOnAbort } from './settle-on-abort.js';
-import {
-  commandSudoSubject,
-  enforceCommandSudo,
-  SUDO_REFUSED_EXIT_CODE,
-} from './sudo/command-guard.js';
 import { extractLeadingCommentReason, SUDO_REASON_ENV } from './sudo/command-reason.js';
-import { GITHUB_DOMAINS, PLUMBING } from './supplemental-commands/git-credential-command.js';
+import { PLUMBING } from './supplemental-commands/git-credential-command.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
 import { sayStdioPlugin } from './supplemental-commands/say-stdio-rewrite.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
@@ -108,7 +100,8 @@ import { createSupplementalCommands } from './supplemental-commands.js';
 import { emitShellCommand } from './telemetry-hook.js';
 import type { TerminalPort } from './terminal-port.js';
 import { VfsAdapter } from './vfs-adapter.js';
-import { buildWorkflowRunArgv, type WorkflowCommandEntry } from './workflow-discovery.js';
+
+export type { ShellSudoConfig };
 
 // ---------------------------------------------------------------------------
 // Options
@@ -199,41 +192,6 @@ export interface HeadlessShellOptions {
   executionLimits?: NonNullable<ConstructorParameters<typeof Bash>[0]>['executionLimits'];
 }
 
-/** Command-level sudo enforcement hooks supplied to the shell. */
-export interface ShellSudoConfig {
-  /** Returns the current (live-reloadable) policy, or `null` to disable gating. */
-  getPolicy: () => SudoersPolicy | null;
-  /** Trusted-realm approval broker (the agent can only request, never fabricate). */
-  broker: SudoBroker;
-  /**
-   * Optional sink that persists a human-confirmed `NOPASSWD Cmnd` grant. When
-   * supplied, the shell routes "Always" grants here instead of writing through
-   * `options.fs` directly — this lets the shell run on the FS-gated handle (so
-   * the `/etc/sudoers` self-protection invariant covers shell writes too) while
-   * the grant append still hits the raw VFS and does not re-prompt.
-   */
-  persistCommandGrant?: (pattern: string) => Promise<void>;
-  /**
-   * Whether to wrap every dispatched command with the transparent `Cmnd` gate.
-   * Defaults to `true` (the agent-shell behavior: any policy-gated command
-   * prompts on dispatch). Set to `false` for the human terminal — the explicit
-   * `sudo <cmd...>` command is still registered (and still gathers approval
-   * + persists "Always" grants), but plain commands run ungated. The human
-   * typing into the panel IS the approver for everything they type.
-   */
-  transparentGating?: boolean;
-  /**
-   * Default disposition for an unmatched (`no-match`) command. The cone uses
-   * `'allow'` (only explicit `Cmnd` rules gate); non-cone scoops use
-   * `'require-approval'` so any disallowed command escalates to the cone for
-   * approval instead of being silently filtered out of the registry. When the
-   * default is `'require-approval'`, registration of allow-listed commands is
-   * not pre-filtered — every command registers and the dispatch-time gate
-   * decides per call.
-   */
-  defaultDisposition?: import('../base/sudoers.js').DefaultDisposition;
-}
-
 // ---------------------------------------------------------------------------
 // Headless surface (interface)
 // ---------------------------------------------------------------------------
@@ -316,37 +274,6 @@ function getFsWatcher(fs: unknown): FsWatcher | null {
   return null;
 }
 
-/**
- * Best-effort GitHub auth refresh for git network ops.
- *
- * - Default: expiry-gated {@link ProviderConfig.getValidAccessToken}, which
- *   also re-syncs `/workspace/.git/github-token` from the live OAuth mask
- *   so a stale `git config github.token` snapshot cannot win (#2777).
- * - `force: true`: call {@link ProviderConfig.onSilentRenew} once (used by
- *   isomorphic-git `onAuthFailure` after a 401) so an access token that is
- *   still inside its local expiry window but rejected upstream can rotate.
- */
-async function ensureFreshGithubToken(opts?: { force?: boolean }): Promise<void> {
-  const github = getRegisteredProviderConfig('github');
-  if (!github) return;
-  if (opts?.force) {
-    await github.onSilentRenew?.();
-    return;
-  }
-  await github.getValidAccessToken?.();
-}
-
-/**
- * Where the GitHub OAuth token is unmasked: the provider's domains plus the
- * user's extras, as the replica gets them (`saveOAuthAccount`).
- */
-function githubOAuthDomains(): string[] {
-  const github = getRegisteredProviderConfig('github');
-  if (!github) return GITHUB_DOMAINS;
-  const extras = typeof localStorage === 'undefined' ? [] : readOAuthExtras(localStorage).github;
-  return [...(github.oauthTokenDomains ?? GITHUB_DOMAINS), ...(extras ?? [])];
-}
-
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
   signal?: AbortSignal;
 };
@@ -356,34 +283,6 @@ type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
 // ---------------------------------------------------------------------------
 
 const log = createLogger('almost-bash-shell');
-
-/**
- * Env var carrying the parent pid of the run a command belongs to.
- *
- * Realm-backed commands (`node` / `python` / `.jsh`) register their realm child
- * under it, so `kill <job pid>` reaches that child and only that child. Reading
- * it from the command's OWN `ctx.env` is what makes parentage exact while
- * several detached runs share one shell — see `AlmostBashShellHeadless`'s
- * per-run parentage note. Internal: stripped from the env written back onto the
- * shell, so it never outlives its run.
- */
-const RUN_PID_ENV = '__SLICC_RUN_PID';
-
-/**
- * Env var demuxing an incremental output tee across concurrent `executeCommand`
- * runs on one shell (#2415). Same channel as {@link RUN_PID_ENV}: just-bash
- * still passes `env` through per-exec, and a nested exec inherits it. Stripped
- * from the env written back onto the shell so it never outlives its run.
- */
-const OUTPUT_TEE_ENV = '__SLICC_OUTPUT_TEE__';
-
-/** Read the run's parent pid back out of a command's environment. */
-function runPidFromEnv(runEnv?: ReadonlyMap<string, string>): number | undefined {
-  const raw = runEnv?.get(RUN_PID_ENV);
-  if (raw === undefined) return undefined;
-  const pid = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
-}
 
 /** Copy of `env` without the internal per-run tags. */
 function stripRunPid(env: Record<string, string>): Record<string, string> {
@@ -456,30 +355,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    */
   private initialJshSync: Promise<void> | null = null;
   protected readonly ownsScriptCatalog: boolean;
-  /** Maps .jsh command names to their registered script paths. */
-  protected registeredJshCommands = new Map<string, string>();
-  /** Workflow command names we've registered (handler is dynamic, so a Set suffices). */
-  protected registeredWorkflowCommands = new Set<string>();
-  /** Wasm-program command names of installed packages we've registered (#3530). */
-  protected registeredWasmCommands = new Set<string>();
-  /** Promise for the currently in-flight jsh sync. */
-  private jshSyncInflight: Promise<void> | null = null;
-  /** Re-sync requested while one was already in flight. */
-  private jshSyncDirty = false;
-  /**
-   * "Always" command grants confirmed mid-dispatch, queued for persistence
-   * after the current `bash.exec()` returns. The grant write touches the
-   * IndexedDB-backed VFS, whose async timers are blocked by just-bash's
-   * defense-in-depth during command execution, so it must run outside the box.
-   */
-  private pendingCommandGrants: string[] = [];
-  /**
-   * One-shot bypass keys for the transparent `Cmnd` gate. Registered by the
-   * explicit `sudo` command after the human already approved a subject, so the
-   * inner dispatch does not prompt a second time. Multiset (counts) because
-   * the same subject can be re-approved repeatedly within a single bash exec.
-   */
-  private pendingSudoBypasses = new Map<string, number>();
+  private readonly commandGate: CommandGate;
+  private jshRegistry!: JshCommandRegistry;
+  private gnuBashFallback!: GnuBashFallback;
   /**
    * Env writes performed by supplemental commands during a `bash.exec()` call
    * (`secret set` injecting a masked value, `secret delete` dropping one).
@@ -642,11 +520,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       // workflow). just-bash has no unregister, so after a PATH root is
       // removed these stay registered but dispatch 127s — `which` uses this
       // set to skip its registered-name fallback for them (Codex P2, #2143).
-      getScriptRegisteredNames: () => [
-        ...this.registeredJshCommands.keys(),
-        ...this.registeredWorkflowCommands,
-        ...this.registeredWasmCommands,
-      ],
+      getScriptRegisteredNames: () => this.jshRegistry.scriptRegisteredNames(),
       fs: options.fs,
       fetch: fetchFn,
       streamFetch,
@@ -674,9 +548,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
             // write must run outside just-bash's defense-in-depth box where
             // async timers are blocked. Matches the transparent gate.
             persistGrant: async (pattern) => {
-              this.pendingCommandGrants.push(pattern);
+              this.commandGate.queueGrant(pattern);
             },
-            suppressNextGate: (subject) => this.registerSudoBypass(subject),
+            suppressNextGate: (subject) => this.commandGate.registerSudoBypass(subject),
           }
         : undefined,
       // Lets `secret set` write the masked value into the owning shell's
@@ -710,6 +584,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     this.vfsAdapter = new VfsAdapter(options.fs);
     this.progress = new ProgressEmitter({ scrubLabel: options.scrubProgressLabel });
     this.allowedCommands = AlmostBashShellHeadless.buildAllowedCommandSet(options);
+    this.commandGate = new CommandGate({
+      getSudo: () => this.options.sudo,
+      fs: options.fs,
+    });
     const initialCwd = options.cwd ?? '/';
     const initialEnv = AlmostBashShellHeadless.buildInitialEnv(options, initialCwd);
 
@@ -864,8 +742,68 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
+    this.bindCollaborators(options);
 
     this.startInitialJshSync();
+  }
+
+  /** Wire jsh/wasm/workflow discovery and the GNU-bash path once bash exists. */
+  private bindCollaborators(options: HeadlessShellOptions): void {
+    const self = this;
+    this.jshRegistry = new JshCommandRegistry({
+      get bash() {
+        return self.bash;
+      },
+      scriptCatalog: this.scriptCatalog,
+      discoveryFs: options.jshDiscoveryFs ?? options.fs,
+      vfsAdapter: this.vfsAdapter,
+      get cwd() {
+        return self.cwd;
+      },
+      get lastEnv() {
+        return self.lastEnv;
+      },
+      get umask() {
+        return self.umask;
+      },
+      builtinCommandNames: this.builtinCommandNames,
+      isCommandAllowed: (name) => this.isCommandAllowed(name),
+      wrapCommandForDispatch: (command) => this.wrapCommandForDispatch(command),
+      path: () => this.lastEnv.PATH,
+      buildJshProcessConfig: (runPid) => this.buildJshProcessConfig(runPid),
+      gateNativeCommand: this.gateNativeCommand,
+      gitIdentity: () => this.gitCommands.identity(),
+    });
+    this.gnuBashFallback = new GnuBashFallback({
+      gnuBash: options.gnuBash === true,
+      get lastEnv() {
+        return self.lastEnv;
+      },
+      get cwd() {
+        return self.cwd;
+      },
+      get umask() {
+        return self.umask;
+      },
+      vfsAdapter: this.vfsAdapter,
+      get bash() {
+        return self.bash;
+      },
+      scriptCatalog: this.scriptCatalog,
+      outputTees: this.outputTees,
+      gateNativeCommand: this.gateNativeCommand,
+      buildJshProcessConfig: (runPid) => this.buildJshProcessConfig(runPid),
+      gitIdentity: () => this.gitCommands.identity(),
+      flushPendingCommandGrants: () => this.commandGate.flushPendingCommandGrants(),
+      applyPendingEnvWrites: () => this.applyPendingEnvWrites(),
+      syncJshCommands: () => this.syncJshCommands(),
+      adoptCwd: (cwd) => {
+        this.cwd = cwd;
+      },
+      adoptEnv: (env) => {
+        this.lastEnv = env;
+      },
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -920,7 +858,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   /** Currently discovered `.jsh` command names (filtered by allow-list). */
   async getJshCommandNames(): Promise<string[]> {
-    return [...(await this.getFilteredJshCommands()).keys()];
+    return this.jshRegistry.getJshCommandNames();
   }
 
   /**
@@ -928,12 +866,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * custom commands. Idempotent; in-flight calls coalesce.
    */
   async syncJshCommands(): Promise<void> {
-    if (this.jshSyncInflight !== null) {
-      this.jshSyncDirty = true;
-      return this.jshSyncInflight;
-    }
-    this.jshSyncInflight = this.doSyncJshCommands();
-    return this.jshSyncInflight;
+    return this.jshRegistry.syncJshCommands();
   }
 
   /**
@@ -1044,30 +977,6 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * Subclasses (the view layer) call this from
    * `executeCommandInTerminal` to share state.
    */
-  /**
-   * Wait for the constructor's `.jsh` registration, but never past an abort.
-   *
-   * Resolves on whichever comes first: the scan finishing, or `signal`
-   * aborting. An abort only stops US waiting — the registration promise keeps
-   * running, so the command after the cancelled one still finds a populated
-   * table. Without this, Ctrl+C during the first command of a fresh shell is
-   * swallowed for however long a full-VFS walk takes.
-   */
-  /**
-   * Begin the constructor's `.jsh` registration and retain it for the first
-   * command to await (see `runCommand`). The promise clears itself on settle
-   * rather than at the await site: a first command that ABORTS mid-wait must
-   * not leave the next one racing the scan again.
-   */
-  /**
-   * The `.jsh` search roots derived from the shell's LIVE `$PATH` (#2085).
-   * `~/.profile` runs before the first scan, so a PATH exported there is
-   * already in `lastEnv` when the initial registration reads it.
-   */
-  private currentScanRoots(): string[] {
-    return pathToScanRoots(this.lastEnv.PATH);
-  }
-
   private startInitialJshSync(): void {
     this.initialJshSync = this.initHomeAndProfile()
       .then(() => this.syncJshCommands())
@@ -1202,8 +1111,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // not a Ctrl+C. On abort we stop WAITING but let the registration run on in
     // the background, so the next command still benefits.
     await this.waitForInitialJshSync(signal);
-    if (await this.usesGnuBash()) {
-      return this.runOnGnuBash(command, signal, runPid, stdin, outputTeeId, capturePipeStatus);
+    if (await this.gnuBashFallback.usesGnuBash()) {
+      return this.gnuBashFallback.runOnGnuBash(
+        command,
+        signal,
+        runPid,
+        stdin,
+        outputTeeId,
+        capturePipeStatus
+      );
     }
 
     // just-bash's published ExecOptions type does not yet expose
@@ -1249,7 +1165,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
     // Persist any "Always" command grants confirmed during dispatch now that we
     // are outside just-bash's execution box (where VFS async timers are blocked).
-    await this.flushPendingCommandGrants();
+    await this.commandGate.flushPendingCommandGrants();
     result = applyCapturedPipeStatus(result, capturePipeStatus);
     if (typeof result.umask === 'number') this.umask = result.umask;
     if (result.env) {
@@ -1276,7 +1192,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
 
     if (result.exitCode === 127) {
-      const jshResult = await this.tryJshFallback(command, runPid);
+      const jshResult = await this.jshRegistry.tryJshFallback(command, runPid);
       if (jshResult) {
         void this.syncJshCommands().catch(() => undefined);
         return jshResult;
@@ -1302,100 +1218,6 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   }
 
   /**
-   * Whether this run goes to GNU bash: asked for, installed, not opted out,
-   * and runnable here. A shell restricted to a command list runs on it too:
-   * its list gates every program bash runs (`gateNativeCommand`) and every
-   * command bash runs through just-bash (the filtered registry); bash's own
-   * builtins are always there, as in any bash.
-   */
-  private async usesGnuBash(): Promise<boolean> {
-    if (!this.options.gnuBash || this.lastEnv[SHELL_CHOICE_ENV] === 'just-bash') return false;
-    if (typeof SharedArrayBuffer !== 'function') return false; // the wasm realm needs it
-    return (await this.scriptCatalog.getWasmCommands()).has('bash');
-  }
-
-  /**
-   * One command on GNU bash (`gnu-bash.ts`): `bash -c COMMAND` in the wasm
-   * realm, on the shell's cwd and environment, whose state it then takes on.
-   * Output goes to the run's tee as it is written. The shell's command policy
-   * applies to every program bash runs (`gateNativeCommand`, and just-bash's
-   * dispatch for the commands it runs through the shell) — not to the
-   * `bash -c` wrapper itself, which is no command of the caller's.
-   */
-  private async runOnGnuBash(
-    command: string,
-    signal: AbortSignal | undefined,
-    runPid: number | undefined,
-    stdin: ByteString,
-    outputTeeId: string | undefined,
-    capturePipeStatus: boolean
-  ): Promise<BashExecResult & { pipeStatus?: number[] }> {
-    const { runWasmCommand, withoutRealmDefaults } = await import(
-      './supplemental-commands/wasm/run.js'
-    );
-    const sudoReason = extractLeadingCommentReason(command);
-    const env: Record<string, string> = {
-      ...this.lastEnv,
-      ...(runPid === undefined ? {} : { [RUN_PID_ENV]: String(runPid) }),
-      ...(sudoReason ? { [SUDO_REASON_ENV]: sudoReason } : {}),
-    };
-    const tee = outputTeeId === undefined ? undefined : this.outputTees.get(outputTeeId);
-    const run = await runOnGnuBash(command, {
-      env,
-      run: (args, runEnv, fds) =>
-        runWasmCommand(args, this.wasmContext(runEnv, signal, stdin), {
-          processConfig: this.buildJshProcessConfig(runPid),
-          gate: this.gateNativeCommand,
-          onOutput: tee,
-          fds,
-          commands: () => this.scriptCatalog.getWasmCommands(),
-          gitIdentity: () => this.gitCommands.identity(),
-        }),
-    });
-    const pathBefore = this.lastEnv.PATH;
-    if (run.state) {
-      this.cwd = run.state.cwd;
-      // The realm's own defaults (proxy, CA bundle) stay the realm's: not the shell's exports.
-      this.lastEnv = carriedEnv(withoutRealmDefaults(run.state.env, env), [
-        RUN_PID_ENV,
-        SUDO_REASON_ENV,
-        OUTPUT_TEE_ENV,
-      ]);
-    }
-    // As on just-bash (#2085): a new PATH can hold `.jsh` commands to register.
-    if (this.lastEnv.PATH !== pathBefore) await this.syncJshCommands().catch(() => undefined);
-    await this.flushPendingCommandGrants();
-    this.applyPendingEnvWrites();
-    return {
-      stdout: run.stdout,
-      stderr: run.stderr,
-      exitCode: run.exitCode,
-      env: { ...this.lastEnv },
-      ...(capturePipeStatus && run.state ? { pipeStatus: run.state.pipeStatus } : {}),
-    };
-  }
-
-  /** The command context `wasm` runs in for a GNU bash run: this shell's fs, cwd and registry. */
-  private wasmContext(
-    env: Record<string, string>,
-    signal: AbortSignal | undefined,
-    stdin: ByteString
-  ): CommandContext {
-    return {
-      fs: this.vfsAdapter,
-      cwd: this.cwd,
-      env: new Map(Object.entries(env)),
-      exportedEnv: env,
-      stdin,
-      signal,
-      // A command bash finds no wasm program for runs through this shell,
-      // whose dispatch applies the command policy.
-      exec: (cmd: string, opts: Parameters<Bash['exec']>[1]) =>
-        this.bash.exec(cmd, { ...opts, umask: this.umask }),
-    } as unknown as CommandContext;
-  }
-
-  /**
    * The command policy for a program a wasm process runs natively (`NativeGate`):
    * what just-bash's registry filter and dispatch-time sudo gate do for a command.
    */
@@ -1408,8 +1230,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       return { stderr: `bash: ${name}: command not found\n`, exitCode: 127 };
     }
     // Plumbing runs inside a call of its command, which the gate already saw.
-    if (!this.isTransparentGatingEnabled() || PLUMBING.has(name)) return null;
-    const denial = await this.gateCommandDispatch(name, args, env[SUDO_REASON_ENV]);
+    if (!this.commandGate.isTransparentGatingEnabled() || PLUMBING.has(name)) return null;
+    const denial = await this.commandGate.gateCommandDispatch(name, args, env[SUDO_REASON_ENV]);
     return denial ? { stderr: denial.stderr, exitCode: denial.exitCode } : null;
   };
 
@@ -1418,30 +1240,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   // -------------------------------------------------------------------------
 
   /**
-   * True when the dispatch-time transparent `Cmnd` gate should wrap every
-   * command. Requires a sudo config AND `transparentGating !== false` —
-   * defaults to enabled (agent-shell behavior) when the flag is omitted.
-   */
-  private isTransparentGatingEnabled(): boolean {
-    const sudo = this.options.sudo;
-    return !!sudo && sudo.transparentGating !== false;
-  }
-
-  /**
-   * Decorate a command's `execute` with the dispatch-time sudo guard. When no
-   * sudo config is present, or `transparentGating` is explicitly false (the
-   * human terminal), the command is returned unchanged (zero overhead).
-   * Otherwise the wrapper runs the `Cmnd` check against the
-   * already-tokenized `name + args` subject before delegating to the wrapped
-   * `execute`, returning an exit-1 result (without running it) on denial.
-   */
-  /**
    * Dispatch-time decorators for a registry entry: sudo gate inside, progress
    * start/end outside. Every command registered after construction (`.jsh`,
    * workflows) must go through this too.
    */
   private wrapCommandForDispatch(command: Command): Command {
-    const inner = this.wrapCommandForSudo(command);
+    const inner = this.commandGate.wrapCommandForSudo(command);
     const wrapped =
       command.name === 'timeout'
         ? wrapTimeoutForProgress(inner, this.progress)
@@ -1526,322 +1330,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
   }
 
-  private wrapCommandForSudo(command: Command): Command {
-    // Plumbing runs inside a call of its command, which the gate already saw.
-    if (!this.isTransparentGatingEnabled() || PLUMBING.has(command.name)) return command;
-    const guard = (args: string[], reason?: string) =>
-      this.gateCommandDispatch(command.name, args, reason);
-    return {
-      ...command,
-      async execute(args: string[], ctx: ResolvedCommandContext): Promise<ExecResult> {
-        // Read the reason from THIS command's own env, the same way
-        // realm-backed commands recover their run pid — a shell shared by
-        // concurrent runs must not hand one run's explanation to another.
-        const denial = await guard(args, ctx.env?.get(SUDO_REASON_ENV));
-        if (denial) return denial;
-        return command.execute(args, ctx);
-      },
-    };
-  }
-
-  /**
-   * Run the command-level sudo guard for a single dispatch. Returns a denial
-   * `ExecResult` (exit 77, no execution) when approval was refused; `null` when
-   * the command may run. No-op when sudo is unconfigured or the active policy
-   * is null.
-   *
-   * `reason` is the run's leading-comment explanation, read from the
-   * dispatching command's own environment — see `sudo/command-reason.ts`.
-   */
-  private async gateCommandDispatch(
-    name: string,
-    args: string[],
-    reason?: string
-  ): Promise<ExecResult | null> {
-    const sudo = this.options.sudo;
-    if (!sudo) return null;
-
-    const subject = commandSudoSubject(name, args);
-
-    // Consume a one-shot bypass when the explicit `sudo` command already
-    // collected approval for this exact subject. Skips even the policy lookup
-    // so a separately-dispatched gated nested command (via $() / pipelines)
-    // still hits the transparent gate normally.
-    if (this.consumeSudoBypass(subject)) {
-      return null;
-    }
-
-    const policy = sudo.getPolicy();
-    if (!policy) return null;
-
-    const result = await enforceCommandSudo(subject, {
-      policy,
-      broker: sudo.broker,
-      // Queue the grant; the actual write runs post-exec (see runCommand)
-      // because just-bash blocks the VFS's async timers mid-dispatch.
-      persistGrant: async (pattern) => {
-        this.pendingCommandGrants.push(pattern);
-      },
-      defaultDisposition: sudo.defaultDisposition,
-      ...(reason ? { reason } : {}),
-    });
-    if (result.allowed) return null;
-
-    return {
-      stdout: '',
-      stderr: `${result.message}\n`,
-      exitCode: result.exitCode ?? SUDO_REFUSED_EXIT_CODE,
-    };
-  }
-
-  /**
-   * Register a one-shot bypass for the next transparent `Cmnd` gate dispatch
-   * matching `subject`. Invoked by the explicit `sudo` command after it has
-   * already collected human approval, so the inner command does not prompt
-   * twice. Multiple registrations for the same subject stack (multiset).
-   */
-  private registerSudoBypass(subject: string): void {
-    const key = subject.trim();
-    if (!key) return;
-    this.pendingSudoBypasses.set(key, (this.pendingSudoBypasses.get(key) ?? 0) + 1);
-  }
-
-  /**
-   * Consume a pending bypass for `subject`. Returns `true` when a bypass was
-   * pending (and was decremented), `false` otherwise.
-   */
-  private consumeSudoBypass(subject: string): boolean {
-    const count = this.pendingSudoBypasses.get(subject);
-    if (!count) return false;
-    if (count === 1) {
-      this.pendingSudoBypasses.delete(subject);
-    } else {
-      this.pendingSudoBypasses.set(subject, count - 1);
-    }
-    return true;
-  }
-
-  /**
-   * Drain {@link pendingCommandGrants}, persisting each confirmed "Always"
-   * grant. Called from `runCommand` after `bash.exec()` returns, so the writes
-   * happen outside just-bash's timer-blocked execution box. Failures are
-   * swallowed per-grant so a persistence error never fails the command the user
-   * already approved.
-   */
-  private async flushPendingCommandGrants(): Promise<void> {
-    if (this.pendingCommandGrants.length === 0) return;
-    const grants = this.pendingCommandGrants;
-    this.pendingCommandGrants = [];
-    for (const pattern of grants) {
-      try {
-        await this.persistCommandGrant(pattern);
-      } catch {
-        /* best-effort: a failed grant write must not fail an approved command */
-      }
-    }
-  }
-
-  /**
-   * Append a human-confirmed `NOPASSWD Cmnd` grant to `/etc/sudoers.d/granted`.
-   * Prefers the injected `persistCommandGrant` sink (which writes through the
-   * raw VFS, so the self-protection invariant does not re-prompt on the grant
-   * write); falls back to `options.fs` directly when no sink is supplied.
-   */
-  private async persistCommandGrant(pattern: string): Promise<void> {
-    const sink = this.options.sudo?.persistCommandGrant;
-    if (sink) {
-      await sink(pattern);
-      return;
-    }
-    const safe = sanitizeGrantPattern(pattern);
-    if (!safe) return;
-    const path = `${SUDOERS_D_DIR}/granted`;
-    const fs = this.options.fs;
-    let existing = '';
-    try {
-      if (await fs.exists(path)) {
-        existing = (await fs.readFile(path)) as string;
-      }
-    } catch (err) {
-      if (!(err instanceof FsError && err.code === 'ENOENT')) throw err;
-    }
-    const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
-    await fs.writeFile(path, `${prefix}NOPASSWD Cmnd  ${safe}\n`);
-  }
-
   /**
    * True when `name` is registrable/executable under the allow-list. Plumbing
    * (`git-credential-slicc`) is allowed exactly when its command is.
    */
   private isCommandAllowed(name: string): boolean {
     return this.allowedCommands === null || this.allowedCommands.has(PLUMBING.get(name) ?? name);
-  }
-
-  private async doSyncJshCommands(): Promise<void> {
-    try {
-      const jshIndex = await this.scriptCatalog.getJshIndex(this.currentScanRoots());
-      const jshMap = jshIndex.commands;
-      for (const collision of jshIndex.collisions) {
-        log.warn(
-          `jsh command '${collision.name}' is provided by more than one skill; using ${collision.winnerPath} (${collision.reason}), shadowed ${collision.shadowedPaths.join(', ')}`
-        );
-      }
-      const wfMap = await this.getFilteredWorkflowCommands();
-      const wasmMap = await this.scriptCatalog.getWasmCommands();
-
-      // .jsh names: keep the existing path-keyed registry + guard.
-      for (const [name, scriptPath] of jshMap) {
-        if (!this.isCommandAllowed(name)) continue;
-        if (this.builtinCommandNames.has(name) && !this.registeredJshCommands.has(name)) continue;
-        if (this.registeredJshCommands.get(name) === scriptPath) continue;
-        this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
-        this.registeredJshCommands.set(name, scriptPath);
-        this.builtinCommandNames.add(name);
-      }
-
-      // Wasm programs (filtered like workflows) and workflows share the unified handler.
-      const wasmNames = [...wasmMap.keys()].filter((name) => this.isCommandAllowed(name));
-      this.registerLateScriptNames(wasmNames, this.registeredWasmCommands);
-      this.registerLateScriptNames(wfMap.keys(), this.registeredWorkflowCommands);
-    } finally {
-      this.jshSyncInflight = null;
-      if (this.jshSyncDirty) {
-        this.jshSyncDirty = false;
-        void this.syncJshCommands().catch(() => undefined);
-      }
-    }
-  }
-
-  /**
-   * Register the SAME unified handler ONCE per name for a script source below `.jsh`
-   * (wasm programs, workflows). It resolves precedence at dispatch, so a name that
-   * another source already registered is only recorded, and a real built-in is never
-   * overridden.
-   */
-  private registerLateScriptNames(names: Iterable<string>, registered: Set<string>): void {
-    const scriptSources = [
-      this.registeredJshCommands,
-      this.registeredWasmCommands,
-      this.registeredWorkflowCommands,
-    ];
-    for (const name of names) {
-      if (registered.has(name)) continue; // already handled
-      if (scriptSources.some((source) => source !== registered && source.has(name))) {
-        registered.add(name);
-        continue;
-      }
-      if (this.builtinCommandNames.has(name)) continue; // never override a real built-in
-      this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
-      registered.add(name);
-      this.builtinCommandNames.add(name);
-    }
-  }
-
-  /**
-   * One late-binding handler per script-command name. Resolves precedence at DISPATCH
-   * against current VFS state: built-in > .jsh > installed wasm program > saved-workflow.
-   * (just-bash has no unregister, so we never rebuild the table — the handler reads live
-   * discovery each call.)
-   */
-  private makeScriptCommand(name: string): Command {
-    const catalog = this.scriptCatalog;
-    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
-    const cmdName = name;
-    const executeInner = async (args: string[], ctx: CommandContext): Promise<ExecResult> => {
-      const execFn: typeof ctx.exec =
-        ctx.exec ??
-        ((cmd, opts) =>
-          // Forward `args` — the workflow branch passes the `workflow run …` argv via
-          // opts.args; dropping it would run a bare `workflow` (just-bash's Bash.exec
-          // appends opts.args to the command).
-          this.bash.exec(cmd, {
-            env: opts?.env ?? Object.fromEntries(ctx.env),
-            cwd: opts?.cwd ?? ctx.cwd,
-            args: opts?.args,
-            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
-          }));
-
-      // 1) .jsh wins the bare name.
-      const jshMap = await catalog.getJshCommands(this.currentScanRoots());
-      const jshPath = jshMap.get(cmdName);
-      if (jshPath) {
-        let code: string;
-        try {
-          const raw = await discoveryFs.readFile(jshPath, { encoding: 'utf-8' });
-          code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-        } catch {
-          return { stdout: '', stderr: `jsh: cannot read script '${jshPath}'\n`, exitCode: 127 };
-        }
-        return executeJsCode(
-          code,
-          ['node', jshPath, ...args],
-          { fs: ctx.fs, cwd: ctx.cwd, env: ctx.env, stdin: ctx.stdin, exec: execFn },
-          this.buildJshProcessConfig(runPidFromEnv(ctx.env))
-        );
-      }
-
-      // 2) Else a wasm program of an installed package (#3530).
-      const wasm = (await catalog.getWasmCommands()).get(cmdName);
-      if (wasm) {
-        const { runWasmCommand } = await import('./supplemental-commands/wasm/run.js');
-        return runWasmCommand(
-          // A script command runs by name: `wasm` hands it to its interpreter.
-          wasm.script
-            ? [cmdName, ...args]
-            : [
-                '--argv0',
-                wasm.argv0,
-                '--module',
-                wasm.wasm,
-                wasm.glue,
-                ...(wasm.args ?? []),
-                ...args,
-              ],
-          ctx,
-          {
-            processConfig: this.buildJshProcessConfig(runPidFromEnv(ctx.env)),
-            gate: this.gateNativeCommand,
-            defaults: wasm.env,
-            commands: () => catalog.getWasmCommands(),
-            gitIdentity: () => this.gitCommands.identity(),
-          }
-        );
-      }
-
-      // 3) Else a workflow (saved bare or skill <skill>:<name>) — route through the
-      //    `workflow run` command path (NOT executeJsCode on the raw file).
-      const wfMap = await catalog.getWorkflowCommands();
-      const wf = wfMap.get(cmdName);
-      if (wf) {
-        const argv = buildWorkflowRunArgv(wf.path, args);
-        return execFn(argv[0], { args: argv.slice(1), cwd: ctx.cwd });
-      }
-
-      // 4) Gone.
-      return { stdout: '', stderr: `${cmdName}: command no longer exists\n`, exitCode: 127 };
-    };
-    return {
-      name,
-      // just-bash v3 monkey-patches async primitives in the defense-in-depth sandbox for
-      // untrusted commands. The `.jsh` executor reads the script from the VFS and runs it
-      // in a worker realm, both of which require unpatched async I/O. Mark the command
-      // trusted so just-bash runs it inside `DefenseInDepthBox.runTrustedAsync`, matching
-      // how `git`, `mount`, and other host-extension commands are registered.
-      trusted: true,
-      async execute(args: string[], ctx) {
-        // A THROW from a .jsh escapes into just-bash's error sanitizer,
-        // which rewrites path-like substrings to the literal `<path>` —
-        // destroying the only diagnostic the user gets (#2146 finding 2,
-        // and the mis-diagnosed #1033-1 scrub in git/clone.ts). Convert
-        // failures into ordinary results so the message survives verbatim.
-        try {
-          return await executeInner(args, ctx);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          return { stdout: '', stderr: `${cmdName}: ${message}\n`, exitCode: 1 };
-        }
-      },
-    };
   }
 
   private createGitCustomCommand(): Command {
@@ -1888,91 +1382,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     });
   }
 
-  private async getFilteredJshCommands(): Promise<Map<string, string>> {
-    const all = await this.scriptCatalog.getJshCommands(this.currentScanRoots());
-    const filtered = new Map<string, string>();
-    for (const [name, path] of all) {
-      if (this.builtinCommandNames.has(name)) continue;
-      if (!this.isCommandAllowed(name)) continue;
-      filtered.set(name, path);
-    }
-    return filtered;
-  }
-
-  private async getFilteredWorkflowCommands(): Promise<Map<string, WorkflowCommandEntry>> {
-    const all = await this.scriptCatalog.getWorkflowCommands();
-    const filtered = new Map<string, WorkflowCommandEntry>();
-    for (const [name, entry] of all) {
-      if (!this.isCommandAllowed(name)) continue;
-      filtered.set(name, entry);
-    }
-    return filtered;
-  }
-
   async getWorkflowCommandNames(): Promise<string[]> {
-    return [...(await this.getFilteredWorkflowCommands()).keys()];
-  }
-
-  /**
-   * `.jsh` fallback when bash returns 127.
-   *
-   * `runPid` is the originating run's parent pid — passed straight down (we are
-   * still in that run's own frame here) so a `.jsh` reached through the fallback
-   * parents its realm child to the job that ran it, not to whichever concurrent
-   * run happens to be active.
-   */
-  private async tryJshFallback(command: string, runPid?: number): Promise<BashExecResult | null> {
-    const trimmed = command.trim();
-    const firstSpace = trimmed.indexOf(' ');
-    const cmdName = firstSpace >= 0 ? trimmed.slice(0, firstSpace) : trimmed;
-    const argsStr = firstSpace >= 0 ? trimmed.slice(firstSpace + 1).trim() : '';
-
-    const jshMap = await this.getFilteredJshCommands();
-    const scriptPath = jshMap.get(cmdName);
-    if (!scriptPath) return null;
-
-    const args = argsStr ? parseShellArgs(argsStr) : [];
-
-    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
-    let code: string;
-    try {
-      const raw = await discoveryFs.readFile(scriptPath, { encoding: 'utf-8' });
-      code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    } catch {
-      return {
-        stdout: '',
-        stderr: `jsh: cannot read script '${scriptPath}'\n`,
-        exitCode: 127,
-        env: this.lastEnv,
-      };
-    }
-
-    const argv = ['node', scriptPath, ...args];
-    const result = await executeJsCode(
-      code,
-      argv,
-      {
-        fs: this.vfsAdapter,
-        cwd: this.cwd,
-        env: new Map(Object.entries(this.lastEnv)),
-        stdin: EMPTY_BYTES,
-        exec: (cmd, opts) =>
-          this.bash.exec(cmd, {
-            env: opts?.env ?? this.lastEnv,
-            cwd: opts?.cwd ?? this.cwd,
-            umask: this.umask,
-            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
-          }),
-      },
-      this.buildJshProcessConfig(runPid)
-    );
-
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-      env: this.lastEnv,
-    };
+    return this.jshRegistry.getWorkflowCommandNames();
   }
 
   /**

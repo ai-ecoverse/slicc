@@ -142,7 +142,7 @@ These work out of the box in CLI/Electron with no custom code. They do NOT fire 
 
 ### Mode-specific shell-command coverage
 
-`fill` beacons fire from `almost-bash-shell-headless.ts:1029` (via the dependency-inverted `telemetry-hook.ts` sink → `telemetry.ts:trackShellCommand()`).
+`fill` beacons fire from `almost-bash-shell-headless.ts` `runCommand` (via the dependency-inverted `telemetry-hook.ts` sink → `telemetry.ts:trackShellCommand()`).
 
 - **CLI / Electron:** every shell command produces a beacon from the single page realm.
 - **Extension:** the hosted leader tab is the single page realm; both user-typed terminal commands and agent-initiated bash calls (from the kernel-worker `AlmostBashShellHeadless`, including `agent` scoop delegations from the cone) emit `fill` beacons that share `referer: 'https://www.sliccy.ai/?slicc=leader'` (or the localhost dev variant).
