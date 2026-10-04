@@ -1,8 +1,9 @@
 /**
- * Guard for the just-bash hunk that forwards `ctx.env` into `timeout` and
- * `xargs` child exec (vercel-labs/just-bash#530). Upstream omitted `env`, so
- * exported vars, saved secrets and HOME vanished while `time` still passed
- * them through (`env: h(s.env)`).
+ * Guard for the just-bash hunk that seeds `timeout` / `xargs` child exec from
+ * `ctx.exportedEnv` with `replaceEnv` (vercel-labs/just-bash#530). Upstream
+ * omitted `env`, so exported vars, saved secrets and HOME vanished. Passing
+ * the whole `ctx.env` without replacement would restore an unset HOME and
+ * leak unexported locals, unlike a nested `sh -c`.
  */
 import { Bash } from 'just-bash';
 import { Bash as BrowserBash } from 'just-bash/browser';
@@ -51,6 +52,19 @@ describe.each([
     expect(
       (await run('export SEARCH_API_KEY=s3cret; timeout 5 printenv SEARCH_API_KEY')).out.trim()
     ).toBe('s3cret');
+  });
+
+  it('unset HOME stays unset under timeout', async () => {
+    expect((await run('unset HOME; printenv HOME')).out.trim()).toBe('');
+    expect((await run('unset HOME; timeout 5 printenv HOME')).out.trim()).toBe('');
+    expect((await run('unset HOME; echo HOME | xargs printenv')).out.trim()).toBe('');
+  });
+
+  it('unexported locals do not leak into timeout or xargs children', async () => {
+    expect((await run("X=local; sh -c 'printenv X'")).out.trim()).toBe('');
+    expect((await run("X=local; timeout 5 sh -c 'printenv X'")).out.trim()).toBe('');
+    expect((await run('X=local; echo X | xargs printenv')).out.trim()).toBe('');
+    expect((await run("export X=1; timeout 5 sh -c 'printenv X'")).out.trim()).toBe('1');
   });
 
   it('reports missing operand and invalid duration', async () => {
