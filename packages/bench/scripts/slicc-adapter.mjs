@@ -98,15 +98,71 @@ export function armCommand(arm, { goalFile, model, timeoutSeconds }) {
   return `${arm.command} --model ${quote(alias)} --time-limit ${limit} --json --goal-file ${quote(goalFile)}`;
 }
 
-/** The driver's own answer from its result.json among the collected files, or ''. */
+/** The answer the driver wrote itself (answer.txt, else transcript.md), or ''. */
+export function driverAnswer(files) {
+  const text = (name) => {
+    const f = (files ?? []).find((x) => x.path.endsWith(name));
+    return f ? Buffer.from(f.base64, 'base64').toString('utf8') : null;
+  };
+  // The driver's full last message, then its session transcript's last assistant section.
+  const full = text('/answer.txt');
+  if (full?.trim()) return full.trim();
+  const md = text('/transcript.md');
+  const last = md
+    ? driverSections(md)
+        .filter((x) => x.role === 'assistant' && x.text)
+        .at(-1)
+    : null;
+  return last?.text ?? '';
+}
+
+/**
+ * The driver's answer: driverAnswer, else result.json's `answer`, a prefix (intent-arm keeps 500
+ * characters), which lost FINAL ANSWER in every run of 37189369126.
+ */
 export function armAnswer(files) {
+  const own = driverAnswer(files);
+  if (own) return own;
   const f = (files ?? []).find((x) => x.path.endsWith('/result.json'));
   if (!f) return '';
   try {
-    return String(JSON.parse(Buffer.from(f.base64, 'base64').toString('utf8')).answer ?? '');
+    return String(JSON.parse(Buffer.from(f.base64, 'base64').toString('utf8'))?.answer ?? '');
   } catch {
     return '';
   }
+}
+
+/**
+ * A driver's session transcript (`transcript.md`: `## user` / `## assistant` / `## tool …`
+ * sections, tool calls under `### tool:`) → `[{ role, text }]`, the assistant text without its
+ * tool calls. The judge's trajectory when the transcript export no longer holds the arm's scoop:
+ * a one-shot scoop is dropped when the driver returns, before the export runs.
+ */
+export function driverSections(md) {
+  const out = [];
+  let cur = null;
+  for (const line of String(md).split('\n')) {
+    const m = /^## (user|assistant|tool result|tool|prompt)\b/i.exec(line);
+    if (m) {
+      if (cur) out.push(cur);
+      cur = { role: m[1].toLowerCase(), lines: [] };
+    } else if (cur) cur.lines.push(line);
+  }
+  if (cur) out.push(cur);
+  return out.map((x) => {
+    const body = x.lines.join('\n');
+    const text = (x.role === 'assistant' ? body.split(/\n### tool:/)[0] : body).trim();
+    return { role: x.role, text, body: body.trim() };
+  });
+}
+
+/** The arm's trajectory from the driver's transcript.md, as judge steps; [] without one. */
+export function driverSteps(files) {
+  const f = (files ?? []).find((x) => x.path.endsWith('/transcript.md'));
+  if (!f) return [];
+  return driverSections(Buffer.from(f.base64, 'base64').toString('utf8'))
+    .filter((x) => x.role !== 'prompt')
+    .map((x) => `## scoop · ${x.role}\n${clip(x.body)}`);
 }
 
 /** The last JSON object the driver printed, or null. */
@@ -126,15 +182,18 @@ export function parseArmResult(stdout) {
 
 /**
  * The conversation an arm's agent ran in: the scoop whose last assistant message came last (the
- * cone only started the driver, through `exec`).
+ * cone only started the driver, through `exec`), and not before `since` (the run's start, epoch
+ * ms): a leader reused across tasks (`--fresh-leader-every 0`) can still hold an earlier task's
+ * scoop, which must not pass for this run's.
  */
-export function armConversation(doc) {
+export function armConversation(doc, since = 0) {
   let best = null;
   for (const c of doc?.conversations ?? []) {
     if (c.kind === 'cone') continue;
     const last = (c.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
     if (!last) continue;
     const at = Number(last.timestamp ?? 0);
+    if (since && !(at >= since)) continue;
     if (!best || at >= best.at) best = { at, c };
   }
   return best?.c ?? null;
@@ -147,9 +206,9 @@ const textOf = (m) =>
     .join('')
     .trim();
 
-/** The agent's last words when an arm ran it in a scoop. */
-export function lastScoopAssistantText(doc) {
-  const msgs = (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant');
+/** The agent's last words when an arm ran it in a scoop (one that spoke since `since`). */
+export function lastScoopAssistantText(doc, since = 0) {
+  const msgs = (armConversation(doc, since)?.messages ?? []).filter((m) => m.role === 'assistant');
   for (let i = msgs.length - 1; i >= 0; i -= 1) {
     const text = textOf(msgs[i]);
     if (text) return text;
@@ -259,7 +318,7 @@ export function lastTurnProviderError(result) {
   // The agent's conversation: the arm's scoop in arm mode, else the cone, selected by kind as in
   // lastConeAssistantText (a scoop can be listed first).
   const agent = result?.arm
-    ? armConversation(result?.transcript)
+    ? armConversation(result?.transcript, result.arm.startedAt ?? 0)
     : (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
   const last = (agent?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
   if (last?.stopReason !== 'error') return null;
@@ -948,13 +1007,24 @@ export function transcriptSummary(info) {
   return summary;
 }
 
-/** Assistant turns of the arm's scoop. */
-export const armTurns = (doc) =>
-  (armConversation(doc)?.messages ?? []).filter((m) => m.role === 'assistant').length;
+/**
+ * Assistant turns of this run's arm: from the driver's own transcript when it has one (always
+ * this run's), else from the export's scoop that spoke since the run began.
+ */
+export const armTurns = (doc, files, since = 0) =>
+  driverSteps(files).filter((x) => x.startsWith('## scoop · assistant')).length ||
+  (armConversation(doc, since)?.messages ?? []).filter((m) => m.role === 'assistant').length;
 
 /** A run's result → the trace shape `judge.mjs` reads. */
 export function traceFromResult(result) {
   const t = transcriptSteps(result.transcript);
+  // An arm's trajectory is the driver's own transcript.md whenever it has one: that file is this
+  // run's for sure, while the export may have lost the scoop (dropped when the driver returned) or
+  // hold an earlier task's (a reused leader).
+  if (result.arm) {
+    const steps = driverSteps(result.arm.files);
+    if (steps.length) t.steps = steps;
+  }
   const finalResult =
     result.finalText?.trim() ||
     (result.timedOut ? 'The run was stopped at the time limit before the cone answered.' : '') ||
@@ -971,7 +1041,12 @@ export function traceFromResult(result) {
     outputFilesText: null,
     metrics: {
       // In arm mode the agent's turns are the arm scoop's: the cone only started the driver.
-      steps: (result.arm ? armTurns(result.transcript) : t.assistantTurns) || result.turns || 0,
+      steps:
+        (result.arm
+          ? armTurns(result.transcript, result.arm.files, result.arm.startedAt ?? 0)
+          : t.assistantTurns) ||
+        result.turns ||
+        0,
       duration: result.durationMs / 1000,
       cost: result.costUsd,
       tokens: result.tokens,
@@ -1349,14 +1424,20 @@ function startAgent(leader, { arm, goalFile, task, model, timeout, signal }) {
 }
 
 /** After an arm's run: its answer (the scoop's last words, else result.json) and its files. */
-async function collectArmRun(leader, arm, reply, transcript) {
+async function collectArmRun(leader, arm, reply, transcript, started) {
   if (!arm) return null;
   const files = arm.files ? await collectArmFiles(leader, arm.files) : null;
   return {
-    finalText: lastScoopAssistantText(transcript) || armAnswer(files?.files),
+    // The driver's own answer first (this run's for sure), then the export's scoop of this run,
+    // then the driver's result.json prefix.
+    finalText:
+      driverAnswer(files?.files) ||
+      lastScoopAssistantText(transcript, started) ||
+      armAnswer(files?.files),
     record: {
       arm: {
         name: arm.name ?? null,
+        startedAt: started,
         result: parseArmResult(reply.stdout),
         files: files?.files ?? [],
         filesTruncated: Boolean(files?.truncated),
@@ -1484,7 +1565,7 @@ export async function runTask({
     const { transcript, transcriptExport, resumedAfterSettle } = collected;
     await closeTabs(leader).catch(() => {});
     const { taken, images } = await readShots(leader, shots);
-    const armOut = await collectArmRun(leader, arm, reply, transcript);
+    const armOut = await collectArmRun(leader, arm, reply, transcript, started);
     health.after = await leaderHealth(leader, now);
     const done = now();
     return {
