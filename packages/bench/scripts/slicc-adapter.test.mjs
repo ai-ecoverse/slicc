@@ -2157,10 +2157,19 @@ describe('arm mode', () => {
       timeoutSeconds: 3600,
     });
     expect(cmd).toBe(
-      `intent-arm --tool intent --private --model 'claude-sonnet-5-5' --time-limit ${3600 - ARM_TIME_MARGIN_S} --json --goal-file '/tmp/bench/r1/goal.txt'`
+      `intent-arm --tool intent --private --model 'claude-sonnet-5-5' --thinking 'low' --time-limit ${3600 - ARM_TIME_MARGIN_S} --json --goal-file '/tmp/bench/r1/goal.txt'`
     );
     expect(armCommand(ARM, { goalFile: '/g', model: 'm', timeoutSeconds: 30 })).toContain(
       '--time-limit 60'
+    );
+    expect(
+      armCommand(ARM, { goalFile: '/g', model: 'claude-sonnet-5-5@low', timeoutSeconds: 600 })
+    ).toContain("--model 'claude-sonnet-5-5' --thinking 'low' --time-limit 540");
+    expect(
+      armCommand(ARM, { goalFile: '/g', model: 'm@default', timeoutSeconds: 600 })
+    ).not.toContain('--thinking');
+    expect(() => armCommand(ARM, { goalFile: '/g', model: 'm@max', timeoutSeconds: 600 })).toThrow(
+      /not max/
     );
   });
 

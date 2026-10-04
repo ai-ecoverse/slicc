@@ -280,6 +280,36 @@ describe('slicc-agent-message', () => {
       expect(body.querySelectorAll('.tw-caret')).toHaveLength(1);
     });
 
+    it('takes a caret with no prose beside it out of flow', () => {
+      const el = mount((e) => {
+        e.setBodyHtml('');
+        e.streaming = true;
+      });
+      const caret = bodyOf(el).querySelector('.tw-caret') as HTMLElement;
+      expect(caret.classList.contains('tw-caret--solo')).toBe(true);
+      expect(getComputedStyle(caret).position).toBe('absolute');
+    });
+
+    it('puts the caret back in flow once prose streams in', () => {
+      const el = mount((e) => {
+        e.setBodyHtml('  ');
+        e.streaming = true;
+      });
+      el.setBodyHtml('<p>first words</p>');
+      const caret = bodyOf(el).querySelector('.tw-caret') as HTMLElement;
+      expect(caret.classList.contains('tw-caret--solo')).toBe(false);
+      expect(getComputedStyle(caret).position).not.toBe('absolute');
+    });
+
+    it('treats bare text in the body as prose', () => {
+      const el = mount((e) => {
+        e.setBodyHtml('plain text');
+        e.streaming = true;
+      });
+      const caret = bodyOf(el).querySelector('.tw-caret') as HTMLElement;
+      expect(caret.classList.contains('tw-caret--solo')).toBe(false);
+    });
+
     it('removes the caret when streaming stops', () => {
       const el = mount((e) => {
         e.streaming = true;

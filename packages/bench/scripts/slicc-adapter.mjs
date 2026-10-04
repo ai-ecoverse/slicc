@@ -26,6 +26,8 @@ export function buildPrompt(task) {
 
 export const ARM_SKILL_SET = 'arm';
 
+export const ARM_THINKING_LEVELS = ['default', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+
 export const ARM_TIME_MARGIN_S = 60;
 
 export const ARM_FILES_MAX_BYTES = 32 * 1024 * 1024;
@@ -50,9 +52,15 @@ export function validateArm(name, arm) {
 }
 
 export function armCommand(arm, { goalFile, model, timeoutSeconds }) {
-  const { alias } = parseModelSpec(model);
+  const { alias, thinking } = parseModelSpec(model);
   const limit = Math.max(60, timeoutSeconds - ARM_TIME_MARGIN_S);
-  return `${arm.command} --model ${quote(alias)} --time-limit ${limit} --json --goal-file ${quote(goalFile)}`;
+
+  if (!ARM_THINKING_LEVELS.includes(thinking))
+    throw new Error(
+      `an arm's agent takes thinking ${ARM_THINKING_LEVELS.filter((l) => l !== 'default').join(', ')}, not ${thinking}`
+    );
+  const level = thinking === 'default' ? '' : ` --thinking ${quote(thinking)}`;
+  return `${arm.command} --model ${quote(alias)}${level} --time-limit ${limit} --json --goal-file ${quote(goalFile)}`;
 }
 
 export function driverAnswer(files) {

@@ -25,6 +25,7 @@ import {
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
   ARM_SKILL_SET,
+  ARM_THINKING_LEVELS,
   lastTurnProviderError,
   parseModelSpec,
   parseSkillsCondition,
@@ -176,6 +177,17 @@ export function loadArm(name, file = ARMS_FILE, readFile = readFileSync) {
   const errors = validateArm(name, arm);
   if (errors.length) throw new Error(errors.join('; '));
   return { ...arm, name };
+}
+
+export function checkArmModels(arm, models) {
+  if (!arm) return;
+  for (const m of models) {
+    const { thinking } = parseModelSpec(m);
+    if (!ARM_THINKING_LEVELS.includes(thinking))
+      throw new Error(
+        `arm ${arm.name} cannot run ${m}: its agent takes thinking ${ARM_THINKING_LEVELS.filter((l) => l !== 'default').join(', ')}`
+      );
+  }
 }
 
 export function checkArmConditions(arm, conditions) {
@@ -910,6 +922,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     deps.log ??
     ((line) => console.error(`[bench ${new Date().toISOString().slice(11, 19)}] ${line}`));
   checkArmConditions(opts.arm, opts.skills);
+  checkArmModels(opts.arm, opts.models);
   const runs = await loadAndPlan(opts, deps, log);
   if (opts.plan) {
     for (const r of runs)
