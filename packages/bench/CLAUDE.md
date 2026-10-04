@@ -8,7 +8,7 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges each r
 
 - **One task format**, shared with browser-use's BU Bench V2: `{ benchmark, tasks[] }`, per task `{ id, task, rubric, weights }` (weights sum 100). Optional `slicc` object (`website`, `skills`, `files`, `timeoutSeconds`, `requires`). Schema: [`README.md`](./README.md).
 - **Public sets by reference.** `bu-v1`/`bu-v2` from browser-use/benchmark at the pin in `scripts/upstream.mjs` (`bu-v2` = BU Bench V2.1, 200 tasks), decrypted in memory. Records carry `upstream` (tag, commit, file sha256). **No licence; task text must never be published** — not committed; traces holding it are Fernet-encrypted before leaving the runner.
-- **Judge**: upstream findings (met / violated / not_assessable + evidence); `score()` from weights. Bedrock Converse, forced tool use, default `global.openai.gpt-5.6-luna`; up to `JUDGE_ATTEMPTS` (3) repair turns, then fallback (`--judge-fallback-model`, default `gpt-5.6-sol`; `none` off). [Internals](../../docs/bench-runner.md#judge).
+- **Judge**: upstream findings (met / violated / not_assessable + evidence); `score()` from weights. Bedrock Converse, forced tool use, default `global.openai.gpt-5.6-luna`; up to `JUDGE_ATTEMPTS` (3) repair turns, then fallback (`--judge-fallback-model`, default `global.openai.gpt-5.6-sol`; `none` off). [Internals](../../docs/bench-runner.md#judge).
 - Not an npm workspace (like `github-workflow/`): `scripts/` is dependency-free (Node built-ins + `gh-io.mjs`). Tests: `bench` project.
 
 ## Layout

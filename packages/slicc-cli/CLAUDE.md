@@ -125,8 +125,8 @@ drops the art) + the `hello.motd` surfaced via `ssh --list`:
 
 `execrun.EvalSession` spawns the runner once; responses framed by output quiescence
 (`--eval-quiet`, default 500 ms). **Session outlives connections**: a cancelled
-per-connection context interrupts in-flight work but never kills the REPL — only
-`Close`/leader SIGTERM/SIGKILL do.
+per-connection context interrupts in-flight work (SIGINT; no-op on Windows) but
+never kills the REPL — only `Close`/leader SIGTERM/SIGKILL do.
 [Lifecycle](../../docs/slicc-cli-details.md#follow---eval-persistent-repl-lifecycle).
 
 ## Self-update (`slicc update`)
