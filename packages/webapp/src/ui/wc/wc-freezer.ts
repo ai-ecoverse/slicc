@@ -45,13 +45,23 @@ function metaLine(entry: FrozenSessionIndexEntry): string {
   return entry.live ? `${turns} · in progress` : turns;
 }
 
+/** Per-host card options: only the leader rail can delete. */
+export interface FrozenCardOptions {
+  /** Offer the card's trash button (never on a live snapshot). */
+  deletable?: boolean;
+}
+
 /** Build one freezer card; `slug` carries the archive filename. */
-export function frozenCard(entry: FrozenSessionIndexEntry): HTMLElement {
+export function frozenCard(
+  entry: FrozenSessionIndexEntry,
+  opts: FrozenCardOptions = {}
+): HTMLElement {
   const card = document.createElement('slicc-freezer-card');
   card.setAttribute('title', entry.title);
   card.setAttribute('meta', metaLine(entry));
   card.setAttribute('slug', entry.filename);
   if (entry.icon) card.setAttribute('icon', entry.icon);
+  if (opts.deletable && !entry.live) card.setAttribute('deletable', '');
   return card;
 }
 
@@ -241,10 +251,11 @@ function entryFromArchive(filename: string, text: string): FrozenSessionIndexEnt
  */
 export function renderFreezerCards(
   freezer: HTMLElement,
-  entries: readonly FrozenSessionIndexEntry[]
+  entries: readonly FrozenSessionIndexEntry[],
+  opts: FrozenCardOptions = {}
 ): void {
   for (const card of Array.from(freezer.querySelectorAll('slicc-freezer-card'))) card.remove();
-  freezer.append(...entries.map(frozenCard));
+  freezer.append(...entries.map((entry) => frozenCard(entry, opts)));
 }
 
 /** Read and parse a frozen archive into its title + messages. */

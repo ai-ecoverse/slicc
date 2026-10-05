@@ -65,6 +65,14 @@ describe('frozenCard', () => {
     expect(card.getAttribute('slug')).toBe(ENTRY.filename);
     expect(card.getAttribute('meta')).toContain('2 turns');
   });
+
+  it('marks finished chats deletable only when asked, never a live snapshot', () => {
+    expect(frozenCard(ENTRY).hasAttribute('deletable')).toBe(false);
+    expect(frozenCard(ENTRY, { deletable: true }).hasAttribute('deletable')).toBe(true);
+    expect(
+      frozenCard({ ...ENTRY, live: true }, { deletable: true }).hasAttribute('deletable')
+    ).toBe(false);
+  });
 });
 
 describe('cone provenance (#2272)', () => {
