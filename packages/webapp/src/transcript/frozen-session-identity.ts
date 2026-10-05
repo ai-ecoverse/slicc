@@ -9,6 +9,7 @@
  */
 
 import { type FrozenSessionIndexEntry, SESSIONS_INDEX_PATH } from './frozen-archive-format.js';
+import { isDraftArchiveFilename } from './frozen-archive-writer.js';
 
 /** What a caller holds for one frozen session: the rail card's slug and id. */
 export interface FrozenSessionKey {
@@ -47,11 +48,6 @@ export function isChatKeyId(id: string): boolean {
   return id.startsWith('session-');
 }
 
-/** Provisional archive names an enrichment may still rename (`pending-` / `live-`). */
-export function isDraftArchiveName(filename: string): boolean {
-  return filename.startsWith('pending-') || filename.startsWith('live-');
-}
-
 /**
  * `row.sessionId` when it is a path-safe per-freeze id (not a chat key) and
  * no OTHER row in `entries` shares it.
@@ -76,7 +72,7 @@ export function findFrozenRow(
   key: FrozenSessionKey
 ): FrozenSessionIndexEntry | undefined {
   const byName = entries.find((entry) => entry.filename === key.filename);
-  if (byName || !key.sessionId || !isDraftArchiveName(key.filename)) return byName;
+  if (byName || !key.sessionId || !isDraftArchiveFilename(key.filename)) return byName;
   const byId = entries.filter((entry) => entry.sessionId === key.sessionId);
   const only = byId.length === 1 ? byId[0] : undefined;
   return only && trustedSessionId(entries, only) === key.sessionId ? only : undefined;

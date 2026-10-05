@@ -68,8 +68,8 @@ describe('trustedSessionId', () => {
   });
 
   it('distrusts a sessionId another row shares (#3807 collapsed rebuild)', () => {
-    const a = row('a.md', 'session-cone');
-    expect(trustedSessionId([a, row('b.md', 'session-cone')], a)).toBeUndefined();
+    const a = row('a.md', 'dup');
+    expect(trustedSessionId([a, row('b.md', 'dup')], a)).toBeUndefined();
   });
 
   it('has nothing to trust on a legacy row, an unsafe id, or a per-cone chat key', () => {
