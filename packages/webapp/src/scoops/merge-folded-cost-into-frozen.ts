@@ -7,18 +7,22 @@
 
 import type { AssistantMessage } from '../core/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
-import {
-  type FrozenSessionCost,
-  type FrozenSessionIndexEntry,
-  type FrozenSessionModel,
-  readSessionsIndex,
+import type {
+  FrozenSessionCost,
+  FrozenSessionIndexEntry,
+  FrozenSessionModel,
 } from '../transcript/frozen-archive-format.js';
-import { upsertSessionsIndexEntry } from '../transcript/frozen-archive-writer.js';
+import {
+  readSessionsIndexForWrite,
+  serializeIndexWrite,
+  writeSessionsIndexUnlocked,
+} from '../transcript/frozen-archive-writer.js';
 import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import type { RegisteredScoop } from './types.js';
 
 /** Structural VFS surface the merge needs (shared with the freezer writer). */
-export type FoldedCostArchiveVfs = Parameters<typeof upsertSessionsIndexEntry>[0] & LocalVfsClient;
+export type FoldedCostArchiveVfs = Parameters<typeof writeSessionsIndexUnlocked>[0] &
+  LocalVfsClient;
 
 /**
  * Add folded assistant-turn usage into the newest `/sessions` index row for
@@ -32,22 +36,30 @@ export async function mergeFoldedCostIntoLatestFrozen(
 ): Promise<boolean> {
   if (folded.length === 0) return false;
   const coneFolder = scoop.folder || PRIMARY_CONE_FOLDER;
-  const entries = await readSessionsIndex(vfs);
-  const candidates = entries.filter((entry) => (entry.cone ?? PRIMARY_CONE_FOLDER) === coneFolder);
-  if (candidates.length === 0) return false;
-  // Newest freeze first — the New-session clear runs moments after the freezer
-  // wrote this row, so folding into any older archive would mis-attribute.
-  const latest = candidates.reduce((best, entry) =>
-    entry.frozenAt > best.frozenAt ? entry : best
-  );
-
-  const merged: FrozenSessionIndexEntry = {
-    ...latest,
-    cost: mergeFrozenCost(latest.cost, folded),
-    models: mergeFrozenModels(latest.models, folded),
-  };
-  await upsertSessionsIndexEntry(vfs, merged);
-  return true;
+  // Read and write as ONE index transaction, updating the row in place: a
+  // stale read followed by an upsert would re-create a row deleted meanwhile.
+  return serializeIndexWrite(async () => {
+    const entries = await readSessionsIndexForWrite(vfs);
+    const candidates = entries.filter(
+      (entry) => (entry.cone ?? PRIMARY_CONE_FOLDER) === coneFolder
+    );
+    if (candidates.length === 0) return false;
+    // Newest freeze first — the New-session clear runs moments after the
+    // freezer wrote this row, so folding into an older archive would mis-attribute.
+    const latest = candidates.reduce((best, entry) =>
+      entry.frozenAt > best.frozenAt ? entry : best
+    );
+    const merged: FrozenSessionIndexEntry = {
+      ...latest,
+      cost: mergeFrozenCost(latest.cost, folded),
+      models: mergeFrozenModels(latest.models, folded),
+    };
+    await writeSessionsIndexUnlocked(
+      vfs,
+      entries.map((entry) => (entry === latest ? merged : entry))
+    );
+    return true;
+  });
 }
 
 function mergeFrozenCost(

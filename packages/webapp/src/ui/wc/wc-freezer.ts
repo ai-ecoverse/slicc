@@ -6,6 +6,7 @@
  */
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import { serializeIndexWrite } from '../../transcript/frozen-archive-writer.js';
 import { loadFrozenArchive } from '../../transcript/session-jsonl.js';
 import { PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 import {
@@ -77,16 +78,21 @@ export async function enrichFreezerIcons(deps: {
   }
   if (picked.size === 0) return;
 
-  // Re-read right before the write; refuse to write over a fault, a corrupt
-  // index, OR an empty one (we were called with entries — an empty re-read
-  // means something is wrong, and writing would persist a wipe).
-  const current = await readFreezerEntries(deps.reader);
-  if (current === null || current.length === 0) return;
-  const updated = current.map((e) => {
-    const icon = !e.icon && picked.has(e.filename) ? picked.get(e.filename) : undefined;
-    return icon ? { ...e, icon } : e;
+  // Re-read and write as ONE index transaction: an unlocked read-then-write
+  // could put back a row deleted (or drop a row frozen) in between. Refuse
+  // to write over a fault, a corrupt index, OR an empty one (we were called
+  // with entries — an empty re-read means something is wrong).
+  const written = await serializeIndexWrite(async () => {
+    const current = await readFreezerEntries(deps.reader);
+    if (current === null || current.length === 0) return false;
+    const updated = current.map((e) => {
+      const icon = !e.icon && picked.has(e.filename) ? picked.get(e.filename) : undefined;
+      return icon ? { ...e, icon } : e;
+    });
+    await deps.writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    return true;
   });
-  await deps.writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+  if (!written) return;
 
   for (const card of deps.freezer.querySelectorAll('slicc-freezer-card')) {
     const icon = picked.get(card.getAttribute('slug') ?? '');
@@ -172,6 +178,27 @@ export async function rebuildFreezerIndexFromArchives(
   }
   entries.sort((a, b) => b.frozenAt.localeCompare(a.frozenAt));
   return entries;
+}
+
+/**
+ * Rebuild a corrupt index from the archives and publish it as ONE index
+ * transaction, re-checking the corruption inside the lock: a scan taken
+ * outside it could publish a row a concurrent delete just removed. Returns
+ * the rows to render, or `null` when there is nothing to show.
+ */
+export function recoverCorruptFreezerIndex(
+  reader: LocalVfsClient,
+  writer: { writeFile(path: string, content: string): Promise<unknown> }
+): Promise<FrozenSessionIndexEntry[] | null> {
+  return serializeIndexWrite(async () => {
+    const state = await readFreezerIndexState(reader);
+    if (state.kind === 'ok') return state.entries;
+    if (state.kind !== 'corrupt') return null;
+    const entries = await rebuildFreezerIndexFromArchives(reader);
+    if (entries.length === 0) return null;
+    await writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
+    return entries;
+  });
 }
 
 /** One rebuilt index row from an archive's text (frontmatter + data block). */

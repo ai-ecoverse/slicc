@@ -9,6 +9,7 @@ import {
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
 } from '../../src/transcript/frozen-archive-format.js';
+import { serializeIndexWrite } from '../../src/transcript/frozen-archive-writer.js';
 
 describe('mergeFoldedCostIntoLatestFrozen', () => {
   let vfs: VirtualFS;
@@ -67,7 +68,7 @@ describe('mergeFoldedCostIntoLatestFrozen', () => {
     expect(ok).toBe(true);
 
     const index = await readSessionsIndex(vfs);
-    // upsertSessionsIndexEntry moves the updated row to the head.
+    // The row is updated in place (never re-created) under the index lock.
     const newest = index.find((e) => e.filename === 'newest.md');
     expect(newest?.cost?.total).toBeCloseTo(0.153, 6);
     expect(newest?.models?.map((m) => m.model)).toEqual(
@@ -81,5 +82,39 @@ describe('mergeFoldedCostIntoLatestFrozen', () => {
       foldedTurn('claude-haiku-4-5', 0.01),
     ]);
     expect(ok).toBe(false);
+  });
+
+  it('updates in place under the index lock and never re-creates a deleted row', async () => {
+    await seedIndex([
+      {
+        filename: 'newest.md',
+        title: 'newest',
+        frozenAt: '2026-09-26T00:00:00.000Z',
+        messageCount: 4,
+        cone: 'cone',
+      },
+    ]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    void serializeIndexWrite(async () => {
+      entered();
+      await gate;
+    });
+    await held;
+
+    const merging = mergeFoldedCostIntoLatestFrozen(vfs, { folder: 'cone' }, [
+      foldedTurn('claude-haiku-4-5', 0.003),
+    ]);
+    await seedIndex([]); // deleted while the merge waited for the lock
+    release();
+
+    expect(await merging).toBe(false);
+    expect(await readSessionsIndex(vfs)).toEqual([]);
   });
 });

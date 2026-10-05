@@ -13,6 +13,7 @@ installWcDomStubs();
 import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { readSessionCount } from '../../../src/scoops/cone-memory-budget.js';
+import { serializeIndexWrite } from '../../../src/transcript/frozen-archive-writer.js';
 import {
   coneBadgeFor,
   enrichFreezerIcons,
@@ -21,6 +22,7 @@ import {
   readFreezerEntries,
   readFreezerIndexState,
   rebuildFreezerIndexFromArchives,
+  recoverCorruptFreezerIndex,
   renderFreezerCards,
   thawFrozenSession,
 } from '../../../src/ui/wc/wc-freezer.js';
@@ -380,5 +382,72 @@ describe('corrupt-index recovery', () => {
     // A legacy archive only carries the cone's chat key — shared by every
     // chat that cone ever froze — so it must not become this row's identity.
     expect(byName.get('2026-06-05T09-00-00Z-b.md')?.sessionId).toBeUndefined();
+  });
+});
+
+/** Hold the sessions-index lock until `release()` — a delete "in flight". */
+function holdIndexLock(): { held: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  void serializeIndexWrite(async () => {
+    entered();
+    await gate;
+  });
+  return { held, release };
+}
+
+describe('index writers never resurrect a deleted row', () => {
+  it('recoverCorruptFreezerIndex rebuilds and publishes a corrupt index', async () => {
+    const fs = await seededFs();
+    await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
+    const entries = await recoverCorruptFreezerIndex(fs, fs);
+    expect(entries?.map((entry) => entry.filename)).toEqual([ENTRY.filename]);
+    expect((await readFreezerEntries(fs))?.map((entry) => entry.filename)).toEqual([
+      ENTRY.filename,
+    ]);
+  });
+
+  it('recoverCorruptFreezerIndex re-checks inside the lock: a delete that landed first wins', async () => {
+    const fs = await seededFs();
+    await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
+    const lock = holdIndexLock();
+    await lock.held;
+    const recovering = recoverCorruptFreezerIndex(fs, fs);
+    // The delete removes the archive and writes a repaired index first.
+    await fs.rm(`/sessions/${ENTRY.filename}`);
+    await fs.writeFile('/sessions/index.json', '[]');
+    lock.release();
+
+    expect(await recovering).toEqual([]);
+    expect(await readFreezerEntries(fs)).toEqual([]);
+  });
+
+  it('enrichFreezerIcons stamps only rows still present when its write runs', async () => {
+    const fs = await seededFs();
+    const entries = (await readFreezerEntries(fs)) ?? [];
+    const other: FrozenSessionIndexEntry = { ...ENTRY, filename: 'other.md', title: 'Other' };
+    const lock = holdIndexLock();
+    await lock.held;
+    const enriching = enrichFreezerIcons({
+      reader: fs,
+      writer: fs,
+      freezer: document.createElement('slicc-freezer'),
+      entries,
+      pickIcon: async () => 'wrench',
+    });
+    // ENTRY is deleted and another freeze lands while the pick is in flight.
+    await fs.writeFile('/sessions/index.json', JSON.stringify([other]));
+    lock.release();
+    await enriching;
+
+    const after = (await readFreezerEntries(fs)) ?? [];
+    expect(after.map((entry) => entry.filename)).toEqual(['other.md']);
+    expect(after[0]?.icon).toBeUndefined();
   });
 });
