@@ -323,6 +323,11 @@ touched-file debt gate.
 
 ## Known limitations
 
+- A row whose `sessionId` is untrusted — shared with another row, or a
+  per-cone chat key from an index rebuilt before #3808 — keeps its
+  `/sessions/data/<sessionId>/` snapshot and its live-curation deltas on
+  delete: neither can be attributed to this session alone, so they are never
+  removed (they can outlive both sessions).
 - The agentic curator's persisted session transcript
   (`/sessions/agent-memory-curator[-<folder>]-<ts>.md`) can contain the
   archive text and is not removed by delete (hence the dialog says "deleted",
