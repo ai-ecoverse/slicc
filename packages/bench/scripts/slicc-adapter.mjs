@@ -335,8 +335,24 @@ export function lastTurnProviderError(result) {
     ? armConversation(result?.transcript, result.arm.startedAt ?? 0)
     : (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
   const last = (agent?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
-  if (last?.stopReason !== 'error') return null;
-  return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
+  if (last?.stopReason === 'error')
+    return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
+  return result?.arm ? armAgentDied(result) : null;
+}
+
+/**
+ * An arm whose agent exited non-zero with no answer to judge: its model call died, and the agent's
+ * one-shot scoop, with the turn's error, is gone before the transcript export, so the check above
+ * cannot see it. "No answer" is the judge's own `finalText` (collectArmRun: answer.txt, else
+ * transcript.md's last assistant words, else the scoop's), so a run that did answer is judged.
+ * In benchmark 37285459938 (GPT-6.1 Sol @low, a Bedrock 500 window on 2026-10-05), 26 of 88 runs
+ * ended this way, every driver transcript on an empty assistant section, and were judged at 0.15
+ * against 0.40 for the rest.
+ */
+function armAgentDied(result) {
+  const code = result.arm.result?.exitCode;
+  if (!code || String(result.finalText ?? '').trim()) return null;
+  return `the arm's agent exited ${code} without an answer`;
 }
 
 /**
