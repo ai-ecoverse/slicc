@@ -74,10 +74,13 @@ files.
   only when it is not a chat key (`/^session-/`); otherwise no `sessionId`.
   `id:` keeps its current meaning. Tracked as #3807; this branch fixes it.
 - **Trusted sessionId**: a row's `sessionId` is used for path derivation or
-  matching only if no other row in the same index read shares it.
+  matching only if it is not a per-cone chat key (`session-…`) and no other
+  row in the same index read shares it.
 - **Delete key**: `{ filename, sessionId? }` from the card. Match by
-  `filename`; if absent (enrichment renamed it between render and click),
-  match the unique row with the trusted `sessionId`; else `'not-found'`.
+  `filename`; only when that is a DRAFT name (`pending-` / `live-` — the only
+  names enrichment renames) and absent, match the unique row with the
+  trusted `sessionId`; else `'not-found'`. A stale card for a canonical name
+  can never resolve to a different chat.
 
 ### 1b. Path safety
 
@@ -115,11 +118,15 @@ Inside ONE `serializeIndexWrite` callback (non-reentrant: use only
    other error and continuing: snapshot bundle + staging dir; sidecar;
    attachment dirs found by parsing the archive's message attachment paths;
    live-delta archives matching `^<key>-\d+-\d+\.md$` plus each delta's
-   receipt and curation dir; the archive's receipt and curation dir; the
-   archive itself (last of the files).
+   receipt and curation dir; the archive's receipt and curation dir; then —
+   only if nothing so far failed — the sidecar and the archive itself. The
+   archive is the only record of a pre-rename attachment dir, so it must
+   survive any failure for a retry to rediscover what is left.
 3. Strict search-index invalidation (1g).
-4. Only if no errors: write the index without the row (LAST), then
-   best-effort `vfs.flush()` → `'deleted'`. Otherwise keep the row →
+4. Only if no errors: write the index without the row (LAST), invalidate
+   the search index once more (lenient — a rebuild that read the bodies
+   before the delete may have written them back), then best-effort
+   `vfs.flush()` → `'deleted'`. Otherwise keep the row →
    `'failed'` with the errors. Every step tolerates already-removed files, so
    a retry converges.
 
@@ -142,13 +149,15 @@ once 1d–1f land.)
 `replaceIndexEntry(old, replacement)` → `'replaced' | 'superseded' | 'deleted' | 'prepended'`, evaluated inside the lock:
 
 1. Old row present → replace as today → `'replaced'`.
-2. Old row missing, but a row with the replacement's `filename` or the same
-   trusted `sessionId` exists → another enricher already transitioned it:
-   write nothing, delete nothing that row references → `'superseded'`.
-3. Old row missing, old archive missing, no row as in 2 → deleted while
+2. Old row missing, a row with the replacement's `filename` exists → it is
+   the canonical row (#718): replace it in place → `'replaced'`.
+3. Old row missing, the ONE row with the replacement's trusted `sessionId`
+   (never a chat key) has another filename → a rival enrichment won: write
+   nothing, delete nothing that row references → `'superseded'`.
+4. Old row missing, old archive missing, no row as in 2–3 → deleted while
    enriching: remove the just-written new archive + sidecar (only if no row
    references them) → `'deleted'`.
-4. Old row missing, old archive present → keep today's prepend (index lost or
+5. Old row missing, old archive present → keep today's prepend (index lost or
    rebuilt) → `'prepended'`.
 
 `commitEnrichedArchive` returns `null` on `'superseded'` / `'deleted'` and
@@ -179,8 +188,10 @@ Callers that must know whether the session still exists ask the index (1e).
   key, removes `/sessions/data/<id>/` and `/sessions/data/.tmp-<id>`,
   tolerating ONLY `ENOENT` (the existing private `removeDir` swallows
   everything and is not reused as-is).
-- `TranscriptExportService.captureFrozen`: after `snapshotStore.write`, call
-  the optional `snapshotStore.discardIfUnindexed(sessionId)`, wired to
+- `TranscriptExportService.captureFrozen`: in a `finally` after
+  `snapshotStore.write` (so it also runs when a concurrent delete broke the
+  publish), call — NOT awaited, so New chat's 5 s snapshot deadline never
+  waits on the lock — the optional `snapshotStore.discardIfUnindexed(sessionId)`, wired to
   `discardSnapshotIfUnindexed` in both the page (`wc-live.ts`) and worker
   (`orchestrator.ts`) registrations. Inside `serializeIndexWrite` it removes
   the bundle only when a well-formed index has no row with that
@@ -308,6 +319,9 @@ Verification: full `verifying-before-push` pass — `lint`, `typecheck`,
 touched-file debt gate.
 
 ## Known limitations
+
+- Rows whose index was rebuilt before #3807 lost their per-freeze UUID; their
+  `/sessions/data/<uuid>/` bundle cannot be found by delete and stays on disk.
 
 - iOS follower: an archive already open stays visible (in memory) until
   dismissed; the list refreshes next time the Past Sessions sheet opens.

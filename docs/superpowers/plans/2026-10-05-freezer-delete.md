@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Work in `/Users/kpauls/projects/adobe/github/slicc/.worktrees/feat-freezer-delete` (branch `feat/freezer-delete`); run every command from that root.
-- Biome errors apply to every file (no debt lists exist): cognitive complexity ≤ 25, ≤ 150 counted lines per function, `noFloatingPromises` / `noMisusedPromises` (prefix deliberately un-awaited promises with `void`). Check touched files with `npx biome check <files>`.
+- Biome errors apply to every file (no debt lists exist): cognitive complexity ≤ 25, ≤ 150 counted lines per function, `noFloatingPromises` / `noMisusedPromises` (prefix deliberately un-awaited promises with `void`). Check touched files with `npx biome check --write <files>`.
 - `wireFreezerRail` (`packages/webapp/src/ui/wc/wc-live-freezer.ts`) is at 145/150 counted lines — Task 10 moves code out of it before adding any.
 - Webcomponents: no `innerHTML` (use `h()` / `iconEl()`), never import from the webapp package.
 - No new `Record<string, unknown>` in non-test source.
@@ -47,7 +47,7 @@
 
 (Paths without a package prefix are under `packages/webapp/src/`; their tests mirror under `packages/webapp/tests/`.)
 
-Dependencies: Task 1 → 3, 5, 7. Task 2 → 7. Tasks 4, 6, 9 independent. Task 5, 6 → 7. Task 7 → 8, 10. Task 9 → 10. Task 11 last.
+Dependencies: Task 1 → 3, 5, 7. Task 2 → 3, 4, 7 (Tasks 2, 3 share `session-freezer.ts`; 2, 4, 10 share `wc-freezer.ts`). Task 4 → 10. Task 5, 6 → 7. Task 7 → 8, 10. Task 9 → 10. Task 11 last. Execute strictly in numeric order.
 
 ---
 
@@ -66,6 +66,7 @@ Dependencies: Task 1 → 3, 5, 7. Task 2 → 7. Tasks 4, 6, 9 independent. Task 
   - `interface IndexReader { readFile(path: string, options: { encoding: 'utf-8' }): Promise<string | Uint8Array> }`
   - `isSafeArchiveFilename(name: unknown): name is string`
   - `isSafeSessionKey(key: unknown): key is string`
+  - `isChatKeyId(id: string): boolean` (`session-` prefix); `isDraftArchiveName(filename: string): boolean` (`pending-` / `live-` prefix)
   - `trustedSessionId(entries: readonly FrozenSessionIndexEntry[], row: FrozenSessionIndexEntry): string | undefined`
   - `findFrozenRow(entries: readonly FrozenSessionIndexEntry[], key: FrozenSessionKey): FrozenSessionIndexEntry | undefined`
   - `readIndexForPresence(vfs: IndexReader): Promise<FrozenSessionIndexEntry[] | null>`
@@ -147,11 +148,14 @@ describe('trustedSessionId', () => {
     expect(trustedSessionId([a, row('b.md', 'session-cone')], a)).toBeUndefined();
   });
 
-  it('has nothing to trust on a legacy row, or on an unsafe id', () => {
+  it('has nothing to trust on a legacy row, an unsafe id, or a per-cone chat key', () => {
     const legacy = row('a.md');
     expect(trustedSessionId([legacy], legacy)).toBeUndefined();
     const bad = row('a.md', '../x');
     expect(trustedSessionId([bad], bad)).toBeUndefined();
+    // Even when unique: `session-<folder>` is shared by every chat of a cone.
+    const chatKey = row('a.md', 'session-cone');
+    expect(trustedSessionId([chatKey], chatKey)).toBeUndefined();
   });
 });
 
@@ -168,8 +172,18 @@ describe('findFrozenRow', () => {
 
   it('matches nothing on an ambiguous sessionId or a missing key', () => {
     const rows = [row('a.md', 'dup'), row('b.md', 'dup')];
-    expect(findFrozenRow(rows, { filename: 'gone.md', sessionId: 'dup' })).toBeUndefined();
+    expect(findFrozenRow(rows, { filename: 'pending-gone.md', sessionId: 'dup' })).toBeUndefined();
     expect(findFrozenRow(rows, { filename: 'gone.md' })).toBeUndefined();
+  });
+
+  it('never follows a sessionId from a canonical (non-draft) name or through a chat key', () => {
+    const b = row('2026-b.md', 'sid-b');
+    // A stale card for a deleted canonical archive must not resolve to b.
+    expect(findFrozenRow([b], { filename: '2026-a.md', sessionId: 'sid-b' })).toBeUndefined();
+    const legacy = row('2026-c.md', 'session-cone');
+    expect(
+      findFrozenRow([legacy], { filename: 'pending-c.md', sessionId: 'session-cone' })
+    ).toBeUndefined();
   });
 });
 
@@ -246,29 +260,44 @@ export function isSafeSessionKey(key: unknown): key is string {
   return isSafeSegment(key);
 }
 
-/** `row.sessionId` when it is path-safe and no OTHER row in `entries` shares it. */
+/** A per-cone chat key (`session-<folder>`) — never a per-freeze identity (#3807). */
+export function isChatKeyId(id: string): boolean {
+  return id.startsWith('session-');
+}
+
+/** Provisional archive names an enrichment may still rename (`pending-` / `live-`). */
+export function isDraftArchiveName(filename: string): boolean {
+  return filename.startsWith('pending-') || filename.startsWith('live-');
+}
+
+/**
+ * `row.sessionId` when it is a path-safe per-freeze id (not a chat key) and
+ * no OTHER row in `entries` shares it.
+ */
 export function trustedSessionId(
   entries: readonly FrozenSessionIndexEntry[],
   row: FrozenSessionIndexEntry
 ): string | undefined {
   const id = row.sessionId;
-  if (!isSafeSessionKey(id)) return undefined;
+  if (!isSafeSessionKey(id) || isChatKeyId(id)) return undefined;
   return entries.some((entry) => entry !== row && entry.sessionId === id) ? undefined : id;
 }
 
 /**
- * The row a key names: by filename first, else — when an enrichment renamed
- * the archive between render and use — the ONE row carrying the key's
- * `sessionId`. An ambiguous id matches nothing.
+ * The row a key names: by filename first. Only a DRAFT name (which an
+ * enrichment may have renamed between render and use) falls back to the
+ * one row carrying the key's trusted `sessionId`; anything else matches
+ * nothing, so a stale card can never resolve to a different chat.
  */
 export function findFrozenRow(
   entries: readonly FrozenSessionIndexEntry[],
   key: FrozenSessionKey
 ): FrozenSessionIndexEntry | undefined {
   const byName = entries.find((entry) => entry.filename === key.filename);
-  if (byName || !key.sessionId) return byName;
+  if (byName || !key.sessionId || !isDraftArchiveName(key.filename)) return byName;
   const byId = entries.filter((entry) => entry.sessionId === key.sessionId);
-  return byId.length === 1 ? byId[0] : undefined;
+  const only = byId.length === 1 ? byId[0] : undefined;
+  return only && trustedSessionId(entries, only) === key.sessionId ? only : undefined;
 }
 
 /**
@@ -293,7 +322,7 @@ export async function readIndexForPresence(
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npx vitest run packages/webapp/tests/transcript/frozen-session-identity.test.ts && npx biome check packages/webapp/src/transcript/frozen-session-identity.ts packages/webapp/tests/transcript/frozen-session-identity.test.ts`
+Run: `npx vitest run packages/webapp/tests/transcript/frozen-session-identity.test.ts && npx biome check --write packages/webapp/src/transcript/frozen-session-identity.ts packages/webapp/tests/transcript/frozen-session-identity.test.ts`
 Expected: all tests PASS; Biome reports no errors.
 
 - [ ] **Step 5: Commit**
@@ -509,7 +538,7 @@ In `entryFromArchive`, add `const sessionId = rebuiltSessionId(parsed);` right b
 
 Run: `npx vitest run packages/webapp/tests/transcript/frozen-archive-writer.test.ts packages/webapp/tests/ui/wc/wc-freezer.test.ts packages/webapp/tests/ui/wc/wc-freezer-live.test.ts packages/webapp/tests/ui/session-freezer.test.ts packages/webapp/tests/scoops/live-session-snapshot.test.ts packages/webapp/tests/transcript/session-search.test.ts`
 Expected: all PASS (existing `wc-freezer-live` rebuild test keeps `id: sid-1` → `sessionId: 'sid-1'`).
-Then: `npx biome check packages/webapp/src/transcript packages/webapp/src/ui/session-freezer.ts packages/webapp/src/scoops/live-session-snapshot.ts packages/webapp/src/ui/wc/wc-freezer.ts` — no errors.
+Then: `npx biome check --write packages/webapp/src/transcript packages/webapp/src/ui/session-freezer.ts packages/webapp/src/scoops/live-session-snapshot.ts packages/webapp/src/ui/wc/wc-freezer.ts` — no errors.
 
 - [ ] **Step 5: Commit**
 
@@ -534,7 +563,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Interfaces:**
 
-- Consumes: nothing new (`removeSessionJsonl`, `SESSIONS_DIR`, `SESSIONS_INDEX_PATH`, `FsError`, `serializeIndexWrite` are already imported there).
+- Consumes: `isChatKeyId` (Task 1); `removeSessionJsonl`, `SESSIONS_DIR`, `SESSIONS_INDEX_PATH`, `FsError`, `serializeIndexWrite` are already imported there.
 - Produces (module-internal): `type ReplaceIndexOutcome = 'replaced' | 'prepended' | 'superseded' | 'deleted'`; `enrichPendingSession` keeps its signature and returns `null` for `superseded` / `deleted`.
 
 - [ ] **Step 1: Write the failing tests** — append to `packages/webapp/tests/ui/session-freezer.test.ts`:
@@ -685,6 +714,10 @@ async function replaceIndexEntry(
     if (outcome === 'prepended') {
       const updated = [replacement, ...existing.filter((e) => e.filename !== replacement.filename)];
       await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    } else if (outcome === 'replaced') {
+      // The canonical row already exists (#718): swap it in place, never duplicate.
+      const updated = existing.map((e) => (e.filename === replacement.filename ? replacement : e));
+      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
     } else {
       await dropUnreferencedCopy(vfs, existing, oldFilename, replacement.filename);
     }
@@ -705,18 +738,23 @@ async function readIndexForReplace(vfs: WritableVfsClient): Promise<FrozenSessio
   }
 }
 
-/** The old row is gone: a rival's win, a delete, or a lost index? */
+/**
+ * The old row is gone. A row already carrying the replacement's filename is
+ * the canonical row (#718) — replace it in place. Otherwise the ONE row with
+ * the replacement's trusted `sessionId` means a rival enrichment won; else the
+ * old archive decides between a lost index (prepend) and a delete.
+ */
 async function resolveMissingOldRow(
   vfs: WritableVfsClient,
   existing: readonly FrozenSessionIndexEntry[],
   oldFilename: string,
   replacement: FrozenSessionIndexEntry
 ): Promise<ReplaceIndexOutcome> {
+  if (existing.some((e) => e.filename === replacement.filename)) return 'replaced';
   const sessionId = replacement.sessionId;
-  const sameId = sessionId ? existing.filter((e) => e.sessionId === sessionId) : [];
-  if (sameId.length === 1 || existing.some((e) => e.filename === replacement.filename)) {
-    return 'superseded';
-  }
+  const sameId =
+    sessionId && !isChatKeyId(sessionId) ? existing.filter((e) => e.sessionId === sessionId) : [];
+  if (sameId.length === 1) return 'superseded';
   return (await archiveExists(vfs, `${SESSIONS_DIR}/${oldFilename}`)) ? 'prepended' : 'deleted';
 }
 
@@ -751,41 +789,80 @@ async function dropUnreferencedCopy(
 }
 ```
 
-Then in `commitEnrichedArchive` replace
+Add this helper right after `dropUnreferencedCopy` (it keeps `commitEnrichedArchive` under Biome's cognitive-complexity cap of 25 — the function is at exactly 25 today):
 
 ```ts
-  try {
-    await replaceIndexEntry(vfs, entry.filename, updatedEntry);
-  } catch (err) {
-```
-
-with
-
-```ts
+/** Swap the row; `false` when the pass must stop (index fault, a rival won, or deleted). */
+async function commitIndexSwap(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry,
+  updated: FrozenSessionIndexEntry
+): Promise<boolean> {
   let outcome: ReplaceIndexOutcome;
   try {
-    outcome = await replaceIndexEntry(vfs, entry.filename, updatedEntry);
+    outcome = await replaceIndexEntry(vfs, entry.filename, updated);
   } catch (err) {
+    log.warn('Enrichment index update failed (entry may stay pending)', {
+      filename: entry.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+  if (outcome === 'superseded' || outcome === 'deleted') {
+    // The session moved on while this pass ran — a rival enrichment won or
+    // the user deleted it. The index lock already dropped this pass's copy.
+    log.info('Enrichment dropped — the session changed during the pass', {
+      filename: entry.filename,
+      outcome,
+    });
+    return false;
+  }
+  return true;
+}
 ```
 
-and directly after that `try { … } catch { … }` block (before `if (newPath !== oldPath) {`) insert:
+Then in `commitEnrichedArchive` replace the whole block
 
 ```ts
-if (outcome === 'superseded' || outcome === 'deleted') {
-  // The session moved on while this pass ran — a rival enrichment won or
-  // the user deleted it. The index lock already dropped this pass's copy.
-  log.info('Enrichment dropped — the session changed during the pass', {
+try {
+  await replaceIndexEntry(vfs, entry.filename, updatedEntry);
+} catch (err) {
+  log.warn('Enrichment index update failed (entry may stay pending)', {
     filename: entry.filename,
-    outcome,
+    error: err instanceof Error ? err.message : String(err),
   });
   return null;
 }
 ```
 
+with
+
+```ts
+if (!(await commitIndexSwap(vfs, entry, updatedEntry))) return null;
+```
+
+Finally add `import { isChatKeyId } from '../transcript/frozen-session-identity.js';` to the imports (run `npx biome check --write --write` to place it).
+
+Also add a regression test for two enrichments of the SAME draft (same title → same canonical name) to the new describe block:
+
+```ts
+it('two concurrent enrichments of the same draft keep one row and the canonical archive', async () => {
+  const vfs = makeFakeVfs();
+  const frozen = await seed(vfs);
+  const [first, second] = await Promise.all([enrich(vfs, frozen), enrich(vfs, frozen)]);
+
+  const winner = first ?? second;
+  expect(winner?.filename).toMatch(/-build-pipeline-debug\.md$/);
+  expect((await readIndex(vfs)).map((entry) => entry.filename)).toEqual([winner!.filename]);
+  expect(vfs.files.has(`/sessions/${winner!.filename}`)).toBe(true);
+  expect(vfs.files.has(`/sessions/${frozen.filename}`)).toBe(false);
+});
+```
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `npx vitest run packages/webapp/tests/ui/session-freezer.test.ts && npx biome check packages/webapp/src/ui/session-freezer.ts`
-Expected: the whole file PASSES (including the existing "two concurrent enrichments" test); Biome clean.
+Run: `npx vitest run packages/webapp/tests/ui/session-freezer.test.ts && npx biome check --write packages/webapp/src/ui/session-freezer.ts`
+Expected: the whole file PASSES — including the existing #718 regression "does not duplicate the canonical row when it already exists in the index" (now `replaced` in place) and "two concurrent enrichments"; Biome clean.
 
 - [ ] **Step 5: Commit**
 
@@ -988,10 +1065,10 @@ export function recoverCorruptFreezerIndex(
 1. Replace the two index imports with:
 
 ```ts
-import {
-  type FrozenSessionCost,
-  type FrozenSessionIndexEntry,
-  type FrozenSessionModel,
+import type {
+  FrozenSessionCost,
+  FrozenSessionIndexEntry,
+  FrozenSessionModel,
 } from '../transcript/frozen-archive-format.js';
 import {
   readSessionsIndexForWrite,
@@ -1032,7 +1109,7 @@ return serializeIndexWrite(async () => {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `npx vitest run packages/webapp/tests/ui/wc/wc-freezer.test.ts packages/webapp/tests/scoops/merge-folded-cost-into-frozen.test.ts packages/webapp/tests/scoops/orchestrator*.test.ts && npx biome check packages/webapp/src/ui/wc/wc-freezer.ts packages/webapp/src/scoops/merge-folded-cost-into-frozen.ts`
+Run: `npx vitest run packages/webapp/tests/ui/wc/wc-freezer.test.ts packages/webapp/tests/scoops/merge-folded-cost-into-frozen.test.ts packages/webapp/tests/scoops/orchestrator*.test.ts && npx biome check --write packages/webapp/src/ui/wc/wc-freezer.ts packages/webapp/src/scoops/merge-folded-cost-into-frozen.ts`
 Expected: PASS; Biome clean.
 
 - [ ] **Step 5: Commit**
@@ -1231,10 +1308,23 @@ export async function discardSnapshotIfUnindexed(
     discardIfUnindexed?(sessionId: string): Promise<unknown>;
 ```
 
-2. In `captureFrozen`, directly after the `await this.deps.snapshotStore.write(…);` statement add:
+2. In `captureFrozen`, wrap the existing `await this.deps.snapshotStore.write(metadata.sessionId, { document: finalDoc, attachments: bundleFiles }, signal);` statement:
 
 ```ts
-await this.deps.snapshotStore.discardIfUnindexed?.(metadata.sessionId);
+try {
+  await this.deps.snapshotStore.write(
+    metadata.sessionId,
+    {
+      document: finalDoc,
+      attachments: bundleFiles,
+    },
+    signal
+  );
+} finally {
+  // Not awaited: New chat's 5 s snapshot deadline must not wait on the
+  // sessions-index lock. Runs even when a concurrent delete broke the publish.
+  void this.deps.snapshotStore.discardIfUnindexed?.(metadata.sessionId)?.catch(() => undefined);
+}
 ```
 
 `packages/webapp/src/ui/wc/wc-live.ts`:
@@ -1263,7 +1353,7 @@ await this.deps.snapshotStore.discardIfUnindexed?.(metadata.sessionId);
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `npx vitest run packages/webapp/tests/transcript/snapshot-store.test.ts packages/webapp/tests/transcript/export-service.test.ts && npx biome check packages/webapp/src/transcript/snapshot-store.ts packages/webapp/src/transcript/export-service.ts packages/webapp/src/ui/wc/wc-live.ts packages/webapp/src/scoops/orchestrator.ts && npx tsc --noEmit -p tsconfig.json`
+Run: `npx vitest run packages/webapp/tests/transcript/snapshot-store.test.ts packages/webapp/tests/transcript/export-service.test.ts && npx biome check --write packages/webapp/src/transcript/snapshot-store.ts packages/webapp/src/transcript/export-service.ts packages/webapp/src/ui/wc/wc-live.ts packages/webapp/src/scoops/orchestrator.ts && npx tsc --noEmit -p tsconfig.json`
 Expected: PASS; Biome clean; no type errors.
 
 - [ ] **Step 5: Commit**
@@ -1462,7 +1552,7 @@ export async function invalidateSessionSearchIndex(
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `npx vitest run packages/webapp/tests/transcript/session-search.test.ts packages/webapp/tests/scoops/live-session-snapshot.test.ts packages/webapp/tests/shell/supplemental-commands/session && npx biome check packages/webapp/src/transcript/session-search-index.ts`
+Run: `npx vitest run packages/webapp/tests/transcript/session-search.test.ts packages/webapp/tests/scoops/live-session-snapshot.test.ts packages/webapp/tests/shell/supplemental-commands/session && npx biome check --write packages/webapp/src/transcript/session-search-index.ts`
 Expected: PASS; Biome clean.
 
 - [ ] **Step 5: Commit**
@@ -1745,6 +1835,36 @@ describe('deleteFrozenSession', () => {
   });
 });
 
+describe('deleteFrozenSession — partial failure', () => {
+  it('keeps the archive while an attachment dir resists, so the retry still finds it', async () => {
+    const a = row('2026-06-01T10-00-00-000Z-a.md', 'sid-a');
+    await seedSession(a, 'pending-aaa111');
+    await put('/sessions/index.json', JSON.stringify([a]));
+    const flaky = new Proxy(vfs, {
+      get(target, prop) {
+        if (prop === 'rm') {
+          return async (path: string, options?: { recursive?: boolean }) => {
+            if (path === '/sessions/attachments/pending-aaa111') {
+              throw Object.assign(new Error('EIO: disk'), { code: 'EIO' });
+            }
+            return target.rm(path, options);
+          };
+        }
+        const value = Reflect.get(target, prop);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as unknown as WritableVfsClient;
+
+    expect((await deleteFrozenSession(flaky, { filename: a.filename })).status).toBe('failed');
+    expect(await exists(`/sessions/${a.filename}`)).toBe(true);
+    expect(await exists('/sessions/attachments/pending-aaa111/0-shot.png')).toBe(true);
+
+    expect(await deleteFrozenSession(w(), { filename: a.filename })).toEqual({ status: 'deleted' });
+    expect(await exists('/sessions/attachments/pending-aaa111')).toBe(false);
+    expect(await exists(`/sessions/${a.filename}`)).toBe(false);
+  });
+});
+
 describe('findIndexedFrozenRow', () => {
   it('present / absent from a well-formed index; unknown when it cannot say', async () => {
     const a = row('a.md', 'sid-a');
@@ -1986,6 +2106,10 @@ export async function removeFrozenSessionArtifacts(
   }
   errors.push(...(await removeCuratorByproducts(vfs, row, others)));
   for (const dir of attachmentDirs) await removeTolerant(vfs, dir, errors, true);
+  // The archive (and its sidecar) is the only record of a pre-rename
+  // attachment dir: keep both until everything else is gone, so a retry can
+  // still rediscover what is left.
+  if (errors.length > 0) return errors;
   await removeTolerant(vfs, sidecarPathForArchive(row.filename), errors);
   await removeTolerant(vfs, `${SESSIONS_DIR}/${row.filename}`, errors);
   return errors;
@@ -2030,6 +2154,9 @@ export function deleteFrozenSession(
       return { status: 'failed', errors };
     }
     await writeSessionsIndexUnlocked(vfs, others);
+    // Again, leniently: a search rebuild that read the bodies before this
+    // delete may have passed its fingerprint check and written them back.
+    await invalidateSessionSearchIndex(vfs);
     try {
       await vfs.flush();
     } catch {
@@ -2043,7 +2170,7 @@ export function deleteFrozenSession(
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npx vitest run packages/webapp/tests/ui/frozen-session-delete.test.ts packages/webapp/tests/scoops/live-session-curation.test.ts && npx biome check packages/webapp/src/ui/frozen-session-delete.ts packages/webapp/src/scoops/live-session-curation.ts packages/webapp/tests/ui/frozen-session-delete.test.ts && node packages/dev-tools/tools/check-layer-back-edges.mjs`
+Run: `npx vitest run packages/webapp/tests/ui/frozen-session-delete.test.ts packages/webapp/tests/scoops/live-session-curation.test.ts && npx biome check --write packages/webapp/src/ui/frozen-session-delete.ts packages/webapp/src/scoops/live-session-curation.ts packages/webapp/tests/ui/frozen-session-delete.test.ts && node packages/dev-tools/tools/check-layer-back-edges.mjs`
 Expected: PASS; Biome clean; no new layer back-edges.
 
 - [ ] **Step 5: Commit**
@@ -2176,7 +2303,7 @@ Expected: the four new tests FAIL (curator runs, settles fire, `findIndexedFroze
 
 - [ ] **Step 3: Implement** — in `packages/webapp/src/ui/new-session.ts`:
 
-1. Add the import (after the `./provider-settings.js` import):
+1. Add the import (`npx biome check --write` sorts it into place):
 
 ```ts
 import { findIndexedFrozenRow, removeCuratorByproducts } from './frozen-session-delete.js';
@@ -2274,7 +2401,7 @@ with
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `npx vitest run packages/webapp/tests/ui/new-session.test.ts packages/webapp/tests/ui/wc/wc-live-freezer-erase.test.ts packages/webapp/tests/ui/wc/wc-live-freezer-cone.test.ts && npx biome check packages/webapp/src/ui/new-session.ts`
+Run: `npx vitest run packages/webapp/tests/ui/new-session.test.ts packages/webapp/tests/ui/wc/wc-live-freezer-erase.test.ts packages/webapp/tests/ui/wc/wc-live-freezer-cone.test.ts && npx biome check --write packages/webapp/src/ui/new-session.ts`
 Expected: PASS; Biome clean.
 
 - [ ] **Step 5: Commit**
@@ -2526,7 +2653,7 @@ export const DeletableHover: Story = {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `npm run test -w @slicc/webcomponents -- tests/freezer && npm run typecheck -w @slicc/webcomponents && npx biome check packages/webcomponents/src/freezer && npm run lint:no-innerhtml`
+Run: `npm run test -w @slicc/webcomponents -- tests/freezer && npm run typecheck -w @slicc/webcomponents && npx biome check --write packages/webcomponents/src/freezer && npm run lint:no-innerhtml`
 Expected: PASS; typecheck clean; Biome clean; no innerHTML.
 
 - [ ] **Step 5: Commit**
@@ -3217,7 +3344,7 @@ wireFreezerDelete({
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `npx vitest run packages/webapp/tests/ui/wc && npx biome check packages/webapp/src/ui/wc && npx tsc --noEmit -p tsconfig.json`
+Run: `npx vitest run packages/webapp/tests/ui/wc && npx biome check --write packages/webapp/src/ui/wc && npx tsc --noEmit -p tsconfig.json`
 Expected: all `tests/ui/wc` PASS (including erase / deeplink / cone / cone-actions suites); Biome clean (in particular no `noExcessiveLinesPerFunction` on `wireFreezerRail`); typecheck clean.
 
 - [ ] **Step 5: Commit**
