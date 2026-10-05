@@ -2227,8 +2227,8 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     // timeout_ms === 0 is an explicit "tell me who's already done"
     // request. The previous `timeoutMs > 0` guard disabled the timer
     // entirely for 0, so a scoop that never completed would stall
-    // Promise.all forever. This test asserts 0 returns immediately
-    // (with a timed-out entry) instead.
+    // Promise.all forever. Assert 0 returns a timed-out entry without
+    // scheduling a macrotask timer (wall-clock bounds flake under CI load).
     const scoop: RegisteredScoop = {
       jid: 'scoop_wait_zero_1',
       name: 'wait-zero',
@@ -2254,15 +2254,18 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     const priv = orch as unknown as OrchestratorPrivate;
     priv.handleMessage = async () => {};
 
-    const started = Date.now();
-    const results = await orch.waitForScoops([scoop.jid], 0);
-    const elapsed = Date.now() - started;
-    // Anti-hang bound, not a perf budget: the regression is `timeout 0` being
-    // treated as "no timeout" and waiting indefinitely. 100ms only held on an
-    // idle machine (observed 117ms under load).
-    expect(elapsed).toBeLessThan(500);
-    expect(results[0].timedOut).toBe(true);
-    expect(results[0].summary).toBeNull();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const resultsPromise = orch.waitForScoops([scoop.jid], 0);
+      // Must settle from microtasks alone — setTimeout(0) would leave this
+      // pending until timers advance (the load-sensitive flake).
+      await expect(resultsPromise).resolves.toEqual([
+        { jid: scoop.jid, summary: null, timedOut: true },
+      ]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shutdown drains pending scoop_wait waiters so in-flight calls resolve', async () => {
