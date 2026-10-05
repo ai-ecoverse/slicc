@@ -256,6 +256,45 @@ export async function writeSnapshot(
   await removeDir(vfs, tmp);
 }
 
+/**
+ * Remove a session's published snapshot and any staging dir a failed or
+ * in-flight publish left. Only `ENOENT` counts as done; other faults throw.
+ */
+export async function removeSnapshot(vfs: WritableVfsClient, sessionId: string): Promise<void> {
+  assertSafeSessionId(sessionId);
+  for (const dir of [sessionDir(sessionId), tmpDir(sessionId)]) {
+    try {
+      await vfs.rm(dir, { recursive: true });
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code !== 'ENOENT') throw err;
+    }
+  }
+}
+
+/**
+ * Called right after a frozen session's snapshot is published: when a
+ * well-formed index has no row with this `sessionId` any more (deleted while
+ * the capture ran), remove the bundle again. Runs inside the sessions-index
+ * lock, so it orders after any in-flight delete. A missing or corrupt index
+ * keeps the bundle — it cannot prove the session is gone.
+ */
+export async function discardSnapshotIfUnindexed(
+  vfs: WritableVfsClient,
+  sessionId: string
+): Promise<boolean> {
+  // Lazy: this module is on the kernel worker's first-load graph.
+  const [{ serializeIndexWrite }, { readIndexForPresence }] = await Promise.all([
+    import('./frozen-archive-writer.js'),
+    import('./frozen-session-identity.js'),
+  ]);
+  return serializeIndexWrite(async () => {
+    const entries = await readIndexForPresence(vfs);
+    if (entries === null || entries.some((entry) => entry.sessionId === sessionId)) return false;
+    await removeSnapshot(vfs, sessionId);
+    return true;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Read
 // ---------------------------------------------------------------------------
