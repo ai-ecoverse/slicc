@@ -350,4 +350,35 @@ describe('corrupt-index recovery', () => {
     });
     expect(writes).toEqual([]);
   });
+
+  it('rebuilds sessionId from the sessionId frontmatter, never from a per-cone chat key (#3807)', async () => {
+    const fs = await seededFs();
+    const archive = (title: string, frozenAt: string, extra: string[]) =>
+      [
+        '---',
+        'id: session-cone',
+        ...extra,
+        `title: "${title}"`,
+        `frozenAt: "${frozenAt}"`,
+        'messageCount: 2',
+        '---',
+        '',
+      ].join('\n');
+    await fs.writeFile(
+      '/sessions/2026-06-04T09-00-00Z-a.md',
+      archive('a', '2026-06-04T09:00:00Z', ['sessionId: sid-a'])
+    );
+    await fs.writeFile(
+      '/sessions/2026-06-05T09-00-00Z-b.md',
+      archive('b', '2026-06-05T09:00:00Z', [])
+    );
+    await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
+
+    const rebuilt = await rebuildFreezerIndexFromArchives(fs);
+    const byName = new Map(rebuilt.map((entry) => [entry.filename, entry]));
+    expect(byName.get('2026-06-04T09-00-00Z-a.md')?.sessionId).toBe('sid-a');
+    // A legacy archive only carries the cone's chat key — shared by every
+    // chat that cone ever froze — so it must not become this row's identity.
+    expect(byName.get('2026-06-05T09-00-00Z-b.md')?.sessionId).toBeUndefined();
+  });
 });

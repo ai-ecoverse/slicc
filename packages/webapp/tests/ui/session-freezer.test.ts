@@ -3104,6 +3104,30 @@ describe('freezeConeSession — sessionId generation', () => {
     });
     expect(r1!.sessionId).not.toBe(r2!.sessionId);
   });
+
+  it('writes the sessionId into the archive frontmatter beside the chat key (#3807)', async () => {
+    const vfs = makeFakeVfs();
+    const result = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('a'),
+          assistantMessage('b'),
+          userMessage('c'),
+          assistantMessage('d'),
+        ],
+        createdAt: 1,
+        updatedAt: 2,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      mode: 'quick',
+    });
+    const markdown = vfs.files.get(`/sessions/${result!.filename}`)!;
+    expect(markdown).toContain('id: session-cone\n');
+    expect(markdown).toContain(`sessionId: ${result!.sessionId}\n`);
+  });
 });
 
 // ---------------------------------------------------------------------------
