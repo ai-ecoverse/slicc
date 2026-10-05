@@ -587,6 +587,10 @@ wildcard scope only warn. A **multi-line paste** gets its own warning because th
 single-line input joins the breaks itself — silently mangling a PEM key the
 line-oriented stores would reject anyway (see [`docs/secrets.md`](secrets.md)).
 
+## Freezer card delete affordance (`<slicc-freezer-card deletable>`)
+
+`deletable` (reflected boolean) adds a trailing `trash-2` `<button part="delete">` whose `aria-label` is `Delete “<title>”` (kept in sync with `title`). It is `display: none` in the collapsed rail — out of layout and tab order — and fades in on row `:hover` / `:focus-within` when `expanded`. A click stops propagation (the row never thaws) and fires `freezer-card-delete` (composed, bubbling, `detail.slug`). The host owns confirmation and deletion; the webapp sets `deletable` only on non-live rows of the leader rail.
+
 ## Slotted containment + chat-prose wrapping
 
 Extended reference for two related Conventions bullets in the package guide.
