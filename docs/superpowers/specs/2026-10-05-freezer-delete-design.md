@@ -42,17 +42,17 @@ are #2272 and #1795, neither mentions deletion).
 `key` below = the row's `sessionId` when trusted (see 1a), else the archive
 filename without `.md` — the same fallback `curateFrozenSessionMemories` uses.
 
-| Artifact                      | Path                                                                   |
-| ----------------------------- | ---------------------------------------------------------------------- |
-| Index row                     | `/sessions/index.json`                                                 |
-| Markdown archive              | `/sessions/<filename>`                                                 |
-| Memory v2 JSONL sidecar       | `/sessions/<base>.jsonl` (`sidecarPathForArchive`)                     |
-| Persisted `/tmp` attachments  | `/sessions/attachments/<initial-base>/` (keyed by the PRE-rename name) |
-| Complete snapshot bundle      | `/sessions/data/<sessionId>/` and staging `/sessions/data/.tmp-<id>`   |
-| Live-curation delta archives  | `/sessions/.live-deltas/<key>-<from>-<to>.md`                          |
-| Curator receipts              | `/sessions/.curated/<archive-or-delta basename>`                       |
-| Curator per-pass state        | `/sessions/.curation/<archive-or-delta base>/`                         |
-| Keyword search index (shared) | `/sessions/.search-index.json` (holds up to 4 KB body per doc)         |
+| Artifact                      | Path                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------ |
+| Index row                     | `/sessions/index.json`                                                                     |
+| Markdown archive              | `/sessions/<filename>`                                                                     |
+| Memory v2 JSONL sidecar       | `/sessions/<base>.jsonl` (`sidecarPathForArchive`)                                         |
+| Persisted `/tmp` attachments  | `/sessions/attachments/<attachmentsKey>/` (initial filename base, recorded in frontmatter) |
+| Complete snapshot bundle      | `/sessions/data/<sessionId>/` and staging `/sessions/data/.tmp-<id>`                       |
+| Live-curation delta archives  | `/sessions/.live-deltas/<key>-<from>-<to>.md`                                              |
+| Curator receipts              | `/sessions/.curated/<archive-or-delta basename>`                                           |
+| Curator per-pass state        | `/sessions/.curation/<archive-or-delta base>/`                                             |
+| Keyword search index (shared) | `/sessions/.search-index.json` (holds up to 4 KB body per doc)                             |
 
 Not owned: scoop compaction snapshots under `/scoops/<folder>/sessions/<jid>/`
 (per-scoop, not freezer-managed — same rule as `discardLiveSnapshot`); memory
@@ -90,8 +90,11 @@ filesystem call:
 - `isSafeArchiveFilename(name)`: non-empty basename, ends in `.md`, no `/`,
   `\`, NUL, not `.`/`..`.
 - `isSafeSessionKey(key)`: `/^[A-Za-z0-9._-]+$/` and not `.`/`..`.
-- Attachment dirs taken from archive message paths must resolve to an
-  immediate child of `/sessions/attachments/`.
+- Attachment dirs are never inferred from message paths (a user can attach
+  any VFS file, including another session's attachment). The freeze records
+  its own dir as `attachmentsKey:` frontmatter (the initial filename base);
+  delete removes only that dir and `/sessions/attachments/<current base>`,
+  each validated with `isSafeSessionKey`.
 
 An unsafe row returns `'unsafe'` and touches nothing.
 
@@ -116,7 +119,7 @@ Inside ONE `serializeIndexWrite` callback (non-reentrant: use only
 2. `removeFrozenSessionArtifacts(vfs, row, { trustedKey })` (shared helper,
    also used by 1e/1f) removes, tolerating ONLY `ENOENT`, collecting every
    other error and continuing: snapshot bundle + staging dir; sidecar;
-   attachment dirs found by parsing the archive's message attachment paths;
+   the attachment dirs the archive owns (`attachmentsKey:` + current base);
    live-delta archives matching `^<key>-\d+-\d+\.md$` plus each delta's
    receipt and curation dir; the archive's receipt and curation dir; then —
    only if nothing so far failed — the sidecar and the archive itself. The
@@ -319,6 +322,10 @@ Verification: full `verifying-before-push` pass — `lint`, `typecheck`,
 touched-file debt gate.
 
 ## Known limitations
+
+- Archives frozen before `attachmentsKey:` existed and later renamed by
+  enrichment leave their pre-rename `/sessions/attachments/pending-…/` dir
+  on disk when deleted (ownership cannot be proven, so it is never guessed).
 
 - Rows whose index was rebuilt before #3807 lost their per-freeze UUID; their
   `/sessions/data/<uuid>/` bundle cannot be found by delete and stays on disk.
