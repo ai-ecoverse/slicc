@@ -70,6 +70,7 @@ import {
   slugify,
   upsertSessionsIndexEntry,
 } from '../transcript/frozen-archive-writer.js';
+import { isChatKeyId } from '../transcript/frozen-session-identity.js';
 import {
   copySessionJsonl,
   loadFrozenArchive,
@@ -1416,15 +1417,7 @@ async function commitEnrichedArchive(
     icon,
     preserveMemoryPending
   );
-  try {
-    await replaceIndexEntry(vfs, entry.filename, updatedEntry);
-  } catch (err) {
-    log.warn('Enrichment index update failed (entry may stay pending)', {
-      filename: entry.filename,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
+  if (!(await commitIndexSwap(vfs, entry, updatedEntry))) return null;
 
   if (newPath !== oldPath) {
     try {
@@ -1606,49 +1599,142 @@ async function stampMemoryCurated(vfs: WritableVfsClient, filename: string): Pro
 }
 
 /**
+ * How {@link replaceIndexEntry} resolved an enrichment's index swap:
+ * `replaced` / `prepended` wrote the replacement; `superseded` (a rival
+ * enrichment already moved the session on) and `deleted` (the user deleted
+ * it mid-pass) wrote nothing and dropped this pass's renamed copy.
+ */
+type ReplaceIndexOutcome = 'replaced' | 'prepended' | 'superseded' | 'deleted';
+
+/**
  * Swap one entry in the sessions index by filename. Used by the
  * enrichment pass to flip a `pending-…` entry over to its renamed
- * canonical form. Always dedupes by `replacement.filename` so a row
- * with the same target name is never duplicated when `oldFilename`
- * isn't found in the index. Writes are serialized via `serializeIndexWrite`.
+ * canonical form. Writes are serialized via `serializeIndexWrite`.
+ *
+ * When the old row is gone, the archive decides: still on disk means the
+ * index was lost or rebuilt (prepend the replacement, as before); gone
+ * means the session was deleted — unless a row already carries the
+ * replacement's filename or its one `sessionId`, i.e. a rival won.
  */
 async function replaceIndexEntry(
   vfs: WritableVfsClient,
   oldFilename: string,
   replacement: FrozenSessionIndexEntry
-): Promise<void> {
-  const run = async (): Promise<void> => {
-    let existing: FrozenSessionIndexEntry[] = [];
-    try {
-      const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
-      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
-    } catch (err) {
-      if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-      // No index — nothing to replace; write the entry as the only row so
-      // the rename is still visible to the panel on next reload.
-    }
+): Promise<ReplaceIndexOutcome> {
+  const run = async (): Promise<ReplaceIndexOutcome> => {
+    const existing = await readIndexForReplace(vfs);
     const idx = existing.findIndex((e) => e.filename === oldFilename);
-    let updated: FrozenSessionIndexEntry[];
-    if (idx === -1) {
-      // Old entry not in the index — prepend the replacement, but strip
-      // any pre-existing row already pointing at `replacement.filename`
-      // so concurrent rename-then-replace flows don't leave duplicates.
-      updated = [replacement, ...existing.filter((e) => e.filename !== replacement.filename)];
-    } else {
-      updated = existing.slice();
+    if (idx !== -1) {
+      const updated = existing.slice();
       updated[idx] = replacement;
-      // Drop any other row sharing the replacement's filename (e.g. the
-      // canonical row already exists alongside the stale pending one).
-      updated = updated.filter((e, i) => i === idx || e.filename !== replacement.filename);
+      const deduped = updated.filter((e, i) => i === idx || e.filename !== replacement.filename);
+      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(deduped, null, 2));
+      return 'replaced';
     }
-    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    const outcome = await resolveMissingOldRow(vfs, existing, oldFilename, replacement);
+    if (outcome === 'prepended') {
+      const updated = [replacement, ...existing.filter((e) => e.filename !== replacement.filename)];
+      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    } else if (outcome === 'replaced') {
+      // The canonical row already exists (#718): swap it in place, never duplicate.
+      const updated = existing.map((e) => (e.filename === replacement.filename ? replacement : e));
+      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    } else {
+      await dropUnreferencedCopy(vfs, existing, oldFilename, replacement.filename);
+    }
+    return outcome;
   };
-  // Serialized with every other index writer in this realm so writers run
-  // strictly in arrival order; each call still surfaces its own error.
-  const next = serializeIndexWrite(run);
-  return next;
+  return serializeIndexWrite(run);
+}
+
+/** The index for {@link replaceIndexEntry}: missing is empty; a read or parse fault throws. */
+async function readIndexForReplace(vfs: WritableVfsClient): Promise<FrozenSessionIndexEntry[]> {
+  try {
+    const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
+    const parsed = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
+  } catch (err) {
+    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
+    return [];
+  }
+}
+
+/**
+ * The old row is gone. A row already carrying the replacement's filename is
+ * the canonical row (#718) — replace it in place. Otherwise the ONE row with
+ * the replacement's trusted `sessionId` means a rival enrichment won; else the
+ * old archive decides between a lost index (prepend) and a delete.
+ */
+async function resolveMissingOldRow(
+  vfs: WritableVfsClient,
+  existing: readonly FrozenSessionIndexEntry[],
+  oldFilename: string,
+  replacement: FrozenSessionIndexEntry
+): Promise<ReplaceIndexOutcome> {
+  if (existing.some((e) => e.filename === replacement.filename)) return 'replaced';
+  const sessionId = replacement.sessionId;
+  const sameId =
+    sessionId && !isChatKeyId(sessionId) ? existing.filter((e) => e.sessionId === sessionId) : [];
+  if (sameId.length === 1) return 'superseded';
+  return (await archiveExists(vfs, `${SESSIONS_DIR}/${oldFilename}`)) ? 'prepended' : 'deleted';
+}
+
+/** `false` only for a definite ENOENT — any other stat fault keeps the archive "present". */
+async function archiveExists(vfs: WritableVfsClient, path: string): Promise<boolean> {
+  try {
+    await vfs.stat(path);
+    return true;
+  } catch (err) {
+    return (err as { code?: unknown } | null)?.code !== 'ENOENT';
+  }
+}
+
+/** Remove this pass's renamed archive + sidecar unless a row already points at them. */
+async function dropUnreferencedCopy(
+  vfs: WritableVfsClient,
+  existing: readonly FrozenSessionIndexEntry[],
+  oldFilename: string,
+  newFilename: string
+): Promise<void> {
+  if (newFilename === oldFilename || existing.some((e) => e.filename === newFilename)) return;
+  try {
+    await vfs.rm(`${SESSIONS_DIR}/${newFilename}`);
+  } catch {
+    /* already gone */
+  }
+  try {
+    await removeSessionJsonl(vfs, newFilename);
+  } catch {
+    /* already gone */
+  }
+}
+
+/** Swap the row; `false` when the pass must stop (index fault, a rival won, or deleted). */
+async function commitIndexSwap(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry,
+  updated: FrozenSessionIndexEntry
+): Promise<boolean> {
+  let outcome: ReplaceIndexOutcome;
+  try {
+    outcome = await replaceIndexEntry(vfs, entry.filename, updated);
+  } catch (err) {
+    log.warn('Enrichment index update failed (entry may stay pending)', {
+      filename: entry.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+  if (outcome === 'superseded' || outcome === 'deleted') {
+    // The session moved on while this pass ran — a rival enrichment won or
+    // the user deleted it. The index lock already dropped this pass's copy.
+    log.info('Enrichment dropped — the session changed during the pass', {
+      filename: entry.filename,
+      outcome,
+    });
+    return false;
+  }
+  return true;
 }
 
 /**
