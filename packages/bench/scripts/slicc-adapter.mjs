@@ -337,27 +337,21 @@ export function lastTurnProviderError(result) {
   const last = (agent?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
   if (last?.stopReason === 'error')
     return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
-  return result?.arm ? armAgentDied(result.arm) : null;
+  return result?.arm ? armAgentDied(result) : null;
 }
 
 /**
- * An arm whose agent exited non-zero without writing answer.txt: its model call died, and the
- * agent's one-shot scoop, with the turn's error, is gone before the transcript export, so the
- * check above cannot see it. In benchmark 37285459938 (GPT-6.1 Sol @low, a Bedrock 500 window on
- * 2026-10-05), 12 of 70 runs ended this way, every driver transcript on an empty assistant
- * section, and were judged at 0.15 against 0.40 for the rest.
+ * An arm whose agent exited non-zero with no answer to judge: its model call died, and the agent's
+ * one-shot scoop, with the turn's error, is gone before the transcript export, so the check above
+ * cannot see it. "No answer" is the judge's own `finalText` (collectArmRun: answer.txt, else
+ * transcript.md's last assistant words, else the scoop's), so a run that did answer is judged.
+ * In benchmark 37285459938 (GPT-6.1 Sol @low, a Bedrock 500 window on 2026-10-05), 26 of 88 runs
+ * ended this way, every driver transcript on an empty assistant section, and were judged at 0.15
+ * against 0.40 for the rest.
  */
-function armAgentDied(arm) {
-  const code = arm.result?.exitCode;
-  if (!code) return null;
-  const answer = (arm.files ?? []).find((f) => f.path?.endsWith('/answer.txt'));
-  if (
-    answer &&
-    Buffer.from(answer.base64 ?? '', 'base64')
-      .toString('utf8')
-      .trim()
-  )
-    return null;
+function armAgentDied(result) {
+  const code = result.arm.result?.exitCode;
+  if (!code || String(result.finalText ?? '').trim()) return null;
   return `the arm's agent exited ${code} without an answer`;
 }
 
