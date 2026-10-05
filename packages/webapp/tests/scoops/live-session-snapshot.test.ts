@@ -97,6 +97,9 @@ describe('snapshotLiveSession', () => {
     expect(entry.coneLabel).toBeUndefined();
     const archive = parseFrozenArchive(vfs.files.get(result.transcriptPath)!);
     expect(archive.live).toBe(true);
+    expect(archive.id).toBe('session-cone');
+    expect(archive.sessionId).toBe(result.entry.sessionId);
+    expect(archive.sessionId).not.toBe(archive.id);
     expect(archive.messages.map((m) => m.content)).toEqual(['fix the build', 'on it']);
   });
 
@@ -385,6 +388,9 @@ describe('finalizeLiveSnapshot', () => {
     expect(row.compactions).toBe(1);
     const text = vfs.files.get(transcriptPath)!;
     expect(text).not.toContain('live: true');
+    expect(text).toContain(`sessionId: ${entry.sessionId}`);
+    expect(parseFrozenArchive(text).sessionId).toBe(entry.sessionId);
+    expect(parseFrozenArchive(text).id).toBe('session-cone');
     expect(text).toMatch(/^---\nid: /);
     expect(parseFrozenArchive(text).messages).toHaveLength(1);
     // Nothing left to finalize, and the next round starts a NEW snapshot.

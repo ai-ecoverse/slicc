@@ -92,7 +92,8 @@ async function captureCompleteSnapshotFor(
   const { getTranscriptExportService } = await import('../../transcript/export-provider.js');
   await getTranscriptExportService().captureFrozen(
     {
-      sessionId: frozen.sessionId ?? frozen.archive.id,
+      sessionId:
+        frozen.sessionId ?? frozen.archive.sessionId ?? frozen.filename.replace(/\.md$/i, ''),
       title: frozen.archive.title,
       frozenAt: frozen.archive.frozenAt,
       createdAt: frozen.archive.createdAt,
