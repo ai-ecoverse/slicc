@@ -676,8 +676,12 @@ export class ScoopCompletionService {
   }
 
   /**
-   * `timeoutMs === 0` is an EXPLICIT immediate timeout. Only `undefined`
-   * / negative means "wait indefinitely".
+   * `timeoutMs === 0` is an EXPLICIT immediate timeout (snapshot of already-
+   * known completions). Only `undefined` / negative means "wait indefinitely".
+   *
+   * Zero must not go through `setTimeout(..., 0)`: that schedules a macrotask
+   * whose delay grows under event-loop load (CI observed 587ms), so "immediate"
+   * would flake against any wall-clock bound.
    */
   private async awaitScoopWaiters(
     promises: Promise<void>[],
@@ -685,6 +689,7 @@ export class ScoopCompletionService {
     signal?: AbortSignal
   ): Promise<void> {
     if (promises.length === 0) return;
+    if (timeoutMs === 0) return;
     if (!signal && (timeoutMs == null || timeoutMs < 0)) {
       await Promise.all(promises);
       return;
@@ -693,7 +698,7 @@ export class ScoopCompletionService {
     let onAbort: (() => void) | null = null;
     try {
       const choices: Promise<void>[] = [Promise.all(promises).then(() => {})];
-      if (timeoutMs != null && timeoutMs >= 0) {
+      if (timeoutMs != null && timeoutMs > 0) {
         choices.push(
           new Promise<void>((resolve) => {
             timer = setTimeout(resolve, timeoutMs);
