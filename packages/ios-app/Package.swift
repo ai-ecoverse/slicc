@@ -17,7 +17,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/Lakr233/libghostty-spm", exact: "1.6.20260922"),
+        .package(url: "https://github.com/Lakr233/libghostty-spm", exact: "1.6.20260928"),
         .package(
             url: "https://github.com/huggingface/swift-huggingface",
             .upToNextMinor(from: "0.11.0")),
