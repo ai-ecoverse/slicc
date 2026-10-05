@@ -16,6 +16,7 @@ function archive(live: boolean): string {
     'frozenAt: 2026-09-02T10:00:00.000Z',
     'messageCount: 1',
     'id: sid-1',
+    'sessionId: sid-1',
     'cone: cone',
     ...(live ? ['live: true', 'liveThrough: 42', 'compactions: 2'] : []),
     '---',

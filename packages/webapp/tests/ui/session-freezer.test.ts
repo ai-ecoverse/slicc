@@ -2857,6 +2857,26 @@ describe('freezeConeSession — sessionId generation', () => {
     expect(index[0]!.sessionId).toBe(result!.sessionId);
   });
 
+  it('writes sessionId in frontmatter without reusing the cone chat key', async () => {
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [userMessage('a'), assistantMessage('b'), userMessage('c'), assistantMessage('d')],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const vfs = makeFakeVfs();
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+    const markdown = vfs.files.get(`/sessions/${result!.filename}`)!;
+    const parsed = parseFrozenArchive(markdown);
+    expect(parsed.id).toBe('session-cone');
+    expect(parsed.sessionId).toBe(result!.sessionId);
+    expect(parsed.sessionId).not.toBe(parsed.id);
+  });
+
   it('sessionId is preserved through enrichment rename', async () => {
     mockRunOneOffCompactionCall
       .mockResolvedValueOnce('- bullet')
@@ -2896,6 +2916,9 @@ describe('freezeConeSession — sessionId generation', () => {
       vfs as unknown as Parameters<typeof readSessionsIndex>[0]
     );
     expect(index[0]!.sessionId).toBe(originalSessionId);
+    const renamed = vfs.files.get(`/sessions/${updated!.filename}`)!;
+    expect(parseFrozenArchive(renamed).sessionId).toBe(originalSessionId);
+    expect(parseFrozenArchive(renamed).id).toBe('session-cone');
   });
 
   it('two sequential freezes produce distinct sessionIds', async () => {

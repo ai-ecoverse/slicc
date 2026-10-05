@@ -98,6 +98,7 @@ export async function loadFrozenArchive(
     | 'liveThrough'
     | 'compactions'
     | 'curatedThrough'
+    | 'sessionId'
   > & { id?: string; sidecar?: string }
 > {
   const parsed = parseFrozenArchive(markdown);

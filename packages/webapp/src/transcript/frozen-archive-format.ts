@@ -65,6 +65,8 @@ export interface FrozenSessionIndexEntry {
 
 export interface FrozenSessionArchive {
   id: string;
+
+  sessionId?: string;
   title: string;
   frozenAt: string;
   createdAt: number;
@@ -119,6 +121,7 @@ export function parseFrozenArchive(
   | 'liveThrough'
   | 'compactions'
   | 'curatedThrough'
+  | 'sessionId'
 > & { id?: string; sidecar?: string } {
   let body = markdown;
   let title = 'Untitled';
@@ -133,6 +136,7 @@ export function parseFrozenArchive(
     | 'liveThrough'
     | 'compactions'
     | 'curatedThrough'
+    | 'sessionId'
   > & { id?: string; sidecar?: string } = {};
 
   const fmMatch = body.match(/^---\n([\s\S]*?)\n---\n+/);
@@ -178,6 +182,7 @@ function parseFrontmatterMeta(
   | 'liveThrough'
   | 'compactions'
   | 'curatedThrough'
+  | 'sessionId'
 > & { id?: string; sidecar?: string } {
   const meta: ReturnType<typeof parseFrontmatterMeta> = {};
   const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
@@ -202,6 +207,8 @@ function parseFrontmatterMeta(
   if (Number.isFinite(curatedThrough) && curatedThrough > 0) meta.curatedThrough = curatedThrough;
   const id = frontmatter.match(/^id:\s*(\S+)\s*$/m)?.[1];
   if (id) meta.id = id;
+  const sessionId = frontmatter.match(/^sessionId:\s*(\S+)\s*$/m)?.[1];
+  if (sessionId) meta.sessionId = sessionId;
 
   const sidecar = frontmatter.match(/^sidecar:\s*(\S+)\s*$/m)?.[1];
   if (sidecar) meta.sidecar = sidecar;

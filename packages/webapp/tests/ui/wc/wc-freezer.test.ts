@@ -219,6 +219,58 @@ describe('corrupt-index recovery', () => {
     expect(rebuilt[0].memorySkipped).toBeUndefined();
   });
 
+  it('rebuilds sessionId from frontmatter sessionId, never from the cone chat id', async () => {
+    const fs = await VirtualFS.create({ dbName: `wc-sessionid-${Math.random()}`, wipe: true });
+    await fs.mkdir('/sessions');
+    await fs.writeFile(
+      '/sessions/one.md',
+      [
+        '---',
+        'id: session-cone',
+        'sessionId: freeze-aaaa',
+        'title: "first"',
+        'frozenAt: "2026-06-04T09:00:00Z"',
+        'messageCount: 2',
+        'cone: cone',
+        '---',
+        '',
+      ].join('\n')
+    );
+    await fs.writeFile(
+      '/sessions/two.md',
+      [
+        '---',
+        'id: session-cone',
+        'sessionId: freeze-bbbb',
+        'title: "second"',
+        'frozenAt: "2026-06-04T10:00:00Z"',
+        'messageCount: 2',
+        'cone: cone',
+        '---',
+        '',
+      ].join('\n')
+    );
+    await fs.writeFile(
+      '/sessions/legacy.md',
+      [
+        '---',
+        'id: session-cone',
+        'title: "legacy"',
+        'frozenAt: "2026-06-03T09:00:00Z"',
+        'messageCount: 1',
+        '---',
+        '',
+      ].join('\n')
+    );
+
+    const rebuilt = await rebuildFreezerIndexFromArchives(fs);
+    expect(rebuilt.map((e) => [e.filename, e.sessionId])).toEqual([
+      ['two.md', 'freeze-bbbb'],
+      ['one.md', 'freeze-aaaa'],
+      ['legacy.md', undefined],
+    ]);
+  });
+
   it('a memorySkipped archive keeps its opt-out through a rebuild (Codex P2)', async () => {
     const fs = await seededFs();
     await fs.writeFile(

@@ -383,6 +383,7 @@ async function writeFrozenArchive(
     );
     const archive: FrozenSessionArchive = {
       id: session.id,
+      sessionId,
       title,
       frozenAt,
       createdAt: session.createdAt,

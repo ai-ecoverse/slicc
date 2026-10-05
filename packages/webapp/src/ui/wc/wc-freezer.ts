@@ -146,7 +146,8 @@ function entryFromArchive(filename: string, text: string): FrozenSessionIndexEnt
     ...(parsed.live && parsed.liveThrough ? { liveThrough: parsed.liveThrough } : {}),
     ...(parsed.live && parsed.compactions ? { compactions: parsed.compactions } : {}),
     ...(parsed.curatedThrough ? { curatedThrough: parsed.curatedThrough } : {}),
-    ...(parsed.id ? { sessionId: parsed.id } : {}),
+
+    ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
     ...(pending ? { pendingEnrichment: true } : {}),
   };
 }
