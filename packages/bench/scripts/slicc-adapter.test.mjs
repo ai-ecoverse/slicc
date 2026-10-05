@@ -14,6 +14,7 @@ import {
   collectArmFiles,
   costTotals,
   decodeTranscriptPart,
+  driverAnswer,
   driverSections,
   driverSteps,
   expectedSkillNames,
@@ -2315,6 +2316,38 @@ describe('arm helpers', () => {
     expect(lastTurnProviderError({ transcript: dead })).toBeNull();
     const t = traceFromResult({ arm: { name: 'x' }, transcript: DOC, durationMs: 1000 });
     expect(t.metrics.steps).toBe(2);
+  });
+
+  it('treats an arm agent that exited non-zero with no recovered answer as a run error', () => {
+    const file = (name, text) => ({
+      path: `/tmp/intent-arm/r/${name}`,
+      base64: Buffer.from(text).toString('base64'),
+    });
+    const run = (exitCode, files, scoopText = '') => ({
+      arm: { name: 'x', startedAt: 0, result: { exitCode }, files },
+      transcript: { conversations: [] },
+      finalText: driverAnswer(files) || scoopText,
+    });
+    const dead = file('transcript.md', '## user\n\ngoal\n\n## assistant\n\n');
+    const said = file('transcript.md', '## user\n\ngoal\n\n## assistant\n\nFINAL ANSWER: 7\n');
+    expect(lastTurnProviderError(run(1, [dead]))).toBe(
+      "the arm's agent exited 1 without an answer"
+    );
+    expect(lastTurnProviderError(run(1, [dead, file('answer.txt', '  \n')]))).toBe(
+      "the arm's agent exited 1 without an answer"
+    );
+
+    expect(lastTurnProviderError(run(1, [said]))).toBeNull();
+    expect(lastTurnProviderError(run(1, [dead], 'FINAL ANSWER: 7'))).toBeNull();
+    expect(
+      lastTurnProviderError(run(1, [dead, file('answer.txt', 'FINAL ANSWER: 42')]))
+    ).toBeNull();
+    expect(lastTurnProviderError(run(0, [dead]))).toBeNull();
+    expect(
+      lastTurnProviderError({ arm: { name: 'x', result: null, files: [] }, transcript: DOC })
+    ).toBeNull();
+
+    expect(lastTurnProviderError({ transcript: DOC })).toBeNull();
   });
 
   it('collects the driver files within a byte budget, skipping odd paths and failed reads', async () => {

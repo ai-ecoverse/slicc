@@ -245,8 +245,15 @@ export function lastTurnProviderError(result) {
     ? armConversation(result?.transcript, result.arm.startedAt ?? 0)
     : (result?.transcript?.conversations ?? []).filter((c) => c.kind === 'cone').at(-1);
   const last = (agent?.messages ?? []).filter((m) => m.role === 'assistant').at(-1);
-  if (last?.stopReason !== 'error') return null;
-  return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
+  if (last?.stopReason === 'error')
+    return String(last.errorMessage ?? last.error ?? 'provider error').slice(0, 300);
+  return result?.arm ? armAgentDied(result) : null;
+}
+
+function armAgentDied(result) {
+  const code = result.arm.result?.exitCode;
+  if (!code || String(result.finalText ?? '').trim()) return null;
+  return `the arm's agent exited ${code} without an answer`;
 }
 
 export function parseModelSpec(spec) {
