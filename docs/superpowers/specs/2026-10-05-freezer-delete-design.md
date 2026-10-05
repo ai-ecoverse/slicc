@@ -244,7 +244,7 @@ lives in its own module and the refresh/icon helpers move to module scope):
   live rows, unknown slugs, and a slug whose dialog/delete is already open.
 - Dialog via `buildConeDialog` + button styles exported from
   `wc-cone-actions.ts`: heading "Delete frozen chat?", body "“<title>” and its
-  transcript will be permanently deleted. Memories already learned from it
+  transcript will be deleted. Memories already learned from it
   are kept." (title via `textContent`), Cancel / Delete (`BTN_DANGER`).
 - Delete: disable both buttons, `await deleteFrozenSession(writer,
 { filename, sessionId })`.
@@ -322,6 +322,12 @@ Verification: full `verifying-before-push` pass — `lint`, `typecheck`,
 touched-file debt gate.
 
 ## Known limitations
+
+- The agentic curator's persisted session transcript
+  (`/sessions/agent-memory-curator[-<folder>]-<ts>.md`) can contain the
+  archive text and is not removed by delete (hence the dialog says "deleted",
+  not "permanently deleted"). Follow-up: record the curator transcript path
+  in the per-pass curation state so the sweep can remove it.
 
 - Archives frozen before `attachmentsKey:` existed and later renamed by
   enrichment leave their pre-rename `/sessions/attachments/pending-…/` dir
