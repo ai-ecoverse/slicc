@@ -3520,7 +3520,10 @@ describe('enrichPendingSession — a delete or a rival enrichment mid-pass', () 
       title: 'Rival title',
     };
     onRenamedWrite(vfs, async () => {
-      vfs.files.delete(`/sessions/${frozen.filename}`);
+      // The rival has swapped the index row and written its own archive, but its
+      // cleanup of the old draft archive runs outside the lock and hasn't landed
+      // yet — the old archive is still on disk. Without the sessionId-based
+      // 'superseded' rule this would be indistinguishable from a lost index.
       vfs.files.set(`/sessions/${winner.filename}`, 'rival archive');
       vfs.files.set(SESSIONS_INDEX_PATH, JSON.stringify([winner]));
     });
