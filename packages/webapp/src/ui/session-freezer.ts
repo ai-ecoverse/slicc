@@ -1695,15 +1695,21 @@ async function dropUnreferencedCopy(
   newFilename: string
 ): Promise<void> {
   if (newFilename === oldFilename || existing.some((e) => e.filename === newFilename)) return;
+  const archivePath = `${SESSIONS_DIR}/${newFilename}`;
   try {
-    await vfs.rm(`${SESSIONS_DIR}/${newFilename}`);
-  } catch {
-    /* already gone */
+    await vfs.rm(archivePath);
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code !== 'ENOENT') {
+      log.warn('Enrichment could not drop its renamed copy', { path: archivePath, error: err });
+    }
   }
+  const sidecarPath = sidecarPathForArchive(newFilename);
   try {
     await removeSessionJsonl(vfs, newFilename);
-  } catch {
-    /* already gone */
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code !== 'ENOENT') {
+      log.warn('Enrichment could not drop its renamed copy', { path: sidecarPath, error: err });
+    }
   }
 }
 

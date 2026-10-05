@@ -3079,6 +3079,14 @@ describe('freezeConeSession — sessionId generation', () => {
     const renamed = vfs.files.get(`/sessions/${updated!.filename}`)!;
     expect(parseFrozenArchive(renamed).sessionId).toBe(originalSessionId);
     expect(parseFrozenArchive(renamed).id).toBe('session-cone');
+
+    // The renamed archive file's own frontmatter carries both lines too —
+    // `removeFrozenSessionArtifacts` trusts `sessionId:`/`attachmentsKey:` in
+    // THIS file, not the index, to decide what a later delete may remove.
+    const originalAttachmentsKey = frozen!.archive.attachmentsKey!;
+    const renamedArchive = vfs.files.get(`/sessions/${updated!.filename}`);
+    expect(renamedArchive).toContain(`sessionId: ${originalSessionId}`);
+    expect(renamedArchive).toContain(`attachmentsKey: ${originalAttachmentsKey}`);
   });
 
   it('two sequential freezes produce distinct sessionIds', async () => {

@@ -45,7 +45,8 @@ function showFailure(body: HTMLElement): void {
     line = body.ownerDocument.createElement('p');
     line.setAttribute('data-freezer-delete-error', '');
     line.setAttribute('role', 'alert');
-    line.style.cssText = 'font-size:0.8125rem;margin:0.5rem 0 0;color:#d23;';
+    line.style.cssText =
+      'font-size:0.8125rem;margin:0.5rem 0 0;color:var(--s2-negative-color, #d23);';
     body.after(line);
   }
   line.textContent = FAILED_COPY;

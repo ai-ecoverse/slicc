@@ -536,6 +536,38 @@ describe('runNewSessionFreeze — write-first + race', () => {
       expect.objectContaining({ filename: enriched.filename })
     );
   });
+
+  it('a thrown findIndexedFrozenRow does not block the curator or leak an unhandled rejection', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    mockFreezeConeSession.mockResolvedValue({ ...pending, memoryPending: true as const });
+    mockEnrichPendingSession.mockResolvedValue(null);
+    mockFindIndexedFrozenRow.mockRejectedValue(new Error('lock request failed'));
+    mockCurateFrozenSessionMemories.mockResolvedValue(enriched);
+    const onSessionSettled = vi.fn();
+
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await runNewSessionFreeze({
+        vfs: {} as never,
+        agenticMemorySpawn: vi.fn(),
+        onSessionSettled,
+      });
+      await vi.waitFor(() => expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce());
+      await settle();
+      // `unhandledRejection` fires a tick after the microtask queue drains.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    expect(onSessionSettled).toHaveBeenCalledOnce();
+    expect(onSessionSettled).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: enriched.filename })
+    );
+    expect(rejections).toEqual([]);
+  });
 });
 
 describe('runNewSessionFreeze — captureCompleteSnapshot hook', () => {
