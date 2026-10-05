@@ -521,6 +521,21 @@ describe('runNewSessionFreeze — write-first + race', () => {
 
     expect(onSessionSettled).not.toHaveBeenCalled();
   });
+
+  it('legacy background enrichment settles the row a rival renamed', async () => {
+    const enrich = deferred<FrozenSessionIndexEntry | null>();
+    mockEnrichPendingSession.mockReturnValue(enrich.promise);
+    mockFindIndexedFrozenRow.mockResolvedValue({ kind: 'present', row: enriched });
+    const onSessionSettled = vi.fn();
+
+    await runNewSessionFreeze({ vfs: {} as never, enrichmentRaceMs: 5, onSessionSettled });
+    enrich.resolve(null);
+    await vi.waitFor(() => expect(onSessionSettled).toHaveBeenCalledOnce());
+
+    expect(onSessionSettled).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: enriched.filename })
+    );
+  });
 });
 
 describe('runNewSessionFreeze — captureCompleteSnapshot hook', () => {

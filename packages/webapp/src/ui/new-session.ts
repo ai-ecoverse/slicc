@@ -160,12 +160,14 @@ async function runAgenticMemoryFreeze(
 /**
  * `current` re-pointed at its index row (a rival enrichment may have renamed
  * it), or `null` when the index says the user deleted it. An index that
- * cannot say (`unknown`) keeps today's behavior.
+ * cannot say (`unknown`) keeps today's behavior. Generic so both the
+ * `FrozenSession` the agentic pass carries and the bare
+ * `FrozenSessionIndexEntry` the legacy race settles with can be followed.
  */
-async function stillFrozen(
+async function stillFrozen<T extends FrozenSessionIndexEntry>(
   vfs: WritableVfsClient,
-  current: FrozenSession
-): Promise<FrozenSession | null> {
+  current: T
+): Promise<T | null> {
   const presence = await findIndexedFrozenRow(vfs, current);
   if (presence.kind === 'absent') return null;
   if (presence.kind === 'present' && presence.row.filename !== current.filename) {
@@ -559,9 +561,8 @@ export async function runNewSessionFreeze(
       enriched: updated?.filename ?? null,
     });
     opts.onBackgroundEnriched?.(updated);
-    const settled = updated ?? frozen;
-    // Deleted while enrichment ran: nothing to tell the gelatiere about.
-    if ((await findIndexedFrozenRow(opts.vfs, settled)).kind === 'absent') return;
+    const settled = await stillFrozen(opts.vfs, updated ?? frozen);
+    if (!settled) return; // deleted while enrichment ran
     opts.onSessionSettled?.(settled);
   });
   return frozen;
