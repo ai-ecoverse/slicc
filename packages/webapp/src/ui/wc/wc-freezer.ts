@@ -200,7 +200,10 @@ function entryFromArchive(filename: string, text: string): FrozenSessionIndexEnt
     ...(parsed.live && parsed.liveThrough ? { liveThrough: parsed.liveThrough } : {}),
     ...(parsed.live && parsed.compactions ? { compactions: parsed.compactions } : {}),
     ...(parsed.curatedThrough ? { curatedThrough: parsed.curatedThrough } : {}),
-    ...(parsed.id ? { sessionId: parsed.id } : {}),
+    // Per-freeze UUID only. Frontmatter `id` is the live chat key
+    // (`session-<folder>`); copying it here collapsed every freeze on a
+    // cone onto one sessionId after a corrupt-index rebuild (#3807).
+    ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
     ...(pending ? { pendingEnrichment: true } : {}),
   };
 }

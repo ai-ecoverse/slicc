@@ -268,6 +268,7 @@ export function formatArchiveAsMarkdown(rawArchive: FrozenSessionArchive): strin
   const header =
     `---\n` +
     `id: ${archive.id}\n` +
+    (archive.sessionId ? `sessionId: ${archive.sessionId}\n` : '') +
     `title: ${JSON.stringify(archive.title)}\n` +
     `frozenAt: ${archive.frozenAt}\n` +
     `createdAt: ${archive.createdAt}\n` +

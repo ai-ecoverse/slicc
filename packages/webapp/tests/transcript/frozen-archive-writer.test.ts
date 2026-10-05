@@ -66,6 +66,7 @@ describe('formatArchiveAsMarkdown', () => {
   it('round-trips messages, provenance and the live marker through parseFrozenArchive', () => {
     const markdown = formatArchiveAsMarkdown({
       id: 'sid',
+      sessionId: 'freeze-uuid',
       title: 'Fix "the" build',
       frozenAt: '2026-09-02T10:00:00.000Z',
       createdAt: 1,
@@ -79,6 +80,7 @@ describe('formatArchiveAsMarkdown', () => {
       compactions: 3,
     });
     expect(markdown).toMatch(/^---\nid: sid\n/);
+    expect(markdown).toContain('sessionId: freeze-uuid\n');
     expect(markdown).toContain('live: true\nliveThrough: 2\ncompactions: 3\n');
     expect(markdown).toContain('## User\nfix "the" build');
     const parsed = parseFrozenArchive(markdown);
@@ -87,6 +89,7 @@ describe('formatArchiveAsMarkdown', () => {
     expect(parsed.liveThrough).toBe(2);
     expect(parsed.compactions).toBe(3);
     expect(parsed.id).toBe('sid');
+    expect(parsed.sessionId).toBe('freeze-uuid');
     expect(parsed.cone).toBe('cone-research');
     expect(parsed.coneLabel).toBe('Research');
     expect(parsed.messages).toEqual([user, assistant]);

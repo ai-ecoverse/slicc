@@ -49,8 +49,11 @@ export interface FrozenSessionIndexEntry {
   /**
    * Stable opaque identifier for the frozen session. Generated with
    * `crypto.randomUUID()` before the quick filename is assigned and
-   * retained through title and filename rewrites. Legacy entries without
-   * this field continue to use `filename` as their lookup key.
+   * retained through title and filename rewrites. Distinct from the live
+   * chat key (`session-<folder>`), which archives still store as frontmatter
+   * `id`. An index rebuild copies frontmatter `sessionId` only — never `id`.
+   * Legacy entries without this field continue to use `filename` as their
+   * lookup key.
    */
   sessionId?: string;
   /**
@@ -146,7 +149,14 @@ export interface FrozenSessionIndexEntry {
 }
 
 export interface FrozenSessionArchive {
+  /** Live chat key (`session-<folder>`). Not the per-freeze UUID. */
   id: string;
+  /**
+   * Per-freeze UUID matching the index row and `/sessions/data/<uuid>/`.
+   * Written as its own frontmatter field so a rebuild does not confuse it
+   * with {@link id}.
+   */
+  sessionId?: string;
   title: string;
   frozenAt: string;
   createdAt: number;
@@ -230,6 +240,7 @@ export function parseFrozenArchive(
   | 'liveThrough'
   | 'compactions'
   | 'curatedThrough'
+  | 'sessionId'
 > & { id?: string; sidecar?: string } {
   let body = markdown;
   let title = 'Untitled';
@@ -244,6 +255,7 @@ export function parseFrozenArchive(
     | 'liveThrough'
     | 'compactions'
     | 'curatedThrough'
+    | 'sessionId'
   > & { id?: string; sidecar?: string } = {};
 
   // 1. Strip YAML-style frontmatter and pull out the title.
@@ -304,6 +316,7 @@ function parseFrontmatterMeta(
   | 'liveThrough'
   | 'compactions'
   | 'curatedThrough'
+  | 'sessionId'
 > & { id?: string; sidecar?: string } {
   const meta: ReturnType<typeof parseFrontmatterMeta> = {};
   const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
@@ -333,6 +346,8 @@ function parseFrontmatterMeta(
   if (Number.isFinite(curatedThrough) && curatedThrough > 0) meta.curatedThrough = curatedThrough;
   const id = frontmatter.match(/^id:\s*(\S+)\s*$/m)?.[1];
   if (id) meta.id = id;
+  const sessionId = frontmatter.match(/^sessionId:\s*(\S+)\s*$/m)?.[1];
+  if (sessionId) meta.sessionId = sessionId;
   // Memory v2 JSONL sidecar filename (basename under /sessions/).
   const sidecar = frontmatter.match(/^sidecar:\s*(\S+)\s*$/m)?.[1];
   if (sidecar) meta.sidecar = sidecar;

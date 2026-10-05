@@ -126,6 +126,9 @@ describe('freezeConeSession over a live snapshot', () => {
     expect(entries[0].liveThrough).toBeUndefined();
     const archive = parseFrozenArchive(vfs.files.get(live.transcriptPath)!);
     expect(archive.live).toBeUndefined();
+    expect(archive.sessionId).toBe(live.entry.sessionId);
+    expect(archive.id).toBe('session-cone');
+    expect(archive.sessionId).not.toBe(archive.id);
     // The UI store's full chat replaces the accumulated agent transcript.
     expect(archive.messages.map((m) => m.content)).toEqual(session.messages.map((m) => m.content));
   });
@@ -163,6 +166,9 @@ describe('freezeConeSession over a live snapshot', () => {
     expect(vfs.files.has(`/sessions/${frozen?.filename}`)).toBe(false);
     expect(parseFrozenArchive(vfs.files.get(`/sessions/${updated?.filename}`)!).title).toBe(
       'Build Fixed Twice'
+    );
+    expect(parseFrozenArchive(vfs.files.get(`/sessions/${updated?.filename}`)!).sessionId).toBe(
+      frozen?.sessionId
     );
   });
 

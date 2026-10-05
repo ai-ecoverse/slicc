@@ -66,7 +66,7 @@ import {
   upsertSessionsIndexEntryUnlocked,
   writeSessionsIndexUnlocked,
 } from '../transcript/frozen-archive-writer.js';
-import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
+import { chatSessionIdFor, PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import { agentMessagesToChatMessages } from './agent-message-to-chat.js';
 import type { ChatMessage } from './chat-types.js';
 
@@ -178,8 +178,10 @@ async function writeSnapshot(
     cone: folder,
     ...(folder !== PRIMARY_CONE_FOLDER && deps.cone.label ? { coneLabel: deps.cone.label } : {}),
   };
+  const sessionId = existing?.sessionId ?? crypto.randomUUID();
   const archive: FrozenSessionArchive = {
-    id: existing?.sessionId ?? crypto.randomUUID(),
+    id: chatSessionIdFor({ folder }),
+    sessionId,
     title,
     frozenAt,
     createdAt: merged[0]?.timestamp || now(),
@@ -196,7 +198,7 @@ async function writeSnapshot(
   };
   const entry: FrozenSessionIndexEntry = {
     filename,
-    sessionId: archive.id,
+    sessionId,
     title,
     frozenAt,
     messageCount: merged.length,

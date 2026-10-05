@@ -436,6 +436,7 @@ async function writeDeltaArchive(
 ): Promise<void> {
   const archive: FrozenSessionArchive = {
     id: source.sessionId,
+    sessionId: source.sessionId,
     title: source.title,
     frozenAt: source.frozenAt,
     createdAt: messages[0]?.timestamp ?? 0,
