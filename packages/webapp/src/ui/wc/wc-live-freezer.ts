@@ -453,7 +453,17 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     freezer: refs.freezer,
     openVfs,
     getEntries: () => frozenEntries,
-    getViewedId: () => currentFrozenSessionId,
+    // A frozen chat only counts as "viewed" while the thread is actually
+    // showing the freezer. `currentFrozenSessionId` is cleared by this
+    // rail's own `selectScoop` wrapper, but switcher clicks, URL context,
+    // and cone actions call `boot.selectScoop` directly — the same signal
+    // `viewingFrozen` uses in wc-live-callbacks.ts — so a chat left via one
+    // of those paths must not have its LIVE cone's thread/queue torn down
+    // by a later delete.
+    getViewedId: () =>
+      (refs.thread.getAttribute('context') ?? '').startsWith('freezer:')
+        ? currentFrozenSessionId
+        : null,
     leaveViewed: (entry) => {
       // Clear FIRST: selecting a cone loads its snapshot asynchronously and
       // keeps the old thread up if that fails.

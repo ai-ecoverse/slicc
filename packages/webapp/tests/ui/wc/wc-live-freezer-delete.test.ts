@@ -111,7 +111,7 @@ function harness() {
     holdQueuedPile: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
   });
-  return { freezer, handles, controller, selectScoop, unit };
+  return { freezer, handles, controller, selectScoop, unit, refs };
 }
 
 const cardFor = (freezer: HTMLElement, slug: string) =>
@@ -157,5 +157,45 @@ describe('Freezer rail → delete', () => {
       selectScoop.mock.invocationCallOrder[0]!
     );
     expect(handles.getViewedFrozenSessionId()).toBeNull();
+  });
+
+  it('does not tear down a live cone reached via the switcher/URL/cone-action path, even though currentFrozenSessionId is stale', async () => {
+    const { freezer, handles, controller, selectScoop, refs } = harness();
+    handles.refreshFreezer();
+    await vi.waitFor(() => expect(cardFor(freezer, FILE)).toBeDefined());
+    await handles.openFrozen(FILE);
+    expect(handles.getViewedFrozenSessionId()).toBe('sid-a');
+
+    // Leave the thawed chat via a path that bypasses this rail's own
+    // `selectScoop` wrapper — a switcher click, a URL-context restore, or a
+    // cone action all call `boot.selectScoop` directly and only
+    // `applyThreadContext` marks the thread as no longer showing the
+    // freezer. `currentFrozenSessionId` is left stale on purpose: that is
+    // the bug this test guards against.
+    refs.thread.setAttribute('context', 'cone:cone-research');
+    controller.loadMessages.mockClear();
+    selectScoop.mockClear();
+    mockDelete.mockClear();
+
+    cardFor(freezer, FILE)!.dispatchEvent(
+      new CustomEvent('freezer-card-delete', {
+        bubbles: true,
+        composed: true,
+        detail: { slug: FILE },
+      })
+    );
+    document.querySelector<HTMLButtonElement>('slicc-dialog [data-cone-action="delete"]')!.click();
+
+    await vi.waitFor(() => expect(mockDelete).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(document.querySelector('slicc-dialog [data-cone-action="delete"]')).toBeNull()
+    );
+
+    expect(
+      controller.loadMessages.mock.calls.some(
+        ([messages]) => Array.isArray(messages) && messages.length === 0
+      )
+    ).toBe(false);
+    expect(selectScoop).not.toHaveBeenCalled();
   });
 });
