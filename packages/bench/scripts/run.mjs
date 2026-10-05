@@ -755,6 +755,25 @@ export async function bootTwice(boot, journal, lane, log) {
   }
 }
 
+/**
+ * Tries per arm setup command. A model download cut mid-stream by the leader's fetch proxy
+ * stopped four of twenty shards of benchmark 37242939267 (2026-10-05); the next try usually
+ * succeeds, and `intent pull` skips the files it already has.
+ */
+export const ARM_SETUP_ATTEMPTS = 3;
+
+/** An arm setup command, retried when it fails on a reachable leader; a lost leader is the caller's to restart. */
+async function armSetup(leader, command, log, attempts = ARM_SETUP_ATTEMPTS) {
+  for (let i = 1; ; i++) {
+    try {
+      return await mustExec(leader, command, ARM_SETUP_TIMEOUT_MS);
+    } catch (err) {
+      if (err?.leaderDown || i >= attempts) throw err;
+      log(`arm setup \`${command}\` failed (try ${i} of ${attempts}), retrying: ${err.message}`);
+    }
+  }
+}
+
 /** A fresh leader when this one has served its share, then this run's skills staged on it. */
 async function prepareLeader(r, ctx, log) {
   const { lane, opts } = ctx;
@@ -768,7 +787,7 @@ async function prepareLeader(r, ctx, log) {
     // `staged`, so a fresh leader runs it again.
     for (const command of opts.arm?.setup ?? []) {
       const t0 = Date.now();
-      await mustExec(ctx.leader, command, ARM_SETUP_TIMEOUT_MS);
+      await armSetup(ctx.leader, command, log);
       log(`arm ${opts.arm.name} setup \`${command}\`: ${Math.round((Date.now() - t0) / 1000)} s`);
     }
   }

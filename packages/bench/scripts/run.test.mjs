@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { taskDigests, withDigests } from './format.mjs';
 import {
+  ARM_SETUP_ATTEMPTS,
   ARMS_FILE,
   ageSeconds,
   checkArmConditions,
@@ -1679,6 +1680,69 @@ describe('arm runs', () => {
     const err = vi.mocked(console.error);
     expect(JSON.stringify([log.mock.calls, q.mock.calls, err.mock?.calls ?? []])).toMatch(
       /intent pull --model 4b-vision/
+    );
+    expect(fake.commands.filter((c) => c.startsWith('intent pull'))).toHaveLength(
+      ARM_SETUP_ATTEMPTS
+    );
+    q.mockRestore();
+  });
+
+  it('retries an arm setup command that fails, and runs once a try succeeds', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    let failures = 0;
+    // The first two pulls fail the way a cut download does, the third succeeds.
+    const fake = leader({ failOn: { test: (c) => /^intent pull/.test(c) && failures++ < 2 } });
+    const log = vi.fn();
+    const code = await main(
+      [
+        '--set',
+        ownSet(dir),
+        '--models',
+        'm',
+        '--no-judge',
+        '--out',
+        out,
+        '--arm',
+        'intent-budget',
+        '--skills',
+        'builtin+arm',
+      ],
+      { ...fake.deps, log }
+    );
+    expect(code).toBe(0);
+    expect(fake.commands.filter((c) => c.startsWith('intent pull'))).toHaveLength(3);
+    expect(fake.commands.some((c) => c.startsWith('intent-arm --tool intent'))).toBe(true);
+    expect(JSON.stringify(log.mock.calls)).toMatch(/failed \(try 2 of 3\), retrying/);
+    q.mockRestore();
+  });
+
+  it('does not retry an arm setup command on a lost leader in place', async () => {
+    const dir = tmp();
+    const q = quiet();
+    const fake = leader({ down: (c) => /^intent pull/.test(c) });
+    await expect(
+      main(
+        [
+          '--set',
+          ownSet(dir),
+          '--models',
+          'm',
+          '--no-judge',
+          '--out',
+          join(dir, 'o'),
+          '--arm',
+          'intent-agent',
+          '--skills',
+          'builtin+arm',
+        ],
+        { ...fake.deps, log: vi.fn() }
+      )
+    ).resolves.not.toBe(0);
+    // One pull per leader: the first, then one after the lane's restart, never three in a row.
+    expect(fake.commands.filter((c) => c.startsWith('intent pull')).length).toBeLessThan(
+      ARM_SETUP_ATTEMPTS
     );
     q.mockRestore();
   });
