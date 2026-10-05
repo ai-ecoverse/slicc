@@ -72,8 +72,7 @@ files.
   `parseFrozenArchive`), preserved through enrichment rewrites and
   live-snapshot finalization. Rebuild prefers `sessionId:`; falls back to `id:`
   only when it is not a chat key (`/^session-/`); otherwise no `sessionId`.
-  `id:` keeps its current meaning. Issue draft saved in the session folder
-  (EMU account cannot create issues).
+  `id:` keeps its current meaning. Tracked as #3807; this branch fixes it.
 - **Trusted sessionId**: a row's `sessionId` is used for path derivation or
   matching only if no other row in the same index read shares it.
 - **Delete key**: `{ filename, sessionId? }` from the card. Match by
