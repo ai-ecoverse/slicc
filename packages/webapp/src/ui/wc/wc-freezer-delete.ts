@@ -17,8 +17,8 @@ export interface FreezerDeleteDeps {
   openVfs(): Promise<WcPageVfs>;
   /** The rows the rail last rendered. */
   getEntries(): readonly FrozenSessionIndexEntry[];
-  /** `sessionId ?? filename` of the frozen chat on screen, or null. */
-  getViewedId(): string | null;
+  /** Is this frozen chat the one currently showing in the thread? */
+  isViewing(entry: FrozenSessionIndexEntry): boolean;
   /** Leave a frozen chat that was just deleted while on screen. */
   leaveViewed(entry: FrozenSessionIndexEntry): void;
   refreshFreezer(): void;
@@ -97,7 +97,7 @@ export function wireFreezerDelete(deps: FreezerDeleteDeps): FreezerDeleteHandles
       if (result.status === 'failed') throw new Error(result.errors.join('; '));
       if (result.status !== 'deleted') {
         deps.log.warn('WC frozen chat delete skipped', { filename: entry.filename, ...result });
-      } else if (deps.getViewedId() === (entry.sessionId ?? entry.filename)) {
+      } else if (deps.isViewing(entry)) {
         deps.leaveViewed(entry);
       }
       if (open?.dialog === dialog) close();

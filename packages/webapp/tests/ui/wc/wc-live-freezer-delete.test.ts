@@ -63,13 +63,31 @@ const ARCHIVE = [
   '',
 ].join('\n');
 
-function harness() {
+function archiveFor(title: string): string {
+  return [
+    '---',
+    `title: "${title}"`,
+    '---',
+    '<!-- slicc:session-data',
+    JSON.stringify([{ id: 'u1', role: 'user', content: title, timestamp: 1 }]),
+    '-->',
+    '',
+    `# ${title}`,
+    '',
+  ].join('\n');
+}
+
+function harness(
+  opts: { index?: readonly Record<string, unknown>[]; archives?: Record<string, string> } = {}
+) {
+  const index = opts.index ?? INDEX;
+  const archives = opts.archives ?? { [FILE]: ARCHIVE };
   document.body.replaceChildren();
   const freezer = document.createElement('slicc-freezer');
   document.body.append(freezer);
   const files = new Map<string, string>([
-    ['/sessions/index.json', JSON.stringify(INDEX)],
-    [`/sessions/${FILE}`, ARCHIVE],
+    ['/sessions/index.json', JSON.stringify(index)],
+    ...Object.entries(archives).map(([name, content]) => [`/sessions/${name}`, content] as const),
   ]);
   const reader = {
     readFile: async (path: string) => {
@@ -191,6 +209,61 @@ describe('Freezer rail → delete', () => {
       expect(document.querySelector('slicc-dialog [data-cone-action="delete"]')).toBeNull()
     );
 
+    expect(
+      controller.loadMessages.mock.calls.some(
+        ([messages]) => Array.isArray(messages) && messages.length === 0
+      )
+    ).toBe(false);
+    expect(selectScoop).not.toHaveBeenCalled();
+  });
+
+  it('viewing chat A does not leave it when a different row sharing its legacy chat-key sessionId is deleted', async () => {
+    const SHARED_SESSION_ID = 'session-cone';
+    const CHAT_A = '2026-06-01T10-00-00Z-chat-a.md';
+    const CHAT_B = '2026-06-01T11-00-00Z-chat-b.md';
+    const SHARED_INDEX = [
+      {
+        filename: CHAT_A,
+        sessionId: SHARED_SESSION_ID,
+        title: 'Chat A',
+        frozenAt: '2026-06-01T10:00:00Z',
+        messageCount: 1,
+        cone: 'cone-research',
+      },
+      {
+        filename: CHAT_B,
+        sessionId: SHARED_SESSION_ID,
+        title: 'Chat B',
+        frozenAt: '2026-06-01T11:00:00Z',
+        messageCount: 1,
+        cone: 'cone-research',
+      },
+    ];
+    const { freezer, handles, controller, selectScoop } = harness({
+      index: SHARED_INDEX,
+      archives: { [CHAT_A]: archiveFor('Chat A'), [CHAT_B]: archiveFor('Chat B') },
+    });
+    handles.refreshFreezer();
+    await vi.waitFor(() => expect(cardFor(freezer, CHAT_A)).toBeDefined());
+    await handles.openFrozen(CHAT_A);
+    // Both rows carry the SAME legacy (#3807) chat-key sessionId.
+    expect(handles.getViewedFrozenSessionId()).toBe(SHARED_SESSION_ID);
+
+    cardFor(freezer, CHAT_B)!.dispatchEvent(
+      new CustomEvent('freezer-card-delete', {
+        bubbles: true,
+        composed: true,
+        detail: { slug: CHAT_B },
+      })
+    );
+    document.querySelector<HTMLButtonElement>('slicc-dialog [data-cone-action="delete"]')!.click();
+
+    await vi.waitFor(() => expect(mockDelete).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(document.querySelector('slicc-dialog [data-cone-action="delete"]')).toBeNull()
+    );
+
+    // B is not A: deleting B must never tear down the thread A is showing.
     expect(
       controller.loadMessages.mock.calls.some(
         ([messages]) => Array.isArray(messages) && messages.length === 0

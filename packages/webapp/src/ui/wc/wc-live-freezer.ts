@@ -1,5 +1,6 @@
 import { isFeatureEnabled } from '../../core/feature-flags.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { isChatKeyId } from '../../transcript/frozen-session-identity.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { tmpDirFor } from '../../work-unit/descriptor.js';
 import { isRootUnit } from '../../work-unit/policy.js';
@@ -307,6 +308,30 @@ function backfillFreezerIcons(
     });
 }
 
+/**
+ * Is `entry` the frozen chat `thread` currently shows? Matched by filename
+ * first (`freezer:<filename>`, set on every thaw); a thread whose context
+ * still starts with `freezer:` but was repainted under a rival-renamed
+ * filename falls back to a trusted (non-chat-key) `sessionId` match against
+ * `currentFrozenSessionId` — never a shared legacy chat-key id (#3807), so
+ * two rows that still carry the same `session-<folder>` id can never be
+ * confused for one another.
+ */
+function isViewingEntry(
+  thread: Pick<HTMLElement, 'getAttribute'>,
+  entry: FrozenSessionIndexEntry,
+  currentFrozenSessionId: string | null
+): boolean {
+  const context = thread.getAttribute('context') ?? '';
+  if (context === `freezer:${entry.filename}`) return true;
+  return (
+    context.startsWith('freezer:') &&
+    !!entry.sessionId &&
+    !isChatKeyId(entry.sessionId) &&
+    currentFrozenSessionId === entry.sessionId
+  );
+}
+
 /** Wire frozen-session refresh, new-session actions, and read-only thaw routing. */
 export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   const { refs, openVfs, client, getController, getSelected, clearSelection, log } = deps;
@@ -460,10 +485,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     // `viewingFrozen` uses in wc-live-callbacks.ts — so a chat left via one
     // of those paths must not have its LIVE cone's thread/queue torn down
     // by a later delete.
-    getViewedId: () =>
-      (refs.thread.getAttribute('context') ?? '').startsWith('freezer:')
-        ? currentFrozenSessionId
-        : null,
+    isViewing: (entry) => isViewingEntry(refs.thread, entry, currentFrozenSessionId),
     leaveViewed: (entry) => {
       // Clear FIRST: selecting a cone loads its snapshot asynchronously and
       // keeps the old thread up if that fails.

@@ -44,7 +44,7 @@ function harness(overrides: Partial<FreezerDeleteDeps> = {}) {
     freezer,
     openVfs: vi.fn(async () => ({ reader: {}, writer }) as never),
     getEntries: () => [ENTRY],
-    getViewedId: () => null,
+    isViewing: () => false,
     leaveViewed: vi.fn(),
     refreshFreezer: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
@@ -109,7 +109,7 @@ describe('wireFreezerDelete', () => {
 
   it('deleting the chat on screen leaves it', async () => {
     mockDelete.mockResolvedValue({ status: 'deleted' });
-    const { freezer, deps } = harness({ getViewedId: () => 'sid-1' });
+    const { freezer, deps } = harness({ isViewing: (entry) => entry.sessionId === 'sid-1' });
     ask(freezer);
     action('delete').click();
     await vi.waitFor(() => expect(deps.leaveViewed).toHaveBeenCalledWith(ENTRY));
