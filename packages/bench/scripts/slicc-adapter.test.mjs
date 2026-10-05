@@ -2327,6 +2327,31 @@ describe('arm helpers', () => {
     expect(t.metrics.steps).toBe(2);
   });
 
+  it('treats an arm agent that exited non-zero without answer.txt as a run error', () => {
+    // The scoop holding the dead turn is gone by export time: only the driver's exit code and
+    // its missing answer.txt remain (benchmark 37285459938, a Bedrock 500 window).
+    const file = (name, text) => ({
+      path: `/tmp/intent-arm/r/${name}`,
+      base64: Buffer.from(text).toString('base64'),
+    });
+    const arm = (exitCode, files) => ({
+      arm: { name: 'x', startedAt: 0, result: { exitCode }, files },
+      transcript: DOC,
+    });
+    const md = file('transcript.md', '## user\n\ngoal\n\n## assistant\n\n');
+    expect(lastTurnProviderError(arm(1, [md]))).toBe("the arm's agent exited 1 without an answer");
+    expect(lastTurnProviderError(arm(1, [md, file('answer.txt', '  \n')]))).toBe(
+      "the arm's agent exited 1 without an answer"
+    );
+    expect(lastTurnProviderError(arm(1, [md, file('answer.txt', 'FINAL ANSWER: 42')]))).toBeNull();
+    expect(lastTurnProviderError(arm(0, [md]))).toBeNull();
+    expect(
+      lastTurnProviderError({ arm: { name: 'x', result: null, files: [] }, transcript: DOC })
+    ).toBeNull();
+    // Outside arm mode the driver result plays no part.
+    expect(lastTurnProviderError({ transcript: DOC })).toBeNull();
+  });
+
   it('collects the driver files within a byte budget, skipping odd paths and failed reads', async () => {
     const { leader } = fakeLeader({
       commands: [
