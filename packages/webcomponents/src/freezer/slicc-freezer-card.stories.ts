@@ -9,6 +9,7 @@ interface FreezerCardArgs {
   expanded?: boolean;
   thawed?: boolean;
   hidden?: boolean;
+  deletable?: boolean;
 }
 
 /** Construct one freezer card from args (the building block for every story). */
@@ -21,6 +22,7 @@ function makeCard(args: FreezerCardArgs): HTMLElement {
   if (args.expanded) el.setAttribute('expanded', '');
   if (args.thawed) el.setAttribute('thawed', '');
   if (args.hidden) el.setAttribute('hidden', '');
+  if (args.deletable) el.setAttribute('deletable', '');
   return el;
 }
 
@@ -39,6 +41,10 @@ const meta: Meta<FreezerCardArgs> = {
     },
     thawed: { control: 'boolean', description: 'Rose reopen flash (mirrored onto the badge)' },
     hidden: { control: 'boolean', description: 'Search-hide (the prototype .match-hidden)' },
+    deletable: {
+      control: 'boolean',
+      description: 'Offer a trash button (fires freezer-card-delete)',
+    },
   },
   render: (args) => makeCard(args),
 };
@@ -76,6 +82,17 @@ export const CollapsedHover: Story = {
 /** Thawing — the rose reopen flash: rose row + rose snowflake badge. */
 export const Thawing: Story = {
   args: { ...SAMPLE, expanded: true, thawed: true },
+};
+
+/** Deletable — an expanded row offering delete; the trash icon appears on hover/focus. */
+export const Deletable: Story = {
+  args: { ...SAMPLE, expanded: true, deletable: true },
+};
+
+/** Deletable + hover — the trash button revealed (Pseudo States toolbar). */
+export const DeletableHover: Story = {
+  args: { ...SAMPLE, expanded: true, deletable: true },
+  parameters: { pseudo: { hover: true } },
 };
 
 /** Search-hidden — the prototype's `.match-hidden` (`display: none`). Renders nothing. */

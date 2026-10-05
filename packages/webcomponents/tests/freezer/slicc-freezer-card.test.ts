@@ -462,4 +462,86 @@ describe('slicc-freezer-card', () => {
       expect(rules.some((r) => r.selectorText === 'slicc-freezer-card:hover')).toBe(false);
     });
   });
+
+  describe('delete affordance (deletable)', () => {
+    const deleteBtnOf = (el: SliccFreezerCard) =>
+      el.querySelector<HTMLButtonElement>(':scope > .slicc-fzcard__delete');
+
+    it('renders a labelled trash button only while deletable', () => {
+      const el = makeCard({ title: 'warm hero', slug: 'warm-hero', expanded: true });
+      document.body.appendChild(el);
+      expect(deleteBtnOf(el)).toBeNull();
+
+      el.deletable = true;
+      expect(el.hasAttribute('deletable')).toBe(true);
+      const btn = deleteBtnOf(el)!;
+      expect(btn.type).toBe('button');
+      expect(btn.getAttribute('part')).toBe('delete');
+      expect(btn.getAttribute('title')).toBe('Delete');
+      expect(btn.getAttribute('aria-label')).toBe('Delete “warm hero”');
+      expect(btn.querySelector('svg')).not.toBeNull();
+
+      el.deletable = false;
+      expect(deleteBtnOf(el)).toBeNull();
+    });
+
+    it('builds the button when deletable is set before connecting, and tracks the title', () => {
+      const el = makeCard({ title: 'old', slug: 's', expanded: true });
+      el.setAttribute('deletable', '');
+      document.body.appendChild(el);
+      expect(deleteBtnOf(el)?.getAttribute('aria-label')).toBe('Delete “old”');
+      el.title = 'new';
+      expect(deleteBtnOf(el)?.getAttribute('aria-label')).toBe('Delete “new”');
+    });
+
+    it('fires freezer-card-delete (composed, bubbling) and never freezer-card-select', () => {
+      const el = makeCard({ title: 't', slug: 'warm-hero', expanded: true });
+      el.setAttribute('deletable', '');
+      document.body.appendChild(el);
+      const selected = vi.fn();
+      el.addEventListener('freezer-card-select', selected);
+      let detail: unknown = null;
+      document.body.addEventListener(
+        'freezer-card-delete',
+        (e) => {
+          const ce = e as CustomEvent<{ slug: string }>;
+          expect(ce.composed).toBe(true);
+          detail = ce.detail;
+        },
+        { once: true }
+      );
+
+      deleteBtnOf(el)!.click();
+
+      expect(detail).toEqual({ slug: 'warm-hero' });
+      expect(selected).not.toHaveBeenCalled();
+      expect(el.thawed).toBe(false);
+    });
+
+    it('is out of layout and tab order in the collapsed rail; present when expanded', () => {
+      const el = makeCard({ title: 't', slug: 's' });
+      el.setAttribute('deletable', '');
+      document.body.appendChild(el);
+      const btn = deleteBtnOf(el)!;
+      expect(getComputedStyle(btn).display).toBe('none');
+
+      el.expanded = true;
+      expect(getComputedStyle(btn).display).not.toBe('none');
+      expect(getComputedStyle(btn).opacity).toBe('0');
+      btn.focus();
+      expect(document.activeElement).toBe(btn);
+
+      el.expanded = false;
+      expect(getComputedStyle(btn).display).toBe('none');
+    });
+
+    it('survives detach + re-attach without a second button', () => {
+      const el = makeCard({ title: 't', slug: 's', expanded: true });
+      el.setAttribute('deletable', '');
+      document.body.appendChild(el);
+      el.remove();
+      document.body.appendChild(el);
+      expect(el.querySelectorAll('.slicc-fzcard__delete')).toHaveLength(1);
+    });
+  });
 });
