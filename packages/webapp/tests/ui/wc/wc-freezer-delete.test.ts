@@ -76,7 +76,7 @@ describe('wireFreezerDelete', () => {
     const dialog = handles.dialog()!;
     expect(dialog.getAttribute('heading')).toBe('Delete frozen chat?');
     expect(dialog.textContent).toContain(
-      '“Fix the build” and its transcript will be permanently deleted. Memories already learned from it are kept.'
+      '“Fix the build” and its transcript will be deleted. Memories already learned from it are kept.'
     );
     expect(action('delete').textContent).toBe('Delete');
     expect(action('cancel').textContent).toBe('Cancel');
