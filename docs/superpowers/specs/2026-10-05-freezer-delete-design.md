@@ -151,24 +151,27 @@ once 1d–1f land.)
 4. Old row missing, old archive present → keep today's prepend (index lost or
    rebuilt) → `'prepended'`.
 
-`enrichPendingSession` gains a discriminated outcome
-(`{ kind: 'updated', entry } | { kind: 'deleted' } | { kind: 'failed' }`);
-the existing `FrozenSessionIndexEntry | null` return stays as a thin wrapper
-for callers that only need the entry. On `'superseded'` it skips its own
-stale-file cleanup (the winner owns it).
+`commitEnrichedArchive` returns `null` on `'superseded'` / `'deleted'` and
+skips its own stale-file cleanup (the winner or the delete owns it), so
+`enrichPendingSession` keeps its `FrozenSessionIndexEntry | null` signature.
+Callers that must know whether the session still exists ask the index (1e).
 
 ### 1e. Background pipeline stops on a deleted session
 
-- `new-session.ts` agentic background pass and legacy timer race: on
-  `{ kind: 'deleted' }` — or when a locked presence check
-  (`frozenSessionIndexed(vfs, key)`) finds no row right before spawning —
-  skip `curateFrozenSessionMemories` and `onSessionSettled` (no billable
-  curator, no gelatiere notification for a deleted archive).
+- `new-session.ts` agentic background pass and legacy timer race: a locked
+  presence check (`findIndexedFrozenRow(vfs, key)`) runs right before the
+  curator spawn and before `onSessionSettled`. Only `absent` (a well-formed
+  index without the row) skips work — a missing or corrupt index is
+  `unknown` and proceeds as today. `absent` skips
+  `curateFrozenSessionMemories` and `onSessionSettled` (no billable curator,
+  no gelatiere notification for a deleted archive). A row renamed by another
+  enrichment is followed to its current filename.
 - `processPendingSessions` (boot catch-up) only calls `enrichPendingSession`
   and never spawns the curator; the 1d `replaceIndexEntry` rules cover it.
 - A curator already running when the delete lands: after it resolves, the
-  caller re-checks presence; if gone, it runs `removeFrozenSessionArtifacts`
-  for the receipt / curation state / deltas the curator produced.
+  caller re-checks presence; if `absent`, it runs `removeCuratorByproducts`
+  for the receipt / curation state / deltas the curator produced (never the
+  archive itself — the delete already swept it).
 
 ### 1f. Complete-snapshot capture
 
@@ -176,23 +179,28 @@ stale-file cleanup (the winner owns it).
   key, removes `/sessions/data/<id>/` and `/sessions/data/.tmp-<id>`,
   tolerating ONLY `ENOENT` (the existing private `removeDir` swallows
   everything and is not reused as-is).
-- `TranscriptExportService.captureFrozen`: after `snapshotStore.write`, inside
-  `serializeIndexWrite`, check a row with that `sessionId` still exists; if
-  not, `removeSnapshot`. The lock orders this after any in-flight delete, so
-  publish-after-delete cannot leave an orphan bundle.
+- `TranscriptExportService.captureFrozen`: after `snapshotStore.write`, call
+  the optional `snapshotStore.discardIfUnindexed(sessionId)`, wired to
+  `discardSnapshotIfUnindexed` in both the page (`wc-live.ts`) and worker
+  (`orchestrator.ts`) registrations. Inside `serializeIndexWrite` it removes
+  the bundle only when a well-formed index has no row with that
+  `sessionId` (missing/corrupt index → keep). The lock orders this after any
+  in-flight delete, so publish-after-delete cannot leave an orphan bundle.
 - Export after delete needs no change: files-first means the snapshot is gone
   before the row, so `buildFrozenSnapshot` misses it and the legacy fallback
   finds no row.
 
 ### 1g. Search index
 
-- `invalidateSessionSearchIndex` tolerates only `ENOENT`; other errors throw
-  (deletion reports `'failed'`, row kept).
-- `rebuildSessionSearchIndex`: recompute the located-entries fingerprint
-  immediately before `writeFile`; if it changed during the rebuild, skip the
-  write. Narrows the "rebuild started before delete writes stale bodies"
-  window; the existing fingerprint check in `ensureSessionSearchIndex` forces
-  a rebuild on the next search for anything that slips through.
+- `invalidateSessionSearchIndex(vfs, { strict: true })` tolerates only
+  `ENOENT`; other errors throw (deletion reports `'failed'`, row kept). The
+  default stays lenient so `discardLiveSnapshot` is unchanged.
+- `rebuildSessionSearchIndex` / `ensureSessionSearchIndex`: recompute the
+  located-entries fingerprint immediately before `writeFile`; if it changed
+  during the build, skip the write (`written: false`) and serve the
+  in-memory index just built. Narrows the "rebuild started before delete
+  writes stale bodies" window; the existing fingerprint check forces a
+  rebuild on the next search for anything that slips through.
 
 ## Section 2 — UI
 
@@ -213,11 +221,13 @@ none }` — removes it from layout AND tab order in the icon-only rail.
 `deletable` unless `entry.live`; `renderFreezerCards(freezer, entries, opts)`
 passes it through. Default off.
 
-**`ui/wc/wc-live-freezer.ts`**:
+**`ui/wc/wc-live-freezer.ts`** + new **`ui/wc/wc-freezer-delete.ts`**
+(`wireFreezerRail` is at 145 of Biome's 150 counted lines, so the delete flow
+lives in its own module and the refresh/icon helpers move to module scope):
 
 - `renderFreezerCards(refs.freezer, entries, { deletable: true })`.
 - On `freezer-card-delete`: resolve the entry by `filename === slug`; ignore
-  if a delete for that slug is already open/in flight.
+  live rows, unknown slugs, and a slug whose dialog/delete is already open.
 - Dialog via `buildConeDialog` + button styles exported from
   `wc-cone-actions.ts`: heading "Delete frozen chat?", body "“<title>” and its
   transcript will be permanently deleted. Memories already learned from it
@@ -228,15 +238,16 @@ passes it through. Default off.
     `sessionId ?? filename`): `getController()?.loadMessages([])` FIRST
     (selecting a cone loads its snapshot asynchronously and keeps the old
     thread on failure), clear `currentFrozenSessionId`, then select
-    `rootForConeFolder(getUnits(), entry.cone)`; with no root, reset thread
-    context/chrome directly. Close dialog, `refreshFreezer()`.
-  - `'failed'`: keep the dialog open, show an inline error line ("Couldn't
+    `rootForConeFolder(getUnits(), entry.cone)` (with no root — impossible,
+    the last cone cannot be dropped — only the thread is cleared). Close
+    dialog, `refreshFreezer()`.
+  - `'failed'` or a thrown error: keep the dialog open, show an inline error line ("Couldn't
     delete everything — try again."), re-enable Delete, `log.error` the
     errors.
   - `'live' | 'not-found' | 'unsafe'`: close, `log.warn`, `refreshFreezer()`.
-- Focus: on close, if the opener is disconnected (a refresh re-rendered the
-  cards while the dialog was open), focus the card with the same slug, else
-  the freezer's search/toggle.
+- Focus: on close, if focus fell back to `<body>` (the opener was detached by
+  a refresh that re-rendered the cards while the dialog was open), focus the
+  re-rendered card's delete button for the same slug.
 
 ## Section 3 — Testing and docs
 
@@ -309,6 +320,5 @@ touched-file debt gate.
 
 ## Housekeeping
 
-Planning artifacts do not ship to `main` (see `6a82b8c9c`). This spec and the
-implementation plan live on the feature branch only and are dropped before
-the PR is opened.
+This spec and the implementation plan ship with the branch; a cleanup worker
+removes planning artifacts from `main` afterwards (as in `6a82b8c9c`).
