@@ -157,6 +157,12 @@ export interface FrozenSessionArchive {
    * with {@link id}.
    */
   sessionId?: string;
+  /**
+   * Dir under /sessions/attachments/ this freeze persisted its /tmp
+   * attachments into — the archive's filename base at freeze time;
+   * enrichment renames do not move it. Delete removes exactly this dir.
+   */
+  attachmentsKey?: string;
   title: string;
   frozenAt: string;
   createdAt: number;
@@ -241,6 +247,7 @@ export function parseFrozenArchive(
   | 'compactions'
   | 'curatedThrough'
   | 'sessionId'
+  | 'attachmentsKey'
 > & { id?: string; sidecar?: string } {
   let body = markdown;
   let title = 'Untitled';
@@ -256,6 +263,7 @@ export function parseFrozenArchive(
     | 'compactions'
     | 'curatedThrough'
     | 'sessionId'
+    | 'attachmentsKey'
   > & { id?: string; sidecar?: string } = {};
 
   // 1. Strip YAML-style frontmatter and pull out the title.
@@ -317,6 +325,7 @@ function parseFrontmatterMeta(
   | 'compactions'
   | 'curatedThrough'
   | 'sessionId'
+  | 'attachmentsKey'
 > & { id?: string; sidecar?: string } {
   const meta: ReturnType<typeof parseFrontmatterMeta> = {};
   const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
@@ -348,6 +357,8 @@ function parseFrontmatterMeta(
   if (id) meta.id = id;
   const sessionId = frontmatter.match(/^sessionId:\s*(\S+)\s*$/m)?.[1];
   if (sessionId) meta.sessionId = sessionId;
+  const attachmentsKey = frontmatter.match(/^attachmentsKey:\s*(\S+)\s*$/m)?.[1];
+  if (attachmentsKey) meta.attachmentsKey = attachmentsKey;
   // Memory v2 JSONL sidecar filename (basename under /sessions/).
   const sidecar = frontmatter.match(/^sidecar:\s*(\S+)\s*$/m)?.[1];
   if (sidecar) meta.sidecar = sidecar;

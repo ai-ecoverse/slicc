@@ -9,13 +9,22 @@
  * discarded through New chat → Discard, which the kernel orders with the
  * snapshot writer. Extracted memories are kept; they carry no per-session
  * provenance.
+ *
+ * Attachment-dir ownership is read from the archive's own `attachmentsKey`
+ * frontmatter (recorded at freeze time), never inferred from message
+ * attachment paths — a user can attach any VFS path, including another
+ * session's attachment dir, and that must survive this delete.
  */
 
 import { createLogger } from '../base/logger.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import { curationDirPath, curatorReceiptPath } from '../scoops/agentic-memory.js';
 import { LIVE_DELTA_DIR } from '../scoops/live-session-curation.js';
-import { type FrozenSessionIndexEntry, SESSIONS_DIR } from '../transcript/frozen-archive-format.js';
+import {
+  type FrozenSessionIndexEntry,
+  parseFrozenArchive,
+  SESSIONS_DIR,
+} from '../transcript/frozen-archive-format.js';
 import {
   readSessionsIndexForWrite,
   serializeIndexWrite,
@@ -29,7 +38,7 @@ import {
   readIndexForPresence,
   trustedSessionId,
 } from '../transcript/frozen-session-identity.js';
-import { loadFrozenArchive, sidecarPathForArchive } from '../transcript/session-jsonl.js';
+import { sidecarPathForArchive } from '../transcript/session-jsonl.js';
 import { invalidateSessionSearchIndex } from '../transcript/session-search-index.js';
 import { removeSnapshot } from '../transcript/snapshot-store.js';
 
@@ -47,7 +56,6 @@ export type FrozenRowPresence =
   | { kind: 'unknown' };
 
 const ATTACHMENTS_DIR = `${SESSIONS_DIR}/attachments`;
-const ATTACHMENT_PATH = /^\/sessions\/attachments\/([^/]+)\/[^/]+$/;
 const DELTA_RANGE = /^\d+-\d+\.md$/;
 
 function isEnoent(err: unknown): boolean {
@@ -126,7 +134,13 @@ export async function removeCuratorByproducts(
   return errors;
 }
 
-/** `/sessions/attachments/<key>/` dirs the archive's messages point into, plus its own base. */
+/**
+ * `/sessions/attachments/<key>/` dirs THIS freeze owns: its current archive
+ * base, plus the `attachmentsKey` its frontmatter recorded at freeze time
+ * (when that differs — an enrichment rename). Never derived from message
+ * attachment paths: those can point at ANY VFS path a user attached,
+ * including another session's attachment dir (#3807-adjacent).
+ */
 async function attachmentDirsOf(
   vfs: WritableVfsClient,
   row: FrozenSessionIndexEntry,
@@ -137,13 +151,8 @@ async function attachmentDirsOf(
   try {
     const raw = await vfs.readFile(path, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    const { messages } = await loadFrozenArchive(vfs, text, row.filename);
-    for (const message of messages) {
-      for (const attachment of message.attachments ?? []) {
-        const key = ATTACHMENT_PATH.exec(attachment.path ?? '')?.[1];
-        if (isSafeSessionKey(key)) dirs.add(`${ATTACHMENTS_DIR}/${key}`);
-      }
-    }
+    const { attachmentsKey } = parseFrozenArchive(text);
+    if (isSafeSessionKey(attachmentsKey)) dirs.add(`${ATTACHMENTS_DIR}/${attachmentsKey}`);
   } catch (err) {
     if (!isEnoent(err)) errors.push(failure(path, err));
   }

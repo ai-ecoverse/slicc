@@ -97,6 +97,7 @@ async function seedSession(
     formatArchiveAsMarkdown({
       id: 'session-cone',
       ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+      attachmentsKey: attachmentKey,
       title: entry.title,
       frozenAt: entry.frozenAt,
       createdAt: 1,
@@ -249,6 +250,105 @@ describe('deleteFrozenSession — partial failure', () => {
     expect(await deleteFrozenSession(w(), { filename: a.filename })).toEqual({ status: 'deleted' });
     expect(await exists('/sessions/attachments/pending-aaa111')).toBe(false);
     expect(await exists(`/sessions/${a.filename}`)).toBe(false);
+  });
+});
+
+describe('deleteFrozenSession — attachment dir ownership (#3807-adjacent)', () => {
+  it("never deletes a sibling session's attachment dir just because a message points into it", async () => {
+    const a = row('2026-06-01T10-00-00-000Z-a.md', 'sid-a');
+    const b = row('2026-06-02T10-00-00-000Z-b.md', 'sid-b');
+    const bAttachment = `/sessions/attachments/${b.filename.slice(0, -3)}/0-shot.png`;
+    await put(bAttachment, 'b-owns-this');
+    // A's own attachmentsKey is its own base — but one of its messages
+    // attaches a path that happens to live inside B's attachment dir
+    // (e.g. the user attached a file from another chat's archive).
+    const aAttachmentsKey = a.filename.slice(0, -3);
+    const messages: ChatMessage[] = [
+      {
+        id: 'u1',
+        role: 'user',
+        content: 'reuse that screenshot',
+        timestamp: 1,
+        attachments: [
+          {
+            id: 'a1',
+            name: 'shot.png',
+            mimeType: 'image/png',
+            size: 3,
+            kind: 'file',
+            path: bAttachment,
+          },
+        ],
+      },
+    ];
+    await put(
+      `/sessions/${a.filename}`,
+      formatArchiveAsMarkdown({
+        id: 'session-cone',
+        sessionId: a.sessionId,
+        attachmentsKey: aAttachmentsKey,
+        title: a.title,
+        frozenAt: a.frozenAt,
+        createdAt: 1,
+        updatedAt: 2,
+        messageCount: 1,
+        messages,
+      })
+    );
+    await put('/sessions/index.json', JSON.stringify([b, a]));
+
+    expect(await deleteFrozenSession(w(), { filename: a.filename, sessionId: 'sid-a' })).toEqual({
+      status: 'deleted',
+    });
+    expect(await exists(bAttachment)).toBe(true);
+  });
+
+  it('a legacy archive without attachmentsKey deletes only its own current-base dir', async () => {
+    const legacy = row('2026-06-01T10-00-00-000Z-legacy.md', 'sid-legacy');
+    const draftDir = '/sessions/attachments/pending-zzz999';
+    await put(`${draftDir}/0-shot.png`, 'draft-owned');
+    const ownDir = `/sessions/attachments/${legacy.filename.slice(0, -3)}`;
+    await put(`${ownDir}/0-shot.png`, 'own');
+    // No attachmentsKey in frontmatter — legacy pre-feature archive. A
+    // message still references the (unrelated) draft dir.
+    const messages: ChatMessage[] = [
+      {
+        id: 'u1',
+        role: 'user',
+        content: 'reuse that screenshot',
+        timestamp: 1,
+        attachments: [
+          {
+            id: 'a1',
+            name: 'shot.png',
+            mimeType: 'image/png',
+            size: 3,
+            kind: 'file',
+            path: `${draftDir}/0-shot.png`,
+          },
+        ],
+      },
+    ];
+    await put(
+      `/sessions/${legacy.filename}`,
+      formatArchiveAsMarkdown({
+        id: 'session-cone',
+        sessionId: legacy.sessionId,
+        title: legacy.title,
+        frozenAt: legacy.frozenAt,
+        createdAt: 1,
+        updatedAt: 2,
+        messageCount: 1,
+        messages,
+      })
+    );
+    await put('/sessions/index.json', JSON.stringify([legacy]));
+
+    expect(await deleteFrozenSession(w(), { filename: legacy.filename })).toEqual({
+      status: 'deleted',
+    });
+    expect(await exists(`${ownDir}/0-shot.png`)).toBe(false);
+    expect(await exists(`${draftDir}/0-shot.png`)).toBe(true);
   });
 });
 

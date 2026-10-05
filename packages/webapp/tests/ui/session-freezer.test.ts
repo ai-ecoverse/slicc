@@ -1550,6 +1550,10 @@ describe('freezeConeSession quick mode', () => {
     expect(result!.filename).toMatch(/^pending-[a-z0-9-]+\.md$/);
     // Heuristic title only — first user message, lightly truncated.
     expect(result!.title).toContain('refactor the auth flow');
+    // Attachment-dir ownership is recorded at freeze time, not inferred
+    // later from message paths (#3807-adjacent) — the archive carries the
+    // filename base it persisted its /tmp attachments under.
+    expect(result!.archive.attachmentsKey).toBe(result!.filename.replace(/\.md$/, ''));
 
     // Archive landed under /sessions/.
     expect(vfs.files.has(`/sessions/${result!.filename}`)).toBe(true);

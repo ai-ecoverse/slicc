@@ -516,14 +516,12 @@ async function writeFrozenArchive(
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
-    const messages = await persistTmpAttachments(
-      opts.vfs,
-      session.messages,
-      filename.replace(/\.md$/, '')
-    );
+    const attachmentsKey = filename.replace(/\.md$/, '');
+    const messages = await persistTmpAttachments(opts.vfs, session.messages, attachmentsKey);
     const archive: FrozenSessionArchive = {
       id: session.id,
       sessionId,
+      attachmentsKey,
       title,
       frozenAt,
       createdAt: session.createdAt,
