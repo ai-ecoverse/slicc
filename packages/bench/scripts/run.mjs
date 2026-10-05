@@ -649,6 +649,19 @@ export async function bootTwice(boot, journal, lane, log) {
   }
 }
 
+export const ARM_SETUP_ATTEMPTS = 3;
+
+async function armSetup(leader, command, log, attempts = ARM_SETUP_ATTEMPTS) {
+  for (let i = 1; ; i++) {
+    try {
+      return await mustExec(leader, command, ARM_SETUP_TIMEOUT_MS);
+    } catch (err) {
+      if (err?.leaderDown || i >= attempts) throw err;
+      log(`arm setup \`${command}\` failed (try ${i} of ${attempts}), retrying: ${err.message}`);
+    }
+  }
+}
+
 async function prepareLeader(r, ctx, log) {
   const { lane, opts } = ctx;
   if (opts.freshLeaderEvery && lane.tasks >= opts.freshLeaderEvery)
@@ -660,7 +673,7 @@ async function prepareLeader(r, ctx, log) {
 
     for (const command of opts.arm?.setup ?? []) {
       const t0 = Date.now();
-      await mustExec(ctx.leader, command, ARM_SETUP_TIMEOUT_MS);
+      await armSetup(ctx.leader, command, log);
       log(`arm ${opts.arm.name} setup \`${command}\`: ${Math.round((Date.now() - t0) / 1000)} s`);
     }
   }
