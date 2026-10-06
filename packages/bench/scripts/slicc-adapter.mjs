@@ -253,7 +253,14 @@ export function lastTurnProviderError(result) {
 
 function armAgentDied(result) {
   const code = result.arm.result?.exitCode;
-  if (!code || String(result.finalText ?? '').trim()) return null;
+
+  if (
+    !code ||
+    result.timedOut ||
+    result.arm.result?.timedOut ||
+    String(result.finalText ?? '').trim()
+  )
+    return null;
   return `the arm's agent exited ${code} without an answer`;
 }
 
@@ -829,7 +836,9 @@ export function traceFromResult(result) {
   }
   const finalResult =
     result.finalText?.trim() ||
-    (result.timedOut ? 'The run was stopped at the time limit before the cone answered.' : '') ||
+    (result.timedOut
+      ? `The run was stopped at the time limit before the ${result.arm ? 'agent' : 'cone'} answered.`
+      : '') ||
     (result.costCapped ? 'The run was stopped at its cost cap before the cone answered.' : '') ||
     (result.stderr ? `The run failed: ${result.stderr}` : '');
   const ex = result.transcriptExport;
@@ -1324,7 +1333,10 @@ export async function runTask({
       thinking: prepared.spec.thinking,
       thinkingEffective: prepared.thinkingEffective,
       exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
-      timedOut: Boolean(reply.timedOut || collected.timedOut),
+
+      timedOut: Boolean(
+        reply.timedOut || collected.timedOut || armOut?.record?.arm?.result?.timedOut
+      ),
       costCapped: Boolean(reply.aborted || collected.costCapped),
       finalText: finalTextOf(armOut, { resumedAfterSettle, transcript, reply }),
       ...armOut?.record,

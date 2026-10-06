@@ -2265,6 +2265,50 @@ describe('arm mode', () => {
 
     expect(JSON.stringify(traceFromResult(result).metrics)).not.toContain(canary);
   });
+
+  it('carries an arm that ran out its own time limit into the run and the judged trace', async () => {
+    const { leader } = fakeLeader({
+      verbs: {
+        'new-session': ok('new session (erase)'),
+        model: ok('bedrock-camp:global.anthropic.claude-sonnet-5-5\n'),
+      },
+      commands: [
+        [
+          /^intent-arm /,
+          () => ({
+            stdout: '{"exitCode":124,"timedOut":true,"steps":9}\n',
+            stderr: '',
+            status: 124,
+            timedOut: false,
+          }),
+        ],
+        [/^cost --json --all$/, ok(JSON.stringify({ scoops: [] }))],
+        [/^playwright-cli tab-list$/, ok('')],
+        [/^find '\/tmp\/intent-arm'/, ok('/tmp/intent-arm/run/transcript.md\n')],
+        [
+          /^base64 '\/tmp\/intent-arm\/run\/transcript\.md'$/,
+          ok(b64('## user\ngoal\n## assistant\n\n')),
+        ],
+        ...leaderFiles(Buffer.from(JSON.stringify({ conversations: [] }))).commands,
+        [/^base64 /, ok('UE5H')],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'Do it.', slicc: { timeoutSeconds: 120 } },
+      runId: 'r1',
+      model: 'claude-sonnet-5-5',
+      arm: ARM,
+      capture: { pollMs: 5 },
+    });
+    expect(result.timedOut).toBe(true);
+    expect(lastTurnProviderError(result)).toBeNull();
+    const trace = traceFromResult(result);
+    expect(trace.metrics.timedOut).toBe(true);
+    expect(trace.finalResult).toBe(
+      'The run was stopped at the time limit before the agent answered.'
+    );
+  });
 });
 
 describe('arm helpers', () => {
@@ -2343,6 +2387,10 @@ describe('arm helpers', () => {
       lastTurnProviderError(run(1, [dead, file('answer.txt', 'FINAL ANSWER: 42')]))
     ).toBeNull();
     expect(lastTurnProviderError(run(0, [dead]))).toBeNull();
+
+    const timedOut = run(124, [dead]);
+    timedOut.arm.result.timedOut = true;
+    expect(lastTurnProviderError(timedOut)).toBeNull();
     expect(
       lastTurnProviderError({ arm: { name: 'x', result: null, files: [] }, transcript: DOC })
     ).toBeNull();
