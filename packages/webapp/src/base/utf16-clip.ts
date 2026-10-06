@@ -22,16 +22,44 @@ export function clipUtf16(text: string, max: number): string {
 }
 
 /**
+ * Replace unpaired UTF-16 surrogates with U+FFFD (ES2024 `toWellFormed` semantics).
+ *
+ * Kept as a pure walk so Safari before 16.4 (and any other runtime without
+ * `String.prototype.toWellFormed`) cannot TypeError out of `quickLabel`
+ * before its fail-soft `try` — the call sits above that catch on purpose.
+ */
+export function replaceLoneSurrogates(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += text.slice(i, i + 2);
+        i += 1;
+      } else {
+        out += '\uFFFD';
+      }
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      out += '\uFFFD';
+    } else {
+      out += text.slice(i, i + 1);
+    }
+  }
+  return out;
+}
+
+/**
  * Replace unpaired UTF-16 surrogates with U+FFFD.
  *
- * Thin wrapper over ES2024 `String.prototype.toWellFormed` — present at
- * runtime (Node ≥ 20 / modern browsers) but not yet in our TS `lib` target
- * (`ES2022`), so call sites stay typed without bumping the project lib.
+ * Prefer the native ES2024 method when present; otherwise use
+ * {@link replaceLoneSurrogates}. Never throws for a missing native.
  */
 export function wellFormed(text: string): string {
-  return (String.prototype as unknown as { toWellFormed(this: string): string }).toWellFormed.call(
-    text
-  );
+  const native = (String.prototype as unknown as { toWellFormed?: (this: string) => string })
+    .toWellFormed;
+  if (typeof native === 'function') return native.call(text);
+  return replaceLoneSurrogates(text);
 }
 
 /** Cap for scoop/cone `lastActivity` snippets fed into quickLabel chip tips. */

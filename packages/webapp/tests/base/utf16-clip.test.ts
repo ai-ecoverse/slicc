@@ -4,7 +4,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { clipUtf16, cutBefore, LAST_ACTIVITY_MAX, wellFormed } from '../../src/base/utf16-clip.js';
+import {
+  clipUtf16,
+  cutBefore,
+  LAST_ACTIVITY_MAX,
+  replaceLoneSurrogates,
+  wellFormed,
+} from '../../src/base/utf16-clip.js';
 
 /** True when `s` contains a UTF-16 code unit in the surrogate range. */
 function hasLoneSurrogate(s: string): boolean {
@@ -63,6 +69,21 @@ describe('clipUtf16', () => {
   });
 });
 
+describe('replaceLoneSurrogates', () => {
+  it('replaces a lone high or low surrogate with U+FFFD', () => {
+    expect(replaceLoneSurrogates('hello \uD83D world')).toBe('hello \uFFFD world');
+    expect(replaceLoneSurrogates('sys \uDE00 prompt')).toBe('sys \uFFFD prompt');
+  });
+
+  it('leaves a complete surrogate pair intact', () => {
+    expect(replaceLoneSurrogates('ok 😀')).toBe('ok 😀');
+  });
+
+  it('replaces a trailing high surrogate at end-of-string', () => {
+    expect(replaceLoneSurrogates('end\uD83D')).toBe('end\uFFFD');
+  });
+});
+
 describe('wellFormed', () => {
   it('replaces a lone high or low surrogate with U+FFFD', () => {
     expect(wellFormed('hello \uD83D world')).toBe('hello \uFFFD world');
@@ -71,5 +92,20 @@ describe('wellFormed', () => {
 
   it('leaves a complete surrogate pair intact', () => {
     expect(wellFormed('ok 😀')).toBe('ok 😀');
+  });
+
+  // Safari < 16.4 (and other pre-ES2024 runtimes) have no native method —
+  // wellFormed must not TypeError, or quickLabel's fail-soft path is bypassed.
+  it('falls back when String.prototype.toWellFormed is missing', () => {
+    const proto = String.prototype as unknown as { toWellFormed?: (this: string) => string };
+    const saved = proto.toWellFormed;
+    try {
+      proto.toWellFormed = undefined;
+      expect(typeof proto.toWellFormed).toBe('undefined');
+      expect(wellFormed('hello \uD83D world')).toBe('hello \uFFFD world');
+      expect(wellFormed('ok 😀')).toBe('ok 😀');
+    } finally {
+      if (saved) proto.toWellFormed = saved;
+    }
   });
 });

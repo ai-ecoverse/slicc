@@ -2210,10 +2210,12 @@ composer placeholder transcript + scoop chip-tip `lastActivity`).
 
 - Head-clip with `clipUtf16` / `cutBefore` (`src/base/utf16-clip.ts`) — same
   cut as bench `cutBefore`, never leave a trailing high surrogate.
-- `quickLabel` runs `prompt` / `system` through `wellFormed()` (ES2024
-  `String#toWellFormed` via `src/base/utf16-clip.ts`) before `completeSimple`,
-  so a lone surrogate from any other caller still cannot break the body
-  (U+FFFD substitution).
+- `quickLabel` runs `prompt` / `system` through `wellFormed()`
+  (`src/base/utf16-clip.ts`: native `String#toWellFormed` when present,
+  else a local surrogate walk) before `completeSimple`, so a lone surrogate
+  from any other caller still cannot break the body (U+FFFD substitution).
+  The local walk matters on Safari before 16.4 — a bare native call would
+  TypeError above `quickLabel`'s fail-soft `try`.
 
 pi-ai does not repair message content before serializing. Any new path that
 truncates text and then POSTs it to a strict provider must use a
