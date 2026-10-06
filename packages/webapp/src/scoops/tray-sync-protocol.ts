@@ -133,7 +133,8 @@ export type SnapshotChunkBuffer = {
 
 /**
  * Reassemble chunked snapshot data. Returns the parsed messages and scoopJid when all chunks
- * have arrived, or null if still waiting for more chunks.
+ * have arrived, or null if still waiting for more chunks or if the joined payload cannot
+ * be parsed (the follower must keep its prior transcript).
  *
  * Buffers are keyed by `scoopJid` so concurrent snapshots for different cones
  * cannot interleave into one JSON parse. A chunk whose `totalChunks` does not
@@ -173,7 +174,7 @@ export function reassembleSnapshot(
       error: err instanceof Error ? err.message : String(err),
       scoopJid: message.scoopJid,
     });
-    return { messages: [], scoopJid: message.scoopJid };
+    return null;
   }
 }
 
