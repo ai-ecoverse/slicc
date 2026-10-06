@@ -574,6 +574,7 @@ export class ScoopCompletionService {
     signal?: AbortSignal
   ): Promise<void> {
     if (promises.length === 0) return;
+    if (timeoutMs === 0) return;
     if (!signal && (timeoutMs == null || timeoutMs < 0)) {
       await Promise.all(promises);
       return;
@@ -582,7 +583,7 @@ export class ScoopCompletionService {
     let onAbort: (() => void) | null = null;
     try {
       const choices: Promise<void>[] = [Promise.all(promises).then(() => {})];
-      if (timeoutMs != null && timeoutMs >= 0) {
+      if (timeoutMs != null && timeoutMs > 0) {
         choices.push(
           new Promise<void>((resolve) => {
             timer = setTimeout(resolve, timeoutMs);

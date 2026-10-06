@@ -2119,13 +2119,17 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     const priv = orch as unknown as OrchestratorPrivate;
     priv.handleMessage = async () => {};
 
-    const started = Date.now();
-    const results = await orch.waitForScoops([scoop.jid], 0);
-    const elapsed = Date.now() - started;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const resultsPromise = orch.waitForScoops([scoop.jid], 0);
 
-    expect(elapsed).toBeLessThan(500);
-    expect(results[0].timedOut).toBe(true);
-    expect(results[0].summary).toBeNull();
+      await expect(resultsPromise).resolves.toEqual([
+        { jid: scoop.jid, summary: null, timedOut: true },
+      ]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shutdown drains pending scoop_wait waiters so in-flight calls resolve', async () => {
