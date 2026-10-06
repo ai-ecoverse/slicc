@@ -764,6 +764,30 @@ describe('wireWcChipTips (richer hover tooltips)', () => {
     expect(chip.title).toBe('sliccy');
     expect(labelFn).not.toHaveBeenCalled();
   });
+
+  it('feeds well-formed activity into the tip prompt when an emoji sat at the cut', async () => {
+    const { clipUtf16, LAST_ACTIVITY_MAX, wellFormed } = await import(
+      '../../../src/base/utf16-clip.js'
+    );
+    const { switcher, chip } = makeSwitcherWithChip('scoop-1');
+    const raw = `${'a'.repeat(LAST_ACTIVITY_MAX - 1)}😀${'b'.repeat(40)}`;
+    const activity = clipUtf16(raw, LAST_ACTIVITY_MAX);
+    expect(activity).toBe(wellFormed(activity));
+    const labelFn = vi.fn(async () => 'tip');
+    wireWcChipTips({
+      switcher,
+      getScoops: () => [scoop({ jid: 'scoop-1', name: 'researcher' })],
+      lastActivity: new Map([['scoop-1', activity]]),
+      labelFn,
+    });
+    chip.dispatchEvent(new Event('pointerover', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(labelFn).toHaveBeenCalled();
+    });
+    const prompt = ((labelFn.mock.calls[0] as unknown[])[0] as { prompt: string }).prompt;
+    expect(prompt).toBe(wellFormed(prompt));
+    expect(prompt).toContain(activity);
+  });
 });
 
 describe('parseProcStatLine', () => {

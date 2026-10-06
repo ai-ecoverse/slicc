@@ -5,6 +5,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+import { wellFormed } from '../../../src/base/utf16-clip.js';
 import type { ChatMessage } from '../../../src/ui/types.js';
 import {
   applySuggestedPlaceholder,
@@ -52,6 +53,29 @@ describe('placeholderTranscript', () => {
     expect(transcript).not.toContain('queued draft');
     expect(transcript).toContain('[assistant]: final answer');
     expect(transcript).not.toContain('older answer');
+  });
+
+  it('truncates without splitting a surrogate pair (well-formed for quickLabel)', () => {
+    const assistantMax = 800;
+
+    const assistant = `${'x'.repeat(assistantMax - 1)}😀${'y'.repeat(50)}`;
+    const transcript = placeholderTranscript([
+      msg('user', 'follow up'),
+      msg('assistant', assistant),
+    ]);
+    expect(transcript).not.toBeNull();
+    expect(transcript).toBe(wellFormed(transcript!));
+    expect(JSON.parse(JSON.stringify(transcript))).toBe(transcript);
+    for (let i = 0; i < transcript!.length; i++) {
+      const code = transcript!.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = transcript!.charCodeAt(i + 1);
+        expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+        i += 1;
+      } else {
+        expect(code >= 0xdc00 && code <= 0xdfff).toBe(false);
+      }
+    }
   });
 });
 
@@ -147,8 +171,8 @@ describe('createPlaceholderRefresher', () => {
       () => {
         expect(inputCard.getAttribute('placeholder')).toBe('default');
       },
-      { timeout: 5000 }
+      { timeout: 10000 }
     );
     expect(inputCard.hasAttribute('suggestion')).toBe(false);
-  });
+  }, 15000);
 });

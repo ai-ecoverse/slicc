@@ -1,3 +1,4 @@
+import { clipUtf16 } from '../../base/utf16-clip.js';
 import { stripDictationMarkers } from '../../speech/dictation-priming.js';
 import type { ChatMessage } from '../types.js';
 
@@ -11,7 +12,7 @@ const SYSTEM =
   'comes to mind, reply exactly: What shall we build?';
 
 function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+  return text.length > max ? `${clipUtf16(text, max)}…` : text;
 }
 
 export function placeholderTranscript(messages: readonly ChatMessage[]): string | null {

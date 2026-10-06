@@ -1,3 +1,4 @@
+import { clipUtf16, LAST_ACTIVITY_MAX } from '../../base/utf16-clip.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { isFeatureEnabled } from '../../core/feature-flags.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
@@ -528,7 +529,10 @@ function makeTurnFinishedHook(deps: {
       .filter((m) => m.role === 'assistant')
       .at(-1);
     if (last) {
-      deps.boot.wiring.lastActivity.set(jid, String(last.content ?? '').slice(0, 600));
+      deps.boot.wiring.lastActivity.set(
+        jid,
+        clipUtf16(String(last.content ?? ''), LAST_ACTIVITY_MAX)
+      );
     }
   };
 }

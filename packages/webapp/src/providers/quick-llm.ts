@@ -4,6 +4,7 @@ import { hasIcon } from '@slicc/webcomponents/icons';
 
 import { icons as lucideIcons } from 'lucide';
 import { createLogger } from '../base/logger.js';
+import { wellFormed } from '../base/utf16-clip.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import {
   getApiKey,
@@ -49,9 +50,12 @@ export async function quickLabel(opts: QuickLabelOptions): Promise<string | null
     return null;
   }
 
+  const prompt = wellFormed(opts.prompt);
+  const systemPrompt = opts.system !== undefined ? wellFormed(opts.system) : undefined;
+
   const userMessage: UserMessage = {
     role: 'user',
-    content: opts.prompt,
+    content: prompt,
     timestamp: Date.now(),
   };
 
@@ -63,7 +67,7 @@ export async function quickLabel(opts: QuickLabelOptions): Promise<string | null
   try {
     const message = await completeSimple(
       model,
-      { systemPrompt: opts.system, messages: [userMessage] },
+      { systemPrompt, messages: [userMessage] },
       {
         apiKey,
         maxTokens: opts.maxTokens ?? 60,
