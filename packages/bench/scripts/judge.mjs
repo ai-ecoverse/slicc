@@ -10,7 +10,17 @@ export function truncateMiddle(text, limit) {
   const s = String(text ?? '');
   if (limit == null || s.length <= limit) return s;
   const half = Math.floor(limit / 2);
-  return `${s.slice(0, half)}\n... [${s.length - limit} characters omitted] ...\n${s.slice(-half)}`;
+  return `${s.slice(0, cutBefore(s, half))}\n... [${s.length - limit} characters omitted] ...\n${s.slice(cutAfter(s, s.length - half))}`;
+}
+
+export function cutBefore(s, end) {
+  const c = s.charCodeAt(end - 1);
+  return end > 0 && c >= 0xd800 && c <= 0xdbff ? end - 1 : end;
+}
+
+export function cutAfter(s, start) {
+  const c = s.charCodeAt(start);
+  return start > 0 && c >= 0xdc00 && c <= 0xdfff ? start + 1 : start;
 }
 
 export function screenshotsNote(captured, attached) {
@@ -95,10 +105,14 @@ export function findingsSchema(itemIds) {
 }
 
 export function buildConverseBody({ spec, task, trace, includeImages = true, maxTokens = 8000 }) {
-  const content = [{ text: buildJudgeText({ task, trace, caps: spec.caps, includeImages }) }];
+  const content = [
+    { text: buildJudgeText({ task, trace, caps: spec.caps, includeImages }).toWellFormed() },
+  ];
   if (includeImages) {
     trace.screenshots.forEach((shot, i) => {
-      content.push({ text: `Screenshot ${i + 1} of ${trace.screenshots.length}: ${shot.label}.` });
+      content.push({
+        text: `Screenshot ${i + 1} of ${trace.screenshots.length}: ${shot.label}.`.toWellFormed(),
+      });
       content.push({ image: { format: shot.format ?? 'png', source: { bytes: shot.base64 } } });
     });
   }

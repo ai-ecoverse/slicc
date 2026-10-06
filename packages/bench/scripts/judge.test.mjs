@@ -63,9 +63,28 @@ describe('truncateMiddle', () => {
     const out = truncateMiddle('a'.repeat(10) + 'b'.repeat(10), 10);
     expect(out).toBe('aaaaa\n... [10 characters omitted] ...\nbbbbb');
   });
+
+  it('never splits a surrogate pair, at either cut', () => {
+    const head = truncateMiddle(`aaaa😀${'x'.repeat(20)}`, 10);
+    expect(head.isWellFormed()).toBe(true);
+    expect(head.startsWith('aaaa\n')).toBe(true);
+    const tail = truncateMiddle(`${'x'.repeat(20)}😀bbbb`, 11);
+    expect(tail.isWellFormed()).toBe(true);
+    expect(tail.endsWith('\nbbbb')).toBe(true);
+  });
 });
 
 describe('request building', () => {
+  it('sends only well-formed text: a lone surrogate in a step cannot break the body', () => {
+    const trace = { ...TRACE, steps: [...TRACE.steps, 'clipped \ud83d'] };
+    const body = buildConverseBody({ spec: SPEC, task: TASK, trace });
+    const json = JSON.stringify(body);
+    expect(json).not.toMatch(/\\ud8[0-9a-f]{2}(?!\\udc)/i);
+    expect(body.messages[0].content.every((c) => c.text == null || c.text.isWellFormed())).toBe(
+      true
+    );
+  });
+
   it('lays out upstream sections with numbered steps', () => {
     const text = buildJudgeText({ task: TASK, trace: TRACE, caps: CAPS });
     expect(text).toContain('<task>\nFind X.\n</task>');
