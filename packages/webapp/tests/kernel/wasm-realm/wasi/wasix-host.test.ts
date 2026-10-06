@@ -7,7 +7,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { E, OFLAGS, RIGHTS } from '../../../../src/kernel/wasm-realm/wasi/wasi-abi.js';
 import { WasiExit, WasiHost } from '../../../../src/kernel/wasm-realm/wasi/wasi-host.js';
-import { importedMemory } from '../../../../src/kernel/wasm-realm/wasi/wasi-module.js';
+import {
+  foreignImports,
+  importedMemory,
+} from '../../../../src/kernel/wasm-realm/wasi/wasi-module.js';
 import { AsyncifyDriver } from '../../../../src/kernel/wasm-realm/wasi/wasix-fork.js';
 import { COMPAT, WasixHost } from '../../../../src/kernel/wasm-realm/wasi/wasix-host.js';
 import { FakeFs, FakeKernel, Guest } from './fakes.js';
@@ -449,5 +452,62 @@ describe('importedMemory', () => {
       shared: true,
     });
     expect(importedMemory(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]))).toBeUndefined();
+  });
+});
+
+describe('foreignImports', () => {
+  const enc = new TextEncoder();
+  const str = (s: string) => [s.length, ...enc.encode(s)];
+  const uleb = (n: number): number[] => (n < 0x80 ? [n] : [(n & 0x7f) | 0x80, ...uleb(n >>> 7)]);
+  const section = (id: number, body: number[]) => [id, ...uleb(body.length), ...body];
+  const types = section(1, [
+    6,
+    ...[0x60, 0, 1, 0x7f], // 0: () -> i32
+    ...[0x60, 0, 1, 0x7e], // 1: () -> i64
+    ...[0x60, 0, 0], // 2: () -> ()
+    ...[0x60, 0, 2, 0x7f, 0x7f], // 3: () -> (i32, i32)
+    ...[0x60, 1, 0x7f, 1, 0x7c], // 4: (i32) -> f64
+    ...[0x60, 0, 1, 0x7b], // 5: () -> v128
+  ]);
+  const func = (m: string, n: string, type: number) => [...str(m), ...str(n), 0, type];
+  const entries = [
+    [...str('env'), ...str('table'), 1, 0x70, 0, 1],
+    [...str('env'), ...str('memory'), 2, 0, 1],
+    [...str('env'), ...str('g'), 3, 0x7f, 0],
+    [...str('env'), ...str('tag'), 4, 0, 0],
+    func('wasi_snapshot_preview1', 'fd_write', 0),
+    func('wasix_32v1', 'proc_fork', 0),
+    func('wasi', 'thread-spawn', 0),
+    func('env', 'abort', 2),
+    func('acme', 'i32', 0),
+    func('acme', 'i64', 1),
+    func('acme', 'none', 2),
+    func('acme', 'pair', 3),
+    func('acme', 'f64', 4),
+    func('acme', 'vec', 5),
+    func('a.b', 'c', 1),
+    func('a', 'b.c', 0),
+  ];
+  const imports = section(2, [entries.length, ...entries.flat()]);
+  const bytes = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, ...types, ...imports]);
+
+  it('reads the result type of each function imported from a namespace the realm does not provide', () => {
+    expect(foreignImports(bytes)).toEqual({
+      acme: { i32: 'i32', i64: 'i64', none: 'none', pair: 'other', f64: 'f64', vec: 'other' },
+      // Names with dots stay apart.
+      'a.b': { c: 'i64' },
+      a: { 'b.c': 'i32' },
+    });
+    expect(foreignImports(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]))).toEqual({});
+  });
+
+  it('still finds the memory past tables, globals and tags', () => {
+    expect(importedMemory(bytes)).toEqual({
+      module: 'env',
+      name: 'memory',
+      initial: 1,
+      maximum: undefined,
+      shared: false,
+    });
   });
 });

@@ -30,7 +30,7 @@ import {
 import { dylinkInfo } from './dylink.js';
 import { cachingBridge } from './wasi-files.js';
 import { WasiExit, type WasiFunction, WasiHost } from './wasi-host.js';
-import type { ImportedMemory } from './wasi-module.js';
+import type { ForeignImports, ForeignResult, ImportedMemory } from './wasi-module.js';
 import { WasiSignals } from './wasi-signals.js';
 import { WasiStats } from './wasi-stats.js';
 import { MAIN_TID, ThreadExit, threadCap, WasiThreads } from './wasi-threads.js';
@@ -45,33 +45,69 @@ const TRAPPED = 134;
 const PREVIEW1 = 'wasi_snapshot_preview1';
 const WASIX = 'wasix_32v1';
 
+/** What a module's imports are judged against. */
+interface ImportContext {
+  wasix: boolean;
+  /** It imports preview1 or WASIX: a WASI program. */
+  wasi: boolean;
+  /** A position-independent main module (5g): the linker lays it out. */
+  pie: boolean;
+  memory?: ImportedMemory;
+  foreign?: ForeignImports;
+}
+
+/** Why one import keeps the module from running here, if it does. */
+function importRefusal(
+  imp: WebAssembly.ModuleImportDescriptor,
+  c: ImportContext
+): string | undefined {
+  const key = `${imp.module}.${imp.name}`;
+  if (imp.module === PREVIEW1 || imp.module === WASIX) return undefined;
+  if (c.pie && (imp.module === 'GOT.mem' || imp.module === 'GOT.func')) return undefined;
+  // Its undefined symbols too: env functions resolve against side modules (or trap if called).
+  if (c.pie && imp.module === 'env' && imp.kind !== 'memory') return undefined;
+  if (imp.kind === 'memory' && c.memory?.module === imp.module && c.memory.name === imp.name)
+    return undefined;
+  // wasm32-wasip1-threads: threads on the memory the kernel recorded.
+  if (imp.module === 'wasi' && imp.name === 'thread-spawn' && (c.wasix || c.memory?.shared))
+    return undefined;
+  // A function from a namespace this host neither provides nor decides answers ENOSYS,
+  // unless its result cannot carry it.
+  if (c.wasi && imp.kind === 'function' && imp.module !== 'env' && imp.module !== 'wasi') {
+    return c.foreign?.[imp.module]?.[imp.name] === 'other'
+      ? `imports ${key}: its result cannot carry ENOSYS, and this host does not provide it`
+      : undefined;
+  }
+  if (imp.kind === 'memory' || imp.module === 'wasi')
+    return `imports ${key}: no WASI program this host runs`;
+  return `imports ${key}: no WASI preview1 program (an Emscripten one runs with its glue)`;
+}
+
 /**
  * Why the module cannot run here, if it cannot: anything an Emscripten
  * module's glue provides (`env` functions, or `a` once minified), a memory
  * import the kernel did not record (a thread spawn needs its shared memory),
- * or no `_start`.
+ * or no `_start`. A WASI program (one that imports preview1 or WASIX) may also
+ * import functions from namespaces this host does not provide, such as a
+ * package's host module that only slicc-kernel loads: those calls answer
+ * ENOSYS ({@link linkImports}).
  */
 export function unsupportedImport(
   module: WebAssembly.Module,
-  memory?: ImportedMemory
+  memory?: ImportedMemory,
+  foreign?: ForeignImports
 ): string | undefined {
   const imports = WebAssembly.Module.imports(module);
-  const wasix = imports.some((i) => i.module === WASIX);
-  // A position-independent main module (5g): the linker lays it out.
-  const pie = dylinkInfo(module) !== undefined;
+  const context: ImportContext = {
+    wasix: imports.some((i) => i.module === WASIX),
+    wasi: imports.some((i) => i.module === PREVIEW1 || i.module === WASIX),
+    pie: dylinkInfo(module) !== undefined,
+    memory,
+    foreign,
+  };
   for (const imp of imports) {
-    if (imp.module === PREVIEW1 || imp.module === WASIX) continue;
-    if (pie && (imp.module === 'GOT.mem' || imp.module === 'GOT.func')) continue;
-    // Its undefined symbols too: env functions resolve against side modules (or trap if called).
-    if (pie && imp.module === 'env' && imp.kind !== 'memory') continue;
-    if (imp.kind === 'memory' && memory?.module === imp.module && memory.name === imp.name)
-      continue;
-    // wasm32-wasip1-threads: threads on the memory the kernel recorded.
-    if (imp.module === 'wasi' && imp.name === 'thread-spawn' && (wasix || memory?.shared)) continue;
-    if (imp.kind === 'memory' || imp.module === 'wasi') {
-      return `imports ${imp.module}.${imp.name}: no WASI program this host runs`;
-    }
-    return `imports ${imp.module}.${imp.name}: no WASI preview1 program (an Emscripten one runs with its glue)`;
+    const refused = importRefusal(imp, context);
+    if (refused) return refused;
   }
   if (!WebAssembly.Module.exports(module).some((e) => e.name === '_start')) {
     return 'no WASI command (it exports no _start)';
@@ -81,15 +117,29 @@ export function unsupportedImport(
 
 /**
  * The import object. A WASIX call this host does not serve (another
- * generation of it, say) answers ENOSYS; `wasi.thread-spawn` starts a thread
- * (-1: none, past the cap or without threads).
+ * generation of it, say) or a function from a namespace it does not provide
+ * answers ENOSYS, as a value of the import's result type (`foreign`, read from
+ * the module's bytes); `wasi.thread-spawn` starts a thread (-1: none, past the
+ * cap or without threads).
  */
+/** The stub for an import this host does not provide: ENOSYS (52) in its result type. */
+function enosys(
+  imp: WebAssembly.ModuleImportDescriptor,
+  result: ForeignResult | undefined
+): () => number | bigint | undefined {
+  if (imp.module === 'wasi' && imp.name === 'thread-spawn') return () => -1;
+  if (result === 'none') return () => undefined;
+  if (result === 'i64') return () => 52n;
+  return () => 52;
+}
+
 function linkImports(
   module: WebAssembly.Module,
   preview1: Record<string, WasiFunction>,
   wasix: Record<string, WasiFunction> | undefined,
   memory: WebAssembly.Memory | undefined,
-  threads: WasiThreads | undefined
+  threads: WasiThreads | undefined,
+  foreign: ForeignImports = {}
 ): WebAssembly.Imports {
   const imports: Record<string, Record<string, WebAssembly.ImportValue>> = {
     [PREVIEW1]: preview1,
@@ -100,7 +150,7 @@ function linkImports(
     const ns = (imports[imp.module] ??= {});
     if (imp.name in ns) continue;
     if (imp.kind === 'memory' && memory) ns[imp.name] = memory;
-    else if (imp.kind === 'function') ns[imp.name] = () => (imp.name === 'thread-spawn' ? -1 : 52);
+    else if (imp.kind === 'function') ns[imp.name] = enosys(imp, foreign[imp.module]?.[imp.name]);
   }
   return imports;
 }
@@ -210,7 +260,13 @@ async function instantiate(
     thread = false,
     stats,
     signals,
-  }: { thread?: boolean; stats?: WasiStats; signals?: WasiSignals } = {}
+    foreign,
+  }: {
+    thread?: boolean;
+    stats?: WasiStats;
+    signals?: WasiSignals;
+    foreign?: ForeignImports;
+  } = {}
 ): Promise<{ instance: WebAssembly.Instance; driver: AsyncifyDriver }> {
   const driver = new AsyncifyDriver(host.mem);
   const wasixHost = WebAssembly.Module.imports(module).some((i) => i.module === WASIX)
@@ -249,7 +305,7 @@ async function instantiate(
       threads.modules = () => sync.linker.compiled();
     }
   }
-  const hostImports = linkImports(module, preview1, wasix, memory, threads);
+  const hostImports = linkImports(module, preview1, wasix, memory, threads, foreign);
   const imports: WebAssembly.Imports = sync
     ? merge(hostImports, sync.linker.mainImports(module))
     : hostImports;
@@ -369,7 +425,7 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
   const stats = init.env.SLICC_WASI_STATS === '1' ? new WasiStats() : undefined;
   const call = stats ? timedCalls(stats, kernelCall) : kernelCall;
   const { module } = init.program;
-  const refused = unsupportedImport(module, init.program.memory);
+  const refused = unsupportedImport(module, init.program.memory, init.program.foreign);
   if (refused) {
     say(refused);
     return 126;
@@ -407,7 +463,11 @@ export async function runWasiProcess(init: WasmProcessInitMsg, port: SabPostLike
       if (!host.fds.isShared) host.fds.share(threads.ids, false);
     };
   }
-  const { instance, driver } = await instantiate(host, module, memory, threads, { stats, signals });
+  const { instance, driver } = await instantiate(host, module, memory, threads, {
+    stats,
+    signals,
+    foreign: init.program.foreign,
+  });
   signals.bind(instance.exports);
   host.onRaise = (sig) => signals.raised(sig);
   const exports = instance.exports as { _start: () => void };
@@ -515,6 +575,7 @@ export async function runWasiThread(init: WasmThreadInitMsg, port: SabPostLike):
   // ENOSYS for them (its driver is never bound).
   const { instance } = await instantiate(host, init.program.module, thread.memory, threads, {
     thread: true,
+    foreign: init.program.foreign,
   });
   const start = instance.exports.wasi_thread_start as (tid: number, arg: number) => void;
   try {

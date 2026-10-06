@@ -143,6 +143,33 @@ describe('unsupportedImport', () => {
     expect(unsupportedImport(module([[P1, 'fd_write', 'func']], ['_start']))).toBeUndefined();
   });
 
+  it('accepts functions from a namespace it does not provide in a WASI program (they answer ENOSYS)', () => {
+    const probe: [string, string, 'func'] = ['acme_host', 'probe', 'func'];
+    expect(
+      unsupportedImport(module([[P1, 'fd_write', 'func'], probe], ['_start']))
+    ).toBeUndefined();
+    expect(
+      unsupportedImport(module([['wasix_32v1', 'proc_fork', 'func'], probe], ['_start']))
+    ).toBeUndefined();
+    expect(unsupportedImport(module([probe], ['_start']))).toContain(
+      'imports acme_host.probe: no WASI preview1 program'
+    );
+  });
+
+  it('refuses one whose result cannot carry ENOSYS (multiple values, vectors, references)', () => {
+    const pair = module(
+      [
+        [P1, 'fd_write', 'func'],
+        ['acme_host', 'pair', 'func'],
+      ],
+      ['_start']
+    );
+    expect(unsupportedImport(pair, undefined, { acme_host: { pair: 'other' } })).toContain(
+      'imports acme_host.pair: its result cannot carry ENOSYS'
+    );
+    expect(unsupportedImport(pair, undefined, { acme_host: { pair: 'i64' } })).toBeUndefined();
+  });
+
   it('accepts WASIX, with the memory the kernel recorded and its thread-spawn', () => {
     const memory = { module: 'env', name: 'memory', initial: 2, shared: true };
     const wasix = module(
@@ -192,6 +219,17 @@ describe('unsupportedImport', () => {
     expect(unsupportedImport(module([['a', 'a', 'func']], ['_start']))).toContain(
       'imports a.a: no WASI preview1 program'
     );
+    expect(
+      unsupportedImport(
+        module(
+          [
+            [P1, 'fd_write', 'func'],
+            ['env', 'abort', 'func'],
+          ],
+          ['_start']
+        )
+      )
+    ).toContain('imports env.abort: no WASI preview1 program');
     expect(unsupportedImport(module([[P1, 'fd_write', 'func']], ['_initialize']))).toContain(
       'no _start'
     );
