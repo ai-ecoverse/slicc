@@ -21,6 +21,7 @@ vi.mock('../../src/providers/account-store.js', () => ({
   getProviderModels: () => providerSettings.models,
 }));
 
+import { wellFormed } from '../../src/base/utf16-clip.js';
 import { __test__, quickLabel } from '../../src/providers/quick-llm.js';
 import { __resetAdobeSessionIdCacheForTests } from '../../src/scoops/llm-session-id.js';
 
@@ -212,6 +213,30 @@ describe('quickLabel', () => {
     expect(context.systemPrompt).toBe('be brief');
     expect(context.messages[0].role).toBe('user');
     expect(context.messages[0].content).toBe('describe');
+  });
+
+  // Defense in depth for #3826: even if a caller still passes a lone
+  // surrogate, the body sent to completeSimple must be well-formed.
+  it('repairs lone surrogates in prompt and system before completeSimple', async () => {
+    providerSettings.models = [makeModel('claude-haiku-4-5', 1)];
+    providerSettings.modelId = 'claude-haiku-4-5';
+    completeSimple.mockResolvedValue(assistantTextMessage('ok'));
+
+    const loneHigh = 'hello \uD83D world';
+    const loneLow = 'sys \uDE00 prompt';
+    expect(loneHigh).not.toBe(wellFormed(loneHigh));
+    expect(loneLow).not.toBe(wellFormed(loneLow));
+
+    await quickLabel({ prompt: loneHigh, system: loneLow });
+
+    const [, context] = completeSimple.mock.calls[0] as [
+      unknown,
+      { systemPrompt?: string; messages: Array<{ role: string; content: string }> },
+    ];
+    expect(context.messages[0].content).toBe(wellFormed(loneHigh));
+    expect(context.systemPrompt).toBe(wellFormed(loneLow));
+    expect(context.messages[0].content).toBe(wellFormed(context.messages[0].content));
+    expect(context.systemPrompt).toBe(wellFormed(context.systemPrompt!));
   });
 });
 

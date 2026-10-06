@@ -1,4 +1,5 @@
 import { isLickChannel } from '../../base/lick-channels.js';
+import { clipUtf16, LAST_ACTIVITY_MAX } from '../../base/utf16-clip.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import {
   presentationStateFor,
@@ -219,7 +220,7 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
     },
     onIncomingMessage: (jid, message) => {
       wiring.refs.switcher.setAttribute('attention', jid);
-      wiring.lastActivity.set(jid, String(message.content ?? '').slice(0, 600));
+      wiring.lastActivity.set(jid, clipUtf16(String(message.content ?? ''), LAST_ACTIVITY_MAX));
       if (wiring.getSelected()?.id !== jid) return;
       if (message.channel !== 'web' && isLickChannel(message.channel)) {
         wiring

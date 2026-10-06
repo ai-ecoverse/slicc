@@ -2196,6 +2196,29 @@ Key files in the chain:
 over `thinkingLevelToEffort`). `clampXhighEffort` only acts on `xhigh`,
 so `max` passes through unchanged.
 
+## Adobe / Bedrock: lone UTF-16 surrogates in JSON request bodies
+
+A `.slice(0, n)` on a JS string counts UTF-16 code units. Cutting through an
+emoji (or any astral character) leaves a **lone surrogate**. `JSON.stringify`
+emits that as an unpaired `\udXXX` escape; the Adobe-proxied Bedrock GPT
+judge/label family rejects the whole body with
+`invalid request body: unexpected end of hex escape` (HTTP 400). Same defect
+shape as the bench judge (#3820) and the webapp `quickLabel` path (#3826:
+composer placeholder transcript + scoop chip-tip `lastActivity`).
+
+**Fix at the clip, then repair at the wire:**
+
+- Head-clip with `clipUtf16` / `cutBefore` (`src/base/utf16-clip.ts`) — same
+  cut as bench `cutBefore`, never leave a trailing high surrogate.
+- `quickLabel` runs `prompt` / `system` through `wellFormed()` (ES2024
+  `String#toWellFormed` via `src/base/utf16-clip.ts`) before `completeSimple`,
+  so a lone surrogate from any other caller still cannot break the body
+  (U+FFFD substitution).
+
+pi-ai does not repair message content before serializing. Any new path that
+truncates text and then POSTs it to a strict provider must use a
+surrogate-safe cut (or `wellFormed()` at the serialize boundary).
+
 ## Adobe / Bedrock: `temperature` + adaptive-thinking shims
 
 When the pinned pi-ai doesn't know a model, it emits request shapes
