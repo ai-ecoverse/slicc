@@ -9,7 +9,7 @@
  * (`sync-sab-req` / `sync-sab-next`, see `realm/sync-sab-wire.ts`).
  */
 import type { DeviceMeta, KernelFdKind } from './fd-table.js';
-import type { ImportedMemory } from './wasi/wasi-module.js';
+import type { ForeignResult, ImportedMemory } from './wasi/wasi-module.js';
 import type { WasiForkState } from './wasi/wasix-fork.js';
 
 export const WASM_PROCESS_INIT = 'wasm-process-init';
@@ -46,6 +46,12 @@ export interface WasmProgram {
    * reflect an import's type.
    */
   memory?: ImportedMemory;
+  /**
+   * WASI: the result types of the functions the module imports from
+   * namespaces the realm does not provide, keyed `module.name`, read from its
+   * bytes when it was compiled; their stubs answer ENOSYS in that type.
+   */
+  foreign?: Record<string, ForeignResult>;
   /**
    * WASI: the module's name-section sidecar (`<module>.names`, the payload of
    * a `name` custom section) when it ships without that section. Set only

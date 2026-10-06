@@ -156,6 +156,20 @@ describe('unsupportedImport', () => {
     );
   });
 
+  it('refuses one whose result cannot carry ENOSYS (multiple values, vectors, references)', () => {
+    const pair = module(
+      [
+        [P1, 'fd_write', 'func'],
+        ['acme_host', 'pair', 'func'],
+      ],
+      ['_start']
+    );
+    expect(unsupportedImport(pair, undefined, { 'acme_host.pair': 'other' })).toContain(
+      'imports acme_host.pair: its result cannot carry ENOSYS'
+    );
+    expect(unsupportedImport(pair, undefined, { 'acme_host.pair': 'i64' })).toBeUndefined();
+  });
+
   it('accepts WASIX, with the memory the kernel recorded and its thread-spawn', () => {
     const memory = { module: 'env', name: 'memory', initial: 2, shared: true };
     const wasix = module(

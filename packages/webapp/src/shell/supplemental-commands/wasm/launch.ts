@@ -40,6 +40,8 @@ import {
 } from '../../../kernel/wasm-realm/socket.js';
 import type { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import {
+  type ForeignResult,
+  foreignImports,
   type ImportedMemory,
   importedMemory,
 } from '../../../kernel/wasm-realm/wasi/wasi-module.js';
@@ -140,8 +142,14 @@ function withSecretFunction(argv0: string, env: Record<string, string>): Record<
 
 /** Compiled modules, keyed by path, size and mtime: a rebuilt program recompiles. */
 const modules = new Map<string, Promise<WebAssembly.Module>>();
-/** The memory a WASI module imports (WASIX's shared `env.memory`), by the same key, read with its bytes. */
-const memories = new Map<string, ImportedMemory | undefined>();
+/** What a WASI module imports, by the same key, read with its bytes. */
+interface WasiImports {
+  /** The memory it imports (WASIX's shared `env.memory`). */
+  memory?: ImportedMemory;
+  /** The result types of its functions from namespaces the realm does not provide. */
+  foreign: Record<string, ForeignResult>;
+}
+const memories = new Map<string, WasiImports>();
 
 /** The process manager's signal names, by number (what `kill()` from a program can reach there). */
 const SIGNAL_NAME = new Map(
@@ -302,7 +310,7 @@ async function loadModule(ctx: CommandContext, path: string): Promise<WebAssembl
  */
 /** Compile WASI bytes into the cache, noting the memory the module imports. */
 function cacheWasi(key: string, bytes: Uint8Array): Promise<WebAssembly.Module> {
-  memories.set(key, importedMemory(bytes));
+  memories.set(key, { memory: importedMemory(bytes), foreign: foreignImports(bytes) });
   return cache(key, compileWasmModule(bytes));
 }
 
@@ -310,14 +318,14 @@ function cacheWasi(key: string, bytes: Uint8Array): Promise<WebAssembly.Module> 
 async function loadWasi(
   ctx: CommandContext,
   path: string
-): Promise<{ module: WebAssembly.Module; memory?: ImportedMemory }> {
+): Promise<{ module: WebAssembly.Module } & WasiImports> {
   const key = cacheKey(path, await ctx.fs.stat(path));
   const cached = modules.get(key);
   const module = await (cached && memories.has(key)
     ? cached
     : cacheWasi(key, await ctx.fs.readFileBuffer(path)));
-  const memory = memories.get(key);
-  return { module, ...(memory ? { memory } : {}) };
+  const { memory, foreign = {} } = memories.get(key) ?? {};
+  return { module, foreign, ...(memory ? { memory } : {}) };
 }
 
 /**
@@ -484,8 +492,9 @@ export class WasmSession {
     let glue = '';
     let module: WebAssembly.Module;
     let memory: ImportedMemory | undefined;
+    let foreign: Record<string, ForeignResult> = {};
     try {
-      if (wasi) ({ module, memory } = await loadWasi(this.ctx, req.module));
+      if (wasi) ({ module, memory, foreign } = await loadWasi(this.ctx, req.module));
       else {
         glue = await this.ctx.fs.readFile(req.glue);
         module = await loadModule(this.ctx, req.module);
@@ -505,7 +514,14 @@ export class WasmSession {
       ...req,
       env,
       program: wasi
-        ? { abi: 'wasi', glue, module, ...(memory ? { memory } : {}), ...(names ? { names } : {}) }
+        ? {
+            abi: 'wasi',
+            glue,
+            module,
+            ...(memory ? { memory } : {}),
+            ...(Object.keys(foreign).length ? { foreign } : {}),
+            ...(names ? { names } : {}),
+          }
         : { glue, module },
     });
   }
