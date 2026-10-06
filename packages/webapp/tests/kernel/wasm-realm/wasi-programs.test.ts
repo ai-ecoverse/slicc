@@ -348,6 +348,11 @@ describe('WASI preview1 programs in the wasm realm', () => {
     expect(r.code).toBe(126);
     expect(r.stderr).toContain('no WASI preview1 program');
   });
+
+  it('runs a WASI program that imports a namespace this host does not provide; the call answers ENOSYS', async () => {
+    const r = await run(await wasi(`${FIXTURES}probetest.wasm`), []);
+    expect(r).toMatchObject({ code: 0, stdout: 'probe=52 spawn=52\n' });
+  });
 });
 
 describe.skipIf(!big('go-demo/wasidemo-go.wasm'))('WASI programs from the big toolchains', () => {

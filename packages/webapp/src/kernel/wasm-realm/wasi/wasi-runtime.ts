@@ -49,7 +49,10 @@ const WASIX = 'wasix_32v1';
  * Why the module cannot run here, if it cannot: anything an Emscripten
  * module's glue provides (`env` functions, or `a` once minified), a memory
  * import the kernel did not record (a thread spawn needs its shared memory),
- * or no `_start`.
+ * or no `_start`. A WASI program (one that imports preview1 or WASIX) may also
+ * import functions from namespaces this host does not provide, such as a
+ * package's host module that only slicc-kernel loads: those calls answer
+ * ENOSYS ({@link linkImports}).
  */
 export function unsupportedImport(
   module: WebAssembly.Module,
@@ -57,6 +60,7 @@ export function unsupportedImport(
 ): string | undefined {
   const imports = WebAssembly.Module.imports(module);
   const wasix = imports.some((i) => i.module === WASIX);
+  const wasi = imports.some((i) => i.module === PREVIEW1 || i.module === WASIX);
   // A position-independent main module (5g): the linker lays it out.
   const pie = dylinkInfo(module) !== undefined;
   for (const imp of imports) {
@@ -68,6 +72,7 @@ export function unsupportedImport(
       continue;
     // wasm32-wasip1-threads: threads on the memory the kernel recorded.
     if (imp.module === 'wasi' && imp.name === 'thread-spawn' && (wasix || memory?.shared)) continue;
+    if (wasi && imp.kind === 'function' && imp.module !== 'env' && imp.module !== 'wasi') continue;
     if (imp.kind === 'memory' || imp.module === 'wasi') {
       return `imports ${imp.module}.${imp.name}: no WASI program this host runs`;
     }
@@ -81,8 +86,9 @@ export function unsupportedImport(
 
 /**
  * The import object. A WASIX call this host does not serve (another
- * generation of it, say) answers ENOSYS; `wasi.thread-spawn` starts a thread
- * (-1: none, past the cap or without threads).
+ * generation of it, say) or a function from a namespace it does not provide
+ * answers ENOSYS; `wasi.thread-spawn` starts a thread (-1: none, past the cap
+ * or without threads).
  */
 function linkImports(
   module: WebAssembly.Module,
@@ -100,7 +106,8 @@ function linkImports(
     const ns = (imports[imp.module] ??= {});
     if (imp.name in ns) continue;
     if (imp.kind === 'memory' && memory) ns[imp.name] = memory;
-    else if (imp.kind === 'function') ns[imp.name] = () => (imp.name === 'thread-spawn' ? -1 : 52);
+    else if (imp.kind === 'function')
+      ns[imp.name] = () => (imp.module === 'wasi' && imp.name === 'thread-spawn' ? -1 : 52);
   }
   return imports;
 }
