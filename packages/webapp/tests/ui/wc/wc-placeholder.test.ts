@@ -9,6 +9,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+import { wellFormed } from '../../../src/base/utf16-clip.js';
 import type { ChatMessage } from '../../../src/ui/types.js';
 import {
   applySuggestedPlaceholder,
@@ -56,6 +57,31 @@ describe('placeholderTranscript', () => {
     expect(transcript).not.toContain('queued draft');
     expect(transcript).toContain('[assistant]: final answer');
     expect(transcript).not.toContain('older answer');
+  });
+
+  // An emoji at the UTF-16 truncate boundary must not leave a lone surrogate
+  // for quickLabel → JSON.stringify → Adobe/Bedrock GPT (#3826 / #3820).
+  it('truncates without splitting a surrogate pair (well-formed for quickLabel)', () => {
+    const assistantMax = 800;
+    // (max-1) ASCII then 😀 so a naive .slice(0, max) keeps only the high half.
+    const assistant = `${'x'.repeat(assistantMax - 1)}😀${'y'.repeat(50)}`;
+    const transcript = placeholderTranscript([
+      msg('user', 'follow up'),
+      msg('assistant', assistant),
+    ]);
+    expect(transcript).not.toBeNull();
+    expect(transcript).toBe(wellFormed(transcript!));
+    expect(JSON.parse(JSON.stringify(transcript))).toBe(transcript);
+    for (let i = 0; i < transcript!.length; i++) {
+      const code = transcript!.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = transcript!.charCodeAt(i + 1);
+        expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+        i += 1;
+      } else {
+        expect(code >= 0xdc00 && code <= 0xdfff).toBe(false);
+      }
+    }
   });
 });
 
@@ -129,6 +155,8 @@ describe('applySuggestedPlaceholder', () => {
 });
 
 describe('createPlaceholderRefresher', () => {
+  // Coverage instrumentation slows the dynamic `quick-llm` import on the
+  // fire-and-forget path; keep both the test and waitFor budgets above that.
   it('writes the refreshed placeholder onto the input card, skipping disabled (frozen) views', async () => {
     const inputCard = document.createElement('slicc-input-card') as HTMLElement & {
       value?: string;
@@ -149,14 +177,12 @@ describe('createPlaceholderRefresher', () => {
     // The real quick-llm path resolves null in tests (no provider/key) —
     // fail-soft means the default lands as the plain placeholder, with no
     // Tab-acceptable suggestion left behind.
-    // Generous timeout: the fire-and-forget refreshSuggestedPlaceholder path
-    // can exceed the 1s default under v8 coverage instrumentation.
     await vi.waitFor(
       () => {
         expect(inputCard.getAttribute('placeholder')).toBe('default');
       },
-      { timeout: 5000 }
+      { timeout: 10000 }
     );
     expect(inputCard.hasAttribute('suggestion')).toBe(false);
-  });
+  }, 15000);
 });

@@ -19,6 +19,7 @@
  * the join lifecycle, the model catalog) stays with the follower mount.
  */
 
+import { clipUtf16, LAST_ACTIVITY_MAX } from '../../base/utf16-clip.js';
 import { toTabDescriptors } from '../../work-unit/client/presentation.js';
 import type { WorkUnitClient } from '../../work-unit/client/types.js';
 import { UnreadLedger } from '../../work-unit/client/unread.js';
@@ -152,7 +153,7 @@ export function attachWcChat(
     const jid = boot.getSelected()?.id;
     if (jid) {
       refs.switcher.setAttribute('attention', jid);
-      boot.wiring.lastActivity.set(jid, (text ?? '').slice(0, 600));
+      boot.wiring.lastActivity.set(jid, clipUtf16(text ?? '', LAST_ACTIVITY_MAX));
     }
   });
 

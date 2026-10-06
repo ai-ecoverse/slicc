@@ -9,6 +9,7 @@
  * conversation yet, user already typing, call failure).
  */
 
+import { clipUtf16 } from '../../base/utf16-clip.js';
 import { stripDictationMarkers } from '../../speech/dictation-priming.js';
 import type { ChatMessage } from '../types.js';
 
@@ -22,7 +23,8 @@ const SYSTEM =
   'comes to mind, reply exactly: What shall we build?';
 
 function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+  // clipUtf16: same surrogate-safe cut as bench cutBefore (#3820 / #3826).
+  return text.length > max ? `${clipUtf16(text, max)}…` : text;
 }
 
 /** The `[user]…[assistant]` transcript for the suggestion prompt, or null
