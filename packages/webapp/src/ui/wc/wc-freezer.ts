@@ -6,6 +6,7 @@
  */
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import { serializeIndexWrite } from '../../transcript/frozen-archive-writer.js';
 import { loadFrozenArchive } from '../../transcript/session-jsonl.js';
 import { PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 import {
@@ -44,13 +45,23 @@ function metaLine(entry: FrozenSessionIndexEntry): string {
   return entry.live ? `${turns} · in progress` : turns;
 }
 
+/** Per-host card options: only the leader rail can delete. */
+export interface FrozenCardOptions {
+  /** Offer the card's trash button (never on a live snapshot). */
+  deletable?: boolean;
+}
+
 /** Build one freezer card; `slug` carries the archive filename. */
-export function frozenCard(entry: FrozenSessionIndexEntry): HTMLElement {
+export function frozenCard(
+  entry: FrozenSessionIndexEntry,
+  opts: FrozenCardOptions = {}
+): HTMLElement {
   const card = document.createElement('slicc-freezer-card');
   card.setAttribute('title', entry.title);
   card.setAttribute('meta', metaLine(entry));
   card.setAttribute('slug', entry.filename);
   if (entry.icon) card.setAttribute('icon', entry.icon);
+  if (opts.deletable && !entry.live) card.setAttribute('deletable', '');
   return card;
 }
 
@@ -77,16 +88,21 @@ export async function enrichFreezerIcons(deps: {
   }
   if (picked.size === 0) return;
 
-  // Re-read right before the write; refuse to write over a fault, a corrupt
-  // index, OR an empty one (we were called with entries — an empty re-read
-  // means something is wrong, and writing would persist a wipe).
-  const current = await readFreezerEntries(deps.reader);
-  if (current === null || current.length === 0) return;
-  const updated = current.map((e) => {
-    const icon = !e.icon && picked.has(e.filename) ? picked.get(e.filename) : undefined;
-    return icon ? { ...e, icon } : e;
+  // Re-read and write as ONE index transaction: an unlocked read-then-write
+  // could put back a row deleted (or drop a row frozen) in between. Refuse
+  // to write over a fault, a corrupt index, OR an empty one (we were called
+  // with entries — an empty re-read means something is wrong).
+  const written = await serializeIndexWrite(async () => {
+    const current = await readFreezerEntries(deps.reader);
+    if (current === null || current.length === 0) return false;
+    const updated = current.map((e) => {
+      const icon = !e.icon && picked.has(e.filename) ? picked.get(e.filename) : undefined;
+      return icon ? { ...e, icon } : e;
+    });
+    await deps.writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    return true;
   });
-  await deps.writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+  if (!written) return;
 
   for (const card of deps.freezer.querySelectorAll('slicc-freezer-card')) {
     const icon = picked.get(card.getAttribute('slug') ?? '');
@@ -174,6 +190,27 @@ export async function rebuildFreezerIndexFromArchives(
   return entries;
 }
 
+/**
+ * Rebuild a corrupt index from the archives and publish it as ONE index
+ * transaction, re-checking the corruption inside the lock: a scan taken
+ * outside it could publish a row a concurrent delete just removed. Returns
+ * the rows to render, or `null` when there is nothing to show.
+ */
+export function recoverCorruptFreezerIndex(
+  reader: LocalVfsClient,
+  writer: { writeFile(path: string, content: string): Promise<unknown> }
+): Promise<FrozenSessionIndexEntry[] | null> {
+  return serializeIndexWrite(async () => {
+    const state = await readFreezerIndexState(reader);
+    if (state.kind === 'ok') return state.entries;
+    if (state.kind !== 'corrupt') return null;
+    const entries = await rebuildFreezerIndexFromArchives(reader);
+    if (entries.length === 0) return null;
+    await writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
+    return entries;
+  });
+}
+
 /** One rebuilt index row from an archive's text (frontmatter + data block). */
 function entryFromArchive(filename: string, text: string): FrozenSessionIndexEntry {
   const header = text.slice(0, 2000);
@@ -214,10 +251,11 @@ function entryFromArchive(filename: string, text: string): FrozenSessionIndexEnt
  */
 export function renderFreezerCards(
   freezer: HTMLElement,
-  entries: readonly FrozenSessionIndexEntry[]
+  entries: readonly FrozenSessionIndexEntry[],
+  opts: FrozenCardOptions = {}
 ): void {
   for (const card of Array.from(freezer.querySelectorAll('slicc-freezer-card'))) card.remove();
-  freezer.append(...entries.map(frozenCard));
+  freezer.append(...entries.map((entry) => frozenCard(entry, opts)));
 }
 
 /** Read and parse a frozen archive into its title + messages. */

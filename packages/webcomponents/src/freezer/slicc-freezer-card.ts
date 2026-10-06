@@ -124,6 +124,45 @@ slicc-freezer-card .slicc-fzcard__meta {
 slicc-freezer-card[thawed] {
   background: color-mix(in srgb, var(--rose) 12%, transparent);
 }
+/* Trash button (deletable rows): a quiet trailing icon that appears on row
+   hover / keyboard focus. display:none in the icon-only rail takes it out of
+   layout AND the tab order. */
+slicc-freezer-card .slicc-fzcard__delete {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--txt-3);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    background-color 0.12s,
+    color 0.12s;
+}
+slicc-freezer-card:hover .slicc-fzcard__delete,
+slicc-freezer-card:focus-within .slicc-fzcard__delete {
+  opacity: 1;
+}
+slicc-freezer-card .slicc-fzcard__delete:hover,
+slicc-freezer-card .slicc-fzcard__delete:focus-visible {
+  color: var(--rose);
+  background: color-mix(in srgb, var(--rose) 14%, transparent);
+}
+slicc-freezer-card:not([expanded]) .slicc-fzcard__delete {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  slicc-freezer-card .slicc-fzcard__delete {
+    transition: none;
+  }
+}
 `;
 
 const STYLE_ID = 'slicc-freezer-card-style';
@@ -142,6 +181,9 @@ const THAW_MS = 1400;
 
 /** Rendered lucide glyph size (px) for a custom `icon`, matching the snowflake badge. */
 const ICON_SIZE = 14;
+
+/** Rendered lucide glyph size (px) for the trailing trash button. */
+const DELETE_ICON_SIZE = 14;
 
 /**
  * `<slicc-freezer-card>` — one frozen-session row from the prototype's left
@@ -182,15 +224,18 @@ const ICON_SIZE = 14;
  * @attr expanded - boolean; fades the title+meta in (collapsed = badge only)
  * @attr thawed - boolean; the rose reopen flash (mirrored onto the badge)
  * @attr hidden - boolean; search-hide (the prototype's `.match-hidden`)
+ * @attr deletable - boolean; adds a trailing trash button that fires freezer-card-delete
  * @csspart badge - the leading `<slicc-snowflake>` badge
  * @csspart text - the `.ftext` title+meta column
  * @csspart title - the `.fzt` session heading
  * @csspart meta - the `.fzm` meta line
+ * @csspart delete - the trash button
  * @slot - default; title content, used when the `title` attribute is absent
  * @fires freezer-card-select - composed + bubbling; `detail.slug` on click
+ * @fires freezer-card-delete - composed + bubbling; detail.slug when the trash button is clicked (the row does not thaw)
  */
 export class SliccFreezerCard extends HTMLElement {
-  static readonly observedAttributes = ['title', 'meta', 'slug', 'icon', 'thawed'];
+  static readonly observedAttributes = ['title', 'meta', 'slug', 'icon', 'thawed', 'deletable'];
 
   #badge!: HTMLElement;
   #text!: HTMLElement;
@@ -199,6 +244,19 @@ export class SliccFreezerCard extends HTMLElement {
   #tip: HTMLElement | null = null;
   /** The custom lucide glyph slotted into the badge when `icon` is set. */
   #iconNode: SVGSVGElement | null = null;
+  /** The trailing trash button while `deletable` is set. */
+  #deleteBtn: HTMLButtonElement | null = null;
+  #onDelete = (event: Event): void => {
+    // The row's own click would thaw the session; deleting must not.
+    event.stopPropagation();
+    this.dispatchEvent(
+      new CustomEvent('freezer-card-delete', {
+        bubbles: true,
+        composed: true,
+        detail: { slug: this.slug },
+      })
+    );
+  };
   #built = false;
   #thawTimer: ReturnType<typeof setTimeout> | null = null;
   #onClick = (): void => this.#select();
@@ -233,6 +291,8 @@ export class SliccFreezerCard extends HTMLElement {
       this.#badge.toggleAttribute('thawed', newValue !== null);
     } else if (name === 'icon') {
       this.#syncIcon();
+    } else if (name === 'deletable') {
+      this.#syncDelete();
     } else {
       this.#sync();
     }
@@ -276,6 +336,15 @@ export class SliccFreezerCard extends HTMLElement {
   set icon(value: string | null) {
     if (value == null) this.removeAttribute('icon');
     else this.setAttribute('icon', value);
+  }
+
+  /** Whether the row offers a trash button (`freezer-card-delete`). */
+  get deletable(): boolean {
+    return this.hasAttribute('deletable');
+  }
+
+  set deletable(value: boolean) {
+    this.toggleAttribute('deletable', value);
   }
 
   /** Whether the title+meta are faded in (collapsed = badge only). */
@@ -356,6 +425,8 @@ export class SliccFreezerCard extends HTMLElement {
       this.#meta = existing.querySelector('.slicc-fzcard__meta') as HTMLElement;
       this.#badge = this.querySelector(':scope > slicc-snowflake') as HTMLElement;
       this.#tip = this.querySelector(':scope > .slicc-fzcard__tip');
+      this.#deleteBtn = this.querySelector(':scope > .slicc-fzcard__delete');
+      this.#deleteBtn?.addEventListener('click', this.#onDelete);
       this.addEventListener('click', this.#onClick);
       this.addEventListener('pointerenter', this.#onTipAnchor);
       this.addEventListener('focusin', this.#onTipAnchor);
@@ -399,6 +470,7 @@ export class SliccFreezerCard extends HTMLElement {
     if (this.#tip) this.#tip.textContent = title ?? (this.#title.textContent || '');
     this.#badge.toggleAttribute('thawed', this.thawed);
     this.#syncIcon();
+    this.#syncDelete();
   }
 
   /**
@@ -419,6 +491,31 @@ export class SliccFreezerCard extends HTMLElement {
       this.#iconNode.remove();
       this.#iconNode = null;
     }
+  }
+
+  /**
+   * Reflect `deletable`: create the trailing trash button (before the hover
+   * tip) or remove it, and keep its accessible name on the current title.
+   */
+  #syncDelete(): void {
+    if (!this.#built) return;
+    if (!this.hasAttribute('deletable')) {
+      this.#deleteBtn?.remove();
+      this.#deleteBtn = null;
+      return;
+    }
+    if (!this.#deleteBtn) {
+      const btn = h(
+        'button',
+        { type: 'button', class: 'slicc-fzcard__delete', part: 'delete', title: 'Delete' },
+        iconEl('trash-2', { size: DELETE_ICON_SIZE })
+      ) as HTMLButtonElement;
+      btn.addEventListener('click', this.#onDelete);
+      this.insertBefore(btn, this.#tip);
+      this.#deleteBtn = btn;
+    }
+    const title = this.getAttribute('title') ?? this.#title.textContent ?? '';
+    this.#deleteBtn.setAttribute('aria-label', `Delete “${title}”`);
   }
 }
 

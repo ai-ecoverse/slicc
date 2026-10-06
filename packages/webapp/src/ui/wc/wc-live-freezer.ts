@@ -1,5 +1,6 @@
 import { isFeatureEnabled } from '../../core/feature-flags.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { isChatKeyId } from '../../transcript/frozen-session-identity.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { tmpDirFor } from '../../work-unit/descriptor.js';
 import { isRootUnit } from '../../work-unit/policy.js';
@@ -19,11 +20,11 @@ import {
   type FrozenSessionIndexEntry,
   readFreezerEntries,
   readFreezerIndexState,
-  rebuildFreezerIndexFromArchives,
+  recoverCorruptFreezerIndex,
   renderFreezerCards,
-  SESSIONS_INDEX_PATH,
   thawFrozenSession,
 } from './wc-freezer.js';
+import { wireFreezerDelete } from './wc-freezer-delete.js';
 import type { WcPageVfs } from './wc-live.js';
 import { applyShellContext, type WcShellRefs } from './wc-shell.js';
 import {
@@ -270,6 +271,67 @@ export function frozenProvenanceEl(
   return el;
 }
 
+/** The rail's rows: the index, or — when it is corrupt — a locked rebuild from the archives. */
+async function loadFreezerEntries(
+  reader: WcPageVfs['reader'],
+  writer: WcPageVfs['writer'],
+  log: BootStageLogger
+): Promise<FrozenSessionIndexEntry[] | null> {
+  const entries = await readFreezerEntries(reader);
+  if (entries !== null) return entries;
+  if ((await readFreezerIndexState(reader)).kind !== 'corrupt') return null;
+  log.warn('WC freezer index corrupt — rebuilding from archives');
+  return recoverCorruptFreezerIndex(reader, writer);
+}
+
+/** Backfill rail icons for rows without one; one pass at a time per rail. */
+function backfillFreezerIcons(
+  gate: { busy: boolean },
+  ctx: Pick<WcPageVfs, 'reader' | 'writer'> & { freezer: HTMLElement; log: BootStageLogger },
+  entries: FrozenSessionIndexEntry[]
+): void {
+  if (gate.busy || !entries.some((entry) => !entry.icon && !entry.pendingEnrichment)) return;
+  gate.busy = true;
+  void import('../../providers/quick-llm.js')
+    .then(({ pickLucideIcon }) =>
+      enrichFreezerIcons({
+        reader: ctx.reader,
+        writer: ctx.writer,
+        freezer: ctx.freezer,
+        entries,
+        pickIcon: (subject) => pickLucideIcon({ subject }),
+      })
+    )
+    .catch((err) => ctx.log.warn('WC freezer icon enrichment failed', err))
+    .finally(() => {
+      gate.busy = false;
+    });
+}
+
+/**
+ * Is `entry` the frozen chat `thread` currently shows? Matched by filename
+ * first (`freezer:<filename>`, set on every thaw); a thread whose context
+ * still starts with `freezer:` but was repainted under a rival-renamed
+ * filename falls back to a trusted (non-chat-key) `sessionId` match against
+ * `currentFrozenSessionId` — never a shared legacy chat-key id (#3807), so
+ * two rows that still carry the same `session-<folder>` id can never be
+ * confused for one another.
+ */
+function isViewingEntry(
+  thread: Pick<HTMLElement, 'getAttribute'>,
+  entry: FrozenSessionIndexEntry,
+  currentFrozenSessionId: string | null
+): boolean {
+  const context = thread.getAttribute('context') ?? '';
+  if (context === `freezer:${entry.filename}`) return true;
+  return (
+    context.startsWith('freezer:') &&
+    !!entry.sessionId &&
+    !isChatKeyId(entry.sessionId) &&
+    currentFrozenSessionId === entry.sessionId
+  );
+}
+
 /** Wire frozen-session refresh, new-session actions, and read-only thaw routing. */
 export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   const { refs, openVfs, client, getController, getSelected, clearSelection, log } = deps;
@@ -281,40 +343,16 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   };
 
   let refreshSeq = 0;
-  let iconEnriching = false;
+  const iconGate = { busy: false };
   const refreshFreezer = (): void => {
     const seq = ++refreshSeq;
     void openVfs()
       .then(async ({ reader, writer }) => {
-        let entries = await readFreezerEntries(reader);
-        if (entries === null) {
-          const state = await readFreezerIndexState(reader);
-          if (state.kind !== 'corrupt') return;
-          log.warn('WC freezer index corrupt — rebuilding from archives');
-          entries = await rebuildFreezerIndexFromArchives(reader);
-          if (entries.length === 0) return;
-          await writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
-        }
-        if (seq !== refreshSeq) return;
+        const entries = await loadFreezerEntries(reader, writer, log);
+        if (entries === null || seq !== refreshSeq) return;
         frozenEntries = entries;
-        renderFreezerCards(refs.freezer, entries);
-        if (!iconEnriching && entries.some((entry) => !entry.icon && !entry.pendingEnrichment)) {
-          iconEnriching = true;
-          void import('../../providers/quick-llm.js')
-            .then(({ pickLucideIcon }) =>
-              enrichFreezerIcons({
-                reader,
-                writer,
-                freezer: refs.freezer,
-                entries,
-                pickIcon: (subject) => pickLucideIcon({ subject }),
-              })
-            )
-            .catch((err) => log.warn('WC freezer icon enrichment failed', err))
-            .finally(() => {
-              iconEnriching = false;
-            });
-        }
+        renderFreezerCards(refs.freezer, entries, { deletable: true });
+        backfillFreezerIcons(iconGate, { reader, writer, freezer: refs.freezer, log }, entries);
       })
       .catch((err) => log.error('WC freezer refresh failed', err));
   };
@@ -434,6 +472,30 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   refs.freezer.addEventListener('freezer-card-select', (event) => {
     const slug = (event as CustomEvent<{ slug?: string }>).detail?.slug;
     if (slug) void openFrozen(slug);
+  });
+
+  wireFreezerDelete({
+    freezer: refs.freezer,
+    openVfs,
+    getEntries: () => frozenEntries,
+    // A frozen chat only counts as "viewed" while the thread is actually
+    // showing the freezer. `currentFrozenSessionId` is cleared by this
+    // rail's own `selectScoop` wrapper, but switcher clicks, URL context,
+    // and cone actions call `boot.selectScoop` directly — the same signal
+    // `viewingFrozen` uses in wc-live-callbacks.ts — so a chat left via one
+    // of those paths must not have its LIVE cone's thread/queue torn down
+    // by a later delete.
+    isViewing: (entry) => isViewingEntry(refs.thread, entry, currentFrozenSessionId),
+    leaveViewed: (entry) => {
+      // Clear FIRST: selecting a cone loads its snapshot asynchronously and
+      // keeps the old thread up if that fails.
+      getController()?.loadMessages([]);
+      currentFrozenSessionId = null;
+      const cone = rootForConeFolder(deps.getUnits(), entry.cone);
+      if (cone) selectScoop(cone);
+    },
+    refreshFreezer,
+    log,
   });
 
   return {

@@ -44,6 +44,13 @@ vi.mock('../../src/ui/session-freezer.js', () => ({
 const mockPickLucideIcon = vi.fn(async () => 'wrench');
 vi.mock('../../src/providers/quick-llm.js', () => ({ pickLucideIcon: mockPickLucideIcon }));
 
+const mockFindIndexedFrozenRow = vi.fn();
+const mockRemoveCuratorByproducts = vi.fn();
+vi.mock('../../src/ui/frozen-session-delete.js', () => ({
+  findIndexedFrozenRow: (...a: unknown[]) => mockFindIndexedFrozenRow(...a),
+  removeCuratorByproducts: (...a: unknown[]) => mockRemoveCuratorByproducts(...a),
+}));
+
 import {
   resetNewSessionTmp,
   runNewSessionArchiveOnly,
@@ -125,6 +132,8 @@ const enriched: FrozenSessionIndexEntry = {
 beforeEach(() => {
   mockIsFeatureEnabled.mockReset().mockReturnValue(false);
   mockProcessPendingSessions.mockReset().mockResolvedValue({ attempted: 0, completed: 0 });
+  mockFindIndexedFrozenRow.mockReset().mockResolvedValue({ kind: 'unknown' });
+  mockRemoveCuratorByproducts.mockReset().mockResolvedValue([]);
 });
 
 describe('pending session boot catch-up', () => {
@@ -435,6 +444,129 @@ describe('runNewSessionFreeze — write-first + race', () => {
     const result = await runNewSessionFreeze({ vfs: {} as never, enrichmentRaceMs: 10 });
     expect(result).toBeNull();
     expect(mockEnrichPendingSession).not.toHaveBeenCalled();
+  });
+
+  const settle = async () => {
+    for (let i = 0; i < 10; i++) await flush();
+  };
+
+  it('agentic background pass skips the curator for a session deleted after the freeze', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    mockFreezeConeSession.mockResolvedValue({ ...pending, memoryPending: true as const });
+    mockEnrichPendingSession.mockResolvedValue(null);
+    mockFindIndexedFrozenRow.mockResolvedValue({ kind: 'absent', entries: [] });
+    const onSessionSettled = vi.fn();
+
+    await runNewSessionFreeze({ vfs: {} as never, agenticMemorySpawn: vi.fn(), onSessionSettled });
+    await vi.waitFor(() => expect(mockFindIndexedFrozenRow).toHaveBeenCalled());
+    await settle();
+
+    expect(mockCurateFrozenSessionMemories).not.toHaveBeenCalled();
+    expect(onSessionSettled).not.toHaveBeenCalled();
+  });
+
+  it('agentic pass curates the row a rival enrichment renamed', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    mockFreezeConeSession.mockResolvedValue({ ...pending, memoryPending: true as const });
+    mockEnrichPendingSession.mockResolvedValue(null);
+    mockFindIndexedFrozenRow.mockResolvedValue({ kind: 'present', row: enriched });
+    mockCurateFrozenSessionMemories.mockResolvedValue(null);
+
+    await runNewSessionFreeze({ vfs: {} as never, agenticMemorySpawn: vi.fn() });
+    await vi.waitFor(() => expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce());
+
+    const target = mockCurateFrozenSessionMemories.mock.calls[0][1] as FrozenSession;
+    expect(target.filename).toBe(enriched.filename);
+  });
+
+  it('a delete landing while the curator ran sweeps its leftovers and settles nothing', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    mockFreezeConeSession.mockResolvedValue({ ...pending, memoryPending: true as const });
+    mockEnrichPendingSession.mockResolvedValue(null);
+    mockFindIndexedFrozenRow
+      .mockResolvedValueOnce({ kind: 'present', row: pending })
+      .mockResolvedValueOnce({ kind: 'absent', entries: [] });
+    mockCurateFrozenSessionMemories.mockResolvedValue(null);
+    const onSessionSettled = vi.fn();
+    const onBackgroundEnriched = vi.fn();
+
+    await runNewSessionFreeze({
+      vfs: {} as never,
+      agenticMemorySpawn: vi.fn(),
+      onSessionSettled,
+      onBackgroundEnriched,
+    });
+    await vi.waitFor(() => expect(mockRemoveCuratorByproducts).toHaveBeenCalledOnce());
+    await settle();
+
+    expect(mockRemoveCuratorByproducts).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ filename: pending.filename }),
+      []
+    );
+    expect(onSessionSettled).not.toHaveBeenCalled();
+    expect(onBackgroundEnriched).not.toHaveBeenCalled();
+  });
+
+  it('legacy background enrichment does not settle a session deleted meanwhile', async () => {
+    const enrich = deferred<FrozenSessionIndexEntry | null>();
+    mockEnrichPendingSession.mockReturnValue(enrich.promise);
+    mockFindIndexedFrozenRow.mockResolvedValue({ kind: 'absent', entries: [] });
+    const onSessionSettled = vi.fn();
+
+    await runNewSessionFreeze({ vfs: {} as never, enrichmentRaceMs: 5, onSessionSettled });
+    enrich.resolve(null);
+    await vi.waitFor(() => expect(mockFindIndexedFrozenRow).toHaveBeenCalled());
+    await settle();
+
+    expect(onSessionSettled).not.toHaveBeenCalled();
+  });
+
+  it('legacy background enrichment settles the row a rival renamed', async () => {
+    const enrich = deferred<FrozenSessionIndexEntry | null>();
+    mockEnrichPendingSession.mockReturnValue(enrich.promise);
+    mockFindIndexedFrozenRow.mockResolvedValue({ kind: 'present', row: enriched });
+    const onSessionSettled = vi.fn();
+
+    await runNewSessionFreeze({ vfs: {} as never, enrichmentRaceMs: 5, onSessionSettled });
+    enrich.resolve(null);
+    await vi.waitFor(() => expect(onSessionSettled).toHaveBeenCalledOnce());
+
+    expect(onSessionSettled).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: enriched.filename })
+    );
+  });
+
+  it('a thrown findIndexedFrozenRow does not block the curator or leak an unhandled rejection', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    mockFreezeConeSession.mockResolvedValue({ ...pending, memoryPending: true as const });
+    mockEnrichPendingSession.mockResolvedValue(null);
+    mockFindIndexedFrozenRow.mockRejectedValue(new Error('lock request failed'));
+    mockCurateFrozenSessionMemories.mockResolvedValue(enriched);
+    const onSessionSettled = vi.fn();
+
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await runNewSessionFreeze({
+        vfs: {} as never,
+        agenticMemorySpawn: vi.fn(),
+        onSessionSettled,
+      });
+      await vi.waitFor(() => expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce());
+      await settle();
+      // `unhandledRejection` fires a tick after the microtask queue drains.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    expect(onSessionSettled).toHaveBeenCalledOnce();
+    expect(onSessionSettled).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: enriched.filename })
+    );
+    expect(rejections).toEqual([]);
   });
 });
 

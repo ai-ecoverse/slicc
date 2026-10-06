@@ -285,10 +285,14 @@ async function readIndexEntriesAt(
   }
 }
 
-export async function rebuildSessionSearchIndex(vfs: SessionSearchVfs): Promise<{
+interface BuiltSearchIndex {
+  mini: MiniSearchLike;
+  meta: IndexMeta;
   docs: number;
   archives: number;
-}> {
+}
+
+async function buildSessionSearchIndex(vfs: SessionSearchVfs): Promise<BuiltSearchIndex> {
   const MiniSearch = (await import('minisearch')).default as unknown as MiniSearchCtor;
   const located = await collectLocatedEntries(vfs);
   const docs: SessionSearchDoc[] = [];
@@ -311,8 +315,33 @@ export async function rebuildSessionSearchIndex(vfs: SessionSearchVfs): Promise<
     archiveCount: located.length,
     fingerprint: fingerprintLocatedEntries(located),
   };
-  await vfs.writeFile(SESSION_SEARCH_INDEX_PATH, JSON.stringify({ meta, index: mini.toJSON() }));
-  return { docs: docs.length, archives: located.length };
+  return { mini, meta, docs: docs.length, archives: located.length };
+}
+
+/**
+ * Persist a built index only if the sessions it read are still the current
+ * ones: a delete (or freeze) landing mid-build would otherwise be overwritten
+ * by an index still holding the deleted bodies. A skipped write is rebuilt
+ * by the next search (fingerprint mismatch).
+ */
+async function persistIfCurrent(vfs: SessionSearchVfs, built: BuiltSearchIndex): Promise<boolean> {
+  const current = fingerprintLocatedEntries(await collectLocatedEntries(vfs));
+  if (current !== built.meta.fingerprint) return false;
+  await vfs.writeFile(
+    SESSION_SEARCH_INDEX_PATH,
+    JSON.stringify({ meta: built.meta, index: built.mini.toJSON() })
+  );
+  return true;
+}
+
+export async function rebuildSessionSearchIndex(vfs: SessionSearchVfs): Promise<{
+  docs: number;
+  archives: number;
+  written: boolean;
+}> {
+  const built = await buildSessionSearchIndex(vfs);
+  const written = await persistIfCurrent(vfs, built);
+  return { docs: built.docs, archives: built.archives, written };
 }
 
 export async function ensureSessionSearchIndex(vfs: SessionSearchVfs): Promise<MiniSearchLike> {
@@ -333,15 +362,9 @@ export async function ensureSessionSearchIndex(vfs: SessionSearchVfs): Promise<M
   } catch {
     // Missing or corrupt — rebuild below.
   }
-  await rebuildSessionSearchIndex(vfs);
-  const raw = await vfs.readFile(SESSION_SEARCH_INDEX_PATH, { encoding: 'utf-8' });
-  const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  const parsed = JSON.parse(text) as { index: unknown };
-  return (
-    MiniSearch as unknown as {
-      loadJS(json: unknown, opts: typeof INDEX_OPTIONS): MiniSearchLike;
-    }
-  ).loadJS(parsed.index, INDEX_OPTIONS);
+  const built = await buildSessionSearchIndex(vfs);
+  await persistIfCurrent(vfs, built);
+  return built.mini;
 }
 
 export async function searchSessions(
@@ -517,14 +540,19 @@ function formatReadPage(messages: readonly ChatMessage[], from: number): string 
   return blocks.join('\n');
 }
 
-/** Drop the persisted index so erased archives cannot be recovered from it. */
-export async function invalidateSessionSearchIndex(vfs: {
-  rm(path: string): Promise<void>;
-}): Promise<void> {
+/**
+ * Drop the persisted index so erased archives cannot be recovered from it.
+ * `strict` (frozen-session delete) rethrows anything but ENOENT so the caller
+ * can keep its row for a retry; the default stays best-effort.
+ */
+export async function invalidateSessionSearchIndex(
+  vfs: { rm(path: string): Promise<void> },
+  options: { strict?: boolean } = {}
+): Promise<void> {
   try {
     await vfs.rm(SESSION_SEARCH_INDEX_PATH);
-  } catch {
-    // Missing index is the desired end state.
+  } catch (err) {
+    if (options.strict && (err as { code?: unknown } | null)?.code !== 'ENOENT') throw err;
   }
 }
 

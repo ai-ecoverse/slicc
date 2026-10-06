@@ -57,7 +57,9 @@ Paths + invariants: [`docs/webapp-details.md`](../../docs/webapp-details.md); ro
   detection via `CapabilityBroker`, not `isExtensionRealm`.
 - **Frozen-session recovery** (`docs/work-unit.md`) uses the **bounded** legacy enrichment call, not the
   unbounded curator. Save / Skip memory / Erase clear the SELECTED cone's chat + non-mount `/tmp` (not
-  scoops; root cone via `wc-unit-context.ts`).
+  scoops; root cone via `wc-unit-context.ts`). `/sessions/index.json` writers go through
+  `serializeIndexWrite` and update only rows still present (only a freeze creates rows); deleting a
+  frozen chat removes its files first and the row LAST (`ui/frozen-session-delete.ts`).
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without queue/watermark loss; user
   `web` bypasses the window. `transcript-limits.ts` caps bridge/event transcripts at 64 KB (not
   `agent-sessions`/compaction).

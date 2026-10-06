@@ -16,6 +16,11 @@ import type { AgentBridge } from '../scoops/agent-bridge.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import { CanonicalSessionReader } from '../work-unit/conversation/sessions.js';
 import { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
+import {
+  type FrozenRowPresence,
+  findIndexedFrozenRow,
+  removeCuratorByproducts,
+} from './frozen-session-delete.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
 import {
   type ConeSessionSource,
@@ -157,6 +162,73 @@ async function runAgenticMemoryFreeze(
 }
 
 /**
+ * `current` re-pointed at its index row (a rival enrichment may have renamed
+ * it), or `null` when the index says the user deleted it. An index that
+ * cannot say (`unknown`) — including a `findIndexedFrozenRow` that THREW
+ * (a lock request failure, say) — keeps today's behavior: `current` as-is,
+ * never thrown, so neither the agentic curator nor the legacy background
+ * settle loses its caller to an unhandled rejection. Generic so both the
+ * `FrozenSession` the agentic pass carries and the bare
+ * `FrozenSessionIndexEntry` the legacy race settles with can be followed.
+ */
+async function stillFrozen<T extends FrozenSessionIndexEntry>(
+  vfs: WritableVfsClient,
+  current: T
+): Promise<T | null> {
+  let presence: FrozenRowPresence;
+  try {
+    presence = await findIndexedFrozenRow(vfs, current);
+  } catch (err) {
+    log.warn('Could not confirm the frozen session still exists — treating it as still frozen', {
+      filename: current.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return current;
+  }
+  if (presence.kind === 'absent') return null;
+  if (presence.kind === 'present' && presence.row.filename !== current.filename) {
+    return { ...current, filename: presence.row.filename };
+  }
+  return current;
+}
+
+/**
+ * A curator that outlived a delete of its session: sweep what it left
+ * behind. A `findIndexedFrozenRow` or `removeCuratorByproducts` that THROWS
+ * is treated as "cannot say" — `false`, same as a definite "still frozen" —
+ * so this never surfaces an unhandled rejection to its (fire-and-forget)
+ * background caller.
+ */
+async function sweepIfDeleted(vfs: WritableVfsClient, current: FrozenSession): Promise<boolean> {
+  let presence: FrozenRowPresence;
+  try {
+    presence = await findIndexedFrozenRow(vfs, current);
+  } catch (err) {
+    log.warn('Could not confirm whether the frozen session was deleted — leftovers left in place', {
+      filename: current.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+  if (presence.kind !== 'absent') return false;
+  try {
+    const errors = await removeCuratorByproducts(vfs, current, presence.entries);
+    if (errors.length > 0) {
+      log.warn('Curator leftovers of a deleted session not fully removed', {
+        filename: current.filename,
+        errors,
+      });
+    }
+  } catch (err) {
+    log.warn('Curator leftovers sweep threw', {
+      filename: current.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return true;
+}
+
+/**
  * Background half of the agentic freeze — runs entirely after the caller has
  * cleared the chat. Best-effort end to end: a failed title enrichment leaves
  * the pending draft for the boot catch-up; a failed curator leaves
@@ -194,6 +266,14 @@ async function runAgenticBackgroundPass(
       error: err instanceof Error ? err.message : String(err),
     });
   }
+  const target = await stillFrozen(opts.vfs, current);
+  if (!target) {
+    log.info('Frozen session deleted before curation — curator skipped', {
+      filename: current.filename,
+    });
+    return;
+  }
+  current = target;
   const curated = await curateFrozenSessionMemories(
     {
       sessionStore,
@@ -217,6 +297,7 @@ async function runAgenticBackgroundPass(
     filename: current.filename,
     memoryPending: curated ? curated.memoryPending === true : true,
   });
+  if (await sweepIfDeleted(opts.vfs, current)) return;
   opts.onBackgroundEnriched?.(curated);
   opts.onSessionSettled?.(curated ?? current);
 }
@@ -512,13 +593,15 @@ export async function runNewSessionFreeze(
   // Timer won: the archive is durable, so the caller may clear the chat now.
   // Let enrichment finish in the background and notify the caller so the rail
   // can refresh once the rename + icon land.
-  void enrichment.then((updated) => {
+  void enrichment.then(async (updated) => {
     log.info('Background enrichment resolved after race window', {
       filename: frozen.filename,
       enriched: updated?.filename ?? null,
     });
     opts.onBackgroundEnriched?.(updated);
-    opts.onSessionSettled?.(updated ?? frozen);
+    const settled = await stillFrozen(opts.vfs, updated ?? frozen);
+    if (!settled) return; // deleted while enrichment ran
+    opts.onSessionSettled?.(settled);
   });
   return frozen;
 }

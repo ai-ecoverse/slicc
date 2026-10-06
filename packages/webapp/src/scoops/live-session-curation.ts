@@ -49,7 +49,8 @@ export const LIVE_DELTA_MAX_MESSAGES = 200;
 /** Characters of content (plus tool-call JSON) one unattended slice will mine. */
 export const LIVE_DELTA_MAX_CHARS = 80_000;
 
-const LIVE_DELTA_DIR = '/sessions/.live-deltas';
+/** Where incremental curation writes its mined slices (`<key>-<from>-<to>.md`). */
+export const LIVE_DELTA_DIR = '/sessions/.live-deltas';
 
 export interface DeltaLimits {
   maxMessages: number;

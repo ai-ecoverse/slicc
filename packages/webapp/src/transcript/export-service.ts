@@ -79,6 +79,12 @@ export interface ExportServiceDeps {
       snapshot: SanitizedTranscriptSnapshot,
       signal?: AbortSignal
     ): Promise<void>;
+    /**
+     * Called after `write` for a frozen capture: drop the bundle again when
+     * its session was deleted while the capture ran. Optional for callers
+     * that never capture frozen sessions.
+     */
+    discardIfUnindexed?(sessionId: string): Promise<unknown>;
   };
   /** Read-only VFS — used for sessions index and legacy archive markdown. */
   vfs: LocalVfsClient;
@@ -320,14 +326,20 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
 
     if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
 
-    await this.deps.snapshotStore.write(
-      metadata.sessionId,
-      {
-        document: finalDoc,
-        attachments: bundleFiles,
-      },
-      signal
-    );
+    try {
+      await this.deps.snapshotStore.write(
+        metadata.sessionId,
+        {
+          document: finalDoc,
+          attachments: bundleFiles,
+        },
+        signal
+      );
+    } finally {
+      // Not awaited: New chat's 5 s snapshot deadline must not wait on the
+      // sessions-index lock. Runs even when a concurrent delete broke the publish.
+      void this.deps.snapshotStore.discardIfUnindexed?.(metadata.sessionId)?.catch(() => undefined);
+    }
   }
 
   // ---------------------------------------------------------------------------
