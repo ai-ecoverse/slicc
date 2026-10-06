@@ -2436,6 +2436,14 @@ describe('arm driver transcript', () => {
     expect(driverSteps([])).toEqual([]);
   });
 
+  it('clips a long step without splitting a surrogate pair', () => {
+    // 3,999 characters, then an emoji across the 4,000-character step limit.
+    const md = `## user\n\n${'x'.repeat(3999 - '## user\n\n'.length + 9)}😀${'y'.repeat(50)}\n`;
+    const [step] = driverSteps([file('/tmp/intent-arm/r/transcript.md', md)]);
+    expect(step.isWellFormed()).toBe(true);
+    expect(step).toMatch(/ … \[\d+ more characters\]$/);
+  });
+
   it('answers from answer.txt, else the transcript, else the result.json prefix', () => {
     expect(armAnswer([file('/x/answer.txt', ' FINAL ANSWER: full \n'), ...files])).toBe(
       'FINAL ANSWER: full'

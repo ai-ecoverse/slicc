@@ -32,7 +32,23 @@ export function truncateMiddle(text, limit) {
   const s = String(text ?? '');
   if (limit == null || s.length <= limit) return s;
   const half = Math.floor(limit / 2);
-  return `${s.slice(0, half)}\n... [${s.length - limit} characters omitted] ...\n${s.slice(-half)}`;
+  return `${s.slice(0, cutBefore(s, half))}\n... [${s.length - limit} characters omitted] ...\n${s.slice(cutAfter(s, s.length - half))}`;
+}
+
+/**
+ * A slice end that does not split a surrogate pair. Half an emoji becomes a lone surrogate, which
+ * JSON.stringify writes as `\ud83d` and Bedrock's GPT judges reject ("invalid request body:
+ * unexpected end of hex escape", HTTP 400): bu2-079 in benchmark 37362726069 failed that way.
+ */
+export function cutBefore(s, end) {
+  const c = s.charCodeAt(end - 1);
+  return end > 0 && c >= 0xd800 && c <= 0xdbff ? end - 1 : end;
+}
+
+/** A slice start that does not begin on the second half of a surrogate pair. */
+export function cutAfter(s, start) {
+  const c = s.charCodeAt(start);
+  return start > 0 && c >= 0xdc00 && c <= 0xdfff ? start + 1 : start;
 }
 
 /** The user-message sections, in upstream's order and with its caps. */
@@ -125,10 +141,16 @@ export function findingsSchema(itemIds) {
 
 /** A Converse request body: system prompt, text + images, and the forced findings tool. */
 export function buildConverseBody({ spec, task, trace, includeImages = true, maxTokens = 8000 }) {
-  const content = [{ text: buildJudgeText({ task, trace, caps: spec.caps, includeImages }) }];
+  // Well-formed text only: a lone surrogate anywhere in the request (a clipped step, page text)
+  // makes the judge reject the whole body.
+  const content = [
+    { text: buildJudgeText({ task, trace, caps: spec.caps, includeImages }).toWellFormed() },
+  ];
   if (includeImages) {
     trace.screenshots.forEach((shot, i) => {
-      content.push({ text: `Screenshot ${i + 1} of ${trace.screenshots.length}: ${shot.label}.` });
+      content.push({
+        text: `Screenshot ${i + 1} of ${trace.screenshots.length}: ${shot.label}.`.toWellFormed(),
+      });
       content.push({ image: { format: shot.format ?? 'png', source: { bytes: shot.base64 } } });
     });
   }

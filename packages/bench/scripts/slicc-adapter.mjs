@@ -25,6 +25,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { cutBefore } from './judge.mjs';
 
 export const SKILLS_DIR = '/workspace/skills';
 export const SKILLS_STASH = '/workspace/.bench-skills-builtin';
@@ -928,9 +929,9 @@ export async function exportTranscript(
 
 function clip(text) {
   const s = String(text ?? '');
-  return s.length > STEP_CHARS
-    ? `${s.slice(0, STEP_CHARS)} … [${s.length - STEP_CHARS} more characters]`
-    : s;
+  if (s.length <= STEP_CHARS) return s;
+  const end = cutBefore(s, STEP_CHARS);
+  return `${s.slice(0, end)} … [${s.length - end} more characters]`;
 }
 
 function describePart(part) {
