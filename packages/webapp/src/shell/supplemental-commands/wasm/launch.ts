@@ -25,6 +25,8 @@ import {
 } from '../../../kernel/wasm-realm/socket.js';
 import type { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import {
+  type ForeignImports,
+  foreignImports,
   type ImportedMemory,
   importedMemory,
 } from '../../../kernel/wasm-realm/wasi/wasi-module.js';
@@ -90,7 +92,12 @@ function withSecretFunction(argv0: string, env: Record<string, string>): Record<
 
 const modules = new Map<string, Promise<WebAssembly.Module>>();
 
-const memories = new Map<string, ImportedMemory | undefined>();
+interface WasiImports {
+  memory?: ImportedMemory;
+
+  foreign: ForeignImports;
+}
+const memories = new Map<string, WasiImports>();
 
 const SIGNAL_NAME = new Map(
   Object.entries(SIGNAL_BY_NAME).map(([name, sig]) => [sig, name as keyof typeof SIGNAL_BY_NAME])
@@ -215,21 +222,21 @@ async function loadModule(ctx: CommandContext, path: string): Promise<WebAssembl
 }
 
 function cacheWasi(key: string, bytes: Uint8Array): Promise<WebAssembly.Module> {
-  memories.set(key, importedMemory(bytes));
+  memories.set(key, { memory: importedMemory(bytes), foreign: foreignImports(bytes) });
   return cache(key, compileWasmModule(bytes));
 }
 
 async function loadWasi(
   ctx: CommandContext,
   path: string
-): Promise<{ module: WebAssembly.Module; memory?: ImportedMemory }> {
+): Promise<{ module: WebAssembly.Module } & WasiImports> {
   const key = cacheKey(path, await ctx.fs.stat(path));
   const cached = modules.get(key);
   const module = await (cached && memories.has(key)
     ? cached
     : cacheWasi(key, await ctx.fs.readFileBuffer(path)));
-  const memory = memories.get(key);
-  return { module, ...(memory ? { memory } : {}) };
+  const { memory, foreign = {} } = memories.get(key) ?? {};
+  return { module, foreign, ...(memory ? { memory } : {}) };
 }
 
 async function namesSidecar(
@@ -371,8 +378,9 @@ export class WasmSession {
     let glue = '';
     let module: WebAssembly.Module;
     let memory: ImportedMemory | undefined;
+    let foreign: ForeignImports = {};
     try {
-      if (wasi) ({ module, memory } = await loadWasi(this.ctx, req.module));
+      if (wasi) ({ module, memory, foreign } = await loadWasi(this.ctx, req.module));
       else {
         glue = await this.ctx.fs.readFile(req.glue);
         module = await loadModule(this.ctx, req.module);
@@ -392,7 +400,14 @@ export class WasmSession {
       ...req,
       env,
       program: wasi
-        ? { abi: 'wasi', glue, module, ...(memory ? { memory } : {}), ...(names ? { names } : {}) }
+        ? {
+            abi: 'wasi',
+            glue,
+            module,
+            ...(memory ? { memory } : {}),
+            ...(Object.keys(foreign).length ? { foreign } : {}),
+            ...(names ? { names } : {}),
+          }
         : { glue, module },
     });
   }

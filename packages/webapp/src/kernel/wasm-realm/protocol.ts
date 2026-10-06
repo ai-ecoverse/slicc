@@ -1,5 +1,5 @@
 import type { DeviceMeta, KernelFdKind } from './fd-table.js';
-import type { ImportedMemory } from './wasi/wasi-module.js';
+import type { ForeignImports, ImportedMemory } from './wasi/wasi-module.js';
 import type { WasiForkState } from './wasi/wasix-fork.js';
 
 export const WASM_PROCESS_INIT = 'wasm-process-init';
@@ -22,6 +22,8 @@ export interface WasmProgram {
   module: WebAssembly.Module;
 
   memory?: ImportedMemory;
+
+  foreign?: ForeignImports;
 
   names?: string;
 }

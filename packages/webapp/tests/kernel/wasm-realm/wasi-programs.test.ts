@@ -14,6 +14,7 @@ import {
 import { spawnWasmProcess } from '../../../src/kernel/wasm-realm/host.js';
 import type { WasmProgram } from '../../../src/kernel/wasm-realm/protocol.js';
 import { LoopbackNet } from '../../../src/kernel/wasm-realm/socket.js';
+import { foreignImports } from '../../../src/kernel/wasm-realm/wasi/wasi-module.js';
 import { VfsAdapter } from '../../../src/shell/vfs-adapter.js';
 import { createDirectoryHandle } from '../../fs/fsa-test-helpers.js';
 import { bundleProcessWorker, loadProgram, nodeWorker } from './helpers/node-wasm-process.js';
@@ -31,10 +32,12 @@ const programs = new Map<string, Promise<WasmProgram>>();
 function wasi(path: string): Promise<WasmProgram> {
   let p = programs.get(path);
   if (!p) {
-    p = WebAssembly.compile(readFileSync(path)).then((module) => ({
+    const bytes = readFileSync(path);
+    p = WebAssembly.compile(bytes).then((module) => ({
       abi: 'wasi' as const,
       glue: '',
       module,
+      foreign: foreignImports(bytes),
     }));
     programs.set(path, p);
   }
@@ -330,6 +333,11 @@ describe('WASI preview1 programs in the wasm realm', () => {
     const r = await run({ abi: 'wasi', glue: '', module: em.module }, []);
     expect(r.code).toBe(126);
     expect(r.stderr).toContain('no WASI preview1 program');
+  });
+
+  it('runs a WASI program that imports a namespace this host does not provide; the call answers ENOSYS', async () => {
+    const r = await run(await wasi(`${FIXTURES}probetest.wasm`), []);
+    expect(r).toMatchObject({ code: 0, stdout: 'probe=52 spawn=52 wide=52 x.wide=52,52\n' });
   });
 });
 
