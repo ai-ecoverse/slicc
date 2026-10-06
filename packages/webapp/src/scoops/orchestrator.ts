@@ -28,7 +28,11 @@ import type {
 import { SudoManager } from '../sudo/sudo-manager.js';
 import { registerTranscriptExportService } from '../transcript/export-provider.js';
 import { DefaultTranscriptExportService } from '../transcript/export-service.js';
-import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
+import {
+  discardSnapshotIfUnindexed,
+  readSnapshot,
+  writeSnapshot,
+} from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { conversationIdentityFor } from '../work-unit/conversation/key.js';
@@ -1221,6 +1225,8 @@ export class Orchestrator implements ConeApprovalRouter {
         read: (sessionId) => readSnapshot(fs as unknown as LocalVfsClient, sessionId),
         write: (sessionId, snapshot, signal) =>
           writeSnapshot(fs as unknown as WritableVfsClient, sessionId, snapshot, signal),
+        discardIfUnindexed: (sessionId) =>
+          discardSnapshotIfUnindexed(fs as unknown as WritableVfsClient, sessionId),
       },
 
       vfs: fs as unknown as LocalVfsClient,

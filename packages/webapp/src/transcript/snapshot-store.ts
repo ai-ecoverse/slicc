@@ -188,6 +188,33 @@ export async function writeSnapshot(
   await removeDir(vfs, tmp);
 }
 
+export async function removeSnapshot(vfs: WritableVfsClient, sessionId: string): Promise<void> {
+  assertSafeSessionId(sessionId);
+  for (const dir of [sessionDir(sessionId), tmpDir(sessionId)]) {
+    try {
+      await vfs.rm(dir, { recursive: true });
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code !== 'ENOENT') throw err;
+    }
+  }
+}
+
+export async function discardSnapshotIfUnindexed(
+  vfs: WritableVfsClient,
+  sessionId: string
+): Promise<boolean> {
+  const [{ serializeIndexWrite }, { readIndexForPresence }] = await Promise.all([
+    import('./frozen-archive-writer.js'),
+    import('./frozen-session-identity.js'),
+  ]);
+  return serializeIndexWrite(async () => {
+    const entries = await readIndexForPresence(vfs);
+    if (entries === null || entries.some((entry) => entry.sessionId === sessionId)) return false;
+    await removeSnapshot(vfs, sessionId);
+    return true;
+  });
+}
+
 export async function readSnapshot(
   vfs: LocalVfsClient,
   sessionId: string

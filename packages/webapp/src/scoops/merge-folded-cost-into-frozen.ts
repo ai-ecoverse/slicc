@@ -1,16 +1,20 @@
 import type { AssistantMessage } from '../core/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
-import {
-  type FrozenSessionCost,
-  type FrozenSessionIndexEntry,
-  type FrozenSessionModel,
-  readSessionsIndex,
+import type {
+  FrozenSessionCost,
+  FrozenSessionIndexEntry,
+  FrozenSessionModel,
 } from '../transcript/frozen-archive-format.js';
-import { upsertSessionsIndexEntry } from '../transcript/frozen-archive-writer.js';
+import {
+  readSessionsIndexForWrite,
+  serializeIndexWrite,
+  writeSessionsIndexUnlocked,
+} from '../transcript/frozen-archive-writer.js';
 import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import type { RegisteredScoop } from './types.js';
 
-export type FoldedCostArchiveVfs = Parameters<typeof upsertSessionsIndexEntry>[0] & LocalVfsClient;
+export type FoldedCostArchiveVfs = Parameters<typeof writeSessionsIndexUnlocked>[0] &
+  LocalVfsClient;
 
 export async function mergeFoldedCostIntoLatestFrozen(
   vfs: FoldedCostArchiveVfs,
@@ -19,21 +23,28 @@ export async function mergeFoldedCostIntoLatestFrozen(
 ): Promise<boolean> {
   if (folded.length === 0) return false;
   const coneFolder = scoop.folder || PRIMARY_CONE_FOLDER;
-  const entries = await readSessionsIndex(vfs);
-  const candidates = entries.filter((entry) => (entry.cone ?? PRIMARY_CONE_FOLDER) === coneFolder);
-  if (candidates.length === 0) return false;
 
-  const latest = candidates.reduce((best, entry) =>
-    entry.frozenAt > best.frozenAt ? entry : best
-  );
+  return serializeIndexWrite(async () => {
+    const entries = await readSessionsIndexForWrite(vfs);
+    const candidates = entries.filter(
+      (entry) => (entry.cone ?? PRIMARY_CONE_FOLDER) === coneFolder
+    );
+    if (candidates.length === 0) return false;
 
-  const merged: FrozenSessionIndexEntry = {
-    ...latest,
-    cost: mergeFrozenCost(latest.cost, folded),
-    models: mergeFrozenModels(latest.models, folded),
-  };
-  await upsertSessionsIndexEntry(vfs, merged);
-  return true;
+    const latest = candidates.reduce((best, entry) =>
+      entry.frozenAt > best.frozenAt ? entry : best
+    );
+    const merged: FrozenSessionIndexEntry = {
+      ...latest,
+      cost: mergeFrozenCost(latest.cost, folded),
+      models: mergeFrozenModels(latest.models, folded),
+    };
+    await writeSessionsIndexUnlocked(
+      vfs,
+      entries.map((entry) => (entry === latest ? merged : entry))
+    );
+    return true;
+  });
 }
 
 function mergeFrozenCost(

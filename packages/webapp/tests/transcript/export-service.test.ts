@@ -698,6 +698,27 @@ describe('DefaultTranscriptExportService — captureFrozen', () => {
       )
     ).rejects.toThrow(TranscriptExportError);
   });
+
+  it('drops the bundle again when its session was deleted while the capture ran', async () => {
+    const snapshotStore = {
+      ...makeEmptySnapshotStore(),
+      discardIfUnindexed: vi.fn(async (_id: string) => true),
+    };
+    const svc = new DefaultTranscriptExportService(makeDeps({ snapshotStore }));
+
+    await svc.captureFrozen({
+      sessionId: 'sess-freeze-002',
+      title: 'Frozen Title',
+      frozenAt: '2024-06-01T12:00:00.000Z',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+
+    expect(snapshotStore.discardIfUnindexed).toHaveBeenCalledWith('sess-freeze-002');
+    expect(snapshotStore.write.mock.invocationCallOrder[0]).toBeLessThan(
+      snapshotStore.discardIfUnindexed.mock.invocationCallOrder[0]
+    );
+  });
 });
 
 describe('DefaultTranscriptExportService — progress', () => {

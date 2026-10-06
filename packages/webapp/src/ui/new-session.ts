@@ -7,6 +7,11 @@ import type { AgentBridge } from '../scoops/agent-bridge.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import { CanonicalSessionReader } from '../work-unit/conversation/sessions.js';
 import { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
+import {
+  type FrozenRowPresence,
+  findIndexedFrozenRow,
+  removeCuratorByproducts,
+} from './frozen-session-delete.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
 import {
   type ConeSessionSource,
@@ -107,6 +112,56 @@ async function runAgenticMemoryFreeze(
   return frozen;
 }
 
+async function stillFrozen<T extends FrozenSessionIndexEntry>(
+  vfs: WritableVfsClient,
+  current: T
+): Promise<T | null> {
+  let presence: FrozenRowPresence;
+  try {
+    presence = await findIndexedFrozenRow(vfs, current);
+  } catch (err) {
+    log.warn('Could not confirm the frozen session still exists — treating it as still frozen', {
+      filename: current.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return current;
+  }
+  if (presence.kind === 'absent') return null;
+  if (presence.kind === 'present' && presence.row.filename !== current.filename) {
+    return { ...current, filename: presence.row.filename };
+  }
+  return current;
+}
+
+async function sweepIfDeleted(vfs: WritableVfsClient, current: FrozenSession): Promise<boolean> {
+  let presence: FrozenRowPresence;
+  try {
+    presence = await findIndexedFrozenRow(vfs, current);
+  } catch (err) {
+    log.warn('Could not confirm whether the frozen session was deleted — leftovers left in place', {
+      filename: current.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+  if (presence.kind !== 'absent') return false;
+  try {
+    const errors = await removeCuratorByproducts(vfs, current, presence.entries);
+    if (errors.length > 0) {
+      log.warn('Curator leftovers of a deleted session not fully removed', {
+        filename: current.filename,
+        errors,
+      });
+    }
+  } catch (err) {
+    log.warn('Curator leftovers sweep threw', {
+      filename: current.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return true;
+}
+
 async function runAgenticBackgroundPass(
   opts: RunNewSessionFreezeOptions,
   sessionStore: ConeSessionSource,
@@ -136,6 +191,14 @@ async function runAgenticBackgroundPass(
       error: err instanceof Error ? err.message : String(err),
     });
   }
+  const target = await stillFrozen(opts.vfs, current);
+  if (!target) {
+    log.info('Frozen session deleted before curation — curator skipped', {
+      filename: current.filename,
+    });
+    return;
+  }
+  current = target;
   const curated = await curateFrozenSessionMemories(
     {
       sessionStore,
@@ -159,6 +222,7 @@ async function runAgenticBackgroundPass(
     filename: current.filename,
     memoryPending: curated ? curated.memoryPending === true : true,
   });
+  if (await sweepIfDeleted(opts.vfs, current)) return;
   opts.onBackgroundEnriched?.(curated);
   opts.onSessionSettled?.(curated ?? current);
 }
@@ -343,13 +407,15 @@ export async function runNewSessionFreeze(
     return settled;
   }
 
-  void enrichment.then((updated) => {
+  void enrichment.then(async (updated) => {
     log.info('Background enrichment resolved after race window', {
       filename: frozen.filename,
       enriched: updated?.filename ?? null,
     });
     opts.onBackgroundEnriched?.(updated);
-    opts.onSessionSettled?.(updated ?? frozen);
+    const settled = await stillFrozen(opts.vfs, updated ?? frozen);
+    if (!settled) return;
+    opts.onSessionSettled?.(settled);
   });
   return frozen;
 }

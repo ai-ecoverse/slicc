@@ -7,7 +7,11 @@ import { formatBudgetResets } from '../../providers/provider-budget.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import { registerTranscriptExportService } from '../../transcript/export-provider.js';
 import { DefaultTranscriptExportService } from '../../transcript/export-service.js';
-import { readSnapshot, writeSnapshot } from '../../transcript/snapshot-store.js';
+import {
+  discardSnapshotIfUnindexed,
+  readSnapshot,
+  writeSnapshot,
+} from '../../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../../transcript/strict-secret-client.js';
 import type { Unsubscribe, WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
 import { CanonicalSessionReader } from '../../work-unit/conversation/sessions.js';
@@ -1066,6 +1070,10 @@ export function attachWcWorkbench(
         write: async (sessionId, snapshot, signal) => {
           const { writer } = await openVfs();
           return writeSnapshot(writer, sessionId, snapshot, signal);
+        },
+        discardIfUnindexed: async (sessionId) => {
+          const { writer } = await openVfs();
+          return discardSnapshotIfUnindexed(writer, sessionId);
         },
       },
       vfs: {

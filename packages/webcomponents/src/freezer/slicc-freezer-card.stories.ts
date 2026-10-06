@@ -9,6 +9,7 @@ interface FreezerCardArgs {
   expanded?: boolean;
   thawed?: boolean;
   hidden?: boolean;
+  deletable?: boolean;
 }
 
 function makeCard(args: FreezerCardArgs): HTMLElement {
@@ -20,6 +21,7 @@ function makeCard(args: FreezerCardArgs): HTMLElement {
   if (args.expanded) el.setAttribute('expanded', '');
   if (args.thawed) el.setAttribute('thawed', '');
   if (args.hidden) el.setAttribute('hidden', '');
+  if (args.deletable) el.setAttribute('deletable', '');
   return el;
 }
 
@@ -38,6 +40,10 @@ const meta: Meta<FreezerCardArgs> = {
     },
     thawed: { control: 'boolean', description: 'Rose reopen flash (mirrored onto the badge)' },
     hidden: { control: 'boolean', description: 'Search-hide (the prototype .match-hidden)' },
+    deletable: {
+      control: 'boolean',
+      description: 'Offer a trash button (fires freezer-card-delete)',
+    },
   },
   render: (args) => makeCard(args),
 };
@@ -66,6 +72,15 @@ export const CollapsedHover: Story = {
 
 export const Thawing: Story = {
   args: { ...SAMPLE, expanded: true, thawed: true },
+};
+
+export const Deletable: Story = {
+  args: { ...SAMPLE, expanded: true, deletable: true },
+};
+
+export const DeletableHover: Story = {
+  args: { ...SAMPLE, expanded: true, deletable: true },
+  parameters: { pseudo: { hover: true } },
 };
 
 export const SearchHidden: Story = {

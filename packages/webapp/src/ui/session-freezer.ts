@@ -48,6 +48,7 @@ import {
   slugify,
   upsertSessionsIndexEntry,
 } from '../transcript/frozen-archive-writer.js';
+import { isChatKeyId } from '../transcript/frozen-session-identity.js';
 import {
   copySessionJsonl,
   loadFrozenArchive,
@@ -376,14 +377,12 @@ async function writeFrozenArchive(
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
-    const messages = await persistTmpAttachments(
-      opts.vfs,
-      session.messages,
-      filename.replace(/\.md$/, '')
-    );
+    const attachmentsKey = filename.replace(/\.md$/, '');
+    const messages = await persistTmpAttachments(opts.vfs, session.messages, attachmentsKey);
     const archive: FrozenSessionArchive = {
       id: session.id,
       sessionId,
+      attachmentsKey,
       title,
       frozenAt,
       createdAt: session.createdAt,
@@ -1095,15 +1094,7 @@ async function commitEnrichedArchive(
     icon,
     preserveMemoryPending
   );
-  try {
-    await replaceIndexEntry(vfs, entry.filename, updatedEntry);
-  } catch (err) {
-    log.warn('Enrichment index update failed (entry may stay pending)', {
-      filename: entry.filename,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
+  if (!(await commitIndexSwap(vfs, entry, updatedEntry))) return null;
 
   if (newPath !== oldPath) {
     try {
@@ -1252,36 +1243,120 @@ async function stampMemoryCurated(vfs: WritableVfsClient, filename: string): Pro
   }
 }
 
+type ReplaceIndexOutcome = 'replaced' | 'prepended' | 'superseded' | 'deleted';
+
 async function replaceIndexEntry(
   vfs: WritableVfsClient,
   oldFilename: string,
   replacement: FrozenSessionIndexEntry
-): Promise<void> {
-  const run = async (): Promise<void> => {
-    let existing: FrozenSessionIndexEntry[] = [];
-    try {
-      const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
-      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
-    } catch (err) {
-      if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-    }
+): Promise<ReplaceIndexOutcome> {
+  const run = async (): Promise<ReplaceIndexOutcome> => {
+    const existing = await readIndexForReplace(vfs);
     const idx = existing.findIndex((e) => e.filename === oldFilename);
-    let updated: FrozenSessionIndexEntry[];
-    if (idx === -1) {
-      updated = [replacement, ...existing.filter((e) => e.filename !== replacement.filename)];
-    } else {
-      updated = existing.slice();
+    if (idx !== -1) {
+      const updated = existing.slice();
       updated[idx] = replacement;
-
-      updated = updated.filter((e, i) => i === idx || e.filename !== replacement.filename);
+      const deduped = updated.filter((e, i) => i === idx || e.filename !== replacement.filename);
+      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(deduped, null, 2));
+      return 'replaced';
     }
-    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    const outcome = await resolveMissingOldRow(vfs, existing, oldFilename, replacement);
+    if (outcome === 'prepended') {
+      const updated = [replacement, ...existing.filter((e) => e.filename !== replacement.filename)];
+      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    } else if (outcome === 'replaced') {
+      const updated = existing.map((e) => (e.filename === replacement.filename ? replacement : e));
+      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    } else {
+      await dropUnreferencedCopy(vfs, existing, oldFilename, replacement.filename);
+    }
+    return outcome;
   };
+  return serializeIndexWrite(run);
+}
 
-  const next = serializeIndexWrite(run);
-  return next;
+async function readIndexForReplace(vfs: WritableVfsClient): Promise<FrozenSessionIndexEntry[]> {
+  try {
+    const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
+    const parsed = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
+  } catch (err) {
+    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
+    return [];
+  }
+}
+
+async function resolveMissingOldRow(
+  vfs: WritableVfsClient,
+  existing: readonly FrozenSessionIndexEntry[],
+  oldFilename: string,
+  replacement: FrozenSessionIndexEntry
+): Promise<ReplaceIndexOutcome> {
+  if (existing.some((e) => e.filename === replacement.filename)) return 'replaced';
+  const sessionId = replacement.sessionId;
+  const sameId =
+    sessionId && !isChatKeyId(sessionId) ? existing.filter((e) => e.sessionId === sessionId) : [];
+  if (sameId.length === 1) return 'superseded';
+  return (await archiveExists(vfs, `${SESSIONS_DIR}/${oldFilename}`)) ? 'prepended' : 'deleted';
+}
+
+async function archiveExists(vfs: WritableVfsClient, path: string): Promise<boolean> {
+  try {
+    await vfs.stat(path);
+    return true;
+  } catch (err) {
+    return (err as { code?: unknown } | null)?.code !== 'ENOENT';
+  }
+}
+
+async function dropUnreferencedCopy(
+  vfs: WritableVfsClient,
+  existing: readonly FrozenSessionIndexEntry[],
+  oldFilename: string,
+  newFilename: string
+): Promise<void> {
+  if (newFilename === oldFilename || existing.some((e) => e.filename === newFilename)) return;
+  const archivePath = `${SESSIONS_DIR}/${newFilename}`;
+  try {
+    await vfs.rm(archivePath);
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code !== 'ENOENT') {
+      log.warn('Enrichment could not drop its renamed copy', { path: archivePath, error: err });
+    }
+  }
+  const sidecarPath = sidecarPathForArchive(newFilename);
+  try {
+    await removeSessionJsonl(vfs, newFilename);
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code !== 'ENOENT') {
+      log.warn('Enrichment could not drop its renamed copy', { path: sidecarPath, error: err });
+    }
+  }
+}
+
+async function commitIndexSwap(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry,
+  updated: FrozenSessionIndexEntry
+): Promise<boolean> {
+  let outcome: ReplaceIndexOutcome;
+  try {
+    outcome = await replaceIndexEntry(vfs, entry.filename, updated);
+  } catch (err) {
+    log.warn('Enrichment index update failed (entry may stay pending)', {
+      filename: entry.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+  if (outcome === 'superseded' || outcome === 'deleted') {
+    log.info('Enrichment dropped — the session changed during the pass', {
+      filename: entry.filename,
+      outcome,
+    });
+    return false;
+  }
+  return true;
 }
 
 export async function markSnapshotUnavailable(

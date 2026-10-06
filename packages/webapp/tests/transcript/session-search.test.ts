@@ -15,6 +15,7 @@ import {
 import {
   classifyEchoKind,
   docsFromArchive,
+  invalidateSessionSearchIndex,
   makeHitId,
   parseHitId,
   porterStem,
@@ -460,5 +461,74 @@ describe('session search ranking', () => {
     const capped = truncateUtf8(cjk, SESSION_READ_BYTE_CAP);
     expect(new TextEncoder().encode(capped).byteLength).toBeLessThanOrEqual(SESSION_READ_BYTE_CAP);
     expect(capped.length).toBeLessThan(cjk.length);
+  });
+});
+
+describe('search index vs a delete', () => {
+  it('strict invalidation ignores only ENOENT; the default stays lenient', async () => {
+    const failing = (code: string) => ({
+      rm: async () => {
+        throw Object.assign(new Error(`${code}: x`), { code });
+      },
+    });
+    await expect(
+      invalidateSessionSearchIndex(failing('ENOENT'), { strict: true })
+    ).resolves.toBeUndefined();
+    await expect(invalidateSessionSearchIndex(failing('EIO'), { strict: true })).rejects.toThrow(
+      'EIO'
+    );
+    await expect(invalidateSessionSearchIndex(failing('EIO'))).resolves.toBeUndefined();
+  });
+
+  it('skips persisting a rebuild when the sessions changed while it read them', async () => {
+    const fs = await VirtualFS.create({ dbName: `search-persist-${Math.random()}`, wipe: true });
+    await fs.mkdir(SESSIONS_DIR, { recursive: true });
+    const filename = '2026-01-01T00-00-00-000Z-zebra.md';
+    await fs.writeFile(
+      `${SESSIONS_DIR}/${filename}`,
+      formatArchiveAsMarkdown({
+        id: 's1',
+        title: 'Zebra',
+        frozenAt: '2026-01-01T00:00:00.000Z',
+        createdAt: 1,
+        updatedAt: 1,
+        messageCount: 1,
+        messages: [msg('user', 'zebra fact', 'u1')],
+      })
+    );
+    const indexJson = JSON.stringify([
+      {
+        filename,
+        title: 'Zebra',
+        frozenAt: '2026-01-01T00:00:00.000Z',
+        messageCount: 1,
+        sessionId: 's1',
+      },
+    ]);
+    await fs.writeFile(`${SESSIONS_DIR}/index.json`, indexJson);
+
+    let deleted = false;
+    const racing = {
+      readFile: async (path: string, options?: { encoding?: string }) => {
+        const out = await fs.readFile(path, options as never);
+        if (path === `${SESSIONS_DIR}/${filename}` && !deleted) {
+          deleted = true;
+          await fs.writeFile(`${SESSIONS_DIR}/index.json`, '[]');
+        }
+        return out;
+      },
+      writeFile: (path: string, content: string) => fs.writeFile(path, content),
+      readDir: (path: string) => fs.readDir(path),
+    };
+
+    const built = await rebuildSessionSearchIndex(racing);
+    expect(deleted).toBe(true);
+    expect(built.written).toBe(false);
+    await expect(fs.stat(`${SESSIONS_DIR}/.search-index.json`)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+
+    await fs.writeFile(`${SESSIONS_DIR}/index.json`, indexJson);
+    expect((await rebuildSessionSearchIndex(fs)).written).toBe(true);
   });
 });

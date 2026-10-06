@@ -148,6 +148,71 @@ describe('formatArchiveAsMarkdown', () => {
     });
     expect(parseFrozenArchive(markdown).messages[0].compaction).toEqual(seam.compaction);
   });
+
+  it('writes the per-freeze sessionId beside the chat-key id and reads it back (#3807)', () => {
+    const markdown = formatArchiveAsMarkdown({
+      id: 'session-cone',
+      sessionId: '0b7e2a64-1d1f-4a63-9d5c-3c1f0f0e9a11',
+      title: 't',
+      frozenAt: 'now',
+      createdAt: 1,
+      updatedAt: 2,
+      messageCount: 1,
+      messages: [user],
+    });
+    expect(markdown).toMatch(
+      /^---\nid: session-cone\nsessionId: 0b7e2a64-1d1f-4a63-9d5c-3c1f0f0e9a11\n/
+    );
+    const parsed = parseFrozenArchive(markdown);
+    expect(parsed.id).toBe('session-cone');
+    expect(parsed.sessionId).toBe('0b7e2a64-1d1f-4a63-9d5c-3c1f0f0e9a11');
+  });
+
+  it('omits the sessionId line when the archive has none', () => {
+    const markdown = formatArchiveAsMarkdown({
+      id: 'sid',
+      title: 't',
+      frozenAt: 'now',
+      createdAt: 1,
+      updatedAt: 2,
+      messageCount: 1,
+      messages: [user],
+    });
+    expect(markdown).not.toContain('sessionId:');
+    expect(parseFrozenArchive(markdown).sessionId).toBeUndefined();
+  });
+
+  it('writes attachmentsKey right after sessionId and reads it back', () => {
+    const markdown = formatArchiveAsMarkdown({
+      id: 'session-cone',
+      sessionId: '0b7e2a64-1d1f-4a63-9d5c-3c1f0f0e9a11',
+      attachmentsKey: 'pending-aaa111',
+      title: 't',
+      frozenAt: 'now',
+      createdAt: 1,
+      updatedAt: 2,
+      messageCount: 1,
+      messages: [user],
+    });
+    expect(markdown).toMatch(
+      /^---\nid: session-cone\nsessionId: 0b7e2a64-1d1f-4a63-9d5c-3c1f0f0e9a11\nattachmentsKey: pending-aaa111\n/
+    );
+    expect(parseFrozenArchive(markdown).attachmentsKey).toBe('pending-aaa111');
+  });
+
+  it('omits the attachmentsKey line when the archive has none', () => {
+    const markdown = formatArchiveAsMarkdown({
+      id: 'sid',
+      title: 't',
+      frozenAt: 'now',
+      createdAt: 1,
+      updatedAt: 2,
+      messageCount: 1,
+      messages: [user],
+    });
+    expect(markdown).not.toContain('attachmentsKey:');
+    expect(parseFrozenArchive(markdown).attachmentsKey).toBeUndefined();
+  });
 });
 
 describe('rewriteTranscriptPointers', () => {

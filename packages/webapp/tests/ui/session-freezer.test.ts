@@ -1488,6 +1488,8 @@ describe('freezeConeSession quick mode', () => {
 
     expect(result!.title).toContain('refactor the auth flow');
 
+    expect(result!.archive.attachmentsKey).toBe(result!.filename.replace(/\.md$/, ''));
+
     expect(vfs.files.has(`/sessions/${result!.filename}`)).toBe(true);
 
     expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
@@ -2919,6 +2921,11 @@ describe('freezeConeSession — sessionId generation', () => {
     const renamed = vfs.files.get(`/sessions/${updated!.filename}`)!;
     expect(parseFrozenArchive(renamed).sessionId).toBe(originalSessionId);
     expect(parseFrozenArchive(renamed).id).toBe('session-cone');
+
+    const originalAttachmentsKey = frozen!.archive.attachmentsKey!;
+    const renamedArchive = vfs.files.get(`/sessions/${updated!.filename}`);
+    expect(renamedArchive).toContain(`sessionId: ${originalSessionId}`);
+    expect(renamedArchive).toContain(`attachmentsKey: ${originalAttachmentsKey}`);
   });
 
   it('two sequential freezes produce distinct sessionIds', async () => {
@@ -2947,6 +2954,30 @@ describe('freezeConeSession — sessionId generation', () => {
       mode: 'quick',
     });
     expect(r1!.sessionId).not.toBe(r2!.sessionId);
+  });
+
+  it('writes the sessionId into the archive frontmatter beside the chat key (#3807)', async () => {
+    const vfs = makeFakeVfs();
+    const result = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('a'),
+          assistantMessage('b'),
+          userMessage('c'),
+          assistantMessage('d'),
+        ],
+        createdAt: 1,
+        updatedAt: 2,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      mode: 'quick',
+    });
+    const markdown = vfs.files.get(`/sessions/${result!.filename}`)!;
+    expect(markdown).toContain('id: session-cone\n');
+    expect(markdown).toContain(`sessionId: ${result!.sessionId}\n`);
   });
 });
 
@@ -3235,5 +3266,114 @@ describe('freezeConeSession — cone provenance (#2272)', () => {
 
     expect(updated!.filename).not.toBe(frozen!.filename);
     expect(updated).toMatchObject({ cone: 'cone-research', coneLabel: 'Research' });
+  });
+});
+
+describe('enrichPendingSession — a delete or a rival enrichment mid-pass', () => {
+  beforeEach(() => {
+    mockRunOneOffCompactionCall.mockReset();
+    mockRunOneOffCompactionCall.mockImplementation(async (opts: { instruction: string }) =>
+      opts.instruction === 'TITLE' ? 'Build pipeline debug' : 'NONE'
+    );
+    mockApplyConeMemoryBudget.mockReset();
+    mockApplyConeMemoryBudget.mockResolvedValue({ restructured: false, reason: 'no-llm' });
+  });
+
+  async function seed(vfs: ReturnType<typeof makeFakeVfs>) {
+    const result = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('debug the build pipeline'),
+          assistantMessage('looking'),
+          userMessage('thanks'),
+          assistantMessage('np'),
+        ],
+        createdAt: 100,
+        updatedAt: 200,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      mode: 'quick',
+    });
+    return result!;
+  }
+
+  function onRenamedWrite(vfs: ReturnType<typeof makeFakeVfs>, land: () => Promise<void>): void {
+    const write = vfs.writeFile.bind(vfs);
+    let landed = false;
+    vfs.writeFile = async (path: string, content: string | Uint8Array) => {
+      await write(path, content);
+      if (!landed && path.endsWith('-build-pipeline-debug.md')) {
+        landed = true;
+        await land();
+      }
+    };
+  }
+
+  const enrich = (vfs: ReturnType<typeof makeFakeVfs>, entry: FrozenSessionIndexEntry) =>
+    enrichPendingSession(vfs as unknown as Parameters<typeof enrichPendingSession>[0], entry, {
+      model: fakeModel!,
+      apiKey: 'k',
+    });
+  const readIndex = (vfs: ReturnType<typeof makeFakeVfs>) =>
+    readSessionsIndex(vfs as unknown as Parameters<typeof readSessionsIndex>[0]);
+  const renamedCopies = (vfs: ReturnType<typeof makeFakeVfs>) =>
+    [...vfs.files.keys()].filter((path) => path.includes('-build-pipeline-debug.'));
+
+  it('a delete landing mid-enrichment is not undone: no row comes back, the renamed copy is dropped', async () => {
+    const vfs = makeFakeVfs();
+    const frozen = await seed(vfs);
+    onRenamedWrite(vfs, async () => {
+      vfs.files.delete(`/sessions/${frozen.filename}`);
+      vfs.files.set(SESSIONS_INDEX_PATH, '[]');
+    });
+
+    expect(await enrich(vfs, frozen)).toBeNull();
+    expect(await readIndex(vfs)).toEqual([]);
+    expect(renamedCopies(vfs)).toEqual([]);
+  });
+
+  it('a rival enrichment that already moved the session on wins; this pass writes nothing', async () => {
+    const vfs = makeFakeVfs();
+    const frozen = await seed(vfs);
+    const { archive: _archive, pendingEnrichment: _pending, ...rest } = frozen;
+    const winner: FrozenSessionIndexEntry = {
+      ...rest,
+      filename: '2026-01-01T00-00-00-000Z-rival-title.md',
+      title: 'Rival title',
+    };
+    onRenamedWrite(vfs, async () => {
+      vfs.files.set(`/sessions/${winner.filename}`, 'rival archive');
+      vfs.files.set(SESSIONS_INDEX_PATH, JSON.stringify([winner]));
+    });
+
+    expect(await enrich(vfs, frozen)).toBeNull();
+    expect((await readIndex(vfs)).map((entry) => entry.filename)).toEqual([winner.filename]);
+    expect(vfs.files.get(`/sessions/${winner.filename}`)).toBe('rival archive');
+    expect(renamedCopies(vfs)).toEqual([]);
+  });
+
+  it('keeps the prepend when the index lost the row but the draft archive survives', async () => {
+    const vfs = makeFakeVfs();
+    const frozen = await seed(vfs);
+    vfs.files.set(SESSIONS_INDEX_PATH, '[]');
+
+    const updated = await enrich(vfs, frozen);
+    expect(updated?.filename).toMatch(/-build-pipeline-debug\.md$/);
+    expect((await readIndex(vfs)).map((entry) => entry.filename)).toEqual([updated!.filename]);
+  });
+
+  it('two concurrent enrichments of the same draft keep one row and the canonical archive', async () => {
+    const vfs = makeFakeVfs();
+    const frozen = await seed(vfs);
+    const [first, second] = await Promise.all([enrich(vfs, frozen), enrich(vfs, frozen)]);
+
+    const winner = first ?? second;
+    expect(winner?.filename).toMatch(/-build-pipeline-debug\.md$/);
+    expect((await readIndex(vfs)).map((entry) => entry.filename)).toEqual([winner!.filename]);
+    expect(vfs.files.has(`/sessions/${winner!.filename}`)).toBe(true);
+    expect(vfs.files.has(`/sessions/${frozen.filename}`)).toBe(false);
   });
 });

@@ -27,7 +27,7 @@ export const LIVE_DELTA_MAX_MESSAGES = 200;
 
 export const LIVE_DELTA_MAX_CHARS = 80_000;
 
-const LIVE_DELTA_DIR = '/sessions/.live-deltas';
+export const LIVE_DELTA_DIR = '/sessions/.live-deltas';
 
 export interface DeltaLimits {
   maxMessages: number;

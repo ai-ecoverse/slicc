@@ -51,6 +51,8 @@ export interface ExportServiceDeps {
       snapshot: SanitizedTranscriptSnapshot,
       signal?: AbortSignal
     ): Promise<void>;
+
+    discardIfUnindexed?(sessionId: string): Promise<unknown>;
   };
 
   vfs: LocalVfsClient;
@@ -235,14 +237,18 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
 
     if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
 
-    await this.deps.snapshotStore.write(
-      metadata.sessionId,
-      {
-        document: finalDoc,
-        attachments: bundleFiles,
-      },
-      signal
-    );
+    try {
+      await this.deps.snapshotStore.write(
+        metadata.sessionId,
+        {
+          document: finalDoc,
+          attachments: bundleFiles,
+        },
+        signal
+      );
+    } finally {
+      void this.deps.snapshotStore.discardIfUnindexed?.(metadata.sessionId)?.catch(() => undefined);
+    }
   }
 
   private async buildActiveSnapshot(

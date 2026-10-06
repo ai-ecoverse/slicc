@@ -164,6 +164,7 @@ export function formatArchiveAsMarkdown(rawArchive: FrozenSessionArchive): strin
     `---\n` +
     `id: ${archive.id}\n` +
     (archive.sessionId ? `sessionId: ${archive.sessionId}\n` : '') +
+    (archive.attachmentsKey ? `attachmentsKey: ${archive.attachmentsKey}\n` : '') +
     `title: ${JSON.stringify(archive.title)}\n` +
     `frozenAt: ${archive.frozenAt}\n` +
     `createdAt: ${archive.createdAt}\n` +

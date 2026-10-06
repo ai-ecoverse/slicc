@@ -67,6 +67,8 @@ export interface FrozenSessionArchive {
   id: string;
 
   sessionId?: string;
+
+  attachmentsKey?: string;
   title: string;
   frozenAt: string;
   createdAt: number;
@@ -122,6 +124,7 @@ export function parseFrozenArchive(
   | 'compactions'
   | 'curatedThrough'
   | 'sessionId'
+  | 'attachmentsKey'
 > & { id?: string; sidecar?: string } {
   let body = markdown;
   let title = 'Untitled';
@@ -137,6 +140,7 @@ export function parseFrozenArchive(
     | 'compactions'
     | 'curatedThrough'
     | 'sessionId'
+    | 'attachmentsKey'
   > & { id?: string; sidecar?: string } = {};
 
   const fmMatch = body.match(/^---\n([\s\S]*?)\n---\n+/);
@@ -183,6 +187,7 @@ function parseFrontmatterMeta(
   | 'compactions'
   | 'curatedThrough'
   | 'sessionId'
+  | 'attachmentsKey'
 > & { id?: string; sidecar?: string } {
   const meta: ReturnType<typeof parseFrontmatterMeta> = {};
   const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
@@ -209,6 +214,8 @@ function parseFrontmatterMeta(
   if (id) meta.id = id;
   const sessionId = frontmatter.match(/^sessionId:\s*(\S+)\s*$/m)?.[1];
   if (sessionId) meta.sessionId = sessionId;
+  const attachmentsKey = frontmatter.match(/^attachmentsKey:\s*(\S+)\s*$/m)?.[1];
+  if (attachmentsKey) meta.attachmentsKey = attachmentsKey;
 
   const sidecar = frontmatter.match(/^sidecar:\s*(\S+)\s*$/m)?.[1];
   if (sidecar) meta.sidecar = sidecar;

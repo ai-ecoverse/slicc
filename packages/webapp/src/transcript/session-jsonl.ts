@@ -99,6 +99,7 @@ export async function loadFrozenArchive(
     | 'compactions'
     | 'curatedThrough'
     | 'sessionId'
+    | 'attachmentsKey'
   > & { id?: string; sidecar?: string }
 > {
   const parsed = parseFrozenArchive(markdown);

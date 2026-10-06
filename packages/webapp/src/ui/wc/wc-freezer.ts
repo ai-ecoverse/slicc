@@ -1,4 +1,5 @@
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import { serializeIndexWrite } from '../../transcript/frozen-archive-writer.js';
 import { loadFrozenArchive } from '../../transcript/session-jsonl.js';
 import { PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 import {
@@ -29,12 +30,20 @@ function metaLine(entry: FrozenSessionIndexEntry): string {
   return entry.live ? `${turns} · in progress` : turns;
 }
 
-export function frozenCard(entry: FrozenSessionIndexEntry): HTMLElement {
+export interface FrozenCardOptions {
+  deletable?: boolean;
+}
+
+export function frozenCard(
+  entry: FrozenSessionIndexEntry,
+  opts: FrozenCardOptions = {}
+): HTMLElement {
   const card = document.createElement('slicc-freezer-card');
   card.setAttribute('title', entry.title);
   card.setAttribute('meta', metaLine(entry));
   card.setAttribute('slug', entry.filename);
   if (entry.icon) card.setAttribute('icon', entry.icon);
+  if (opts.deletable && !entry.live) card.setAttribute('deletable', '');
   return card;
 }
 
@@ -53,13 +62,17 @@ export async function enrichFreezerIcons(deps: {
   }
   if (picked.size === 0) return;
 
-  const current = await readFreezerEntries(deps.reader);
-  if (current === null || current.length === 0) return;
-  const updated = current.map((e) => {
-    const icon = !e.icon && picked.has(e.filename) ? picked.get(e.filename) : undefined;
-    return icon ? { ...e, icon } : e;
+  const written = await serializeIndexWrite(async () => {
+    const current = await readFreezerEntries(deps.reader);
+    if (current === null || current.length === 0) return false;
+    const updated = current.map((e) => {
+      const icon = !e.icon && picked.has(e.filename) ? picked.get(e.filename) : undefined;
+      return icon ? { ...e, icon } : e;
+    });
+    await deps.writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    return true;
   });
-  await deps.writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+  if (!written) return;
 
   for (const card of deps.freezer.querySelectorAll('slicc-freezer-card')) {
     const icon = picked.get(card.getAttribute('slug') ?? '');
@@ -124,6 +137,21 @@ export async function rebuildFreezerIndexFromArchives(
   return entries;
 }
 
+export function recoverCorruptFreezerIndex(
+  reader: LocalVfsClient,
+  writer: { writeFile(path: string, content: string): Promise<unknown> }
+): Promise<FrozenSessionIndexEntry[] | null> {
+  return serializeIndexWrite(async () => {
+    const state = await readFreezerIndexState(reader);
+    if (state.kind === 'ok') return state.entries;
+    if (state.kind !== 'corrupt') return null;
+    const entries = await rebuildFreezerIndexFromArchives(reader);
+    if (entries.length === 0) return null;
+    await writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
+    return entries;
+  });
+}
+
 function entryFromArchive(filename: string, text: string): FrozenSessionIndexEntry {
   const header = text.slice(0, 2000);
   const title = /^title:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? filename;
@@ -154,10 +182,11 @@ function entryFromArchive(filename: string, text: string): FrozenSessionIndexEnt
 
 export function renderFreezerCards(
   freezer: HTMLElement,
-  entries: readonly FrozenSessionIndexEntry[]
+  entries: readonly FrozenSessionIndexEntry[],
+  opts: FrozenCardOptions = {}
 ): void {
   for (const card of Array.from(freezer.querySelectorAll('slicc-freezer-card'))) card.remove();
-  freezer.append(...entries.map(frozenCard));
+  freezer.append(...entries.map((entry) => frozenCard(entry, opts)));
 }
 
 export async function thawFrozenSession(

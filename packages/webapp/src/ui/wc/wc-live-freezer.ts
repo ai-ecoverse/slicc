@@ -1,5 +1,6 @@
 import { isFeatureEnabled } from '../../core/feature-flags.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { isChatKeyId } from '../../transcript/frozen-session-identity.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { tmpDirFor } from '../../work-unit/descriptor.js';
 import { isRootUnit } from '../../work-unit/policy.js';
@@ -19,11 +20,11 @@ import {
   type FrozenSessionIndexEntry,
   readFreezerEntries,
   readFreezerIndexState,
-  rebuildFreezerIndexFromArchives,
+  recoverCorruptFreezerIndex,
   renderFreezerCards,
-  SESSIONS_INDEX_PATH,
   thawFrozenSession,
 } from './wc-freezer.js';
+import { wireFreezerDelete } from './wc-freezer-delete.js';
 import type { WcPageVfs } from './wc-live.js';
 import { applyShellContext, type WcShellRefs } from './wc-shell.js';
 import {
@@ -213,6 +214,56 @@ export function frozenProvenanceEl(
   return el;
 }
 
+async function loadFreezerEntries(
+  reader: WcPageVfs['reader'],
+  writer: WcPageVfs['writer'],
+  log: BootStageLogger
+): Promise<FrozenSessionIndexEntry[] | null> {
+  const entries = await readFreezerEntries(reader);
+  if (entries !== null) return entries;
+  if ((await readFreezerIndexState(reader)).kind !== 'corrupt') return null;
+  log.warn('WC freezer index corrupt — rebuilding from archives');
+  return recoverCorruptFreezerIndex(reader, writer);
+}
+
+function backfillFreezerIcons(
+  gate: { busy: boolean },
+  ctx: Pick<WcPageVfs, 'reader' | 'writer'> & { freezer: HTMLElement; log: BootStageLogger },
+  entries: FrozenSessionIndexEntry[]
+): void {
+  if (gate.busy || !entries.some((entry) => !entry.icon && !entry.pendingEnrichment)) return;
+  gate.busy = true;
+  void import('../../providers/quick-llm.js')
+    .then(({ pickLucideIcon }) =>
+      enrichFreezerIcons({
+        reader: ctx.reader,
+        writer: ctx.writer,
+        freezer: ctx.freezer,
+        entries,
+        pickIcon: (subject) => pickLucideIcon({ subject }),
+      })
+    )
+    .catch((err) => ctx.log.warn('WC freezer icon enrichment failed', err))
+    .finally(() => {
+      gate.busy = false;
+    });
+}
+
+function isViewingEntry(
+  thread: Pick<HTMLElement, 'getAttribute'>,
+  entry: FrozenSessionIndexEntry,
+  currentFrozenSessionId: string | null
+): boolean {
+  const context = thread.getAttribute('context') ?? '';
+  if (context === `freezer:${entry.filename}`) return true;
+  return (
+    context.startsWith('freezer:') &&
+    !!entry.sessionId &&
+    !isChatKeyId(entry.sessionId) &&
+    currentFrozenSessionId === entry.sessionId
+  );
+}
+
 export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   const { refs, openVfs, client, getController, getSelected, clearSelection, log } = deps;
   let frozenEntries: FrozenSessionIndexEntry[] = [];
@@ -223,40 +274,16 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   };
 
   let refreshSeq = 0;
-  let iconEnriching = false;
+  const iconGate = { busy: false };
   const refreshFreezer = (): void => {
     const seq = ++refreshSeq;
     void openVfs()
       .then(async ({ reader, writer }) => {
-        let entries = await readFreezerEntries(reader);
-        if (entries === null) {
-          const state = await readFreezerIndexState(reader);
-          if (state.kind !== 'corrupt') return;
-          log.warn('WC freezer index corrupt — rebuilding from archives');
-          entries = await rebuildFreezerIndexFromArchives(reader);
-          if (entries.length === 0) return;
-          await writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
-        }
-        if (seq !== refreshSeq) return;
+        const entries = await loadFreezerEntries(reader, writer, log);
+        if (entries === null || seq !== refreshSeq) return;
         frozenEntries = entries;
-        renderFreezerCards(refs.freezer, entries);
-        if (!iconEnriching && entries.some((entry) => !entry.icon && !entry.pendingEnrichment)) {
-          iconEnriching = true;
-          void import('../../providers/quick-llm.js')
-            .then(({ pickLucideIcon }) =>
-              enrichFreezerIcons({
-                reader,
-                writer,
-                freezer: refs.freezer,
-                entries,
-                pickIcon: (subject) => pickLucideIcon({ subject }),
-              })
-            )
-            .catch((err) => log.warn('WC freezer icon enrichment failed', err))
-            .finally(() => {
-              iconEnriching = false;
-            });
-        }
+        renderFreezerCards(refs.freezer, entries, { deletable: true });
+        backfillFreezerIcons(iconGate, { reader, writer, freezer: refs.freezer, log }, entries);
       })
       .catch((err) => log.error('WC freezer refresh failed', err));
   };
@@ -363,6 +390,22 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   refs.freezer.addEventListener('freezer-card-select', (event) => {
     const slug = (event as CustomEvent<{ slug?: string }>).detail?.slug;
     if (slug) void openFrozen(slug);
+  });
+
+  wireFreezerDelete({
+    freezer: refs.freezer,
+    openVfs,
+    getEntries: () => frozenEntries,
+
+    isViewing: (entry) => isViewingEntry(refs.thread, entry, currentFrozenSessionId),
+    leaveViewed: (entry) => {
+      getController()?.loadMessages([]);
+      currentFrozenSessionId = null;
+      const cone = rootForConeFolder(deps.getUnits(), entry.cone);
+      if (cone) selectScoop(cone);
+    },
+    refreshFreezer,
+    log,
   });
 
   return {

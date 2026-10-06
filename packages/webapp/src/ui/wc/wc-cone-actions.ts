@@ -28,8 +28,8 @@ export interface ConeActionsHandles {
 const BTN_BASE =
   'padding:0.5rem 1.25rem;border-radius:0.375rem;cursor:pointer;font:inherit;font-size:0.875rem;';
 const BTN_PRIMARY = `${BTN_BASE}border:none;background:var(--s2-accent-color,#0265dc);color:#fff;`;
-const BTN_DANGER = `${BTN_BASE}border:none;background:#d23;color:#fff;`;
-const BTN_PLAIN = `${BTN_BASE}background:transparent;border:1px solid var(--s2-border-color,#e0e0e0);color:inherit;`;
+export const BTN_DANGER = `${BTN_BASE}border:none;background:#d23;color:#fff;`;
+export const BTN_PLAIN = `${BTN_BASE}background:transparent;border:1px solid var(--s2-border-color,#e0e0e0);color:inherit;`;
 
 export function buildNewConeRecord(
   name: string,
@@ -45,9 +45,9 @@ export function buildNewConeRecord(
   };
 }
 
-type ConeDialog = HTMLElement & { show?: () => void; hide?: () => void };
+export type ConeDialog = HTMLElement & { show?: () => void; hide?: () => void };
 
-interface ConeDialogSpec {
+export interface ConeDialogSpec {
   heading: string;
   body: HTMLElement;
   actions: Array<{ text: string; style: string; data: string; onClick: () => void }>;
@@ -55,7 +55,7 @@ interface ConeDialogSpec {
   onDismiss(dialog: ConeDialog): void;
 }
 
-function buildConeDialog(doc: Document, spec: ConeDialogSpec): ConeDialog {
+export function buildConeDialog(doc: Document, spec: ConeDialogSpec): ConeDialog {
   const d = doc.createElement('slicc-dialog') as ConeDialog;
   d.setAttribute('heading', spec.heading);
   d.append(spec.body);

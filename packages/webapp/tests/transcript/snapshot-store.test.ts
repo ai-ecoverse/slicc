@@ -3,7 +3,9 @@ import type { TranscriptAttachment } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
+  discardSnapshotIfUnindexed,
   readSnapshot,
+  removeSnapshot,
   type SanitizedTranscriptSnapshot,
   writeSnapshot,
 } from '../../src/transcript/snapshot-store.js';
@@ -403,5 +405,74 @@ describe('writeSnapshot — undeclared attachment bytes', () => {
     const bytes = new Uint8Array([7, 8, 9]);
     const snapshot = makeSnapshot([['attachments/att-0001.bin', bytes]]);
     await expect(writeSnapshot(vfs, sessionId, snapshot)).resolves.toBeUndefined();
+  });
+});
+
+describe('removeSnapshot', () => {
+  it('removes the published bundle and a leftover staging dir; missing is fine', async () => {
+    const vfs = await createVfs();
+    await writeSnapshot(vfs, 'sess-rm-001', makeSnapshot());
+    await vfs.mkdir('/sessions/data/.tmp-sess-rm-001', { recursive: true });
+    await vfs.writeFile('/sessions/data/.tmp-sess-rm-001/document.json', '{}');
+
+    await removeSnapshot(vfs, 'sess-rm-001');
+
+    await expect(vfs.stat('/sessions/data/sess-rm-001')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(vfs.stat('/sessions/data/.tmp-sess-rm-001')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(removeSnapshot(vfs, 'sess-rm-001')).resolves.toBeUndefined();
+  });
+
+  it('rejects an unsafe id', async () => {
+    const vfs = await createVfs();
+    await expect(removeSnapshot(vfs, '../escape')).rejects.toThrow();
+  });
+
+  it('surfaces a non-ENOENT removal fault', async () => {
+    const failing = {
+      rm: async () => {
+        throw Object.assign(new Error('EIO: disk'), { code: 'EIO' });
+      },
+    };
+    await expect(removeSnapshot(failing as never, 'sess-x')).rejects.toThrow('EIO');
+  });
+});
+
+describe('discardSnapshotIfUnindexed', () => {
+  async function seeded(index: string | null): Promise<VirtualFS> {
+    const vfs = await createVfs();
+    await writeSnapshot(vfs, 'sess-d-001', makeSnapshot());
+    if (index !== null) await vfs.writeFile('/sessions/index.json', index);
+    return vfs;
+  }
+  const kept = (vfs: VirtualFS) =>
+    vfs.stat('/sessions/data/sess-d-001').then(
+      () => true,
+      () => false
+    );
+
+  it('keeps the bundle while a row still carries the sessionId', async () => {
+    const vfs = await seeded(
+      JSON.stringify([
+        { filename: 'a.md', title: 'a', frozenAt: 'x', messageCount: 1, sessionId: 'sess-d-001' },
+      ])
+    );
+    expect(await discardSnapshotIfUnindexed(vfs, 'sess-d-001')).toBe(false);
+    expect(await kept(vfs)).toBe(true);
+  });
+
+  it('removes the bundle when a well-formed index no longer has the row', async () => {
+    const vfs = await seeded('[]');
+    expect(await discardSnapshotIfUnindexed(vfs, 'sess-d-001')).toBe(true);
+    expect(await kept(vfs)).toBe(false);
+  });
+
+  it('keeps the bundle when the index is missing or corrupt — it cannot prove a delete', async () => {
+    for (const index of [null, '[{"filename": trunc']) {
+      const vfs = await seeded(index);
+      expect(await discardSnapshotIfUnindexed(vfs, 'sess-d-001')).toBe(false);
+      expect(await kept(vfs)).toBe(true);
+    }
   });
 });
