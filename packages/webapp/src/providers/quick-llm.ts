@@ -28,6 +28,33 @@ import {
 
 const log = createLogger('quick-llm');
 
+/**
+ * Replace every unpaired UTF-16 surrogate with U+FFFD so the string survives
+ * `JSON.stringify` + a strict provider body validator (see call site below).
+ * Equivalent to `String.prototype.toWellFormed()` (ES2024), which the webapp's
+ * ES2022 `lib` target does not yet declare; well-formed input is returned
+ * untouched.
+ */
+function toWellFormed(s: string): string {
+  let out: string[] | null = null;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code < 0xd800 || code > 0xdfff) continue;
+    if (code <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        i++; // well-formed pair — skip its low half
+        continue;
+      }
+    }
+    // Lone surrogate (unpaired high, or a low with no preceding high).
+    // `split('')` cuts by UTF-16 code unit, so indices match `charCodeAt`.
+    out ??= s.split('');
+    out[i] = '�';
+  }
+  return out === null ? s : out.join('');
+}
+
 export interface QuickLabelOptions {
   /** User-facing prompt. Keep it short — labels aren't conversations. */
   prompt: string;
@@ -72,9 +99,17 @@ export async function quickLabel(opts: QuickLabelOptions): Promise<string | null
     return null;
   }
 
+  // Callers build prompts by index-truncating transcript/activity text
+  // (`.slice()` counts UTF-16 units), so a cut landing inside a surrogate
+  // pair can leave a lone surrogate. `completeSimple` -> the provider
+  // transport `JSON.stringify`s this content; a strict proxy (the Adobe
+  // Bedrock GPT family) then rejects the whole body with
+  // `invalid request body: unexpected end of hex escape`. pi-ai does not
+  // repair surrogates, so centralize the fix here — every call site is
+  // covered at once. Mirrors PR #3820's `toWellFormed()` repair.
   const userMessage: UserMessage = {
     role: 'user',
-    content: opts.prompt,
+    content: toWellFormed(opts.prompt),
     timestamp: Date.now(),
   };
 
@@ -86,7 +121,10 @@ export async function quickLabel(opts: QuickLabelOptions): Promise<string | null
   try {
     const message = await completeSimple(
       model,
-      { systemPrompt: opts.system, messages: [userMessage] },
+      {
+        systemPrompt: opts.system === undefined ? undefined : toWellFormed(opts.system),
+        messages: [userMessage],
+      },
       {
         apiKey,
         maxTokens: opts.maxTokens ?? 60,

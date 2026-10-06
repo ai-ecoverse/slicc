@@ -213,6 +213,57 @@ describe('quickLabel', () => {
     expect(context.messages[0].role).toBe('user');
     expect(context.messages[0].content).toBe('describe');
   });
+
+  it('repairs a lone surrogate in the prompt before serialization (#3826)', async () => {
+    providerSettings.models = [makeModel('claude-haiku-4-5', 1)];
+    providerSettings.modelId = 'claude-haiku-4-5';
+    completeSimple.mockResolvedValue(assistantTextMessage('ok'));
+
+    // '\ud83d' is a lone high surrogate — exactly what index-based truncation
+    // (`.slice()`) through an emoji leaves at the call sites. It must never
+    // reach the provider: JSON.stringify would write it as "\ud83d" and a
+    // strict proxy rejects the whole body.
+    const brokenPrompt = `summary \ud83d`;
+    await quickLabel({ prompt: brokenPrompt });
+
+    const [, context] = completeSimple.mock.calls[0] as [
+      unknown,
+      { messages: Array<{ content: string }> },
+    ];
+    const sent = context.messages[0].content;
+    expect(sent).not.toContain('\ud83d');
+    expect(sent).toBe('summary �');
+    // JSON.stringify (what the transport does) must not emit a lone \ud83d.
+    expect(JSON.stringify(sent)).not.toContain('\\ud83d');
+  });
+
+  it('leaves a well-formed prompt (paired surrogates) untouched (#3826)', async () => {
+    providerSettings.models = [makeModel('claude-haiku-4-5', 1)];
+    providerSettings.modelId = 'claude-haiku-4-5';
+    completeSimple.mockResolvedValue(assistantTextMessage('ok'));
+
+    const prompt = 'ship it 🚀 now';
+    await quickLabel({ prompt });
+
+    const [, context] = completeSimple.mock.calls[0] as [
+      unknown,
+      { messages: Array<{ content: string }> },
+    ];
+    expect(context.messages[0].content).toBe(prompt);
+  });
+
+  it('repairs a lone surrogate in the system prompt (#3826)', async () => {
+    providerSettings.models = [makeModel('claude-haiku-4-5', 1)];
+    providerSettings.modelId = 'claude-haiku-4-5';
+    completeSimple.mockResolvedValue(assistantTextMessage('ok'));
+
+    await quickLabel({ prompt: 'hi', system: `be brief \ud83d` });
+
+    const [, context] = completeSimple.mock.calls[0] as [unknown, { systemPrompt?: string }];
+    const system = context.systemPrompt ?? '';
+    expect(system).not.toContain('\ud83d');
+    expect(system).toBe('be brief �');
+  });
 });
 
 describe('familyOf', () => {
