@@ -164,10 +164,10 @@ describe('unsupportedImport', () => {
       ],
       ['_start']
     );
-    expect(unsupportedImport(pair, undefined, { 'acme_host.pair': 'other' })).toContain(
+    expect(unsupportedImport(pair, undefined, { acme_host: { pair: 'other' } })).toContain(
       'imports acme_host.pair: its result cannot carry ENOSYS'
     );
-    expect(unsupportedImport(pair, undefined, { 'acme_host.pair': 'i64' })).toBeUndefined();
+    expect(unsupportedImport(pair, undefined, { acme_host: { pair: 'i64' } })).toBeUndefined();
   });
 
   it('accepts WASIX, with the memory the kernel recorded and its thread-spawn', () => {

@@ -40,7 +40,7 @@ import {
 } from '../../../kernel/wasm-realm/socket.js';
 import type { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import {
-  type ForeignResult,
+  type ForeignImports,
   foreignImports,
   type ImportedMemory,
   importedMemory,
@@ -147,7 +147,7 @@ interface WasiImports {
   /** The memory it imports (WASIX's shared `env.memory`). */
   memory?: ImportedMemory;
   /** The result types of its functions from namespaces the realm does not provide. */
-  foreign: Record<string, ForeignResult>;
+  foreign: ForeignImports;
 }
 const memories = new Map<string, WasiImports>();
 
@@ -492,7 +492,7 @@ export class WasmSession {
     let glue = '';
     let module: WebAssembly.Module;
     let memory: ImportedMemory | undefined;
-    let foreign: Record<string, ForeignResult> = {};
+    let foreign: ForeignImports = {};
     try {
       if (wasi) ({ module, memory, foreign } = await loadWasi(this.ctx, req.module));
       else {

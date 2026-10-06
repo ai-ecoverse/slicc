@@ -354,7 +354,7 @@ describe('WASI preview1 programs in the wasm realm', () => {
 
   it('runs a WASI program that imports a namespace this host does not provide; the call answers ENOSYS', async () => {
     const r = await run(await wasi(`${FIXTURES}probetest.wasm`), []);
-    expect(r).toMatchObject({ code: 0, stdout: 'probe=52 spawn=52 wide=52\n' });
+    expect(r).toMatchObject({ code: 0, stdout: 'probe=52 spawn=52 wide=52 x.wide=52,52\n' });
   });
 });
 

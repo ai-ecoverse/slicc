@@ -485,18 +485,18 @@ describe('foreignImports', () => {
     func('acme', 'pair', 3),
     func('acme', 'f64', 4),
     func('acme', 'vec', 5),
+    func('a.b', 'c', 1),
+    func('a', 'b.c', 0),
   ];
   const imports = section(2, [entries.length, ...entries.flat()]);
   const bytes = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, ...types, ...imports]);
 
   it('reads the result type of each function imported from a namespace the realm does not provide', () => {
     expect(foreignImports(bytes)).toEqual({
-      'acme.i32': 'i32',
-      'acme.i64': 'i64',
-      'acme.none': 'none',
-      'acme.pair': 'other',
-      'acme.f64': 'f64',
-      'acme.vec': 'other',
+      acme: { i32: 'i32', i64: 'i64', none: 'none', pair: 'other', f64: 'f64', vec: 'other' },
+      // Names with dots stay apart.
+      'a.b': { c: 'i64' },
+      a: { 'b.c': 'i32' },
     });
     expect(foreignImports(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]))).toEqual({});
   });

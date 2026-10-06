@@ -30,7 +30,7 @@ import {
 import { dylinkInfo } from './dylink.js';
 import { cachingBridge } from './wasi-files.js';
 import { WasiExit, type WasiFunction, WasiHost } from './wasi-host.js';
-import type { ForeignResult, ImportedMemory } from './wasi-module.js';
+import type { ForeignImports, ForeignResult, ImportedMemory } from './wasi-module.js';
 import { WasiSignals } from './wasi-signals.js';
 import { WasiStats } from './wasi-stats.js';
 import { MAIN_TID, ThreadExit, threadCap, WasiThreads } from './wasi-threads.js';
@@ -53,7 +53,7 @@ interface ImportContext {
   /** A position-independent main module (5g): the linker lays it out. */
   pie: boolean;
   memory?: ImportedMemory;
-  foreign?: Record<string, ForeignResult>;
+  foreign?: ForeignImports;
 }
 
 /** Why one import keeps the module from running here, if it does. */
@@ -74,7 +74,7 @@ function importRefusal(
   // A function from a namespace this host neither provides nor decides answers ENOSYS,
   // unless its result cannot carry it.
   if (c.wasi && imp.kind === 'function' && imp.module !== 'env' && imp.module !== 'wasi') {
-    return c.foreign?.[key] === 'other'
+    return c.foreign?.[imp.module]?.[imp.name] === 'other'
       ? `imports ${key}: its result cannot carry ENOSYS, and this host does not provide it`
       : undefined;
   }
@@ -95,7 +95,7 @@ function importRefusal(
 export function unsupportedImport(
   module: WebAssembly.Module,
   memory?: ImportedMemory,
-  foreign?: Record<string, ForeignResult>
+  foreign?: ForeignImports
 ): string | undefined {
   const imports = WebAssembly.Module.imports(module);
   const context: ImportContext = {
@@ -139,7 +139,7 @@ function linkImports(
   wasix: Record<string, WasiFunction> | undefined,
   memory: WebAssembly.Memory | undefined,
   threads: WasiThreads | undefined,
-  foreign: Record<string, ForeignResult> = {}
+  foreign: ForeignImports = {}
 ): WebAssembly.Imports {
   const imports: Record<string, Record<string, WebAssembly.ImportValue>> = {
     [PREVIEW1]: preview1,
@@ -150,8 +150,7 @@ function linkImports(
     const ns = (imports[imp.module] ??= {});
     if (imp.name in ns) continue;
     if (imp.kind === 'memory' && memory) ns[imp.name] = memory;
-    else if (imp.kind === 'function')
-      ns[imp.name] = enosys(imp, foreign[`${imp.module}.${imp.name}`]);
+    else if (imp.kind === 'function') ns[imp.name] = enosys(imp, foreign[imp.module]?.[imp.name]);
   }
   return imports;
 }
@@ -266,7 +265,7 @@ async function instantiate(
     thread?: boolean;
     stats?: WasiStats;
     signals?: WasiSignals;
-    foreign?: Record<string, ForeignResult>;
+    foreign?: ForeignImports;
   } = {}
 ): Promise<{ instance: WebAssembly.Instance; driver: AsyncifyDriver }> {
   const driver = new AsyncifyDriver(host.mem);

@@ -19,6 +19,12 @@ export interface ImportedMemory {
 /** The result type of a function import the realm does not provide: what its ENOSYS stub returns. */
 export type ForeignResult = 'none' | 'i32' | 'i64' | 'f32' | 'f64' | 'other';
 
+/**
+ * Those result types by namespace, then name: nested, since names may contain
+ * dots (`a.b`/`c` and `a`/`b.c` must not share an entry).
+ */
+export type ForeignImports = Record<string, Record<string, ForeignResult>>;
+
 /** Namespaces the realm provides or decides itself; imports from any other are foreign. */
 const PROVIDED = new Set(['wasi_snapshot_preview1', 'wasix_32v1', 'wasi', 'env']);
 
@@ -108,11 +114,11 @@ export function importedMemory(bytes: Uint8Array): ImportedMemory | undefined {
   return memory;
 }
 
-/** The result types of `bytes`' function imports from namespaces the realm does not provide, keyed `module.name`. */
-export function foreignImports(bytes: Uint8Array): Record<string, ForeignResult> {
+/** The result types of `bytes`' function imports from namespaces the realm does not provide. */
+export function foreignImports(bytes: Uint8Array): ForeignImports {
   const r = reader(bytes);
   const results: ForeignResult[] = [];
-  const foreign: Record<string, ForeignResult> = {};
+  const foreign: ForeignImports = {};
   r.sections((id) => {
     if (id === 1) {
       const count = r.u32();
@@ -129,7 +135,7 @@ export function foreignImports(bytes: Uint8Array): Record<string, ForeignResult>
     if (id !== 2) return false;
     r.imports((module, name, kind, type) => {
       if (kind === 0 && !PROVIDED.has(module))
-        foreign[`${module}.${name}`] = results[type] ?? 'other';
+        (foreign[module] ??= {})[name] = results[type] ?? 'other';
       return false;
     });
     return true;
