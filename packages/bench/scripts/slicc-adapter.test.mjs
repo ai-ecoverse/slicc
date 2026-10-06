@@ -2357,6 +2357,11 @@ describe('arm helpers', () => {
       lastTurnProviderError(run(1, [dead, file('answer.txt', 'FINAL ANSWER: 42')]))
     ).toBeNull();
     expect(lastTurnProviderError(run(0, [dead]))).toBeNull();
+    // An agent that ran out its own time limit failed the task: judged, like a cone timeout.
+    // bu2-071 in benchmark 37362726069 exited 124 after 3,565 s with timedOut set.
+    const timedOut = run(124, [dead]);
+    timedOut.arm.result.timedOut = true;
+    expect(lastTurnProviderError(timedOut)).toBeNull();
     expect(
       lastTurnProviderError({ arm: { name: 'x', result: null, files: [] }, transcript: DOC })
     ).toBeNull();

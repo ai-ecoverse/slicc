@@ -352,7 +352,8 @@ export function lastTurnProviderError(result) {
  */
 function armAgentDied(result) {
   const code = result.arm.result?.exitCode;
-  if (!code || String(result.finalText ?? '').trim()) return null;
+  // An agent that ran out its own time limit is judged: the timeout is its result, as for a cone.
+  if (!code || result.arm.result?.timedOut || String(result.finalText ?? '').trim()) return null;
   return `the arm's agent exited ${code} without an answer`;
 }
 
