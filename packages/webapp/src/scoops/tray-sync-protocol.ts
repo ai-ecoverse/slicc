@@ -137,7 +137,7 @@ export function reassembleSnapshot(
       error: err instanceof Error ? err.message : String(err),
       scoopJid: message.scoopJid,
     });
-    return { messages: [], scoopJid: message.scoopJid };
+    return null;
   }
 }
 

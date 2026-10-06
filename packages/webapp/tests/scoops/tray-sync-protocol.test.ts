@@ -415,7 +415,7 @@ describe('tray-sync-protocol', () => {
       ).toEqual(original);
     });
 
-    it('returns empty messages on corrupt JSON', () => {
+    it('returns null on corrupt JSON so the follower can drop the frame', () => {
       const buffers = new Map();
       expect(
         reassembleSnapshot(buffers, {
@@ -434,7 +434,7 @@ describe('tray-sync-protocol', () => {
           totalChunks: 2,
           scoopJid: 'cone',
         })
-      ).toEqual({ messages: [], scoopJid: 'cone' });
+      ).toBeNull();
     });
 
     it('keeps concurrent snapshots for different cones isolated', () => {

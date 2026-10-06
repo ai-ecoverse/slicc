@@ -290,6 +290,34 @@ describe('FollowerSyncManager', () => {
       expect(follower.getLatestSnapshot()).toEqual(reviewer);
       void follower;
     });
+
+    it('does not wipe the follower transcript when a chunked snapshot fails to parse', () => {
+      const channel = new FakeChannel();
+      const onSnapshot = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onSnapshot });
+      const messages: ChatMessage[] = [{ id: '1', role: 'user', content: 'keep me', timestamp: 1 }];
+
+      channel.simulateLeaderMessage({ type: 'snapshot', messages, scoopJid: 'cone' });
+      onSnapshot.mockClear();
+
+      channel.simulateLeaderMessage({
+        type: 'snapshot_chunk',
+        chunkData: '{"messages":',
+        chunkIndex: 0,
+        totalChunks: 2,
+        scoopJid: 'cone',
+      });
+      channel.simulateLeaderMessage({
+        type: 'snapshot_chunk',
+        chunkData: 'INVALID}}}',
+        chunkIndex: 1,
+        totalChunks: 2,
+        scoopJid: 'cone',
+      });
+
+      expect(onSnapshot).not.toHaveBeenCalled();
+      expect(follower.getLatestSnapshot()).toEqual({ messages, scoopJid: 'cone' });
+    });
   });
 
   describe('user_message_echo handling', () => {
