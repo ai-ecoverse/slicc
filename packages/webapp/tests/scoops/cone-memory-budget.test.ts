@@ -12,6 +12,7 @@ vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
   };
 });
 
+import { wellFormed } from '../../src/base/utf16-clip.js';
 import { FsError, VirtualFS } from '../../src/fs/index.js';
 import {
   applyConeMemoryBudget,
@@ -192,6 +193,25 @@ describe('restructureConeMemory', () => {
     expect(opts.headers).toEqual({ 'X-Session-Id': 'sess-1' });
     expect(opts.signal).toBe(ac.signal);
     expect(opts.apiKey).toBe('k');
+  });
+
+  it('sends well-formed strings when accumulated bullets hold a lone surrogate', async () => {
+    mockCompleteSimple.mockResolvedValueOnce(
+      llmResponse('## Auto-extracted (consolidated)\n\n- ok')
+    );
+    await restructureConeMemory({
+      currentContent: '## Auto-extracted (2024-01-01)\n\n- bad \uD83D tail\n- low \uDE00 head\n',
+      budget: 4000,
+      model: fakeModel,
+      apiKey: 'k',
+    });
+    const ctx = mockCompleteSimple.mock.calls[0][1] as {
+      systemPrompt: string;
+      messages: { content: { text: string }[] }[];
+    };
+    expect(ctx.systemPrompt).toBe(wellFormed(ctx.systemPrompt));
+    expect(ctx.systemPrompt).toContain('bad \uFFFD tail');
+    for (const part of ctx.messages[0].content) expect(part.text).toBe(wellFormed(part.text));
   });
 
   it('throws when the LLM call returns an error stopReason', async () => {
