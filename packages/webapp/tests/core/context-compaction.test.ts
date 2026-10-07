@@ -682,8 +682,10 @@ describe('createCompactContext', () => {
       unknown,
       { systemPrompt: string; messages: { content: { text: string }[] }[] },
     ][]) {
-      expect(ctx.systemPrompt.isWellFormed()).toBe(true);
-      expect(ctx.messages[0].content[0].text.isWellFormed()).toBe(true);
+      expect(JSON.stringify(ctx.systemPrompt)).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/i);
+      expect(JSON.stringify(ctx.messages[0].content[0].text)).not.toMatch(
+        /\\ud[89a-f][0-9a-f]{2}/i
+      );
     }
     const first = mockCompleteSimple.mock.calls[0][1] as { systemPrompt: string };
     expect(first.systemPrompt).toContain('\ud83d\ude00');
