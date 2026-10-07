@@ -12,6 +12,7 @@ import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { createLogger } from '../base/logger.js';
 import { computeBudget } from '../base/memory-budget.js';
+import { wellFormed } from '../base/utf16-clip.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import { PRIMARY_WORKSPACE } from '../work-unit/descriptor.js';
@@ -94,15 +95,18 @@ export async function restructureConeMemory(opts: RestructureConeMemoryOptions):
     return opts.currentContent;
   }
 
-  const systemPrompt = `You are a memory consolidation assistant. You are given a markdown file's "auto-extracted" section — a list of memory bullets accumulated across sessions of an AI coding assistant. Your job is to rewrite that section as a tighter, deduplicated set of durable memories that fits well within ${opts.budget} characters.
+  // Accumulated bullets may hold a lone surrogate (an earlier slice split a
+  // pair); the provider JSON encoder rejects it and fails the whole call.
+  const systemPrompt =
+    wellFormed(`You are a memory consolidation assistant. You are given a markdown file's "auto-extracted" section — a list of memory bullets accumulated across sessions of an AI coding assistant. Your job is to rewrite that section as a tighter, deduplicated set of durable memories that fits well within ${opts.budget} characters.
 
 <auto-extracted>
 ${autoExtracted}
-</auto-extracted>`;
+</auto-extracted>`);
 
   const userMessage: UserMessage = {
     role: 'user',
-    content: [{ type: 'text', text: RESTRUCTURE_INSTRUCTION }],
+    content: [{ type: 'text', text: wellFormed(RESTRUCTURE_INSTRUCTION) }],
     timestamp: Date.now(),
   };
 
