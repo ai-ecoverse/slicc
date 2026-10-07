@@ -1,4 +1,4 @@
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
@@ -116,13 +116,26 @@ Examples:
   mcp import claude_desktop_config.json
   mcp auth weather
   mcp delete weather
+  mcp --serve /workspace/skills/jira/jira.jsh
+  mcp --serve --list
+  mcp --serve --stop
 `;
 }
 
 export function createMcpCommand(deps: McpCommandDeps = {}): Command {
-  return defineCommand('mcp', async (args): Promise<ExecResult> => {
+  return defineCommand('mcp', async (args, ctx: CommandContext): Promise<ExecResult> => {
     if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
       return ok(helpText());
+    }
+
+    if (args.includes('--serve')) {
+      const { runMcpServeCommand } = await import('../mcp/serve-command.js');
+      try {
+        return await runMcpServeCommand(args, ctx);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return err(`mcp --serve: ${msg}`);
+      }
     }
     const sub = args[0];
     const rest = args.slice(1);

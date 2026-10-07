@@ -208,6 +208,54 @@ export interface PushTokenRecord {
   registeredAt: string;
 }
 
+export interface McpOAuthClient {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  registeredAt: string;
+}
+
+export interface McpOAuthPending {
+  id: string;
+  clientId: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge: string;
+
+  generation: number;
+  expiresAt: number;
+}
+
+export interface McpOAuthCode {
+  codeHash: string;
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  grantGeneration: number;
+  expiresAt: number;
+}
+
+export interface McpOAuthToken {
+  accessHash: string;
+  refreshHash: string;
+  clientId: string;
+  grantGeneration: number;
+  accessExpiresAt: number;
+  refreshExpiresAt: number;
+}
+
+export interface McpServeRecord {
+  token: string;
+  url: string;
+  trayId: string;
+  grantGeneration: number;
+  createdAt: string;
+  clients: McpOAuthClient[];
+  pending: McpOAuthPending[];
+  codes: McpOAuthCode[];
+  tokens: McpOAuthToken[];
+}
+
 export interface TrayRecord {
   trayId: string;
   createdAt: string;
@@ -238,6 +286,8 @@ export interface TrayRecord {
   pushTokens?: Record<string, PushTokenRecord>;
 
   biscotti?: BiscottoRecord[];
+
+  mcpServe?: McpServeRecord;
 }
 
 export interface CreateTrayRequest {

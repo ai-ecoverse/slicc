@@ -14,6 +14,7 @@ import {
 import type { VirtualFS } from '../fs/index.js';
 
 import { registerProviders } from '../providers/index.js';
+import { bindMcpServeInstance } from '../shell/mcp/serve-instance.js';
 import {
   getLocalApiBaseUrl,
   setBridgeToken,
@@ -180,6 +181,7 @@ function configureWorkerEnvironment(init: KernelWorkerInitMsg): void {
 
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
   setStaleAssetInstanceId(init.instanceId);
+  bindMcpServeInstance(init.instanceId);
   const beaconMixedBuildGraph = checkMixedBuildGraph(init);
 
   const emitBootProgress = (stage: string): void => {

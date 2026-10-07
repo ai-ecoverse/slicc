@@ -105,7 +105,7 @@ export function cloudflareWorkerLayerOf(relPath) {
   if (srcRel === 'index.ts' || srcRel === 'preview-worker.ts') return 'entry';
   if (WORKER_SHARED_FILES.has(srcRel) || srcRel.startsWith('auth/')) return 'shared';
 
-  if (srcRel.startsWith('session-tray-')) return 'shared';
+  if (srcRel.startsWith('session-tray-') || srcRel.startsWith('mcp-serve-')) return 'shared';
   if (srcRel.startsWith('cloud/')) {
     if (
       srcRel === 'cloud/handlers.ts' ||

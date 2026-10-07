@@ -136,6 +136,26 @@ export type WebhookDeliveryDisposition =
   | 'unknown-webhook'
   | 'unresolved-target';
 
+export interface WorkerMcpPublished {
+  type: 'mcp.published';
+  requestId: string;
+  url: string;
+  token: string;
+  grantGeneration: number;
+}
+
+export interface WorkerMcpStopped {
+  type: 'mcp.stopped';
+  requestId: string;
+}
+
+export interface WorkerMcpRequest {
+  type: 'mcp.request';
+  reqId: string;
+  op: 'rpc' | 'consent';
+  body: string;
+}
+
 export interface WorkerPreviewRequest {
   type: 'preview.request';
   reqId: string;
@@ -202,7 +222,10 @@ export type WorkerToLeaderControlMessage =
   | WorkerBridgeConnected
   | WorkerBridgeDisconnected
   | WorkerBridgeCdpResponse
-  | BiscottoRevokedMessage;
+  | BiscottoRevokedMessage
+  | WorkerMcpPublished
+  | WorkerMcpStopped
+  | WorkerMcpRequest;
 
 export interface BiscottoRevokedMessage {
   type: 'biscotto.revoked';
@@ -310,6 +333,31 @@ export interface LeaderWebhookDelivery {
   disposition: WebhookDeliveryDisposition;
 }
 
+export interface LeaderMcpPublish {
+  type: 'mcp.publish';
+  requestId: string;
+  grantGeneration: number;
+  workerBaseUrl: string;
+}
+
+export interface LeaderMcpGeneration {
+  type: 'mcp.generation';
+  grantGeneration: number;
+}
+
+export interface LeaderMcpStop {
+  type: 'mcp.stop';
+  requestId: string;
+}
+
+export interface LeaderMcpResponse {
+  type: 'mcp.response';
+  reqId: string;
+  status: number;
+  contentType: string;
+  body: string;
+}
+
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
   | LeaderWebhookDelivery
@@ -323,7 +371,11 @@ export type LeaderToWorkerControlMessage =
   | LeaderPreviewPurge
   | LeaderPreviewStateUpdate
   | LeaderBridgeCdpRequest
-  | LeaderBridgeClose;
+  | LeaderBridgeClose
+  | LeaderMcpPublish
+  | LeaderMcpGeneration
+  | LeaderMcpStop
+  | LeaderMcpResponse;
 
 export interface BootstrapPollRequest {
   action: 'poll';

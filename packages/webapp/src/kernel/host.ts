@@ -645,6 +645,7 @@ async function restoreMountsThenJshd(
   progress('mounts-restored');
   await restoreJshdUnits(sharedFs, processManager, lickManager, log, orchestrator);
   progress('jshd-restored');
+  await restoreMcpPublication(sharedFs, log);
 }
 
 async function restoreJshdUnits(
@@ -670,6 +671,51 @@ async function restoreJshdUnits(
   } catch (err) {
     log.warn('jshd restore failed', err);
   }
+}
+
+async function restoreMcpPublication(sharedFs: VirtualFS, log: KernelHostLogger): Promise<void> {
+  try {
+    const { restoreMcpServe } = await import('../shell/mcp/serve-runtime.js');
+    const { executeJshFile } = await import('../shell/jsh-executor.js');
+    const { textAsStdin } = await import('../shell/just-bash-compat.js');
+    const { createCommandContext } = await import('just-bash');
+    const { DEFAULT_HOME_DIR } = await import('../shell/home-dir.js');
+    const { DEFAULT_SHELL_PATH } = await import('../shell/jsh-discovery.js');
+    const env = new Map<string, string>([
+      ['HOME', DEFAULT_HOME_DIR],
+      ['PATH', DEFAULT_SHELL_PATH],
+      ['PWD', '/workspace'],
+    ]);
+    await restoreMcpServe(textFsFrom(sharedFs), async (scriptPath, argv, stdin) => {
+      const ctx = createCommandContext({
+        fs: sharedFs as unknown as Parameters<typeof createCommandContext>[0]['fs'],
+        cwd: '/workspace',
+        env,
+        stdin: textAsStdin(stdin ?? ''),
+      });
+      const result = await executeJshFile(scriptPath, argv, ctx);
+      return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+    });
+  } catch (err) {
+    log.warn('mcp serve restore failed', err);
+  }
+}
+
+function textFsFrom(fs: VirtualFS) {
+  return {
+    readFile: async (path: string) => {
+      const content = await fs.readFile(path);
+      return typeof content === 'string' ? content : new TextDecoder().decode(content);
+    },
+    writeFile: async (path: string, content: string) => {
+      await fs.writeFile(path, content);
+    },
+    exists: (path: string) => fs.exists(path),
+    mkdir: async (path: string) => {
+      if (await fs.exists(path)) return;
+      await fs.mkdir(path, { recursive: true });
+    },
+  };
 }
 
 async function recoverPersistedMounts(
