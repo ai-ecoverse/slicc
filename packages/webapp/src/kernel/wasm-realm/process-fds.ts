@@ -18,7 +18,7 @@
  *   bash's process substitution hands a command: `diff <(a) <(b)` runs
  *   `diff /dev/fd/63 /dev/fd/62`.
  */
-import type { ProcessFs, ProcessStream } from './kernel-streams.js';
+import type { ProcessFs, ProcessStream, ProcessSys } from './kernel-streams.js';
 import { type PtyKernel, ptyIoctl } from './process-pty.js';
 import { wasiErrno } from './wasi-errno.js';
 
@@ -248,6 +248,38 @@ export function wrapCloexecSyscalls(
 
 type AsyncImport = ((...args: number[]) => unknown) & { isAsync?: boolean };
 
+/** The glue's own fd_sync, fd_pread and fd_pwrite (the trailer hands them over). */
+export interface GlueFdImports {
+  fd_sync?: unknown;
+  fd_pread?: unknown;
+  fd_pwrite?: unknown;
+}
+
+/**
+ * Replace each import that is the glue's `name` by `wrap(import)`, unless
+ * that declines. A minified build renames its imports (`a.s` for fd_pread),
+ * so they are found by identity; where Asyncify already wrapped them (an
+ * assertions build, whose names are not minified), by name.
+ */
+function replaceGlueImport(
+  imports: WebAssembly.Imports,
+  glue: GlueFdImports | undefined,
+  name: keyof GlueFdImports,
+  wrap: (value: unknown) => unknown
+): void {
+  const own = glue?.[name];
+  const seen = new Set<object>();
+  for (const namespace of Object.values(imports)) {
+    if (!namespace || typeof namespace !== 'object' || seen.has(namespace)) continue;
+    seen.add(namespace);
+    for (const [key, value] of Object.entries(namespace)) {
+      if (typeof value !== 'function' || (value !== own && key !== name)) continue;
+      const wrapped = wrap(value);
+      if (wrapped) namespace[key] = wrapped as WebAssembly.ImportValue;
+    }
+  }
+}
+
 /** A stream on a mount with its own `syncfs` (IDBFS, a program's persistent mount). */
 function persistsItself(stream: ProcessStream): boolean {
   const type = stream.node.mount?.type as { syncfs?: unknown } | undefined;
@@ -274,11 +306,15 @@ function errnoOf(err: unknown): number {
  * stream's own fsync answers at once; a mount that persists itself keeps
  * Emscripten's asynchronous one, which waits for its syncfs.
  */
-export function syncFsync(imports: WebAssembly.Imports, fs: () => ProcessFs | undefined): void {
-  for (const namespace of Object.values(imports)) {
-    const original = namespace?.fd_sync as AsyncImport | undefined;
-    if (typeof original !== 'function' || !original.isAsync) continue;
-    namespace.fd_sync = (fd: number) => {
+export function syncFsync(
+  imports: WebAssembly.Imports,
+  fs: () => ProcessFs | undefined,
+  glue?: GlueFdImports
+): void {
+  replaceGlueImport(imports, glue, 'fd_sync', (value) => {
+    const original = value as AsyncImport;
+    if (!original.isAsync) return undefined;
+    return (fd: number) => {
       const stream = fs()?.getStream(fd);
       if (!stream) return wasiErrno('EBADF');
       if (persistsItself(stream)) return original(fd);
@@ -289,7 +325,129 @@ export function syncFsync(imports: WebAssembly.Imports, fs: () => ProcessFs | un
         return errnoOf(err);
       }
     };
+  });
+}
+
+/**
+ * fd_pread / fd_pwrite: (fd, iov, iovcnt, offset, pnum), the offset an i64
+ * (BigInt), or legalized into signed (low, high) halves without WASM_BIGINT.
+ */
+type PositionedImport = (...args: Array<number | bigint>) => unknown;
+
+interface PositionedDeps {
+  fs: () => ProcessFs | undefined;
+  /** The instance's memory, once it runs. */
+  memory: () => ArrayBuffer | undefined;
+  sys: Pick<ProcessSys, 'pread' | 'pwrite'>;
+}
+
+/** The iovecs at `iov`: [pointer, length] each. */
+function iovecs(view: DataView, iov: number, iovcnt: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < iovcnt; i++) {
+    out.push([view.getUint32(iov + i * 8, true), view.getUint32(iov + i * 8 + 4, true)]);
   }
+  return out;
+}
+
+/**
+ * pread(2) into the iovecs at `at`; bytes read. The kernel caps one read
+ * (MAX_READ), so each iovec reads until it is full or at end of file.
+ */
+function preadInto(
+  buffer: ArrayBuffer,
+  vecs: Array<[number, number]>,
+  read: (len: number, at: number) => Uint8Array,
+  at: number
+): number {
+  let total = 0;
+  for (const [ptr, len] of vecs) {
+    let done = 0;
+    while (done < len) {
+      const bytes = read(len - done, at + total);
+      if (bytes.length === 0) return total;
+      new Uint8Array(buffer).set(bytes, ptr + done);
+      done += bytes.length;
+      total += bytes.length;
+    }
+  }
+  return total;
+}
+
+/** pwrite(2) of the iovecs at `at`; bytes written. */
+function pwriteFrom(
+  buffer: ArrayBuffer,
+  vecs: Array<[number, number]>,
+  write: (bytes: Uint8Array, at: number) => number,
+  at: number
+): number {
+  let total = 0;
+  for (const [ptr, len] of vecs) {
+    const n = write(new Uint8Array(buffer, ptr, len).slice(), at + total);
+    total += n;
+    if (n < len) break;
+  }
+  return total;
+}
+
+/** An i64 argument: a BigInt, as signed, or a number. */
+function i64(value: number | bigint | undefined): number {
+  return typeof value === 'bigint' ? Number(BigInt.asIntN(64, value)) : Number(value);
+}
+
+/** A legalized i64 from its signed 32-bit halves. */
+function i64Halves(low: number | bigint | undefined, high: number | bigint | undefined): number {
+  return Number(high) * 2 ** 32 + (Number(low) >>> 0);
+}
+
+function positioned(original: PositionedImport, deps: PositionedDeps, mode: 'read' | 'write') {
+  return (...args: Array<number | bigint>) => {
+    const [fd, iov, iovcnt] = args.map(Number);
+    const stream = deps.fs()?.getStream(fd);
+    const kfd = stream?.sliccKernelFile ? stream.sliccKernelFd : undefined;
+    const buffer = deps.memory();
+    const { pread, pwrite } = deps.sys;
+    if (kfd === undefined || !buffer || !pread || !pwrite) return original(...args);
+    const split = args.length > 5;
+    const offset = split ? i64Halves(args[3], args[4]) : i64(args[3]);
+    const pnum = Number(args[split ? 5 : 4]);
+    if (!Number.isSafeInteger(offset) || offset < 0) return wasiErrno('EINVAL');
+    const view = new DataView(buffer);
+    const vecs = iovecs(view, iov, iovcnt);
+    let total: number;
+    try {
+      total =
+        mode === 'read'
+          ? preadInto(buffer, vecs, (len, at) => pread(kfd, len, at), offset)
+          : pwriteFrom(buffer, vecs, (bytes, at) => pwrite(kfd, bytes, at), offset);
+    } catch (err) {
+      return errnoOf(err);
+    }
+    view.setUint32(pnum, total, true);
+    return 0;
+  };
+}
+
+/**
+ * pread(2) / pwrite(2) on a descriptor backed by a kernel VFS file
+ * description: at the requested offset, without moving the description's
+ * shared one. Emscripten's fd_pread / fd_pwrite hand the offset to the
+ * stream's read / write as a position, which such a stream cannot honour (its
+ * read and write go at the shared offset): git, built NO_MMAP, reads packs
+ * with pread and got another offset's bytes ("unknown object type 5 at offset
+ * 12"). Other streams keep Emscripten's own.
+ */
+export function positionedIo(
+  imports: WebAssembly.Imports,
+  deps: PositionedDeps,
+  glue?: GlueFdImports
+): void {
+  replaceGlueImport(imports, glue, 'fd_pread', (value) =>
+    positioned(value as PositionedImport, deps, 'read')
+  );
+  replaceGlueImport(imports, glue, 'fd_pwrite', (value) =>
+    positioned(value as PositionedImport, deps, 'write')
+  );
 }
 
 /** The instance's linear memory: exported, or imported (`-sIMPORTED_MEMORY`). */

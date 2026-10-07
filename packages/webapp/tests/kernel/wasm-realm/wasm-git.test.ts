@@ -12,7 +12,9 @@
  *   `git remote-http` helper chain, against a TS smart-HTTP listener;
  * - push, clone (by path and file://) and fetch against a local bare
  *   repository: upload-pack / receive-pack run through `sh -c`, and
- *   index-pack's fsync must not suspend the (Asyncify) process.
+ *   index-pack's fsync must not suspend the (Asyncify) process;
+ * - fetch into a clone that checked nothing out: git (NO_MMAP) reads the
+ *   pack with pread, which must read at its offset, not the shared one.
  *
  * The packages are not fixtures: point SLICC_WASM_MODULES at a
  * `node_modules` that holds them to run this.
@@ -212,6 +214,19 @@ describe.skipIf(!MODULES)('native git in the wasm realm (real programs)', () => 
     );
     expect(await sh.exited, sh.stderr()).toBe(0);
     expect(sh.output()).toBe('c1=one,two, c2=one\nbare=2\nfetched=2\n');
+  }, 120_000);
+
+  it('fetches into a clone whose remote HEAD named no branch (git reads packs with pread)', async () => {
+    const sh = bash(
+      'rm -rf /tmp/h && mkdir -p /tmp/h && cd /tmp/h && git init -q --bare repo.git && ' +
+        'git init -q -b main w && cd w && git config user.email realm@slicc && ' +
+        'git config user.name Realm && echo one > a.txt && git add a.txt && git commit -qm one && ' +
+        'git remote add origin /tmp/h/repo.git && git push -q origin main && cd /tmp/h && ' +
+        'git clone -q file:///tmp/h/repo.git c && cd c && git fetch -q origin && ' +
+        'echo "fetched=$(git rev-list --count origin/main)"'
+    );
+    expect(await sh.exited, sh.stderr()).toBe(0);
+    expect(sh.output()).toBe('fetched=1\n');
   }, 120_000);
 
   it('pages `git log` through less on the terminal; q returns to the shell', async () => {
