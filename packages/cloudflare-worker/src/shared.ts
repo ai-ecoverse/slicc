@@ -156,7 +156,7 @@ export function resolveJoinCapability(
 
 export function normalizeBiscottoGate(gate: Partial<BiscottoGate> | undefined): BiscottoGate {
   const approver = gate?.approver;
-  if (approver === 'off' || approver === 'user' || approver === 'cone') {
+  if (approver === 'off' || approver === 'user' || approver === 'cone' || approver === 'agent') {
     return { approver };
   }
   if (approver === 'scoop' && typeof gate?.scoop === 'string' && gate.scoop.length > 0) {

@@ -60,11 +60,11 @@ export function parseApprover(input: string): Gate | null {
 }
 
 function readGateFlag(flag: string, raw: string | undefined): Gate | string {
-  if (!raw) return `${flag} needs an approver (user, cone, scoop:<name>, off)`;
+  if (!raw) return `${flag} needs an approver (user, cone, agent, scoop:<name>, off)`;
   const gate = parseApprover(raw);
   if (!gate) return `${flag}: cannot read "${raw}" as an approver`;
   if (flag === '--gate-tools' && gate.approver === 'cone') {
-    return '--gate-tools cone: the cone cannot approve a tool call it is blocked on; use user, scoop:<name>, or off';
+    return '--gate-tools cone: the cone cannot approve a tool call it is blocked on; use user, agent, scoop:<name>, or off';
   }
   return gate;
 }

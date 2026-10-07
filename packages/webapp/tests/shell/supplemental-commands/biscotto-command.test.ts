@@ -110,6 +110,9 @@ describe('parseServeArgs', () => {
     expect(parseServeArgs(['--label', 'A', '--expires'])).toBe(
       '--expires needs a duration (30m, 12h, 7d)'
     );
+    expect(parseServeArgs(['--label', 'A', '--gate-tools'])).toBe(
+      '--gate-tools needs an approver (user, cone, agent, scoop:<name>, off)'
+    );
   });
 });
 
