@@ -246,6 +246,52 @@ export function wrapCloexecSyscalls(
   }
 }
 
+type AsyncImport = ((...args: number[]) => unknown) & { isAsync?: boolean };
+
+/** A stream on a mount with its own `syncfs` (IDBFS, a program's persistent mount). */
+function persistsItself(stream: ProcessStream): boolean {
+  const type = stream.node.mount?.type as { syncfs?: unknown } | undefined;
+  return typeof type?.syncfs === 'function';
+}
+
+/**
+ * The errno a failed stream op carries: an ErrnoError's, or a SyscallError's
+ * code. Anything else is a bug, and is rethrown, as Emscripten does.
+ */
+function errnoOf(err: unknown): number {
+  const { errno, code } = (err ?? {}) as { errno?: unknown; code?: unknown };
+  if (typeof errno === 'number') return errno;
+  if (typeof code === 'string') return wasiErrno(code);
+  throw err;
+}
+
+/**
+ * Answer an Asyncify build's `fd_sync` synchronously. Emscripten marks it
+ * async (`Asyncify.handleAsync`), so every fsync unwinds the stack, and the
+ * fork glue allows only `fork` to suspend: git index-pack, which fsyncs the
+ * pack it writes, failed with "unexpected Asyncify suspension (not a fork)".
+ * Every file operation here is synchronous over the SAB bridge, so the
+ * stream's own fsync answers at once; a mount that persists itself keeps
+ * Emscripten's asynchronous one, which waits for its syncfs.
+ */
+export function syncFsync(imports: WebAssembly.Imports, fs: () => ProcessFs | undefined): void {
+  for (const namespace of Object.values(imports)) {
+    const original = namespace?.fd_sync as AsyncImport | undefined;
+    if (typeof original !== 'function' || !original.isAsync) continue;
+    namespace.fd_sync = (fd: number) => {
+      const stream = fs()?.getStream(fd);
+      if (!stream) return wasiErrno('EBADF');
+      if (persistsItself(stream)) return original(fd);
+      try {
+        const result = stream.stream_ops.fsync?.(stream);
+        return typeof result === 'number' ? result : 0;
+      } catch (err) {
+        return errnoOf(err);
+      }
+    };
+  }
+}
+
 /** The instance's linear memory: exported, or imported (`-sIMPORTED_MEMORY`). */
 export function wasmMemory(
   instance: WebAssembly.Instance,
