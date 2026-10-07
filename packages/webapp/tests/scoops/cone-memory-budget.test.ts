@@ -20,6 +20,7 @@ vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
   };
 });
 
+import { wellFormed } from '../../src/base/utf16-clip.js';
 import { FsError, VirtualFS } from '../../src/fs/index.js';
 import {
   applyConeMemoryBudget,
