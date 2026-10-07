@@ -150,7 +150,7 @@ export interface StreamOps {
   close?: (stream: ProcessStream) => void;
   dup?: (stream: ProcessStream) => void;
   poll?: (stream: ProcessStream) => number;
-  fsync?: () => number;
+  fsync?: (stream: ProcessStream) => unknown;
 }
 
 /** An open stream of the module's FS; `sliccKernelFd` marks one backed by a kernel fd. */

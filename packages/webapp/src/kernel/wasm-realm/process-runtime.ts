@@ -37,6 +37,7 @@ import {
 import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import {
   type GlueSyscalls,
+  syncFsync,
   trackCloseOnExec,
   useDevFd,
   wasmMemory,
@@ -425,6 +426,7 @@ export async function runWasmProcess(
               },
             },
           });
+          syncFsync(imports, () => ownValue<ProcessFs>(module, 'FS'));
           return WebAssembly.instantiate(init.program.module, imports);
         })
         .then((instance) => {
