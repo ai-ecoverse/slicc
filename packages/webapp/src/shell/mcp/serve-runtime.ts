@@ -4,7 +4,8 @@
  * CLI scripts exit, so this does not keep a jshd unit per file. The kernel
  * handler is the server and each call spawns the script once. Calls for one
  * CLI run one at a time because browser-session scripts share a tab.
- * A hung script is raced against the budget and is not killed.
+ * A hung script is raced against the budget and is not killed. The queue stays
+ * on that script until it exits, so the next call for the same CLI waits.
  */
 
 import { createLogger } from '../../base/logger.js';
@@ -149,10 +150,12 @@ async function invokeTool(name: string, args: unknown): Promise<RunResult> {
   const found = findTool(name);
   const run = runner;
   if (!found || !run) return { stdout: '', stderr: `unknown tool ${name}\n`, exitCode: 1 };
-  return enqueue(found.cli.name, () => runTool(found.tool, found.cli, args, run));
+  // The queue follows the real script. The caller stops waiting at the budget.
+  const execution = enqueue(found.cli.name, () => executeTool(found.tool, found.cli, args, run));
+  return awaitBudget(execution);
 }
 
-async function runTool(
+function executeTool(
   tool: ServeTool,
   cli: PublishedCli,
   args: unknown,
@@ -160,23 +163,29 @@ async function runTool(
 ): Promise<RunResult> {
   if (tool.kind === 'help') return runHelpTool(cli.path, run);
   const planned = planInvocation(tool, cli, args);
-  if ('error' in planned) return { stdout: '', stderr: `${planned.error}\n`, exitCode: 2 };
-  try {
-    return await withTimeout(run(cli.path, planned.argv, planned.stdin), TOOL_BUDGET_MS);
-  } catch {
-    // The script is still running. v1 only stops waiting for it.
-    return { stdout: '', stderr: 'timed out\n', exitCode: 124 };
+  if ('error' in planned) {
+    return Promise.resolve({ stdout: '', stderr: `${planned.error}\n`, exitCode: 2 });
   }
+  return run(cli.path, planned.argv, planned.stdin);
 }
 
 async function runHelpTool(filePath: string, run: RunFn): Promise<RunResult> {
-  const dashed = await withTimeout(run(filePath, ['--help']), TOOL_BUDGET_MS).catch(() => ({
-    stdout: '',
-    stderr: 'timed out\n',
-    exitCode: 124,
-  }));
+  const dashed = await run(filePath, ['--help']).catch(timedOut);
   if (dashed.exitCode === 0) return dashed;
-  return withTimeout(run(filePath, ['help']), TOOL_BUDGET_MS).catch(() => dashed);
+  return run(filePath, ['help']).catch(() => dashed);
+}
+
+function timedOut(): RunResult {
+  return { stdout: '', stderr: 'timed out\n', exitCode: 124 };
+}
+
+async function awaitBudget(work: Promise<RunResult>): Promise<RunResult> {
+  try {
+    return await withTimeout(work, TOOL_BUDGET_MS);
+  } catch {
+    // The script is still running. v1 only stops waiting for it.
+    return timedOut();
+  }
 }
 
 function planInvocation(

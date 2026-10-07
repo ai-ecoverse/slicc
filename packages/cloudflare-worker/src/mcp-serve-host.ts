@@ -9,6 +9,8 @@
 import type { DurableObjectStubLike } from './shared.js';
 
 const BODY_CAP = 1_048_576;
+/** Fetch forbids a body on these statuses, including the empty string. */
+const NULL_BODY_STATUS = new Set([101, 204, 205, 304]);
 
 interface McpEnvelope {
   status: number;
@@ -58,7 +60,14 @@ async function probeMcpHost(
   if (response.status === 404 && text.includes('"NOT_MCP"')) return null;
   const envelope = parseEnvelope(text);
   if (!envelope) return null;
-  return new Response(envelope.body, { status: envelope.status, headers: envelope.headers });
+  return new Response(visitorBody(envelope), {
+    status: envelope.status,
+    headers: envelope.headers,
+  });
+}
+
+function visitorBody(envelope: McpEnvelope): string | null {
+  return NULL_BODY_STATUS.has(envelope.status) ? null : envelope.body;
 }
 
 async function readBody(request: Request): Promise<{ body: string; tooLarge: boolean }> {
