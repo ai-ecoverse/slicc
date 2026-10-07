@@ -47,6 +47,7 @@ import {
   shouldCompact,
 } from '@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js';
 import { createLogger } from '../base/logger.js';
+import { wellFormed } from '../base/utf16-clip.js';
 
 const log = createLogger('context-compaction');
 
@@ -506,12 +507,12 @@ async function runCompactionCall(
 ): Promise<string> {
   const userMessage: UserMessage = {
     role: 'user',
-    content: [{ type: 'text', text: userInstruction }],
+    content: [{ type: 'text', text: wellFormed(userInstruction) }],
     timestamp: Date.now(),
   };
   const response = await completeSimple(
     model,
-    { systemPrompt, messages: [userMessage] },
+    { systemPrompt: wellFormed(systemPrompt), messages: [userMessage] },
     { maxTokens, apiKey, headers, signal }
   );
   if (typeof response !== 'object' || response === null) {

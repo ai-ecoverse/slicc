@@ -668,6 +668,30 @@ describe('createCompactContext', () => {
     expect(opts.headers).toEqual({ 'X-Session-Id': 'cone_42/abcd1234' });
   });
 
+  it('strips lone surrogates from the system prompt and user instruction', async () => {
+    const compact = createCompactContext(mockConfig);
+    const baseMsg = 'x'.repeat(65000);
+    const messages = [
+      createMessage('user', `bad \ud83d tail \ude00 ok \ud83d\ude00 ${baseMsg}`),
+      ...Array.from({ length: 11 }, () => createMessage('user', baseMsg)),
+    ];
+
+    await compact(messages);
+
+    for (const [, ctx] of mockCompleteSimple.mock.calls as [
+      unknown,
+      { systemPrompt: string; messages: { content: { text: string }[] }[] },
+    ][]) {
+      expect(JSON.stringify(ctx.systemPrompt)).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/i);
+      expect(JSON.stringify(ctx.messages[0].content[0].text)).not.toMatch(
+        /\\ud[89a-f][0-9a-f]{2}/i
+      );
+    }
+    const first = mockCompleteSimple.mock.calls[0][1] as { systemPrompt: string };
+    expect(first.systemPrompt).toContain('\ud83d\ude00');
+    expect(first.systemPrompt).toContain('bad \ufffd tail \ufffd ok');
+  });
+
   it('wraps summary in context-summary tags', async () => {
     const compact = createCompactContext(mockConfig);
     mockCompleteSimple.mockResolvedValueOnce(llmResponse('## Goal\nsome work'));
