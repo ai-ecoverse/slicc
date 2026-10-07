@@ -216,9 +216,9 @@ describe('restructureConeMemory', () => {
       systemPrompt: string;
       messages: { content: { text: string }[] }[];
     };
-    expect(ctx.systemPrompt.isWellFormed()).toBe(true);
+    expect(ctx.systemPrompt).toBe(wellFormed(ctx.systemPrompt));
     expect(ctx.systemPrompt).toContain('bad \uFFFD tail');
-    for (const part of ctx.messages[0].content) expect(part.text.isWellFormed()).toBe(true);
+    for (const part of ctx.messages[0].content) expect(part.text).toBe(wellFormed(part.text));
   });
 
   it('throws when the LLM call returns an error stopReason', async () => {
