@@ -125,6 +125,21 @@ function lastMessage(socket: FakeWebSocket): { type: string; [key: string]: unkn
   return JSON.parse(raw) as { type: string };
 }
 
+async function waitForMessage(
+  socket: FakeWebSocket,
+  after: number,
+  matches: (message: { type: string; [key: string]: unknown }) => boolean
+): Promise<{ type: string; [key: string]: unknown }> {
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    for (const raw of socket.received.slice(after)) {
+      const message = JSON.parse(raw) as { type: string; [key: string]: unknown };
+      if (matches(message)) return message;
+    }
+    await tick();
+  }
+  throw new Error('timed out waiting for leader message');
+}
+
 describe('session tray mcp publication', () => {
   it('mints one URL, requires a bearer, and relays a tool call', async () => {
     const t = await createTestTray();
@@ -222,6 +237,7 @@ describe('session tray mcp publication', () => {
       }).toString(),
     });
     const access = JSON.parse(tokenRes.body).access_token as string;
+    const beforeCall = socket.received.length;
     const pendingCall = edge(t.durable, token, {
       method: 'POST',
       path: '/mcp',
@@ -229,8 +245,11 @@ describe('session tray mcp publication', () => {
       authorization: `Bearer ${access}`,
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
     });
-    await tick();
-    const call = lastMessage(socket);
+    const call = await waitForMessage(
+      socket,
+      beforeCall,
+      (message) => message.type === 'mcp.request' && message.op === 'rpc'
+    );
     expect(call.type).toBe('mcp.request');
     expect(call.op).toBe('rpc');
     socket.send(
