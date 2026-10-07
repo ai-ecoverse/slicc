@@ -2247,11 +2247,12 @@ Fix: `src/providers/temperature-support.ts` exposes
 `modelSupportsTemperature` / `withSupportedTemperature`, both delegating to
 `claudeRejectsTemperature` in `claude-model-version.ts`. The deprecation
 tracks **generations, not families** — Opus picked it up at 4.7, Sonnet at
-5.0, and Fable shipped with it. Haiku 4.5 still accepts `temperature`.
+5.0, Haiku at 5.0 (verified on Haiku 5.5), and Fable shipped with it. Haiku
+4.5 still accepts `temperature`.
 Assume the next new family also rejects it and verify against the real
 endpoint before adding it.
 
-### 2. Adaptive thinking required (everything except Haiku, ≥ 4.6)
+### 2. Adaptive thinking required (Opus/Sonnet/Fable ≥ 4.6, Haiku ≥ 5.0)
 
 With thinking **enabled**, Bedrock returns `400 "thinking.type.enabled is
 not supported for this model. Use thinking.type.adaptive and
@@ -2260,10 +2261,22 @@ recognize new models and falls back to the legacy shape.
 
 Fix: `src/providers/adaptive-thinking.ts` — an `onPayload` hook rewrites
 `enabled → adaptive` + `output_config.effort` for any Claude Opus, Sonnet,
-or Fable ≥ 4.6. The rewrite only fires when the enabled shape is present, so
-it's a no-op when thinking is off or pi-ai already emits the adaptive shape.
-Haiku is the lone holdout — `claude-haiku-4-5` answers `400 "adaptive
-thinking is not supported on this model"` and stays on the legacy shape.
+or Fable ≥ 4.6, and Haiku ≥ 5.0. The rewrite only fires when the enabled
+shape is present, so it's a no-op when thinking is off or pi-ai already emits
+the adaptive shape. Haiku 4.x is the holdout — `claude-haiku-4-5` answers
+`400 "adaptive thinking is not supported on this model"` and stays on the
+legacy shape — while Haiku 5.5 400s on `thinking.type.enabled` like the
+others (`claudeSupportsAdaptiveThinking` gates Haiku on ≥ 5.0).
+
+**Thinking off differs by model.** Omitting the thinking field is how "off"
+works for most adaptive models, but Haiku 5.5 reads a request without the
+field as adaptive thinking at its default effort (the reply carries a
+`reasoningContent` block). Only an explicit `thinking: { type: 'disabled' }`
+turns it off, and `bedrock-camp.ts` sends that for Haiku ≥ 5.0
+(`claudeTurnsThinkingOffExplicitly`). Do not generalise it: Sonnet 5.5 and
+Fable 400 on `disabled` (Sonnet 5.5 points to `thinking.type.between_tools`,
+which Haiku 5.5 in turn 400s), so they keep the omitted field. Verified
+2026-10-07 against `bedrock-runtime.us-west-2`.
 
 ### 3. Version substrings are not capability tests
 
@@ -2276,7 +2289,8 @@ Neither failure raises an error — the filter just returns `false`.
 
 Route new gates through the `claude-model-version.ts` predicates
 (`claudeSupportsPromptCaching`, `claudeSupportsAdaptiveThinking`,
-`claudeSupportsNativeXhighEffort`, `claudeRejectsTemperature`), which parse
+`claudeSupportsNativeXhighEffort`, `claudeRejectsTemperature`,
+`claudeTurnsThinkingOffExplicitly`), which parse
 family + major + minor. Adding a _family_ (as `fable` was) still needs an
 edit in three places: `ClaudeFamily`, `CLAUDE_VERSION_RE`, and the picker's
 `BEDROCK_CAMP_CLAUDE_RE` — which is duplicated in `bedrock-camp.ts` and
@@ -2325,7 +2339,7 @@ mid-loop:
 |                | Claude                                            | gpt-5.6                                          | gpt-6                                          | kimi-k3                              |
 | -------------- | ------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------- | ------------------------------------ |
 | prompt caching | explicit `cachePoint` block                       | **implicit**; a `cachePoint` block returns `403` | **implicit**                                   | **implicit**                         |
-| `temperature`  | rejected from Opus 4.7 / Sonnet 5.0               | rejected                                         | rejected                                       | rejected                             |
+| `temperature`  | rejected from Opus 4.7 / Sonnet 5.0 / Haiku 5.0   | rejected                                         | rejected                                       | rejected                             |
 | thinking shape | `thinking.type.adaptive` + `output_config.effort` | **none accepted**; 400s `unknown_parameter`      | only `reasoning.effort` (`none` 400s on Astra) | every shape accepted **and ignored** |
 
 `supportsPromptCaching` gates on `isAnthropicClaudeModel`, so caching needed
