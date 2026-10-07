@@ -14,6 +14,7 @@ import {
   claudeSupportsAdaptiveThinking,
   claudeSupportsNativeXhighEffort,
   claudeSupportsPromptCaching,
+  claudeTurnsThinkingOffExplicitly,
 } from '../../src/providers/claude-model-version.js';
 
 const byId = (id: string) => BEDROCK_CAMP_EXTRA_MODELS.find((m) => m.id === id);
@@ -90,6 +91,61 @@ describe('BEDROCK_CAMP_EXTRA_MODELS', () => {
     expect(claudeRejectsTemperature(id)).toBe(true);
     expect(claudeSupportsAdaptiveThinking(id)).toBe(true);
     expect(claudeSupportsNativeXhighEffort(id)).toBe(true);
+    expect(byId(id)?.reasoning).toBe(true);
+    expect(byId(id)?.thinkingLevelMap).toEqual({ xhigh: 'xhigh', max: 'max' });
+  });
+
+  it('lists Haiku 5.5 on every profile Bedrock lists, at list price with its long-context tier', () => {
+    const ids = BEDROCK_CAMP_EXTRA_MODELS.map((m) => m.id).filter((id) =>
+      id.endsWith('anthropic.claude-haiku-5-5')
+    );
+    expect(ids).toEqual([
+      'global.anthropic.claude-haiku-5-5',
+      'us.anthropic.claude-haiku-5-5',
+      'eu.anthropic.claude-haiku-5-5',
+      'jp.anthropic.claude-haiku-5-5',
+      'au.anthropic.claude-haiku-5-5',
+    ]);
+    const g = byId('global.anthropic.claude-haiku-5-5');
+    expect(g?.name).toBe('Claude Haiku 5.5 (Global)');
+    expect(g?.cost).toEqual({
+      input: 0.1,
+      output: 0.5,
+      cacheRead: 0.01,
+      cacheWrite: 0.125,
+      tiers: [
+        { inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 },
+      ],
+    });
+    expect(byId('us.anthropic.claude-haiku-5-5')?.cost).toEqual({
+      input: 0.11,
+      output: 0.55,
+      cacheRead: 0.011,
+      cacheWrite: 0.1375,
+      tiers: [
+        {
+          inputTokensAbove: 100_000,
+          input: 0.55,
+          output: 2.75,
+          cacheRead: 0.055,
+          cacheWrite: 0.6875,
+        },
+      ],
+    });
+    expect(g?.contextWindow).toBe(1_000_000);
+    expect(g?.maxTokens).toBe(128_000);
+  });
+
+  it('carries the capabilities verified live for Haiku 5.5', () => {
+    // Bedrock answered 400 to `temperature` and to `thinking.type.enabled`,
+    // accepted adaptive effort low through max, kept thinking without a
+    // thinking field and stopped for `thinking.type.disabled`.
+    const id = 'global.anthropic.claude-haiku-5-5';
+    expect(claudeRejectsTemperature(id)).toBe(true);
+    expect(claudeSupportsAdaptiveThinking(id)).toBe(true);
+    expect(claudeSupportsNativeXhighEffort(id)).toBe(true);
+    expect(claudeSupportsPromptCaching(id)).toBe(true);
+    expect(claudeTurnsThinkingOffExplicitly(id)).toBe(true);
     expect(byId(id)?.reasoning).toBe(true);
     expect(byId(id)?.thinkingLevelMap).toEqual({ xhigh: 'xhigh', max: 'max' });
   });

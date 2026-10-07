@@ -151,15 +151,15 @@ function compareVersion(
  * with the `thinking: { type: 'adaptive' }` + `output_config.effort` shape
  * (vs. the legacy `thinking: { type: 'enabled', budget_tokens }`).
  *
- * Haiku is the lone holdout: `us.anthropic.claude-haiku-4-5` 400s with
- * "adaptive thinking is not supported on this model", so it stays on the
- * legacy shape. Excluding by family (rather than listing the adaptive ones)
- * keeps a future Fable/Opus generation correct without an edit.
+ * Haiku joined at 5.x: `us.anthropic.claude-haiku-4-5` 400s with "adaptive
+ * thinking is not supported on this model" and stays on the legacy shape, while
+ * Haiku 5.5 400s on `thinking.type.enabled` and accepts the adaptive shape
+ * (verified 2026-10-07 against bedrock-runtime.us-west-2).
  */
 export function claudeSupportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
   const v = parseClaudeVersion(modelId, modelName);
   if (!v) return false;
-  if (v.family === 'haiku') return false;
+  if (v.family === 'haiku') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   return compareVersion(v, { major: 4, minor: 6 }) >= 0;
 }
 
@@ -174,6 +174,8 @@ export function claudeSupportsNativeXhighEffort(modelId: string, modelName?: str
   if (v.family === 'opus') return compareVersion(v, { major: 4, minor: 7 }) >= 0;
   if (v.family === 'sonnet') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   if (v.family === 'fable') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
+  // Haiku 5.5 accepts effort xhigh and max (verified 2026-10-07).
+  if (v.family === 'haiku') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   return false;
 }
 
@@ -211,9 +213,9 @@ export function claudeSupportsPromptCaching(modelId: string, modelName?: string)
 /**
  * Bedrock rejects `temperature` with
  * `400 "\`temperature\` is deprecated for this model."` for Opus ≥ 4.7,
- * Sonnet ≥ 5.0, and every Fable. Haiku still accepts it on every released
- * version (verified against `bedrock-runtime.us-west-2` for opus-5,
- * sonnet-5, fable-5, and haiku-4-5).
+ * Sonnet ≥ 5.0, every Fable, and Haiku ≥ 5.0. Haiku 4.5 still accepts it
+ * (verified against `bedrock-runtime.us-west-2` for opus-5, sonnet-5, fable-5,
+ * haiku-4-5 and, on 2026-10-07, haiku-5-5).
  *
  * The deprecation tracks generations, not families: assume a future family
  * ships without `temperature` and add it here when it lands.
@@ -224,5 +226,20 @@ export function claudeRejectsTemperature(modelId: string, modelName?: string): b
   if (v.family === 'opus') return compareVersion(v, { major: 4, minor: 7 }) >= 0;
   if (v.family === 'sonnet') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   if (v.family === 'fable') return true;
+  if (v.family === 'haiku') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   return false;
+}
+
+/**
+ * Models that keep thinking when a request carries no thinking field and turn
+ * it off only for an explicit `thinking: { type: 'disabled' }`. Haiku 5.5
+ * answers a request without the field with a reasoning block (adaptive
+ * thinking at its default effort) and accepts `disabled`. Sonnet 5.5 and Fable
+ * 400 on `disabled`, so they keep the omitted field (verified 2026-10-07
+ * against bedrock-runtime.us-west-2).
+ */
+export function claudeTurnsThinkingOffExplicitly(modelId: string, modelName?: string): boolean {
+  const v = parseClaudeVersion(modelId, modelName);
+  if (!v) return false;
+  return v.family === 'haiku' && compareVersion(v, { major: 5, minor: 0 }) >= 0;
 }

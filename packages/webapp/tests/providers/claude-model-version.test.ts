@@ -7,6 +7,7 @@ import {
   claudeSupportsMaxEffort,
   claudeSupportsNativeXhighEffort,
   claudeSupportsPromptCaching,
+  claudeTurnsThinkingOffExplicitly,
   parseClaudeVersion,
   representativeModelId,
 } from '../../src/providers/claude-model-version.js';
@@ -84,6 +85,9 @@ describe('claudeSupportsAdaptiveThinking', () => {
     // `thinking.type.enabled` and demands `thinking.type.adaptive`.
     ['claude-fable-5'],
     ['claude-fable-5-1'],
+    // Haiku 5.5 400s on `thinking.type.enabled` (verified 2026-10-07).
+    ['claude-haiku-5-5'],
+    ['global.anthropic.claude-haiku-5-5'],
   ])('returns true for adaptive-capable %s', (id) => {
     expect(claudeSupportsAdaptiveThinking(id)).toBe(true);
   });
@@ -91,7 +95,7 @@ describe('claudeSupportsAdaptiveThinking', () => {
   it.each([
     ['claude-opus-4-5'],
     ['claude-sonnet-4-5'],
-    ['claude-haiku-4-9'], // haiku stays on legacy regardless of version
+    ['claude-haiku-4-9'], // Haiku 4.x stays on the legacy shape
     ['gpt-4o'],
   ])('returns false for non-adaptive %s', (id) => {
     expect(claudeSupportsAdaptiveThinking(id)).toBe(false);
@@ -100,6 +104,7 @@ describe('claudeSupportsAdaptiveThinking', () => {
 
 describe('claudeSupportsNativeXhighEffort', () => {
   it.each([
+    ['global.anthropic.claude-haiku-5-5'],
     ['claude-opus-4-7'],
     ['claude-opus-4-8'],
     ['claude-opus-4-9'],
@@ -109,7 +114,7 @@ describe('claudeSupportsNativeXhighEffort', () => {
     ['claude-opus-5'],
     ['claude-fable-5'],
     ['claude-fable-5-1'],
-  ])('returns true for Opus ≥ 4.7, Sonnet ≥ 5.0, or Fable (%s)', (id) => {
+  ])('returns true for Opus ≥ 4.7, Sonnet ≥ 5.0, Fable, or Haiku ≥ 5.0 (%s)', (id) => {
     expect(claudeSupportsNativeXhighEffort(id)).toBe(true);
   });
 
@@ -239,5 +244,26 @@ describe('canonicalModelId', () => {
     expect(representativeModelId(['global.anthropic.claude-opus-5', 'claude-opus-5'])).toBe(
       'claude-opus-5'
     );
+  });
+});
+
+describe('claudeTurnsThinkingOffExplicitly', () => {
+  it.each([
+    ['claude-haiku-5-5'],
+    ['global.anthropic.claude-haiku-5-5'],
+    ['us.anthropic.claude-haiku-5-5'],
+  ])('returns true for Haiku ≥ 5.0 (%s)', (id) => {
+    expect(claudeTurnsThinkingOffExplicitly(id)).toBe(true);
+  });
+
+  it.each([
+    ['claude-haiku-4-5'],
+    // Sonnet 5.5 and Fable 400 on `thinking.type.disabled`.
+    ['global.anthropic.claude-sonnet-5-5'],
+    ['global.anthropic.claude-fable-5-1'],
+    ['global.anthropic.claude-opus-5-5'],
+    ['gpt-4o'],
+  ])('returns false for %s', (id) => {
+    expect(claudeTurnsThinkingOffExplicitly(id)).toBe(false);
   });
 });
