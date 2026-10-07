@@ -20,7 +20,7 @@
     "dist"
   ],
   "dependencies": {
-    "html2canvas-pro": "2.4.5"
+    "html2canvas-pro": "2.5.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-preview-bootstrap.mjs",
