@@ -204,7 +204,9 @@ export function cloudflareWorkerLayerOf(relPath) {
   if (srcRel === 'index.ts' || srcRel === 'preview-worker.ts') return 'entry';
   if (WORKER_SHARED_FILES.has(srcRel) || srcRel.startsWith('auth/')) return 'shared';
   // `session-tray-*.ts` are DO internals; `session-tray.ts` itself is the route.
-  if (srcRel.startsWith('session-tray-')) return 'shared';
+  // `mcp-serve-*.ts` are the publication helpers those internals and the preview
+  // route call. They are not route modules, so they must not sit in `routes`.
+  if (srcRel.startsWith('session-tray-') || srcRel.startsWith('mcp-serve-')) return 'shared';
   if (srcRel.startsWith('cloud/')) {
     if (
       srcRel === 'cloud/handlers.ts' ||

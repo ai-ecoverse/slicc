@@ -8,8 +8,8 @@ signaling for tray-connected runtimes; also serves the built webapp as static as
 
 Import direction `shared/links/auth → routes → entry` (`src/index.ts` = composition root), enforced
 by `npm run lint:layer-back-edges` (`layer-back-edge-baseline-cloudflare-worker.json`). Route modules
-must not import each other sideways; helpers (`shared.ts`, `links.ts`, `auth/`, `session-tray-*`)
-must not import routes or `index.ts`.
+must not import each other sideways; helpers (`shared.ts`, `links.ts`, `auth/`, `session-tray-*`,
+`mcp-serve-*`) must not import routes or `index.ts`.
 
 ## Main Files
 
