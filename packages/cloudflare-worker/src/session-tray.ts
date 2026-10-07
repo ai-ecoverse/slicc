@@ -16,6 +16,7 @@
  * - `session-tray-biscotto.ts` — guest seat lifecycle
  * - `session-tray-webhook.ts` — webhook relay + delivery receipts
  * - `session-tray-push.ts` — APNs device registry + fan-out
+ * - `session-tray-mcp.ts` — MCP publication, OAuth, and tool-call relay
  * - `session-tray-requests.ts` — pure request parsing / wire-shape guards
  */
 
@@ -51,6 +52,14 @@ import { previewTokenFromHost } from './preview-host.js';
 import { type BiscottoDeps, dispatchBiscottoRoute } from './session-tray-biscotto.js';
 import { BootstrapCoordinator, type BootstrapDeps } from './session-tray-bootstrap.js';
 import { BRIDGE_WS_TAG, type BridgeDeps, BridgeRelay } from './session-tray-bridge.js';
+import {
+  failAllPendingMcp,
+  handleMcpInternal,
+  handleMcpLeaderMessage,
+  isMcpLeaderMessage,
+  type McpDeps,
+  type McpPendingReply,
+} from './session-tray-mcp.js';
 import {
   dispatchPreviewRoute,
   expireOrphanedLivePreviews,
@@ -181,6 +190,8 @@ export class SessionTrayDurableObject {
   // when the matching `preview.response` arrives (single chunk today, future-
   // proof for chunked binary).
   private readonly pendingPreviews = new Map<string, PreviewAssembler>();
+  // In-flight MCP consent and tools/call round-trips, keyed by reqId.
+  private readonly pendingMcp = new Map<string, McpPendingReply>();
   // Live previews dropped by a reclaim, announced once the leader WS opens.
   private readonly expiredLivePreviewNotices: string[] = [];
   private previewMutation: Promise<unknown> = Promise.resolve();
@@ -258,6 +269,7 @@ export class SessionTrayDurableObject {
       transferred: async (tokens) => {
         for (const token of tokens) this.bridge.closeSocketsForPreview(token, true);
         failAllPendingPreviews(this.pendingPreviews);
+        failAllPendingMcp(this.pendingMcp);
         await this.state.storage.deleteAlarm?.();
       },
       imported: async () => {
@@ -403,6 +415,9 @@ export class SessionTrayDurableObject {
       return dispatchBiscottoRoute(url, request, this.biscottoDeps(), (id) =>
         this.announceBiscottoRevocation(id)
       );
+    }
+    if (url.pathname.startsWith('/internal/mcp/')) {
+      return handleMcpInternal(url, request, this.mcpDeps());
     }
     return null;
   }
@@ -1275,6 +1290,9 @@ export class SessionTrayDurableObject {
     socket: TrayWebSocketLike,
     message: LeaderToWorkerControlMessage
   ): Promise<boolean> {
+    if (isMcpLeaderMessage(message)) {
+      return handleMcpLeaderMessage(message, this.mcpDeps());
+    }
     switch (message.type) {
       case 'ping':
         socket.send(JSON.stringify({ type: 'pong', trayId: this.requireTray().trayId }));
@@ -1332,6 +1350,7 @@ export class SessionTrayDurableObject {
     this.tray.leader.disconnectedAt = this.isoNow();
     this.tray.leader.lastSeenAt = this.tray.leader.disconnectedAt;
     failAllPendingPreviews(this.pendingPreviews);
+    failAllPendingMcp(this.pendingMcp);
     await this.persistTray();
   }
 
@@ -1381,6 +1400,7 @@ export class SessionTrayDurableObject {
     this.tray.leader.connected = false;
     this.tray.leader.disconnectedAt = this.isoNow();
     failAllPendingPreviews(this.pendingPreviews);
+    failAllPendingMcp(this.pendingMcp);
     await this.persistTray();
     try {
       staleSocket.close(1000, 'leader stale — no messages in >2 min');
@@ -1613,6 +1633,17 @@ export class SessionTrayDurableObject {
       persistTray: () => this.persistTray(),
       isoNow: () => this.isoNow(),
       apns: this.apns,
+    };
+  }
+
+  private mcpDeps(): McpDeps {
+    return {
+      getTray: () => this.tray,
+      persistTray: () => this.persistTray(),
+      sendToLeader: (message) => this.sendToLeader(message),
+      isoNow: () => this.isoNow(),
+      now: () => this.now(),
+      pending: this.pendingMcp,
     };
   }
 

@@ -44,6 +44,7 @@ import type { VirtualFS } from '../fs/index.js';
 // `registerProviders()` during boot before any code that reads from
 // the registry runs.
 import { registerProviders } from '../providers/index.js';
+import { bindMcpServeInstance } from '../shell/mcp/serve-instance.js';
 import {
   getLocalApiBaseUrl,
   setBridgeToken,
@@ -411,6 +412,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // (registerProviders eagerly imports every provider chunk) broadcasts an
   // instanceId-scoped reload request to the owning page.
   setStaleAssetInstanceId(init.instanceId);
+  bindMcpServeInstance(init.instanceId);
   const beaconMixedBuildGraph = checkMixedBuildGraph(init);
   // Boot-progress heartbeat (#2007): re-arms the page's ready watchdog at
   // each awaited milestone so a slow-but-advancing boot is not killed.

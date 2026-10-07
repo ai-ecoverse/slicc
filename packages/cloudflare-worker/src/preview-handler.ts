@@ -17,6 +17,7 @@
 // cannot reach the socket directly. All leader I/O is mediated through
 // `stub.fetch('https://internal/internal/preview/fetch', …)`.
 
+import { tryHandleMcpHost } from './mcp-serve-host.js';
 import { servePersistentPreview } from './persistent-preview-storage.js';
 import { PREVIEW_BRIDGE_JS } from './preview-bridge-assets.js';
 import { cachedPreviewFetch } from './preview-cache.js';
@@ -55,10 +56,7 @@ export async function handlePreviewRequest(request: Request, env: PreviewEnv): P
     )
   );
   if (resolveRes.status !== 200) {
-    const unavailable = resolveRes.status >= 500;
-    return new Response(unavailable ? 'Preview temporarily unavailable' : 'Preview not found', {
-      status: unavailable ? 503 : 404,
-    });
+    return previewMiss(request, env, parsed.trayId, previewToken, url, resolveRes.status);
   }
   const record = (await resolveRes.json()) as PreviewRecord;
   // A preview carried across a rove is served by the tray that holds it now.
@@ -82,6 +80,30 @@ export async function handlePreviewRequest(request: Request, env: PreviewEnv): P
     return injectBridge(response, { previewToken, host: url.host, scheme });
   }
   return response;
+}
+
+/**
+ * A missing preview may still be an MCP publication on the same host.
+ * Probe only on 404. A 5xx stays "temporarily unavailable" so a broken
+ * tray is not reported as a missing publication.
+ */
+async function previewMiss(
+  request: Request,
+  env: PreviewEnv,
+  trayId: string,
+  previewToken: string,
+  url: URL,
+  status: number
+): Promise<Response> {
+  if (status === 404) {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(trayId));
+    const mcp = await tryHandleMcpHost(request, stub, previewToken, url);
+    if (mcp) return mcp;
+  }
+  const unavailable = status >= 500;
+  return new Response(unavailable ? 'Preview temporarily unavailable' : 'Preview not found', {
+    status: unavailable ? 503 : 404,
+  });
 }
 
 function fetchLivePreview(

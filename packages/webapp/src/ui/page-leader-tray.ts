@@ -54,6 +54,7 @@ import type {
   SprinkleSummary,
 } from '../scoops/tray-sync-protocol.js';
 import { LeaderTrayPeerManager, type TrayPeerConnectionFactory } from '../scoops/tray-webrtc.js';
+import { dispatchMcpServeControl, installMcpServePage } from '../shell/mcp/serve-bridge.js';
 import { getComputersStore } from './computers-store.js';
 import type { AgentEvent } from './types.js';
 
@@ -94,6 +95,8 @@ function relayWebhookEvent(
 export interface StartPageLeaderTrayOptions {
   /** Cloudflare tray worker base URL (from `tray-worker-base-url` localStorage). */
   workerBaseUrl: string;
+  /** Page instance id. Scopes the MCP serve channel to this tab. */
+  instanceId?: string | null;
 
   /** Tray attach runtime string. Default 'slicc-standalone'. */
   runtime?: string;
@@ -398,6 +401,7 @@ function buildLeaderManager(
     ...(options._storeOverride ? { store: options._storeOverride } : {}),
     ...(options._webSocketFactory ? { webSocketFactory: options._webSocketFactory } : {}),
     onControlMessage: (message) => {
+      if (dispatchMcpServeControl(message)) return;
       if (message.type === 'webhook.event') {
         relayWebhookEvent(message, options.sendWebhookEvent, (ack) =>
           getLeader().sendControlMessage(ack)
@@ -620,6 +624,11 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     options._peerConnectionFactory
   );
   leader = buildLeaderManager(options, peers, sync, fetchImpl, updateUrlBar, () => leader);
+  const unsubscribeMcp = installMcpServePage({
+    instanceId: options.instanceId ?? null,
+    workerBaseUrl: options.workerBaseUrl,
+    send: (message) => leader.sendControlMessage(message),
+  });
 
   // --- Agent event tap → broadcast to all followers. The helper owns
   // this subscription (and unsubscribes on stop) so the caller doesn't
@@ -667,6 +676,7 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     scheduleScoopsListBroadcast,
     stop() {
       stopped = true;
+      unsubscribeMcp();
       if (scoopBroadcastTimer !== null) clearTimeout(scoopBroadcastTimer);
       scoopBroadcastTimer = null;
       unsubscribeAgent();

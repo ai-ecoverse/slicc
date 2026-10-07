@@ -212,6 +212,33 @@ export type WebhookDeliveryDisposition =
   | 'unknown-webhook'
   | 'unresolved-target';
 
+/** Worker → leader: the publication URL for `mcp.publish`. */
+export interface WorkerMcpPublished {
+  type: 'mcp.published';
+  requestId: string;
+  url: string;
+  token: string;
+  grantGeneration: number;
+}
+
+/** Worker → leader: `mcp.stop` finished. */
+export interface WorkerMcpStopped {
+  type: 'mcp.stopped';
+  requestId: string;
+}
+
+/**
+ * Worker → leader: one public MCP round trip. `rpc` is a JSON-RPC body.
+ * `consent` asks for the Accept page HTML. The leader answers with
+ * `mcp.response`.
+ */
+export interface WorkerMcpRequest {
+  type: 'mcp.request';
+  reqId: string;
+  op: 'rpc' | 'consent';
+  body: string;
+}
+
 export interface WorkerPreviewRequest {
   type: 'preview.request';
   reqId: string;
@@ -283,7 +310,10 @@ export type WorkerToLeaderControlMessage =
   | WorkerBridgeConnected
   | WorkerBridgeDisconnected
   | WorkerBridgeCdpResponse
-  | BiscottoRevokedMessage;
+  | BiscottoRevokedMessage
+  | WorkerMcpPublished
+  | WorkerMcpStopped
+  | WorkerMcpRequest;
 
 /**
  * A guest seat was revoked. The leader MUST drop every peer holding it.
@@ -434,6 +464,40 @@ export interface LeaderWebhookDelivery {
   disposition: WebhookDeliveryDisposition;
 }
 
+/**
+ * Leader → worker: mint or refresh the one MCP publication on this tray.
+ * Repeating it keeps the same capability token and updates the grant
+ * generation. Adding a CLI bumps the generation so existing tokens must
+ * be accepted again.
+ */
+export interface LeaderMcpPublish {
+  type: 'mcp.publish';
+  requestId: string;
+  grantGeneration: number;
+  workerBaseUrl: string;
+}
+
+/** Leader → worker: the published set grew or shrank without a new token. */
+export interface LeaderMcpGeneration {
+  type: 'mcp.generation';
+  grantGeneration: number;
+}
+
+/** Leader → worker: revoke the MCP publication and its grants. */
+export interface LeaderMcpStop {
+  type: 'mcp.stop';
+  requestId: string;
+}
+
+/** Leader → worker: the body of one `mcp.request` round trip. */
+export interface LeaderMcpResponse {
+  type: 'mcp.response';
+  reqId: string;
+  status: number;
+  contentType: string;
+  body: string;
+}
+
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
   | LeaderWebhookDelivery
@@ -447,7 +511,11 @@ export type LeaderToWorkerControlMessage =
   | LeaderPreviewPurge
   | LeaderPreviewStateUpdate
   | LeaderBridgeCdpRequest
-  | LeaderBridgeClose;
+  | LeaderBridgeClose
+  | LeaderMcpPublish
+  | LeaderMcpGeneration
+  | LeaderMcpStop
+  | LeaderMcpResponse;
 
 // ---------------------------------------------------------------------------
 // Follower HTTP bootstrap API — requests (follower → worker)

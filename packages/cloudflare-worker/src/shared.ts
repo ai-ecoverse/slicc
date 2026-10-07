@@ -317,6 +317,62 @@ export interface PushTokenRecord {
   registeredAt: string;
 }
 
+/** Public client registered against an `mcp --serve` publication. */
+export interface McpOAuthClient {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  registeredAt: string;
+}
+
+/** Consent request waiting for Accept or Deny. `id` is the unguessable form secret. */
+export interface McpOAuthPending {
+  id: string;
+  clientId: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge: string;
+  /** Grant generation the consent page was rendered for. */
+  generation: number;
+  expiresAt: number;
+}
+
+/** Authorization code. Only the SHA-256 hash is stored. */
+export interface McpOAuthCode {
+  codeHash: string;
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  grantGeneration: number;
+  expiresAt: number;
+}
+
+/** Access and refresh token pair. Only SHA-256 hashes are stored. */
+export interface McpOAuthToken {
+  accessHash: string;
+  refreshHash: string;
+  clientId: string;
+  grantGeneration: number;
+  accessExpiresAt: number;
+  refreshExpiresAt: number;
+}
+
+/**
+ * The one MCP server published by `mcp --serve` on this tray.
+ * The capability token is also the `*.sliccy.now` preview-host label.
+ */
+export interface McpServeRecord {
+  token: string;
+  url: string;
+  trayId: string;
+  grantGeneration: number;
+  createdAt: string;
+  clients: McpOAuthClient[];
+  pending: McpOAuthPending[];
+  codes: McpOAuthCode[];
+  tokens: McpOAuthToken[];
+}
+
 export interface TrayRecord {
   trayId: string;
   createdAt: string;
@@ -364,6 +420,8 @@ export interface TrayRecord {
   pushTokens?: Record<string, PushTokenRecord>;
   /** Guest seats on this cone. Absent on trays minted before the feature. */
   biscotti?: BiscottoRecord[];
+  /** Live `mcp --serve` publication. Absent until the leader publishes one. */
+  mcpServe?: McpServeRecord;
 }
 
 export interface CreateTrayRequest {

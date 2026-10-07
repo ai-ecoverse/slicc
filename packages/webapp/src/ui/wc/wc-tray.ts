@@ -980,6 +980,7 @@ export function createLeaderOptionsFactory(
   const execSessions = new LeaderExecSessionPool(client);
   return (workerBaseUrl) => ({
     workerBaseUrl,
+    instanceId: deps.instanceId,
     getMessages: () => deps.getController()?.getMessages() ?? [],
     getMessagesForScoop: (scoopJid) => client.getMessagesForScoop(scoopJid),
     getScoopJid: () => deps.getSelectedJid(),
