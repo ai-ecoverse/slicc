@@ -4,6 +4,7 @@ import {
   closesOnExec,
   fdOfPath,
   O_CLOEXEC,
+  syncFsync,
   trackCloseOnExec,
   useDevFd,
   wasmMemory,
@@ -268,6 +269,68 @@ describe('wrapCloexecSyscalls', () => {
     wrapCloexecSyscalls(imports, undefined, { fs: () => undefined, heap: () => undefined });
     wrapCloexecSyscalls(imports, {}, { fs: () => undefined, heap: () => undefined });
     expect(imports.env!.a).toBe(other);
+  });
+});
+
+describe('syncFsync', () => {
+  const asyncSync = () =>
+    Object.assign(
+      vi.fn(() => 'suspended'),
+      { isAsync: true }
+    );
+  const streamOf = (stream_ops: object, mount?: object) =>
+    ({ fd: 3, stream_ops, node: { mode: 0, mount } }) as unknown as ProcessStream;
+  const fsWith = (stream?: ProcessStream) =>
+    ({ getStream: (fd: number) => (fd === 3 ? stream : null) }) as unknown as ProcessFs;
+  const fdSync = (imports: { a: { fd_sync: unknown } }) =>
+    imports.a.fd_sync as unknown as (fd: number) => unknown;
+
+  it('answers an Asyncify fd_sync from the stream, and leaves a plain one alone', () => {
+    const fsync = vi.fn(() => 0);
+    const plain = vi.fn(() => 0);
+    const imports = { a: { fd_sync: asyncSync() }, b: { fd_sync: plain }, c: {} };
+    syncFsync(imports as unknown as WebAssembly.Imports, () => fsWith(streamOf({ fsync })));
+    expect(fdSync(imports)(3)).toBe(0);
+    expect(fsync).toHaveBeenCalledOnce();
+    expect(imports.b.fd_sync).toBe(plain);
+  });
+
+  it('returns EBADF without an FS or a stream, the op result, and 0 without an op', () => {
+    const run = (fs: ProcessFs | undefined, fd = 3) => {
+      const imports = { a: { fd_sync: asyncSync() } };
+      syncFsync(imports as unknown as WebAssembly.Imports, () => fs);
+      return fdSync(imports)(fd);
+    };
+    expect(run(undefined)).toBe(EBADF);
+    expect(run(fsWith(streamOf({})), 4)).toBe(EBADF);
+    expect(run(fsWith(streamOf({ fsync: () => 29 })))).toBe(29);
+    expect(run(fsWith(streamOf({ fsync: () => undefined })))).toBe(0);
+    expect(run(fsWith(streamOf({})))).toBe(0);
+  });
+
+  it('turns a thrown ErrnoError or coded error into its errno, and rethrows anything else', () => {
+    const run = (error: unknown) => {
+      const imports = { a: { fd_sync: asyncSync() } };
+      const fsync = () => {
+        throw error;
+      };
+      syncFsync(imports as unknown as WebAssembly.Imports, () => fsWith(streamOf({ fsync })));
+      return fdSync(imports)(3);
+    };
+    expect(run(new ErrnoError(28))).toBe(28);
+    expect(run(Object.assign(new Error('x'), { code: 'EBADF' }))).toBe(EBADF);
+    expect(() => run(new TypeError('bug'))).toThrow('bug');
+  });
+
+  it('keeps the asynchronous fd_sync for a mount that persists itself', () => {
+    const original = asyncSync();
+    const fsync = vi.fn(() => 0);
+    const imports = { a: { fd_sync: original } };
+    const stream = streamOf({ fsync }, { type: { syncfs: () => {} } });
+    syncFsync(imports as unknown as WebAssembly.Imports, () => fsWith(stream));
+    expect(fdSync(imports)(3)).toBe('suspended');
+    expect(original).toHaveBeenCalledWith(3);
+    expect(fsync).not.toHaveBeenCalled();
   });
 });
 

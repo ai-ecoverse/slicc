@@ -175,6 +175,24 @@ describe.skipIf(!MODULES)('native git in the wasm realm (real programs)', () => 
     expect(sh.output()).toMatch(/^1000 1000\n([0-9a-f]+ commit \d\n){5}$/);
   }, 60_000);
 
+  it('pushes to, clones and fetches from a local bare repository (index-pack fsyncs)', async () => {
+    const sh = bash(
+      'set -e; rm -rf /tmp/g && mkdir -p /tmp/g && cd /tmp/g && git init -q --bare -b main repo.git && ' +
+        'git init -q -b main w && cd w && git config user.email realm@slicc && ' +
+        'git config user.name Realm && echo one > a.txt && git add a.txt && git commit -qm one && ' +
+        'git remote add origin /tmp/g/repo.git && git push -q origin main && cd /tmp/g && ' +
+        'git clone -q /tmp/g/repo.git c1 && git clone -q file:///tmp/g/repo.git c2 && ' +
+        'cd c1 && git config user.email realm@slicc && git config user.name Realm && ' +
+        'echo two >> a.txt && git commit -qam two && git push -q origin main && ' +
+        'cd /tmp/g/c2 && git fetch -q origin && ' +
+        'echo "c1=$(cat /tmp/g/c1/a.txt | tr "\\n" ,) c2=$(cat /tmp/g/c2/a.txt)" && ' +
+        'echo "bare=$(git --git-dir=/tmp/g/repo.git rev-list --count main)" && ' +
+        'echo "fetched=$(git rev-list --count origin/main)"'
+    );
+    expect(await sh.exited, sh.stderr()).toBe(0);
+    expect(sh.output()).toBe('c1=one,two, c2=one\nbare=2\nfetched=2\n');
+  }, 120_000);
+
   it('pages `git log` through less on the terminal; q returns to the shell', async () => {
     const sh = bash('cd /tmp/repo && git log; echo "after git: $?"', { terminal: true });
     await sh.until(/commit 5/);

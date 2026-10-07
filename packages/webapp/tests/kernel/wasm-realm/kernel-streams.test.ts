@@ -185,7 +185,7 @@ describe('KernelStreams', () => {
     });
     const { fs, streams } = fakeFs(1);
     new KernelStreams(fs, sys).attachFile(streams[0]!, 11);
-    expect(streams[0]!.stream_ops.fsync!()).toBe(0);
+    expect(streams[0]!.stream_ops.fsync!(streams[0]!)).toBe(0);
     expect(flushed).toEqual([11]);
   });
 
