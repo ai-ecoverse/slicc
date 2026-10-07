@@ -301,6 +301,19 @@ describe('syncFsync', () => {
     expect(imports.b.fd_sync).toBe(plain);
   });
 
+  it("finds a minified build's fd_sync by identity with the glue's own", () => {
+    const fsync = vi.fn(() => 0);
+    const own = asyncSync();
+    const other = asyncSync();
+    const imports = { a: { q: own, z: other } };
+    syncFsync(imports as unknown as WebAssembly.Imports, () => fsWith(streamOf({ fsync })), {
+      fd_sync: own,
+    });
+    expect((imports.a.q as unknown as (fd: number) => unknown)(3)).toBe(0);
+    expect(fsync).toHaveBeenCalledOnce();
+    expect(imports.a.z).toBe(other);
+  });
+
   it('returns EBADF without an FS or a stream, the op result, and 0 without an op', () => {
     const run = (fs: ProcessFs | undefined, fd = 3) => {
       const imports = { a: { fd_sync: asyncSync() } };
@@ -444,6 +457,33 @@ describe('positionedIo', () => {
       [11, [65, 66], 5],
       [11, [67], 7],
     ]);
+  });
+
+  it("finds a minified build's fd_pread and fd_pwrite by identity with the glue's own", () => {
+    const pread = vi.fn((_fd: number, max: number, at: number) => file.slice(at, at + max));
+    const pwrite = vi.fn((_fd: number, bytes: Uint8Array) => bytes.length);
+    const ownRead = vi.fn();
+    const ownWrite = vi.fn();
+    const unrelated = vi.fn();
+    const memory = new ArrayBuffer(64);
+    const view = new DataView(memory);
+    view.setUint32(16, 32, true);
+    view.setUint32(20, 2, true);
+    const imports = { a: { s: ownRead, r: ownWrite, t: unrelated } };
+    const fs = { getStream: () => kernelFile } as unknown as ProcessFs;
+    positionedIo(
+      imports as unknown as WebAssembly.Imports,
+      { fs: () => fs, memory: () => memory, sys: { pread, pwrite } },
+      { fd_pread: ownRead, fd_pwrite: ownWrite }
+    );
+    const fn = (f: unknown) => f as (...args: Array<number | bigint>) => unknown;
+    expect(fn(imports.a.s)(3, 16, 1, 4n, 8)).toBe(0);
+    expect(new TextDecoder().decode(new Uint8Array(memory, 32, 2))).toBe('45');
+    expect(fn(imports.a.r)(3, 16, 1, 7n, 8)).toBe(0);
+    expect(pwrite).toHaveBeenCalledWith(11, expect.any(Uint8Array), 7);
+    expect(imports.a.t).toBe(unrelated);
+    expect(ownRead).not.toHaveBeenCalled();
+    expect(ownWrite).not.toHaveBeenCalled();
   });
 
   it('takes a legalized offset as signed halves, and refuses a negative or unsafe one', () => {

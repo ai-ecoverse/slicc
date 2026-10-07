@@ -36,6 +36,7 @@ import {
 } from './kernel-streams.js';
 import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import {
+  type GlueFdImports,
   type GlueSyscalls,
   positionedIo,
   syncFsync,
@@ -248,6 +249,8 @@ interface RunningModule {
   sliccKernel?: ProcessKernel;
   /** The glue's own fcntl, pipe2, … (the trailer hands them over to be wrapped). */
   sliccSyscalls?: GlueSyscalls;
+  /** The glue's own fd_sync, fd_pread and fd_pwrite. */
+  sliccFdImports?: GlueFdImports;
 }
 
 /** Evaluate the glue with `Module` (overridable in tests). */
@@ -289,6 +292,12 @@ const GLUE_TRAILER = [
   "  accept4: typeof ___syscall_accept4 === 'function' ? ___syscall_accept4 : undefined,",
   "  ioctl: typeof ___syscall_ioctl === 'function' ? ___syscall_ioctl : undefined,",
   "  setitimer: typeof __setitimer_js === 'function' ? __setitimer_js : undefined,",
+  '};',
+  // fd_sync / fd_pread / fd_pwrite, which a minified build imports under other names.
+  'Module.sliccFdImports ??= {',
+  "  fd_sync: typeof _fd_sync === 'function' ? _fd_sync : undefined,",
+  "  fd_pread: typeof _fd_pread === 'function' ? _fd_pread : undefined,",
+  "  fd_pwrite: typeof _fd_pwrite === 'function' ? _fd_pwrite : undefined,",
   '};',
   // The toolchain's SIGPIPE disposition query (exported once instantiated).
   // Only while the runtime is up: an assertions build (-O0) aborts on an
@@ -431,12 +440,13 @@ export async function runWasmProcess(
               },
             },
           });
-          syncFsync(imports, () => ownValue<ProcessFs>(module, 'FS'));
-          positionedIo(imports, {
-            fs: () => ownValue<ProcessFs>(module, 'FS'),
-            memory: () => memory?.buffer,
-            sys,
-          });
+          const fdImports = ownValue<GlueFdImports>(module, 'sliccFdImports');
+          syncFsync(imports, () => ownValue<ProcessFs>(module, 'FS'), fdImports);
+          positionedIo(
+            imports,
+            { fs: () => ownValue<ProcessFs>(module, 'FS'), memory: () => memory?.buffer, sys },
+            fdImports
+          );
           return WebAssembly.instantiate(init.program.module, imports);
         })
         .then((instance) => {

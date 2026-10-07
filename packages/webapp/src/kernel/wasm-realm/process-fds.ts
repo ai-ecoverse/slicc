@@ -248,6 +248,38 @@ export function wrapCloexecSyscalls(
 
 type AsyncImport = ((...args: number[]) => unknown) & { isAsync?: boolean };
 
+/** The glue's own fd_sync, fd_pread and fd_pwrite (the trailer hands them over). */
+export interface GlueFdImports {
+  fd_sync?: unknown;
+  fd_pread?: unknown;
+  fd_pwrite?: unknown;
+}
+
+/**
+ * Replace each import that is the glue's `name` by `wrap(import)`, unless
+ * that declines. A minified build renames its imports (`a.s` for fd_pread),
+ * so they are found by identity; where Asyncify already wrapped them (an
+ * assertions build, whose names are not minified), by name.
+ */
+function replaceGlueImport(
+  imports: WebAssembly.Imports,
+  glue: GlueFdImports | undefined,
+  name: keyof GlueFdImports,
+  wrap: (value: unknown) => unknown
+): void {
+  const own = glue?.[name];
+  const seen = new Set<object>();
+  for (const namespace of Object.values(imports)) {
+    if (!namespace || typeof namespace !== 'object' || seen.has(namespace)) continue;
+    seen.add(namespace);
+    for (const [key, value] of Object.entries(namespace)) {
+      if (typeof value !== 'function' || (value !== own && key !== name)) continue;
+      const wrapped = wrap(value);
+      if (wrapped) namespace[key] = wrapped as WebAssembly.ImportValue;
+    }
+  }
+}
+
 /** A stream on a mount with its own `syncfs` (IDBFS, a program's persistent mount). */
 function persistsItself(stream: ProcessStream): boolean {
   const type = stream.node.mount?.type as { syncfs?: unknown } | undefined;
@@ -274,11 +306,15 @@ function errnoOf(err: unknown): number {
  * stream's own fsync answers at once; a mount that persists itself keeps
  * Emscripten's asynchronous one, which waits for its syncfs.
  */
-export function syncFsync(imports: WebAssembly.Imports, fs: () => ProcessFs | undefined): void {
-  for (const namespace of Object.values(imports)) {
-    const original = namespace?.fd_sync as AsyncImport | undefined;
-    if (typeof original !== 'function' || !original.isAsync) continue;
-    namespace.fd_sync = (fd: number) => {
+export function syncFsync(
+  imports: WebAssembly.Imports,
+  fs: () => ProcessFs | undefined,
+  glue?: GlueFdImports
+): void {
+  replaceGlueImport(imports, glue, 'fd_sync', (value) => {
+    const original = value as AsyncImport;
+    if (!original.isAsync) return undefined;
+    return (fd: number) => {
       const stream = fs()?.getStream(fd);
       if (!stream) return wasiErrno('EBADF');
       if (persistsItself(stream)) return original(fd);
@@ -289,7 +325,7 @@ export function syncFsync(imports: WebAssembly.Imports, fs: () => ProcessFs | un
         return errnoOf(err);
       }
     };
-  }
+  });
 }
 
 /**
@@ -401,20 +437,17 @@ function positioned(original: PositionedImport, deps: PositionedDeps, mode: 'rea
  * with pread and got another offset's bytes ("unknown object type 5 at offset
  * 12"). Other streams keep Emscripten's own.
  */
-export function positionedIo(imports: WebAssembly.Imports, deps: PositionedDeps): void {
-  for (const namespace of Object.values(imports)) {
-    if (!namespace || typeof namespace !== 'object') continue;
-    const { fd_pread: pread, fd_pwrite: pwrite } = namespace as {
-      fd_pread?: unknown;
-      fd_pwrite?: unknown;
-    };
-    if (typeof pread === 'function') {
-      namespace.fd_pread = positioned(pread as PositionedImport, deps, 'read');
-    }
-    if (typeof pwrite === 'function') {
-      namespace.fd_pwrite = positioned(pwrite as PositionedImport, deps, 'write');
-    }
-  }
+export function positionedIo(
+  imports: WebAssembly.Imports,
+  deps: PositionedDeps,
+  glue?: GlueFdImports
+): void {
+  replaceGlueImport(imports, glue, 'fd_pread', (value) =>
+    positioned(value as PositionedImport, deps, 'read')
+  );
+  replaceGlueImport(imports, glue, 'fd_pwrite', (value) =>
+    positioned(value as PositionedImport, deps, 'write')
+  );
 }
 
 /** The instance's linear memory: exported, or imported (`-sIMPORTED_MEMORY`). */
