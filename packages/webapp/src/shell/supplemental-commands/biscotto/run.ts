@@ -68,7 +68,7 @@ export function parseDuration(input: string): number | null {
 }
 
 /**
- * `user` | `cone` | `off` | `scoop:<name>`.
+ * `user` | `cone` | `agent` | `off` | `scoop:<name>`.
  *
  * Returns null for anything else rather than guessing — an approver nobody
  * recognises must not quietly become a different one.
@@ -87,14 +87,14 @@ export function parseApprover(input: string): Gate | null {
  * the option loop stays a flat table of flags.
  */
 function readGateFlag(flag: string, raw: string | undefined): Gate | string {
-  if (!raw) return `${flag} needs an approver (user, cone, scoop:<name>, off)`;
+  if (!raw) return `${flag} needs an approver (user, cone, agent, scoop:<name>, off)`;
   const gate = parseApprover(raw);
   if (!gate) return `${flag}: cannot read "${raw}" as an approver`;
   if (flag === '--gate-tools' && gate.approver === 'cone') {
     // Refused at configuration time rather than discovered as a stalled
     // approval: for a tool call the cone is the unit executing it, so it would
     // be asked to approve something it is itself blocked on.
-    return '--gate-tools cone: the cone cannot approve a tool call it is blocked on; use user, scoop:<name>, or off';
+    return '--gate-tools cone: the cone cannot approve a tool call it is blocked on; use user, agent, scoop:<name>, or off';
   }
   return gate;
 }
