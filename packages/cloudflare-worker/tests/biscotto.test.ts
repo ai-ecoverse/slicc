@@ -116,6 +116,14 @@ describe('normalizeBiscottoGate', () => {
     expect(normalizeBiscottoGate({ approver: 'user' })).toEqual({ approver: 'user' });
   });
 
+  it('keeps the agent approver', () => {
+    // `biscotto serve --gate-* agent` is accepted by the CLI and routed by the
+    // leader; dropping it here silently turned an agent gate into a user gate.
+    expect(normalizeBiscottoGate({ approver: 'agent' })).toEqual({ approver: 'agent' });
+    // `scoop` is only meaningful for `approver: 'scoop'`, so a stray one is dropped.
+    expect(normalizeBiscottoGate({ approver: 'agent', scoop: 'x' })).toEqual({ approver: 'agent' });
+  });
+
   it('keeps a named scoop delegation', () => {
     expect(normalizeBiscottoGate({ approver: 'scoop', scoop: 'reviewer' })).toEqual({
       approver: 'scoop',
@@ -299,6 +307,27 @@ describe('mintBiscotto', () => {
       message: { approver: 'user' },
       tool: { approver: 'user' },
     });
+  });
+
+  it('round-trips agent gates through mint and list', async () => {
+    // Repro for `biscotto serve --gate-messages agent --gate-tools agent`,
+    // which used to come back and list as `messages: user · tools: user`.
+    const deps = createDeps(tray);
+    const result = await mintBiscotto(
+      {
+        controllerToken: tray.controllerToken,
+        label: 'Anna',
+        workerBaseUrl: 'https://www.sliccy.ai',
+        unitJid: 'cone',
+        gates: { message: { approver: 'agent' }, tool: { approver: 'agent' } },
+      },
+      deps
+    );
+    const expected = { message: { approver: 'agent' }, tool: { approver: 'agent' } };
+    expect(result.gates).toEqual(expected);
+    expect(tray.biscotti![0].gates).toEqual(expected);
+    const listed = await listBiscotti({ controllerToken: tray.controllerToken }, deps);
+    expect(listed[0].gates).toEqual(expected);
   });
 
   it('flattens and bounds a hostile label', async () => {

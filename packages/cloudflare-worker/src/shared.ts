@@ -130,6 +130,8 @@ export interface LeaderRecord {
  *              cone-mediated sudo request uses (`ScoopApprovalRouter`).
  *  - `scoop` — a scoop the cone delegated the decision to; `BiscottoGate.scoop`
  *              names it.
+ *  - `agent` — a bounded approver agent spawned per request
+ *              (`scoops/approver-agent.ts` in the webapp); needs no name.
  *
  * `off` is a member of this union rather than a separate boolean so that every
  * consumer must branch on the approver explicitly. A missing/unknown value
@@ -253,7 +255,7 @@ export function resolveJoinCapability(
  */
 export function normalizeBiscottoGate(gate: Partial<BiscottoGate> | undefined): BiscottoGate {
   const approver = gate?.approver;
-  if (approver === 'off' || approver === 'user' || approver === 'cone') {
+  if (approver === 'off' || approver === 'user' || approver === 'cone' || approver === 'agent') {
     return { approver };
   }
   if (approver === 'scoop' && typeof gate?.scoop === 'string' && gate.scoop.length > 0) {
