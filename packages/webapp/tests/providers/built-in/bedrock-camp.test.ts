@@ -680,6 +680,50 @@ describe('Claude Fable 5.1 request shape', () => {
   });
 });
 
+describe('Claude Haiku 5.5 request shape', () => {
+  const haiku = () =>
+    baseModel({
+      id: 'global.anthropic.claude-haiku-5-5',
+      name: 'Claude Haiku 5.5 (Global)',
+      reasoning: true,
+    });
+
+  it('turns thinking off with an explicit disabled', async () => {
+    const payload = await capturePayload(haiku(), {});
+    expect(payload.additionalModelRequestFields).toEqual({ thinking: { type: 'disabled' } });
+  });
+
+  it.each([
+    ['low', 'low'],
+    ['medium', 'medium'],
+    ['xhigh', 'xhigh'],
+  ] as const)('sends adaptive thinking at effort %s', async (reasoning, effort) => {
+    const payload = await capturePayload(haiku(), { reasoning });
+    expect(payload.additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive', display: 'summarized' },
+      output_config: { effort },
+    });
+    expect(JSON.stringify(payload.messages)).toContain('cachePoint');
+  });
+
+  it('omits temperature', async () => {
+    const payload = await capturePayload(haiku(), { temperature: 0.3 });
+    expect(payload.inferenceConfig.temperature).toBeUndefined();
+  });
+
+  it('still sends no thinking field for off on Sonnet 5.5, which 400s on disabled', async () => {
+    const payload = await capturePayload(
+      baseModel({
+        id: 'global.anthropic.claude-sonnet-5-5',
+        name: 'Claude Sonnet 5.5 (Global)',
+        reasoning: true,
+      }),
+      {}
+    );
+    expect(payload.additionalModelRequestFields).toBeUndefined();
+  });
+});
+
 describe('GPT-6 reasoning effort', () => {
   const gpt6 = (variant: 'sol' | 'luna' | 'astra') =>
     baseModel({ id: `global.openai.gpt-6-${variant}`, name: `GPT-6 ${variant}`, reasoning: true });

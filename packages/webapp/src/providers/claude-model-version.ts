@@ -73,7 +73,7 @@ function compareVersion(
 export function claudeSupportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
   const v = parseClaudeVersion(modelId, modelName);
   if (!v) return false;
-  if (v.family === 'haiku') return false;
+  if (v.family === 'haiku') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   return compareVersion(v, { major: 4, minor: 6 }) >= 0;
 }
 
@@ -83,6 +83,8 @@ export function claudeSupportsNativeXhighEffort(modelId: string, modelName?: str
   if (v.family === 'opus') return compareVersion(v, { major: 4, minor: 7 }) >= 0;
   if (v.family === 'sonnet') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   if (v.family === 'fable') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
+
+  if (v.family === 'haiku') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   return false;
 }
 
@@ -108,5 +110,12 @@ export function claudeRejectsTemperature(modelId: string, modelName?: string): b
   if (v.family === 'opus') return compareVersion(v, { major: 4, minor: 7 }) >= 0;
   if (v.family === 'sonnet') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   if (v.family === 'fable') return true;
+  if (v.family === 'haiku') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   return false;
+}
+
+export function claudeTurnsThinkingOffExplicitly(modelId: string, modelName?: string): boolean {
+  const v = parseClaudeVersion(modelId, modelName);
+  if (!v) return false;
+  return v.family === 'haiku' && compareVersion(v, { major: 5, minor: 0 }) >= 0;
 }

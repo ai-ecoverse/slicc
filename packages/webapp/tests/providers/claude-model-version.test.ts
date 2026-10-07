@@ -7,6 +7,7 @@ import {
   claudeSupportsMaxEffort,
   claudeSupportsNativeXhighEffort,
   claudeSupportsPromptCaching,
+  claudeTurnsThinkingOffExplicitly,
   parseClaudeVersion,
   representativeModelId,
 } from '../../src/providers/claude-model-version.js';
@@ -83,6 +84,9 @@ describe('claudeSupportsAdaptiveThinking', () => {
 
     ['claude-fable-5'],
     ['claude-fable-5-1'],
+
+    ['claude-haiku-5-5'],
+    ['global.anthropic.claude-haiku-5-5'],
   ])('returns true for adaptive-capable %s', (id) => {
     expect(claudeSupportsAdaptiveThinking(id)).toBe(true);
   });
@@ -97,6 +101,7 @@ describe('claudeSupportsAdaptiveThinking', () => {
 
 describe('claudeSupportsNativeXhighEffort', () => {
   it.each([
+    ['global.anthropic.claude-haiku-5-5'],
     ['claude-opus-4-7'],
     ['claude-opus-4-8'],
     ['claude-opus-4-9'],
@@ -106,7 +111,7 @@ describe('claudeSupportsNativeXhighEffort', () => {
     ['claude-opus-5'],
     ['claude-fable-5'],
     ['claude-fable-5-1'],
-  ])('returns true for Opus ≥ 4.7, Sonnet ≥ 5.0, or Fable (%s)', (id) => {
+  ])('returns true for Opus ≥ 4.7, Sonnet ≥ 5.0, Fable, or Haiku ≥ 5.0 (%s)', (id) => {
     expect(claudeSupportsNativeXhighEffort(id)).toBe(true);
   });
 
@@ -232,5 +237,26 @@ describe('canonicalModelId', () => {
     expect(representativeModelId(['global.anthropic.claude-opus-5', 'claude-opus-5'])).toBe(
       'claude-opus-5'
     );
+  });
+});
+
+describe('claudeTurnsThinkingOffExplicitly', () => {
+  it.each([
+    ['claude-haiku-5-5'],
+    ['global.anthropic.claude-haiku-5-5'],
+    ['us.anthropic.claude-haiku-5-5'],
+  ])('returns true for Haiku ≥ 5.0 (%s)', (id) => {
+    expect(claudeTurnsThinkingOffExplicitly(id)).toBe(true);
+  });
+
+  it.each([
+    ['claude-haiku-4-5'],
+
+    ['global.anthropic.claude-sonnet-5-5'],
+    ['global.anthropic.claude-fable-5-1'],
+    ['global.anthropic.claude-opus-5-5'],
+    ['gpt-4o'],
+  ])('returns false for %s', (id) => {
+    expect(claudeTurnsThinkingOffExplicitly(id)).toBe(false);
   });
 });
