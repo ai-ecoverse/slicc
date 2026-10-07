@@ -219,6 +219,7 @@ describe('evaluateGlue', () => {
       'var runtimeInitialized = true;',
       'var fired = [];',
       'var __setitimer_js = (which, ms) => 0;',
+      'var _fd_pread = () => 0;',
       'var __emscripten_timeout = (which, now) => { fired.push([which, typeof now]); };',
       'var _emscripten_get_now = () => 5;',
       'Module.fired = () => fired;',
@@ -226,11 +227,14 @@ describe('evaluateGlue', () => {
     const module = { sliccEnv: {} } as {
       sliccEnv: object;
       sliccSyscalls?: { setitimer?: unknown };
+      sliccFdImports?: { fd_sync?: unknown; fd_pread?: unknown };
       sliccTimerFire?: (which: number) => boolean;
       fired?: () => unknown[];
     };
     evaluateGlue(glue, module);
     expect(typeof module.sliccSyscalls?.setitimer).toBe('function');
+    expect(typeof module.sliccFdImports?.fd_pread).toBe('function');
+    expect(module.sliccFdImports?.fd_sync).toBeUndefined();
     expect(module.sliccTimerFire?.(0)).toBe(true);
     expect(module.fired?.()).toEqual([[0, 'number']]);
 

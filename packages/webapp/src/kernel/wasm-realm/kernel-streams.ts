@@ -95,6 +95,8 @@ export interface ProcessSys {
 
   pread?(fd: number, max: number, at: number): Uint8Array;
 
+  pwrite?(fd: number, bytes: Uint8Array, at: number): number;
+
   isatty?(fd: number): boolean;
 
   ttyName?(fd: number): string | undefined;

@@ -233,6 +233,13 @@ describe('WASI preview1 programs in the wasm realm', () => {
     expect((await run(c, ['ls', 'src'])).stdout).toBe('ls src: lib.rs main.go\n');
   });
 
+  it('Emscripten (minified imports): pread and pwrite on its own file go through the glue', async () => {
+    const em = await loadProgram(`${FIXTURES}wasitest-em`);
+    expect((await run(em, ['rw', 'rw-em.bin'])).stdout).toBe('pread 23AB67 size 7\n');
+    expect(await text('/workspace/proj/rw-em.bin')).toBe('0123AB6');
+    await fs.rm('/workspace/proj/rw-em.bin');
+  });
+
   it('SLICC_WASI_STATS=1: a 300-entry listing is one bridge request, counted on stderr', async () => {
     for (let i = 0; i < 300; i++) await fs.writeFile(`/home/many/m${i}.py`, '');
     const r = await run(await wasi(`${FIXTURES}wasitest.wasm`), ['ls', '/home/many'], {

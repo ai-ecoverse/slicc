@@ -20,7 +20,9 @@ import {
 } from './kernel-streams.js';
 import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import {
+  type GlueFdImports,
   type GlueSyscalls,
+  positionedIo,
   syncFsync,
   trackCloseOnExec,
   useDevFd,
@@ -110,6 +112,10 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys & PtyKernel {
     pread(fd, max, at) {
       const r = call({ op: 'fd-pread', fd, max, offset: at }, `fd-pread ${fd}`);
       return r.ok && r.kind === 'bytes' ? r.bytes : new Uint8Array(0);
+    },
+    pwrite(fd, bytes, at) {
+      const n = json(call({ op: 'fd-pwrite', fd, offset: at, body: bytes }, `fd-pwrite ${fd}`));
+      return typeof n === 'number' ? n : bytes.length;
     },
     isatty(fd) {
       return (
@@ -216,6 +222,8 @@ interface RunningModule {
   sliccKernel?: ProcessKernel;
 
   sliccSyscalls?: GlueSyscalls;
+
+  sliccFdImports?: GlueFdImports;
 }
 
 export type GlueEvaluator = (glue: string, module: object) => void;
@@ -245,6 +253,12 @@ const GLUE_TRAILER = [
   "  accept4: typeof ___syscall_accept4 === 'function' ? ___syscall_accept4 : undefined,",
   "  ioctl: typeof ___syscall_ioctl === 'function' ? ___syscall_ioctl : undefined,",
   "  setitimer: typeof __setitimer_js === 'function' ? __setitimer_js : undefined,",
+  '};',
+
+  'Module.sliccFdImports ??= {',
+  "  fd_sync: typeof _fd_sync === 'function' ? _fd_sync : undefined,",
+  "  fd_pread: typeof _fd_pread === 'function' ? _fd_pread : undefined,",
+  "  fd_pwrite: typeof _fd_pwrite === 'function' ? _fd_pwrite : undefined,",
   '};',
 
   'const __sliccUp = () =>',
@@ -359,7 +373,13 @@ export async function runWasmProcess(
               },
             },
           });
-          syncFsync(imports, () => ownValue<ProcessFs>(module, 'FS'));
+          const fdImports = ownValue<GlueFdImports>(module, 'sliccFdImports');
+          syncFsync(imports, () => ownValue<ProcessFs>(module, 'FS'), fdImports);
+          positionedIo(
+            imports,
+            { fs: () => ownValue<ProcessFs>(module, 'FS'), memory: () => memory?.buffer, sys },
+            fdImports
+          );
           return WebAssembly.instantiate(init.program.module, imports);
         })
         .then((instance) => {

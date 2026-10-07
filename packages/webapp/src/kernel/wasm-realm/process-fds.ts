@@ -1,4 +1,4 @@
-import type { ProcessFs, ProcessStream } from './kernel-streams.js';
+import type { ProcessFs, ProcessStream, ProcessSys } from './kernel-streams.js';
 import { type PtyKernel, ptyIoctl } from './process-pty.js';
 import { wasiErrno } from './wasi-errno.js';
 
@@ -193,6 +193,31 @@ export function wrapCloexecSyscalls(
 
 type AsyncImport = ((...args: number[]) => unknown) & { isAsync?: boolean };
 
+export interface GlueFdImports {
+  fd_sync?: unknown;
+  fd_pread?: unknown;
+  fd_pwrite?: unknown;
+}
+
+function replaceGlueImport(
+  imports: WebAssembly.Imports,
+  glue: GlueFdImports | undefined,
+  name: keyof GlueFdImports,
+  wrap: (value: unknown) => unknown
+): void {
+  const own = glue?.[name];
+  const seen = new Set<object>();
+  for (const namespace of Object.values(imports)) {
+    if (!namespace || typeof namespace !== 'object' || seen.has(namespace)) continue;
+    seen.add(namespace);
+    for (const [key, value] of Object.entries(namespace)) {
+      if (typeof value !== 'function' || (value !== own && key !== name)) continue;
+      const wrapped = wrap(value);
+      if (wrapped) namespace[key] = wrapped as WebAssembly.ImportValue;
+    }
+  }
+}
+
 function persistsItself(stream: ProcessStream): boolean {
   const type = stream.node.mount?.type as { syncfs?: unknown } | undefined;
   return typeof type?.syncfs === 'function';
@@ -205,11 +230,15 @@ function errnoOf(err: unknown): number {
   throw err;
 }
 
-export function syncFsync(imports: WebAssembly.Imports, fs: () => ProcessFs | undefined): void {
-  for (const namespace of Object.values(imports)) {
-    const original = namespace?.fd_sync as AsyncImport | undefined;
-    if (typeof original !== 'function' || !original.isAsync) continue;
-    namespace.fd_sync = (fd: number) => {
+export function syncFsync(
+  imports: WebAssembly.Imports,
+  fs: () => ProcessFs | undefined,
+  glue?: GlueFdImports
+): void {
+  replaceGlueImport(imports, glue, 'fd_sync', (value) => {
+    const original = value as AsyncImport;
+    if (!original.isAsync) return undefined;
+    return (fd: number) => {
       const stream = fs()?.getStream(fd);
       if (!stream) return wasiErrno('EBADF');
       if (persistsItself(stream)) return original(fd);
@@ -220,7 +249,108 @@ export function syncFsync(imports: WebAssembly.Imports, fs: () => ProcessFs | un
         return errnoOf(err);
       }
     };
+  });
+}
+
+type PositionedImport = (...args: Array<number | bigint>) => unknown;
+
+interface PositionedDeps {
+  fs: () => ProcessFs | undefined;
+
+  memory: () => ArrayBuffer | undefined;
+  sys: Pick<ProcessSys, 'pread' | 'pwrite'>;
+}
+
+function iovecs(view: DataView, iov: number, iovcnt: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < iovcnt; i++) {
+    out.push([view.getUint32(iov + i * 8, true), view.getUint32(iov + i * 8 + 4, true)]);
   }
+  return out;
+}
+
+function preadInto(
+  buffer: ArrayBuffer,
+  vecs: Array<[number, number]>,
+  read: (len: number, at: number) => Uint8Array,
+  at: number
+): number {
+  let total = 0;
+  for (const [ptr, len] of vecs) {
+    let done = 0;
+    while (done < len) {
+      const bytes = read(len - done, at + total);
+      if (bytes.length === 0) return total;
+      new Uint8Array(buffer).set(bytes, ptr + done);
+      done += bytes.length;
+      total += bytes.length;
+    }
+  }
+  return total;
+}
+
+function pwriteFrom(
+  buffer: ArrayBuffer,
+  vecs: Array<[number, number]>,
+  write: (bytes: Uint8Array, at: number) => number,
+  at: number
+): number {
+  let total = 0;
+  for (const [ptr, len] of vecs) {
+    const n = write(new Uint8Array(buffer, ptr, len).slice(), at + total);
+    total += n;
+    if (n < len) break;
+  }
+  return total;
+}
+
+function i64(value: number | bigint | undefined): number {
+  return typeof value === 'bigint' ? Number(BigInt.asIntN(64, value)) : Number(value);
+}
+
+function i64Halves(low: number | bigint | undefined, high: number | bigint | undefined): number {
+  return Number(high) * 2 ** 32 + (Number(low) >>> 0);
+}
+
+function positioned(original: PositionedImport, deps: PositionedDeps, mode: 'read' | 'write') {
+  return (...args: Array<number | bigint>) => {
+    const [fd, iov, iovcnt] = args.map(Number);
+    const stream = deps.fs()?.getStream(fd);
+    const kfd = stream?.sliccKernelFile ? stream.sliccKernelFd : undefined;
+    const buffer = deps.memory();
+    const { pread, pwrite } = deps.sys;
+    if (kfd === undefined || !buffer || !pread || !pwrite) return original(...args);
+    const split = args.length > 5;
+    const offset = split ? i64Halves(args[3], args[4]) : i64(args[3]);
+    const pnum = Number(args[split ? 5 : 4]);
+    if (!Number.isSafeInteger(offset) || offset < 0) return wasiErrno('EINVAL');
+    const view = new DataView(buffer);
+    const vecs = iovecs(view, iov, iovcnt);
+    let total: number;
+    try {
+      total =
+        mode === 'read'
+          ? preadInto(buffer, vecs, (len, at) => pread(kfd, len, at), offset)
+          : pwriteFrom(buffer, vecs, (bytes, at) => pwrite(kfd, bytes, at), offset);
+    } catch (err) {
+      return errnoOf(err);
+    }
+    view.setUint32(pnum, total, true);
+    return 0;
+  };
+}
+
+export function positionedIo(
+  imports: WebAssembly.Imports,
+  deps: PositionedDeps,
+  glue?: GlueFdImports
+): void {
+  replaceGlueImport(imports, glue, 'fd_pread', (value) =>
+    positioned(value as PositionedImport, deps, 'read')
+  );
+  replaceGlueImport(imports, glue, 'fd_pwrite', (value) =>
+    positioned(value as PositionedImport, deps, 'write')
+  );
 }
 
 export function wasmMemory(
