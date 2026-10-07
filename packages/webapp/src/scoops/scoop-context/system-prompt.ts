@@ -1,3 +1,4 @@
+import { wellFormed } from '../../base/utf16-clip.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import { MINIMAL_AGENT_SYSTEM_PROMPT, withSafetyTrailer } from '../agent-prompt-text.js';
 import { formatSkillsForPrompt, type Skill } from '../skills.js';
@@ -48,6 +49,9 @@ export function buildScoopSystemPrompt(
   const { policy, workspace } = unit;
   const places = promptPlaces(stable, scoop, workspace, isRoot);
   const { assistantName, workspaceShown, homeShown, memoryPathShown, memoryHeading } = places;
+
+  globalMemory = wellFormed(globalMemory);
+  scoopMemory = wellFormed(scoopMemory);
 
   const basePrompt = `# ${assistantName}
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { wellFormed } from '../../../src/base/utf16-clip.js';
 import { AGENT_SAFETY_TRAILER } from '../../../src/scoops/agent-prompt-text.js';
 import { buildScoopSystemPrompt } from '../../../src/scoops/scoop-context/system-prompt.js';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
@@ -11,6 +12,21 @@ function promptFor(folder: string, config: RegisteredScoop['config']): string {
 }
 
 describe('buildScoopSystemPrompt cache stability', () => {
+  it('repairs lone surrogates in cone and scoop memory', () => {
+    const scoop = childRecord('cone_1', { folder: 'agent-test', assistantLabel: 'agent-test' });
+    const prompt = buildScoopSystemPrompt(
+      scoop,
+      toDescriptor(scoop),
+      'global\uD800memory',
+      'local\uDC00memory',
+      []
+    );
+
+    expect(prompt).toContain('global\uFFFDmemory');
+    expect(prompt).toContain('local\uFFFDmemory');
+    expect(prompt).toBe(wellFormed(prompt));
+  });
+
   it('drops the scratch folder from a cache-stable prompt', () => {
     const a = promptFor('agent-quiet-vanilla', { cacheStablePrompt: true });
     const b = promptFor('agent-loud-chocolate', { cacheStablePrompt: true });
