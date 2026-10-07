@@ -121,6 +121,8 @@ export interface ProcessSys {
   flush(fd: number): void;
   /** pread(2) on a VFS file description: up to `max` bytes at `at`, its offset untouched. */
   pread?(fd: number, max: number, at: number): Uint8Array;
+  /** pwrite(2) on a VFS file description: `bytes` at `at`, its offset untouched; bytes written. */
+  pwrite?(fd: number, bytes: Uint8Array, at: number): number;
   /** Whether the descriptor is a terminal. */
   isatty?(fd: number): boolean;
   /** A terminal's device path (`/dev/pts/N`), when it has one. */

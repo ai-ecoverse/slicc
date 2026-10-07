@@ -37,6 +37,7 @@ import {
 import { createProcessKernel, type ProcessKernel } from './process-children.js';
 import {
   type GlueSyscalls,
+  positionedIo,
   syncFsync,
   trackCloseOnExec,
   useDevFd,
@@ -126,6 +127,10 @@ export function kernelSys(transport: SyncSabTransport): ProcessSys & PtyKernel {
     pread(fd, max, at) {
       const r = call({ op: 'fd-pread', fd, max, offset: at }, `fd-pread ${fd}`);
       return r.ok && r.kind === 'bytes' ? r.bytes : new Uint8Array(0);
+    },
+    pwrite(fd, bytes, at) {
+      const n = json(call({ op: 'fd-pwrite', fd, offset: at, body: bytes }, `fd-pwrite ${fd}`));
+      return typeof n === 'number' ? n : bytes.length;
     },
     isatty(fd) {
       return (
@@ -427,6 +432,11 @@ export async function runWasmProcess(
             },
           });
           syncFsync(imports, () => ownValue<ProcessFs>(module, 'FS'));
+          positionedIo(imports, {
+            fs: () => ownValue<ProcessFs>(module, 'FS'),
+            memory: () => memory?.buffer,
+            sys,
+          });
           return WebAssembly.instantiate(init.program.module, imports);
         })
         .then((instance) => {

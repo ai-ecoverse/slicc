@@ -4,6 +4,7 @@ import {
   closesOnExec,
   fdOfPath,
   O_CLOEXEC,
+  positionedIo,
   syncFsync,
   trackCloseOnExec,
   useDevFd,
@@ -18,6 +19,7 @@ class ErrnoError extends Error {
 }
 
 const EBADF = 8;
+const EINVAL = 28;
 const F_DUPFD = 0;
 const F_GETFD = 1;
 const F_SETFD = 2;
@@ -335,6 +337,134 @@ describe('syncFsync', () => {
     expect(fdSync(imports)(3)).toBe('suspended');
     expect(original).toHaveBeenCalledWith(3);
     expect(fsync).not.toHaveBeenCalled();
+  });
+});
+
+describe('positionedIo', () => {
+  const file = new TextEncoder().encode('0123456789');
+  const setup = (stream: Partial<ProcessStream> | undefined, withMemory = true) => {
+    const memory = new ArrayBuffer(256);
+    const view = new DataView(memory);
+    const sys = {
+      pread: vi.fn((_fd: number, max: number, at: number) => file.slice(at, at + max)),
+      pwrite: vi.fn((_fd: number, bytes: Uint8Array, _at: number) => bytes.length),
+    };
+    const original = vi.fn(() => 'original');
+    const imports = { a: { fd_pread: original, fd_pwrite: original }, b: null, c: 'x' };
+    const fs = { getStream: (fd: number) => (fd === 3 ? stream : null) } as unknown as ProcessFs;
+    positionedIo(imports as unknown as WebAssembly.Imports, {
+      fs: () => fs,
+      memory: () => (withMemory ? memory : undefined),
+      sys,
+    });
+    const call = (
+      name: 'fd_pread' | 'fd_pwrite',
+      vecs: Array<[number, number]>,
+      offset: bigint
+    ) => {
+      vecs.forEach(([ptr, len], i) => {
+        view.setUint32(16 + i * 8, ptr, true);
+        view.setUint32(16 + i * 8 + 4, len, true);
+      });
+      const fn = imports.a[name] as unknown as (...args: unknown[]) => unknown;
+      return fn(3, 16, vecs.length, offset, 8);
+    };
+    const raw = (name: 'fd_pread' | 'fd_pwrite', ...args: Array<number | bigint>) =>
+      (imports.a[name] as unknown as (...a: Array<number | bigint>) => unknown)(...args);
+    return { memory, view, sys, original, call, raw };
+  };
+  const kernelFile = { sliccKernelFile: true, sliccKernelFd: 11 } as Partial<ProcessStream>;
+
+  it('reads a kernel file at the offset into each iovec, stopping short at end of file', () => {
+    const { memory, view, sys, call } = setup(kernelFile);
+    expect(
+      call(
+        'fd_pread',
+        [
+          [64, 3],
+          [96, 4],
+        ],
+        2n
+      )
+    ).toBe(0);
+    expect(new TextDecoder().decode(new Uint8Array(memory, 64, 3))).toBe('234');
+    expect(new TextDecoder().decode(new Uint8Array(memory, 96, 4))).toBe('5678');
+    expect(view.getUint32(8, true)).toBe(7);
+    expect(sys.pread.mock.calls).toEqual([
+      [11, 3, 2],
+      [11, 4, 5],
+    ]);
+    expect(
+      call(
+        'fd_pread',
+        [
+          [64, 8],
+          [96, 8],
+        ],
+        6n
+      )
+    ).toBe(0);
+    expect(view.getUint32(8, true)).toBe(4);
+    expect(sys.pread).toHaveBeenCalledTimes(3);
+  });
+
+  it('writes each iovec of a kernel file at the offset', () => {
+    const { memory, view, sys, call } = setup(kernelFile);
+    new Uint8Array(memory, 64, 2).set([65, 66]);
+    new Uint8Array(memory, 96, 1).set([67]);
+    expect(
+      call(
+        'fd_pwrite',
+        [
+          [64, 2],
+          [96, 1],
+        ],
+        5n
+      )
+    ).toBe(0);
+    expect(view.getUint32(8, true)).toBe(3);
+    expect(sys.pwrite.mock.calls.map(([fd, bytes, at]) => [fd, [...bytes], at])).toEqual([
+      [11, [65, 66], 5],
+      [11, [67], 7],
+    ]);
+  });
+
+  it('takes a legalized offset as signed halves, and refuses a negative or unsafe one', () => {
+    const { view, sys, call, raw } = setup(kernelFile);
+    view.setUint32(16, 64, true);
+    view.setUint32(20, 1, true);
+    expect(raw('fd_pread', 3, 16, 1, 2, 0, 8)).toBe(0);
+    expect(raw('fd_pread', 3, 16, 1, -(2 ** 31), 0, 8)).toBe(0);
+    expect(sys.pread.mock.calls).toEqual([
+      [11, 1, 2],
+      [11, 1, 2 ** 31],
+    ]);
+    expect(raw('fd_pread', 3, 16, 1, 0, -1, 8)).toBe(EINVAL);
+    expect(call('fd_pwrite', [[64, 1]], -1n)).toBe(EINVAL);
+    expect(call('fd_pwrite', [[64, 1]], 2n ** 63n - 1n)).toBe(EINVAL);
+    expect(call('fd_pread', [[64, 1]], 2n ** 64n - 1n)).toBe(EINVAL);
+    expect(sys.pread).toHaveBeenCalledTimes(2);
+    expect(sys.pwrite).not.toHaveBeenCalled();
+  });
+
+  it("leaves other streams, and calls before the module's memory exists, to Emscripten", () => {
+    expect(setup({ sliccKernelFd: 4 }).call('fd_pread', [[64, 1]], 0n)).toBe('original');
+    expect(setup(undefined).call('fd_pwrite', [[64, 1]], 0n)).toBe('original');
+    expect(setup(kernelFile, false).call('fd_pread', [[64, 1]], 0n)).toBe('original');
+  });
+
+  it('returns the errno of a failed kernel call', () => {
+    const { sys, view, call } = setup(kernelFile);
+    view.setUint32(8, 99, true);
+    sys.pread.mockImplementation(() => {
+      throw Object.assign(new Error('EBADF'), { code: 'EBADF' });
+    });
+    expect(call('fd_pread', [[64, 1]], 0n)).toBe(EBADF);
+    sys.pwrite.mockImplementation(() => {
+      throw new ErrnoError(28);
+    });
+    expect(call('fd_pwrite', [[64, 1]], 0n)).toBe(28);
+    expect(view.getUint32(8, true)).toBe(99);
   });
 });
 

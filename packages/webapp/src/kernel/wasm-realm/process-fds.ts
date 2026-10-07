@@ -18,7 +18,7 @@
  *   bash's process substitution hands a command: `diff <(a) <(b)` runs
  *   `diff /dev/fd/63 /dev/fd/62`.
  */
-import type { ProcessFs, ProcessStream } from './kernel-streams.js';
+import type { ProcessFs, ProcessStream, ProcessSys } from './kernel-streams.js';
 import { type PtyKernel, ptyIoctl } from './process-pty.js';
 import { wasiErrno } from './wasi-errno.js';
 
@@ -289,6 +289,124 @@ export function syncFsync(imports: WebAssembly.Imports, fs: () => ProcessFs | un
         return errnoOf(err);
       }
     };
+  }
+}
+
+/**
+ * fd_pread / fd_pwrite: (fd, iov, iovcnt, offset, pnum), the offset an i64
+ * (BigInt), or legalized into signed (low, high) halves without WASM_BIGINT.
+ */
+type PositionedImport = (...args: Array<number | bigint>) => unknown;
+
+interface PositionedDeps {
+  fs: () => ProcessFs | undefined;
+  /** The instance's memory, once it runs. */
+  memory: () => ArrayBuffer | undefined;
+  sys: Pick<ProcessSys, 'pread' | 'pwrite'>;
+}
+
+/** The iovecs at `iov`: [pointer, length] each. */
+function iovecs(view: DataView, iov: number, iovcnt: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < iovcnt; i++) {
+    out.push([view.getUint32(iov + i * 8, true), view.getUint32(iov + i * 8 + 4, true)]);
+  }
+  return out;
+}
+
+/** pread(2) into the iovecs at `at`; bytes read (short at end of file). */
+function preadInto(
+  buffer: ArrayBuffer,
+  vecs: Array<[number, number]>,
+  read: (len: number, at: number) => Uint8Array,
+  at: number
+): number {
+  let total = 0;
+  for (const [ptr, len] of vecs) {
+    const bytes = read(len, at + total);
+    new Uint8Array(buffer).set(bytes, ptr);
+    total += bytes.length;
+    if (bytes.length < len) break;
+  }
+  return total;
+}
+
+/** pwrite(2) of the iovecs at `at`; bytes written. */
+function pwriteFrom(
+  buffer: ArrayBuffer,
+  vecs: Array<[number, number]>,
+  write: (bytes: Uint8Array, at: number) => number,
+  at: number
+): number {
+  let total = 0;
+  for (const [ptr, len] of vecs) {
+    const n = write(new Uint8Array(buffer, ptr, len).slice(), at + total);
+    total += n;
+    if (n < len) break;
+  }
+  return total;
+}
+
+/** An i64 argument: a BigInt, as signed, or a number. */
+function i64(value: number | bigint | undefined): number {
+  return typeof value === 'bigint' ? Number(BigInt.asIntN(64, value)) : Number(value);
+}
+
+/** A legalized i64 from its signed 32-bit halves. */
+function i64Halves(low: number | bigint | undefined, high: number | bigint | undefined): number {
+  return Number(high) * 2 ** 32 + (Number(low) >>> 0);
+}
+
+function positioned(original: PositionedImport, deps: PositionedDeps, mode: 'read' | 'write') {
+  return (...args: Array<number | bigint>) => {
+    const [fd, iov, iovcnt] = args.map(Number);
+    const stream = deps.fs()?.getStream(fd);
+    const kfd = stream?.sliccKernelFile ? stream.sliccKernelFd : undefined;
+    const buffer = deps.memory();
+    const { pread, pwrite } = deps.sys;
+    if (kfd === undefined || !buffer || !pread || !pwrite) return original(...args);
+    const split = args.length > 5;
+    const offset = split ? i64Halves(args[3], args[4]) : i64(args[3]);
+    const pnum = Number(args[split ? 5 : 4]);
+    if (!Number.isSafeInteger(offset) || offset < 0) return wasiErrno('EINVAL');
+    const view = new DataView(buffer);
+    const vecs = iovecs(view, iov, iovcnt);
+    let total: number;
+    try {
+      total =
+        mode === 'read'
+          ? preadInto(buffer, vecs, (len, at) => pread(kfd, len, at), offset)
+          : pwriteFrom(buffer, vecs, (bytes, at) => pwrite(kfd, bytes, at), offset);
+    } catch (err) {
+      return errnoOf(err);
+    }
+    view.setUint32(pnum, total, true);
+    return 0;
+  };
+}
+
+/**
+ * pread(2) / pwrite(2) on a descriptor backed by a kernel VFS file
+ * description: at the requested offset, without moving the description's
+ * shared one. Emscripten's fd_pread / fd_pwrite hand the offset to the
+ * stream's read / write as a position, which such a stream cannot honour (its
+ * read and write go at the shared offset): git, built NO_MMAP, reads packs
+ * with pread and got another offset's bytes ("unknown object type 5 at offset
+ * 12"). Other streams keep Emscripten's own.
+ */
+export function positionedIo(imports: WebAssembly.Imports, deps: PositionedDeps): void {
+  for (const namespace of Object.values(imports)) {
+    if (!namespace || typeof namespace !== 'object') continue;
+    const { fd_pread: pread, fd_pwrite: pwrite } = namespace as {
+      fd_pread?: unknown;
+      fd_pwrite?: unknown;
+    };
+    if (typeof pread === 'function') {
+      namespace.fd_pread = positioned(pread as PositionedImport, deps, 'read');
+    }
+    if (typeof pwrite === 'function') {
+      namespace.fd_pwrite = positioned(pwrite as PositionedImport, deps, 'write');
+    }
   }
 }
 
