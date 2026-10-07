@@ -342,11 +342,13 @@ describe('syncFsync', () => {
 
 describe('positionedIo', () => {
   const file = new TextEncoder().encode('0123456789');
-  const setup = (stream: Partial<ProcessStream> | undefined, withMemory = true) => {
+  const setup = (stream: Partial<ProcessStream> | undefined, withMemory = true, cap = 64) => {
     const memory = new ArrayBuffer(256);
     const view = new DataView(memory);
     const sys = {
-      pread: vi.fn((_fd: number, max: number, at: number) => file.slice(at, at + max)),
+      pread: vi.fn((_fd: number, max: number, at: number) =>
+        file.slice(at, at + Math.min(max, cap))
+      ),
       pwrite: vi.fn((_fd: number, bytes: Uint8Array, _at: number) => bytes.length),
     };
     const original = vi.fn(() => 'original');
@@ -375,7 +377,7 @@ describe('positionedIo', () => {
   };
   const kernelFile = { sliccKernelFile: true, sliccKernelFd: 11 } as Partial<ProcessStream>;
 
-  it('reads a kernel file at the offset into each iovec, stopping short at end of file', () => {
+  it('reads a kernel file at the offset into each iovec, stopping at end of file', () => {
     const { memory, view, sys, call } = setup(kernelFile);
     expect(
       call(
@@ -405,7 +407,22 @@ describe('positionedIo', () => {
       )
     ).toBe(0);
     expect(view.getUint32(8, true)).toBe(4);
-    expect(sys.pread).toHaveBeenCalledTimes(3);
+    expect(sys.pread.mock.calls.slice(2)).toEqual([
+      [11, 8, 6],
+      [11, 4, 10],
+    ]);
+  });
+
+  it('reads again until an iovec is full when the kernel caps one read', () => {
+    const { memory, view, sys, call } = setup(kernelFile, true, 3);
+    expect(call('fd_pread', [[64, 8]], 1n)).toBe(0);
+    expect(new TextDecoder().decode(new Uint8Array(memory, 64, 8))).toBe('12345678');
+    expect(view.getUint32(8, true)).toBe(8);
+    expect(sys.pread.mock.calls).toEqual([
+      [11, 8, 1],
+      [11, 5, 4],
+      [11, 2, 7],
+    ]);
   });
 
   it('writes each iovec of a kernel file at the offset', () => {
@@ -435,15 +452,19 @@ describe('positionedIo', () => {
     view.setUint32(20, 1, true);
     expect(raw('fd_pread', 3, 16, 1, 2, 0, 8)).toBe(0);
     expect(raw('fd_pread', 3, 16, 1, -(2 ** 31), 0, 8)).toBe(0);
+    expect(raw('fd_pread', 3, 16, 1, 0, 1, 8)).toBe(0);
+    expect(raw('fd_pread', 3, 16, 1, -1, 0, 8)).toBe(0);
     expect(sys.pread.mock.calls).toEqual([
       [11, 1, 2],
       [11, 1, 2 ** 31],
+      [11, 1, 2 ** 32],
+      [11, 1, 2 ** 32 - 1],
     ]);
     expect(raw('fd_pread', 3, 16, 1, 0, -1, 8)).toBe(EINVAL);
     expect(call('fd_pwrite', [[64, 1]], -1n)).toBe(EINVAL);
     expect(call('fd_pwrite', [[64, 1]], 2n ** 63n - 1n)).toBe(EINVAL);
     expect(call('fd_pread', [[64, 1]], 2n ** 64n - 1n)).toBe(EINVAL);
-    expect(sys.pread).toHaveBeenCalledTimes(2);
+    expect(sys.pread).toHaveBeenCalledTimes(4);
     expect(sys.pwrite).not.toHaveBeenCalled();
   });
 

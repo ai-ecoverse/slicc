@@ -314,7 +314,10 @@ function iovecs(view: DataView, iov: number, iovcnt: number): Array<[number, num
   return out;
 }
 
-/** pread(2) into the iovecs at `at`; bytes read (short at end of file). */
+/**
+ * pread(2) into the iovecs at `at`; bytes read. The kernel caps one read
+ * (MAX_READ), so each iovec reads until it is full or at end of file.
+ */
 function preadInto(
   buffer: ArrayBuffer,
   vecs: Array<[number, number]>,
@@ -323,10 +326,14 @@ function preadInto(
 ): number {
   let total = 0;
   for (const [ptr, len] of vecs) {
-    const bytes = read(len, at + total);
-    new Uint8Array(buffer).set(bytes, ptr);
-    total += bytes.length;
-    if (bytes.length < len) break;
+    let done = 0;
+    while (done < len) {
+      const bytes = read(len - done, at + total);
+      if (bytes.length === 0) return total;
+      new Uint8Array(buffer).set(bytes, ptr + done);
+      done += bytes.length;
+      total += bytes.length;
+    }
   }
   return total;
 }
