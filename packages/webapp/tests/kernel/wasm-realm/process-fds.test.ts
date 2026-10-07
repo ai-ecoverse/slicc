@@ -312,7 +312,7 @@ describe('syncFsync', () => {
     expect(run(fsWith(streamOf({})))).toBe(0);
   });
 
-  it('turns a thrown ErrnoError or coded error into its errno', () => {
+  it('turns a thrown ErrnoError or coded error into its errno, and rethrows anything else', () => {
     const run = (error: unknown) => {
       const imports = { a: { fd_sync: asyncSync() } };
       const fsync = () => {
@@ -323,6 +323,7 @@ describe('syncFsync', () => {
     };
     expect(run(new ErrnoError(28))).toBe(28);
     expect(run(Object.assign(new Error('x'), { code: 'EBADF' }))).toBe(EBADF);
+    expect(() => run(new TypeError('bug'))).toThrow('bug');
   });
 
   it('keeps the asynchronous fd_sync for a mount that persists itself', () => {

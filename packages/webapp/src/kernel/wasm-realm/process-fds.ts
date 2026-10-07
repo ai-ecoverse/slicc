@@ -255,6 +255,17 @@ function persistsItself(stream: ProcessStream): boolean {
 }
 
 /**
+ * The errno a failed stream op carries: an ErrnoError's, or a SyscallError's
+ * code. Anything else is a bug, and is rethrown, as Emscripten does.
+ */
+function errnoOf(err: unknown): number {
+  const { errno, code } = (err ?? {}) as { errno?: unknown; code?: unknown };
+  if (typeof errno === 'number') return errno;
+  if (typeof code === 'string') return wasiErrno(code);
+  throw err;
+}
+
+/**
  * Answer an Asyncify build's `fd_sync` synchronously. Emscripten marks it
  * async (`Asyncify.handleAsync`), so every fsync unwinds the stack, and the
  * fork glue allows only `fork` to suspend: git index-pack, which fsyncs the
@@ -275,8 +286,7 @@ export function syncFsync(imports: WebAssembly.Imports, fs: () => ProcessFs | un
         const result = stream.stream_ops.fsync?.(stream);
         return typeof result === 'number' ? result : 0;
       } catch (err) {
-        const { errno, code } = err as { errno?: unknown; code?: unknown };
-        return typeof errno === 'number' ? errno : wasiErrno(String(code));
+        return errnoOf(err);
       }
     };
   }
