@@ -142,6 +142,35 @@ const EXTRA_MODEL_SPECS: readonly ExtraModelSpec[] = [
     maxTokens: 128_000,
     thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
   },
+  {
+    // Released 2026-10-07; verified that day against bedrock-runtime.us-west-2.
+    // `GET /inference-profiles` lists `global.` everywhere plus `us.`
+    // (us-west-2, us-east-1), `eu.` (eu-central-1), `jp.` (ap-northeast-1) and
+    // `au.` (ap-southeast-2); `global.` and `us.` answer Converse, the bare id
+    // needs a profile. `temperature` 400s. Thinking is adaptive only
+    // (`thinking.type.enabled` 400s) with effort low, medium, high, xhigh and
+    // max. Unlike Sonnet 5.5, a request without a thinking field still thinks,
+    // and `thinking.type.disabled` turns it off (`between_tools` 400s): see
+    // `claudeTurnsThinkingOffExplicitly`. cachePoint writes then reads.
+    // Prices, the 100k-token long-context tier, context window and max tokens
+    // are Anthropic's list prices; models.dev's `amazon-bedrock` entries agree,
+    // and pi's hosted catalogue does not list the model yet.
+    baseId: 'anthropic.claude-haiku-5-5',
+    name: 'Claude Haiku 5.5',
+    profiles: ['global', 'us', 'eu', 'jp', 'au'],
+    globalCost: {
+      input: 0.1,
+      output: 0.5,
+      cacheRead: 0.01,
+      cacheWrite: 0.125,
+      tiers: [
+        { inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 },
+      ],
+    },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+    thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+  },
   // The five below were verified 2026-09-25 against bedrock-runtime.us-west-2.
   // `GET /inference-profiles` lists only `global.` and `us.` for each, in
   // us-west-2 and us-east-1; eu-central-1, ap-northeast-1 and ap-southeast-2

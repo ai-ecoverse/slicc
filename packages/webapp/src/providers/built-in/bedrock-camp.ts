@@ -45,6 +45,7 @@ import {
   claudeSupportsMaxEffort,
   claudeSupportsNativeXhighEffort,
   claudeSupportsPromptCaching,
+  claudeTurnsThinkingOffExplicitly,
 } from '../claude-model-version.js';
 import { toLegacyPiContext, toPiTranscriptContext } from '../pi-transcript-context.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
@@ -270,10 +271,15 @@ type BedrockCampOpenAIReasoningFields = {
   reasoning: { effort: string };
 };
 
+type BedrockCampDisabledThinkingFields = {
+  thinking: { type: 'disabled' };
+};
+
 type BedrockCampAdditionalModelRequestFields =
   | BedrockCampAdaptiveFields
   | BedrockCampLegacyThinkingFields
-  | BedrockCampOpenAIReasoningFields;
+  | BedrockCampOpenAIReasoningFields
+  | BedrockCampDisabledThinkingFields;
 
 type BedrockCampInferenceConfig = {
   maxTokens?: number;
@@ -750,7 +756,17 @@ function buildAdditionalModelRequestFields(
     const effort = openAIReasoningEffort(effortMap, options);
     return effort === undefined ? undefined : { reasoning: { effort } };
   }
-  if (!options.reasoning || !model.reasoning) return undefined;
+  if (!options.reasoning) {
+    // Thinking off. Omitting the field is enough for most Claude models, but
+    // Haiku 5.5 reads a request without it as adaptive thinking at its default
+    // effort, and only an explicit `disabled` turns it off.
+    return model.reasoning &&
+      isAnthropicClaudeModel(model) &&
+      claudeTurnsThinkingOffExplicitly(model.id, model.name)
+      ? { thinking: { type: 'disabled' } }
+      : undefined;
+  }
+  if (!model.reasoning) return undefined;
   if (!isAnthropicClaudeModel(model)) return undefined;
 
   const display = isGovCloudTarget(model) ? undefined : (options.thinkingDisplay ?? 'summarized');
