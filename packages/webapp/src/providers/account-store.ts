@@ -48,6 +48,7 @@ import {
   MODELS_POLICY_FILE,
   policyHintFor,
 } from './model-policy.js';
+import { canonicalProviderId } from './renamed-providers.js';
 import type { CompatOverrides } from './types.js';
 
 export type { ProviderConfig } from './index.js';
@@ -143,7 +144,56 @@ function cleanLegacyKeys(): void {
       /* noop */
     }
   }
+  migrateRenamedPiProviders();
   migrateLegacyAuthOnlySelection();
+}
+
+/**
+ * Move stored accounts and the `selected-model` prefix from renamed pi-ai
+ * provider ids to their new ids (see `renamed-providers.ts`). When an account
+ * under the new id already exists, it wins and the old row is dropped.
+ * Idempotent; never throws.
+ *
+ * Exported only for tests — production runs it through `cleanLegacyKeys()`.
+ */
+export function migrateRenamedPiProviders(): void {
+  try {
+    const raw = localStorage.getItem(MODEL_KEY);
+    const sep = raw ? raw.indexOf(':') : -1;
+    if (raw && sep > 0) {
+      const provider = raw.slice(0, sep);
+      const renamed = canonicalProviderId(provider);
+      if (renamed !== provider) localStorage.setItem(MODEL_KEY, `${renamed}${raw.slice(sep)}`);
+    }
+  } catch {
+    /* leave the selection alone if storage is unavailable. */
+  }
+  try {
+    const rawAccounts = localStorage.getItem(ACCOUNTS_KEY);
+    if (!rawAccounts) return;
+    const parsed = JSON.parse(rawAccounts);
+    if (!Array.isArray(parsed)) return;
+    const present = new Set(
+      parsed
+        .filter((entry) => entry != null && typeof entry === 'object')
+        .map((entry) => entry.providerId)
+    );
+    let changed = false;
+    const migrated = parsed.flatMap((entry) => {
+      const renamed =
+        entry != null && typeof entry === 'object' && typeof entry.providerId === 'string'
+          ? canonicalProviderId(entry.providerId)
+          : undefined;
+      if (renamed === undefined || renamed === entry.providerId) return [entry];
+      changed = true;
+      if (present.has(renamed)) return [];
+      present.add(renamed);
+      return [{ ...entry, providerId: renamed }];
+    });
+    if (changed) localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(migrated));
+  } catch {
+    /* leave accounts alone if storage is unavailable or the row is malformed. */
+  }
 }
 
 /**

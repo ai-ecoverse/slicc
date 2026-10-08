@@ -11,6 +11,7 @@
  */
 
 import { slugify } from '@slicc/shared-ts';
+import { canonicalProviderId } from '../providers/renamed-providers.js';
 import type { RegisteredScoop, WorkUnitModel, WorkUnitThinking } from '../scoops/types.js';
 import { isRootUnit, rootsOf } from './policy.js';
 
@@ -43,6 +44,11 @@ export function legacyRecordIsCone(scoop: RegisteredScoop): boolean {
  */
 export function normalizeScoopRecord(scoop: RegisteredScoop): RegisteredScoop {
   liftLegacyModelConfig(scoop);
+  // A unit pinned to a provider pi-ai has since renamed keeps its model.
+  if (scoop.model) scoop.model.provider = canonicalProviderId(scoop.model.provider);
+  if (scoop.config?.modelProviderId !== undefined) {
+    scoop.config.modelProviderId = canonicalProviderId(scoop.config.modelProviderId);
+  }
   const legacy = scoop as RegisteredScoop & LegacyRoleFields;
   delete legacy.isCone;
   delete legacy.type;

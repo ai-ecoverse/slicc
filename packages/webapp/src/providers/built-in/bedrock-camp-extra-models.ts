@@ -9,10 +9,11 @@
  * its prefix covers, and `POST /converse` answers.
  *
  * pi-ai wins on id collisions (`mergeBedrockCampCatalogue`), except that GPT-6
- * long-context price tiers are retained when its base rates match. Pi-ai
- * 0.99.1 lists the earlier models below, but its Bedrock GPT-6 entries omit
- * those tiers. GPT-6.1 Sol still needs its own entry; the earlier entries
- * retain their live probe record without adding duplicate picker entries.
+ * long-context price tiers are retained when its base rates match and pi-ai's
+ * entry has none (pi-ai 0.99.1's Bedrock GPT-6 entries omitted them). Pi-ai
+ * 1.1.0 lists every model below, Haiku 5.5 and GPT-6.1 Sol included, with the
+ * same rates and tiers; the entries retain their live probe record without
+ * adding duplicate picker entries.
  *
  * Dependency-free on purpose, like `bedrock-camp-compat.ts`: the eagerly
  * loaded `account-store.ts` imports it, so it must not pull in pi-ai.
