@@ -239,10 +239,14 @@ type ModelCatalogEntry struct {
 	Reasoning    bool   `json:"reasoning"`
 }
 
-// ModelsList is the leader's model catalogue (leader→follower).
+// ModelsList is the leader's model catalogue (leader→follower). Models is what
+// a person may pick; HiddenModels are selectable models the human pickers hide
+// (e.g. Haiku), sent apart so an older follower that ignores the field shows
+// exactly the list it always did. model.select accepts ids from either list.
 type ModelsList struct {
-	Type   string              `json:"type"` // "models.list"
-	Models []ModelCatalogEntry `json:"models"`
+	Type         string              `json:"type"` // "models.list"
+	Models       []ModelCatalogEntry `json:"models"`
+	HiddenModels []ModelCatalogEntry `json:"hiddenModels,omitempty"`
 }
 
 // ModelSelect picks the model of a cone (follower→leader). The leader applies

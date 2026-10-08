@@ -544,7 +544,19 @@ export type LeaderToFollowerMessage =
    * A bespoke semantic chunk variant is unnecessary: the generic
    * `TrayChunkFrame` layer frames and reassembles any oversize message.
    */
-  | { type: 'models.list'; models: TrayModelCatalogEntry[] }
+  | {
+      type: 'models.list';
+      /** What a person may pick: the leader's human-facing picker list. */
+      models: TrayModelCatalogEntry[];
+      /**
+       * Models the human pickers hide (e.g. Haiku) that automation may still
+       * select with `model.select` — `slicc model` resolves against both lists.
+       * A separate field rather than a flag on `models`, so an older follower
+       * that ignores it keeps showing exactly the picker list it always did.
+       * Followers must not offer these in a picker. Omitted when empty.
+       */
+      hiddenModels?: TrayModelCatalogEntry[];
+    }
   | { type: 'model.state'; state: TrayModelSelectionState }
   | { type: 'sprinkles.list'; sprinkles: SprinkleSummary[] }
   | {

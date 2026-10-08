@@ -108,6 +108,11 @@ export interface LeaderSyncManagerOptions {
   computers?: TrayComputersSource;
   /** Build the credential-free model catalog advertised to followers. */
   getModelCatalog?: () => TrayModelCatalogEntry[];
+  /**
+   * Models the human pickers hide but automation may select, advertised as
+   * `models.list` `hiddenModels` (never shown in a follower picker).
+   */
+  getHiddenModelCatalog?: () => TrayModelCatalogEntry[];
   /** Resolve the named unit's model and thinking state (#2310). */
   getModelSelectionState?: (scoopJid: string) => TrayModelSelectionState;
   /**

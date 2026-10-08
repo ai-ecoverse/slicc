@@ -85,6 +85,7 @@ import {
 import {
   getAccounts,
   getAllAvailableModels,
+  getPickerHiddenModels,
   getProviderConfig,
   resolveCurrentModel,
   resolveModelById,
@@ -275,7 +276,20 @@ function modelTheAgentRuns(pinned: WorkUnitModel | undefined) {
 }
 
 function modelCatalogForTray(): TrayModelCatalogEntry[] {
-  return getAllAvailableModels().flatMap((group) =>
+  return catalogEntries(getAllAvailableModels());
+}
+
+/**
+ * Models the human pickers hide (Haiku) that a follower may still select, sent
+ * as `models.list` `hiddenModels` so `slicc model` and the benchmark runner can
+ * pick them while no picker offers them.
+ */
+function hiddenModelCatalogForTray(): TrayModelCatalogEntry[] {
+  return catalogEntries(getPickerHiddenModels());
+}
+
+function catalogEntries(groups: ReturnType<typeof getAllAvailableModels>): TrayModelCatalogEntry[] {
+  return groups.flatMap((group) =>
     group.models.map((model) => ({
       providerName: group.providerName,
       modelId: `${group.providerId}:${model.id}`,
@@ -852,7 +866,10 @@ function leaderModelCallbacks(
       };
     },
     onFollowerModelSelect: (modelId, scoopJid) => {
-      const entry = modelCatalogForTray().find((model) => model.modelId === modelId);
+      // A picker-hidden model is a valid pick too: automation selects it by id.
+      const entry =
+        modelCatalogForTray().find((model) => model.modelId === modelId) ??
+        hiddenModelCatalogForTray().find((model) => model.modelId === modelId);
       if (!entry) return false;
       // A follower changes the model of the cone IT is looking at — never the
       // leader's selected cone and never a global setting.
@@ -991,6 +1008,7 @@ export function createLeaderOptionsFactory(
         turnsFromUnits(deps.workUnits.currentUnits())
       ),
     getModelCatalog: modelCatalogForTray,
+    getHiddenModelCatalog: hiddenModelCatalogForTray,
     ...leaderModelCallbacks(deps),
     onFollowerThinkingSet: (scoopJid, thinkingLevel, effortOverride) =>
       client.setScoopThinkingLevel(scoopJid, thinkingLevel, effortOverride),

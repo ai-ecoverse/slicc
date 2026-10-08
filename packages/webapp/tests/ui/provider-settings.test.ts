@@ -193,6 +193,7 @@ import {
   getBaseUrl,
   getBaseUrlForProvider,
   getOAuthAccountInfo,
+  getPickerHiddenModels,
   getProviderConfig,
   getProviderModels,
   getSelectedModelId,
@@ -655,6 +656,33 @@ describe('getAllAvailableModels', () => {
     const groups = getAllAvailableModels();
     expect(groups).toHaveLength(1);
     expect(groups[0].providerId).toBe('anthropic');
+  });
+
+  it('keeps picker-hidden models (Haiku) out of the pickers and offers them apart', () => {
+    const original = mockGetModels.getMockImplementation();
+    mockGetModels.mockImplementation((providerId: string) =>
+      providerId === 'anthropic'
+        ? [
+            { id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4', reasoning: true },
+            { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', reasoning: true },
+          ]
+        : []
+    );
+    try {
+      addAccount('anthropic', 'ant-key');
+      expect(getAllAvailableModels()[0].models.map((m) => m.id)).toEqual(['claude-sonnet-4-0']);
+      const hidden = getPickerHiddenModels();
+      expect(hidden).toHaveLength(1);
+      expect(hidden[0].providerId).toBe('anthropic');
+      expect(hidden[0].models.map((m) => m.id)).toEqual(['claude-haiku-5-5']);
+    } finally {
+      if (original) mockGetModels.mockImplementation(original);
+    }
+  });
+
+  it('offers no hidden group for a provider without picker-hidden models', () => {
+    addAccount('anthropic', 'ant-key');
+    expect(getPickerHiddenModels()).toEqual([]);
   });
 });
 

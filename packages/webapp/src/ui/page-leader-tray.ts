@@ -115,6 +115,7 @@ export interface StartPageLeaderTrayOptions {
   getScoops?: () => ScoopSummary[];
   getSprinkles?: () => SprinkleSummary[];
   getModelCatalog?: LeaderSyncManagerOptions['getModelCatalog'];
+  getHiddenModelCatalog?: LeaderSyncManagerOptions['getHiddenModelCatalog'];
   getModelSelectionState?: LeaderSyncManagerOptions['getModelSelectionState'];
   onFollowerModelSelect?: LeaderSyncManagerOptions['onFollowerModelSelect'];
   onFollowerThinkingSet?: LeaderSyncManagerOptions['onFollowerThinkingSet'];
@@ -298,6 +299,7 @@ function buildSyncManager(
       unwatch: (id, token) => getComputersStore().unwatch(id, token),
     },
     getModelCatalog: options.getModelCatalog,
+    getHiddenModelCatalog: options.getHiddenModelCatalog,
     getModelSelectionState: options.getModelSelectionState,
     onFollowerModelSelect: options.onFollowerModelSelect,
     onFollowerThinkingSet: options.onFollowerThinkingSet,
