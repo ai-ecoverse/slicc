@@ -692,6 +692,36 @@ export function policyVisible<T extends { id: string }>(models: T[], providerId:
   return models.filter((m) => !isModelDeniedByPolicy(policy, selected, providerId, m.id));
 }
 
+/**
+ * The models {@link getAllAvailableModels} leaves out because the human
+ * pickers hide them ({@link isModelHiddenFromPicker}), grouped the same way.
+ * Not for any picker: the tray advertises them to followers as
+ * `hiddenModels`, so automation (`slicc model`, the benchmark runner) can
+ * select a model no person is offered. Policy denials still apply.
+ */
+export function getPickerHiddenModels(): GroupedModels[] {
+  const accounts = getAccounts();
+  if (accounts.length === 0) return [];
+  const seen = new Map<string, GroupedModels>();
+  for (const account of accounts) {
+    if (seen.has(account.providerId)) continue;
+    const config = getProviderConfig(account.providerId);
+    if (config.hidden) continue;
+    if (isBuildExcludedPiProvider(account.providerId)) continue;
+    const models = policyVisible(
+      getProviderModels(account.providerId).filter((m) => isModelHiddenFromPicker(m.id)),
+      account.providerId
+    );
+    if (models.length === 0) continue;
+    seen.set(account.providerId, {
+      providerId: account.providerId,
+      providerName: config.name,
+      models,
+    });
+  }
+  return [...seen.values()];
+}
+
 /** Get models from all configured provider accounts, grouped by provider. */
 export function getAllAvailableModels(): GroupedModels[] {
   const accounts = getAccounts();

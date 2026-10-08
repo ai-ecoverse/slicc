@@ -173,6 +173,58 @@ describe('BroadcastManager', () => {
     ]);
     expect(getModelSelectionState).toHaveBeenCalledWith('scoop-1');
   });
+
+  it('sends picker-hidden models apart as hiddenModels, sanitized, and only when there are any', () => {
+    const visible = {
+      providerName: 'Bedrock',
+      modelId: 'bedrock-camp:global.anthropic.claude-sonnet-5-5',
+      modelName: 'Claude Sonnet 5.5',
+      reasoning: true,
+    };
+    const hidden = {
+      providerName: 'Bedrock',
+      modelId: 'bedrock-camp:global.anthropic.claude-haiku-5-5',
+      modelName: 'Claude Haiku 5.5',
+      reasoning: true,
+    };
+    const { broadcast, sent } = createHarness({
+      getModelCatalog: () => [visible],
+      getHiddenModelCatalog: () => [{ ...hidden, accessToken: 'must-not-cross-the-wire' }] as never,
+      getModelSelectionState: (scoopJid: string) => ({ activeModelId: visible.modelId, scoopJid }),
+    });
+    broadcast.sendModelCatalogToFollower('follower');
+    expect(sent[0]).toEqual({ type: 'models.list', models: [visible], hiddenModels: [hidden] });
+
+    const none = createHarness({
+      getModelCatalog: () => [visible],
+      getHiddenModelCatalog: () => [],
+      getModelSelectionState: (scoopJid: string) => ({ activeModelId: visible.modelId, scoopJid }),
+    });
+    none.broadcast.sendModelCatalogToFollower('follower');
+    expect(none.sent[0]).toEqual({ type: 'models.list', models: [visible] });
+    expect(Object.hasOwn(none.sent[0] as object, 'hiddenModels')).toBe(false);
+  });
+
+  it('sends a catalog whose only models are picker-hidden instead of deferring it as empty', () => {
+    const hidden = {
+      providerName: 'Bedrock',
+      modelId: 'bedrock-camp:global.anthropic.claude-haiku-5-5',
+      modelName: 'Claude Haiku 5.5',
+      reasoning: true,
+    };
+    const { broadcast, sent, registry } = createHarness({
+      getModelCatalog: () => [],
+      getHiddenModelCatalog: () => [hidden],
+      getModelSelectionState: (scoopJid: string) => ({ activeModelId: hidden.modelId, scoopJid }),
+    });
+    broadcast.sendModelCatalogToFollower('follower');
+    expect(sent[0]).toEqual({ type: 'models.list', models: [], hiddenModels: [hidden] });
+    expect(registry.followers.get('follower')?.modelCatalogSent).toBe(true);
+
+    const cold = createHarness({ getModelCatalog: () => [], getHiddenModelCatalog: () => [] });
+    cold.broadcast.sendModelCatalogToFollower('follower');
+    expect(cold.sent.filter((m) => m.type === 'models.list')).toEqual([]);
+  });
   // ── issue #2166: targeted sprinkle delivery ───────────────────────────────
 
   describe('broadcastSprinkleUpdate', () => {

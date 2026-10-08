@@ -271,13 +271,13 @@ type modelListing struct {
 // modelChannels routes models.list and model.state messages to channels;
 // full channels drop, since only the latest answers matter.
 type modelChannels struct {
-	lists  chan []protocol.ModelCatalogEntry
+	lists  chan protocol.ModelsList
 	states chan protocol.ModelSelectionState
 }
 
 func newModelChannels() modelChannels {
 	return modelChannels{
-		lists:  make(chan []protocol.ModelCatalogEntry, 4),
+		lists:  make(chan protocol.ModelsList, 4),
 		states: make(chan protocol.ModelSelectionState, 16),
 	}
 }
@@ -288,7 +288,7 @@ func (c modelChannels) handle(typ string, raw []byte) {
 		var l protocol.ModelsList
 		if json.Unmarshal(raw, &l) == nil {
 			select {
-			case c.lists <- l.Models:
+			case c.lists <- l:
 			default:
 			}
 		}
@@ -327,15 +327,16 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 
 	deadline := time.NewTimer(a.timeout)
 	defer deadline.Stop()
-	catalog, state, code := awaitCatalog(ctx, conn, ch, deadline.C, a.timeout, "model")
+	list, state, code := awaitCatalog(ctx, conn, ch, deadline.C, a.timeout, "model")
 	if code >= 0 {
 		return code
 	}
 	if a.query == "" {
-		printModels(a.json, state, catalog)
+		// The listing is the human picker's: picker-hidden models stay out of it.
+		printModels(a.json, state, list.Models)
 		return 0
 	}
-	want, err := resolveModel(a.query, catalog)
+	want, err := resolveModel(a.query, selectableModels(list))
 	if err != nil {
 		errLine("model", "%s", err)
 		return 1
@@ -353,26 +354,35 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 
 // awaitCatalog waits for both the catalogue and the cone's model state. A
 // non-negative code means the command is over with that exit status.
-func awaitCatalog(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration, verb string) ([]protocol.ModelCatalogEntry, protocol.ModelSelectionState, int) {
-	var catalog []protocol.ModelCatalogEntry
+func awaitCatalog(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration, verb string) (protocol.ModelsList, protocol.ModelSelectionState, int) {
+	var list *protocol.ModelsList
 	var state *protocol.ModelSelectionState
-	for catalog == nil || state == nil {
+	for list == nil || state == nil {
 		select {
 		case l := <-ch.lists:
-			catalog = l
+			list = &l
 		case s := <-ch.states:
 			state = &s
 		case <-deadline:
 			errLine(verb, "the leader sent no model list within %s", timeout)
-			return nil, protocol.ModelSelectionState{}, 1
+			return protocol.ModelsList{}, protocol.ModelSelectionState{}, 1
 		case <-conn.Done():
 			errLine(verb, "connection closed")
-			return nil, protocol.ModelSelectionState{}, 1
+			return protocol.ModelsList{}, protocol.ModelSelectionState{}, 1
 		case <-ctx.Done():
-			return nil, protocol.ModelSelectionState{}, 130
+			return protocol.ModelsList{}, protocol.ModelSelectionState{}, 130
 		}
 	}
-	return catalog, *state, -1
+	return *list, *state, -1
+}
+
+// selectableModels is every model the leader will apply: the picker's list plus
+// the models it hides from people but lets automation pick (hiddenModels). An
+// older leader sends no hiddenModels, so only its picker list resolves.
+func selectableModels(l protocol.ModelsList) []protocol.ModelCatalogEntry {
+	out := make([]protocol.ModelCatalogEntry, 0, len(l.Models)+len(l.HiddenModels))
+	out = append(out, l.Models...)
+	return append(out, l.HiddenModels...)
 }
 
 // awaitSwitch waits for a model.state for the cone's scoop naming want.

@@ -281,6 +281,14 @@
             "modelName": "Reasoner",
             "reasoning": true
           }
+        ],
+        "hiddenModels": [
+          {
+            "providerName": "Example Provider",
+            "modelId": "example:hidden-small",
+            "modelName": "Hidden Small",
+            "reasoning": false
+          }
         ]
       }
     },
