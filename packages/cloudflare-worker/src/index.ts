@@ -395,6 +395,20 @@ try {
     var extensionId = state.extensionId || '';
     if (!/^[a-p]{32}$/.test(extensionId)) throw new Error('Invalid extensionId');
     target = 'https://' + extensionId + '.chromiumapp.org' + path + query;
+  } else if (source === 'origin') {
+    // A SLICC page on a sliccy.ai subdomain (seven, branch hosts) that runs
+    // cross-origin isolated, so COOP leaves it no opener to post to. Navigate
+    // the popup top-level to that origin's own /auth/callback instead; the
+    // page there hands the result to its tab on the same origin. Strict: one
+    // DNS label, lowercase, https, no port, no path, never www or the apex.
+    var sliccOrigin = state.origin || '';
+    if (
+      !/^https:\\/\\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.sliccy\\.ai$/.test(sliccOrigin) ||
+      sliccOrigin === ${JSON.stringify(SLICC_HOSTED_ORIGIN)}
+    ) {
+      throw new Error('Invalid origin: ' + sliccOrigin);
+    }
+    target = sliccOrigin + '/auth/callback' + query;
   } else if (source === 'remote') {
     // Remote origin (staging / preview / deployed dashboards).
     var origin = state.origin || '';

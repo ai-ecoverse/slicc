@@ -422,6 +422,85 @@ describe('OAuth callback relay — self-origin guard for local source', () => {
   });
 });
 
+describe('OAuth callback relay — origin source (sliccy.ai subdomain)', () => {
+  function originState(origin: unknown, extra: Record<string, unknown> = {}): string {
+    return btoa(JSON.stringify({ source: 'origin', origin, nonce: 'n1', ...extra }));
+  }
+
+  it('navigates the popup to the subdomain callback with the nonce and the IMS hash', async () => {
+    const state = originState('https://seven.sliccy.ai');
+    const search = `?state=${state}`;
+    const hash = '#access_token=dummy&expires_in=3600&state=' + state;
+    const html = await fetchRelayBody(search);
+    const { replaced, error, postedMessage, broadcasts } = runRelay(html, search, hash);
+    expect(error).toBeUndefined();
+    expect(postedMessage).toBeUndefined();
+    expect(broadcasts).toEqual([]);
+    const target = new URL(replaced!);
+    expect(target.origin).toBe('https://seven.sliccy.ai');
+    expect(target.pathname).toBe('/auth/callback');
+    expect(target.searchParams.get('nonce')).toBe('n1');
+    expect(target.searchParams.has('state')).toBe(false);
+    expect(target.hash).toBe(hash);
+  });
+
+  it('accepts branch hosts and always uses /auth/callback, whatever path state asks for', async () => {
+    const state = originState('https://feat-adobe-sign-in.sliccy.ai', { path: '/elsewhere' });
+    const html = await fetchRelayBody(`?state=${state}`);
+    const { replaced, error } = runRelay(html, `?state=${state}`);
+    expect(error).toBeUndefined();
+    expect(replaced).toMatch(
+      /^https:\/\/feat-adobe-sign-in\.sliccy\.ai\/auth\/callback\?nonce=n1$/
+    );
+  });
+
+  it.each([
+    ['www', 'https://www.sliccy.ai'],
+    ['the apex', 'https://sliccy.ai'],
+    ['http', 'http://seven.sliccy.ai'],
+    ['a port', 'https://seven.sliccy.ai:8443'],
+    ['a path', 'https://seven.sliccy.ai/auth/callback'],
+    ['a trailing slash', 'https://seven.sliccy.ai/'],
+    ['uppercase', 'https://SEVEN.sliccy.ai'],
+    ['two labels', 'https://a.seven.sliccy.ai'],
+    ['another domain', 'https://seven.sliccy.ai.evil.com'],
+    ['userinfo', 'https://evil.com@seven.sliccy.ai'],
+    ['a leading hyphen', 'https://-seven.sliccy.ai'],
+    ['a trailing hyphen', 'https://seven-.sliccy.ai'],
+    ['a 64-character label', `https://${'a'.repeat(64)}.sliccy.ai`],
+    ['no origin', undefined],
+    ['a non-string origin', 42],
+  ])('rejects %s', async (_name, origin) => {
+    const state = originState(origin);
+    const html = await fetchRelayBody(`?state=${state}`);
+    const { replaced, error } = runRelay(html, `?state=${state}`, '#access_token=dummy');
+    expect(replaced).toBeUndefined();
+    expect(error).toContain('Invalid origin');
+  });
+
+  it('leaves the opener, local and extension sources as they were', async () => {
+    const opener = btoa(JSON.stringify({ source: 'opener', nonce: 'n' }));
+    const local = btoa(JSON.stringify({ source: 'local', port: 5710, nonce: 'n' }));
+    const extension = btoa(
+      JSON.stringify({
+        source: 'extension',
+        extensionId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+        nonce: 'n',
+      })
+    );
+    const html = await fetchRelayBody('');
+    expect(runRelay(html, `?state=${opener}`, '#access_token=x').postedMessage?.type).toBe(
+      'oauth-callback'
+    );
+    expect(runRelay(html, `?state=${local}`).replaced).toBe(
+      'http://localhost:5710/auth/callback?nonce=n'
+    );
+    expect(runRelay(html, `?state=${extension}`).replaced).toBe(
+      'https://akjjllgokmbgpbdbmafpiefnhidlmbgf.chromiumapp.org/auth/callback?nonce=n'
+    );
+  });
+});
+
 describe('OAuth callback relay — unknown source', () => {
   it('rejects an unknown source value', async () => {
     const state = btoa(
