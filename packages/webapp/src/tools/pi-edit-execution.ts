@@ -61,8 +61,33 @@ function validateEditInput(input: EditArguments): EditInput {
   return { path: input.path, edits: input.edits as EditInput['edits'] };
 }
 
+/** Pi's tool-path normalization: Unicode spaces become spaces, a leading `@` goes. */
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
+function normalizeToolPath(path: string): string {
+  const normalized = path.replace(UNICODE_SPACES, ' ');
+  return normalized.startsWith('@') ? normalized.slice(1) : normalized;
+}
+
 /**
- * Per-file mutation queue, keyed by VFS view and absolute path, so concurrent
+ * The queue key: the canonical path, so a symlink and its target share one
+ * queue. A file that doesn't exist yet keys by its absolute path.
+ */
+async function mutationQueueKey(
+  fs: VirtualFS,
+  path: string,
+  absolutePath: string
+): Promise<string> {
+  try {
+    return await fs.realpath(absolutePath);
+  } catch (error) {
+    if (error instanceof FsError && error.code === 'ENOENT') return absolutePath;
+    throw new Error(`Could not edit file: ${path}. Error code: ${fileErrorCode(error)}.`);
+  }
+}
+
+/**
+ * Per-file mutation queue, keyed by VFS view and canonical path, so concurrent
  * edits to one file apply one after the other (Pi's `withFileMutationQueue`).
  */
 const fileQueues = new WeakMap<VirtualFS, Map<string, Promise<unknown>>>();
@@ -88,14 +113,26 @@ export async function executePiEdit(
   signal?: AbortSignal
 ): Promise<ToolResult> {
   const { path, edits } = validateEditInput(input);
-  const absolutePath = normalizePath(path.startsWith('/') ? path : joinPath(cwd, path));
-  return withFileMutationQueue(fs, absolutePath, async () => {
+  const toolPath = normalizeToolPath(path);
+  const absolutePath = normalizePath(toolPath.startsWith('/') ? toolPath : joinPath(cwd, toolPath));
+  const queueKey = await mutationQueueKey(fs, path, absolutePath);
+  return withFileMutationQueue(fs, queueKey, async () => {
     // Checked after each await rather than from an abort listener, so the
     // queue stays locked until the current VFS operation has settled.
     const throwIfAborted = () => {
       if (signal?.aborted) throw new Error('Operation aborted');
     };
     throwIfAborted();
+    let kind: string;
+    try {
+      kind = (await fs.lstat(absolutePath)).type;
+    } catch (error) {
+      throwIfAborted();
+      throw new Error(`Could not edit file: ${path}. Error code: ${fileErrorCode(error)}.`);
+    }
+    if (kind !== 'file' && kind !== 'symlink') {
+      throw new Error(`Could not edit file: ${path}. Path is not a file.`);
+    }
     let rawContent: string;
     try {
       rawContent = await fs.readTextFile(absolutePath);
