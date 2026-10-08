@@ -62,7 +62,7 @@ export function toAgentTools(options: ToAgentToolsOptions): AgentTool[] {
             ...(result.structuredContent
               ? {
                   structuredContent:
-                    result.structuredContent as import('@earendil-works/pi-agent-core').JsonValue,
+                    result.structuredContent as import('@earendil-works/pi-ai').JsonValue,
                 }
               : {}),
             ...(result.isError ? { isError: true } : {}),

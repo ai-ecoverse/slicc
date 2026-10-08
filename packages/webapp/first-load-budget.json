@@ -12,8 +12,8 @@
   "maxDeltaKb": 5,
   "//ceiling-raised-pi-0991": "pi 0.84.4 -> 0.99.1 increases the shared pi-ai/pi-agent-core graph and generated chat catalogue. Measured on this branch: page 1105 kB and worker 4604 kB, versus previous ceilings 768/4337. Provider transports remain behind pi-ai's lazy adapters; the model picker and Agent runtime need the shared code at boot. Raising to 1152/4656 leaves about 47/52 kB of platform headroom. The lockfile changes over 200 transitive dependencies, so the same-machine merge-base delta check is skipped by its 25-dependency guard; the absolute ceiling still applies. Revisit after Pi's shared graph can be split further.",
   "dependencyUpgradeException": {
-    "lockfileSha256": "acca295051fa2f9e68aa16a23d1b79d03fca92719b015542dc0a623345674e55",
-    "reason": "sharp 0.35.4 to 0.35.5 changes 28 lockfile dependency paths (the package plus its nested platform optionalDeps); the baseline realignment guard permits 25. This exact lockfile is reviewed with the bump, while the page and worker absolute eager ceilings remain enforced. Remove this exception after the upgrade merges."
+    "lockfileSha256": "149dffe89103ce1116107952040f493b7210575463e5a5cdb6d93a3e4bc9d67d",
+    "reason": "pi 0.99.2 to 1.1.0 (PR #3859) changes 158 lockfile dependencies, mostly pi-coding-agent's nested copy of the pi stack deduping away; the baseline realignment guard permits 25. Measured on the same machine against merge-base 10e7cd3a3: page 1,136,808 -> 1,128,277 B (-8.3 kB; jsdiff and pi-agent-core's harness leave the page graph) and worker 4,713,935 -> 4,718,749 B (+4.7 kB, under the 5 kB per-PR gate; pi-ai's larger catalogue). This exact lockfile is reviewed with the bump, while the page and worker absolute eager ceilings remain enforced. Remove this exception after the upgrade merges."
   },
   "pageEagerCeilingKb": 1152,
   "//ceiling-raised-3053": "Approved for the durable tray/webhook lifecycle work in PR #3053: measured worker eager graph growth versus merge-base with page unchanged. Raise 4298 -> 4299 for this wiring and narrow headroom (stacked on #3005's 4298 ceiling); keep the 5 kB per-PR delta gate and page ceiling unchanged.",

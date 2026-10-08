@@ -186,6 +186,7 @@ import {
   logoutOAuthAccount,
   maskOAuthTokenWithRetry,
   migrateLegacyAuthOnlySelection,
+  migrateRenamedPiProviders,
   persistOAuthMaskViaServiceWorker,
   removeAccount,
   resolveCurrentModel,
@@ -448,6 +449,58 @@ describe('migrateLegacyAuthOnlySelection — clears stale auth-only selections',
     migrateLegacyAuthOnlySelection();
     migrateLegacyAuthOnlySelection();
     expect(storage.get('selected-model')).toBeUndefined();
+  });
+});
+
+describe('migrateRenamedPiProviders — follows pi-ai provider renames', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('moves selected-model and the account from azure-openai-responses to azure', () => {
+    storage.set('selected-model', 'azure-openai-responses:gpt-5');
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'anthropic', apiKey: 'ant-key' },
+        {
+          providerId: 'azure-openai-responses',
+          apiKey: 'az-key',
+          baseUrl: 'https://x.openai.azure.com',
+        },
+      ])
+    );
+    migrateRenamedPiProviders();
+    expect(storage.get('selected-model')).toBe('azure:gpt-5');
+    expect(JSON.parse(storage.get('slicc_accounts')!)).toEqual([
+      { providerId: 'anthropic', apiKey: 'ant-key' },
+      { providerId: 'azure', apiKey: 'az-key', baseUrl: 'https://x.openai.azure.com' },
+    ]);
+  });
+
+  it('keeps an existing azure account and drops the old row', () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'azure-openai-responses', apiKey: 'old-key' },
+        { providerId: 'azure', apiKey: 'new-key' },
+      ])
+    );
+    migrateRenamedPiProviders();
+    expect(JSON.parse(storage.get('slicc_accounts')!)).toEqual([
+      { providerId: 'azure', apiKey: 'new-key' },
+    ]);
+  });
+
+  it('leaves other providers alone and is idempotent', () => {
+    storage.set('selected-model', 'azure-openai:gpt-4o');
+    const accounts = JSON.stringify([{ providerId: 'azure-openai', apiKey: 'k' }]);
+    storage.set('slicc_accounts', accounts);
+    migrateRenamedPiProviders();
+    migrateRenamedPiProviders();
+    expect(storage.get('selected-model')).toBe('azure-openai:gpt-4o');
+    expect(storage.get('slicc_accounts')).toBe(accounts);
   });
 });
 

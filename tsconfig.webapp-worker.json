@@ -18,9 +18,6 @@
       ],
       "@earendil-works/pi-ai/dist/providers/simple-options.js": [
         "./node_modules/@earendil-works/pi-ai/dist/providers/simple-options.d.ts"
-      ],
-      "@earendil-works/pi-agent-core/edit-tool": [
-        "./node_modules/@earendil-works/pi-agent-core/dist/harness/tools/edit.d.ts"
       ]
     }
   },
@@ -38,6 +35,7 @@
     "packages/webapp/src/types/pi-ai-internals.d.ts",
     "packages/webapp/src/types/pi-coding-agent-compaction.d.ts",
     "packages/webapp/src/types/pi-coding-agent-truncate.d.ts",
+    "packages/webapp/src/types/pi-coding-agent-edit-diff.d.ts",
     "packages/webapp/src/core/stale-asset-channel.ts",
     "packages/chrome-extension/src/chrome.d.ts"
   ]

@@ -104,9 +104,13 @@ export default defineConfig({
               workspaceRoot,
               'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js'
             ),
-            '@earendil-works/pi-agent-core/edit-tool': resolve(
+            '@earendil-works/pi-coding-agent/dist/core/tools/edit-diff.js': resolve(
               workspaceRoot,
-              'node_modules/@earendil-works/pi-agent-core/dist/harness/tools/edit.js?pi-edit-lazy'
+              'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/edit-diff.js'
+            ),
+            '@earendil-works/pi-coding-agent/dist/utils/text.js': resolve(
+              workspaceRoot,
+              'node_modules/@earendil-works/pi-coding-agent/dist/utils/text.js'
             ),
             '@earendil-works/pi-ai/dist/api/transform-messages.js': resolve(
               workspaceRoot,

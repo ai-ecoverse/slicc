@@ -1,4 +1,5 @@
 import { createLogger } from '../base/logger.js';
+import { canonicalProviderId } from './renamed-providers.js';
 
 const log = createLogger('model-policy');
 
@@ -36,7 +37,7 @@ export function parseModelPolicy(text: string): ModelPolicy {
 
     const header = /^\[([^\]]+)\]$/.exec(line);
     if (header) {
-      section = header[1].trim();
+      section = canonicalProviderId(header[1].trim());
       policy.sections[section] ??= [];
       continue;
     }
@@ -54,7 +55,7 @@ export function parseModelPolicy(text: string): ModelPolicy {
       continue;
     }
     policy.sections[section].push({
-      providerId: body.slice(0, colon).trim(),
+      providerId: canonicalProviderId(body.slice(0, colon).trim()),
       modelId: body.slice(colon + 1).trim(),
       deny,
     });

@@ -35,6 +35,7 @@ import {
   MODELS_POLICY_FILE,
   policyHintFor,
 } from './model-policy.js';
+import { canonicalProviderId } from './renamed-providers.js';
 import type { CompatOverrides } from './types.js';
 
 export type { ProviderConfig } from './index.js';
@@ -99,7 +100,44 @@ function cleanLegacyKeys(): void {
       localStorage.removeItem(key);
     } catch {}
   }
+  migrateRenamedPiProviders();
   migrateLegacyAuthOnlySelection();
+}
+
+export function migrateRenamedPiProviders(): void {
+  try {
+    const raw = localStorage.getItem(MODEL_KEY);
+    const sep = raw ? raw.indexOf(':') : -1;
+    if (raw && sep > 0) {
+      const provider = raw.slice(0, sep);
+      const renamed = canonicalProviderId(provider);
+      if (renamed !== provider) localStorage.setItem(MODEL_KEY, `${renamed}${raw.slice(sep)}`);
+    }
+  } catch {}
+  try {
+    const rawAccounts = localStorage.getItem(ACCOUNTS_KEY);
+    if (!rawAccounts) return;
+    const parsed = JSON.parse(rawAccounts);
+    if (!Array.isArray(parsed)) return;
+    const present = new Set(
+      parsed
+        .filter((entry) => entry != null && typeof entry === 'object')
+        .map((entry) => entry.providerId)
+    );
+    let changed = false;
+    const migrated = parsed.flatMap((entry) => {
+      const renamed =
+        entry != null && typeof entry === 'object' && typeof entry.providerId === 'string'
+          ? canonicalProviderId(entry.providerId)
+          : undefined;
+      if (renamed === undefined || renamed === entry.providerId) return [entry];
+      changed = true;
+      if (present.has(renamed)) return [];
+      present.add(renamed);
+      return [{ ...entry, providerId: renamed }];
+    });
+    if (changed) localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(migrated));
+  } catch {}
 }
 
 export function migrateLegacyAuthOnlySelection(): void {

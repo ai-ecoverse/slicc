@@ -44,6 +44,13 @@ function curatedShikiBundlePlugin() {
   };
 }
 
+function isPiEditDiffNodeImport(source: string, importer: string): boolean {
+  return (
+    importer.endsWith('/core/tools/edit-diff.js') &&
+    (source === 'fs' || source === 'fs/promises' || source === './path-utils.js')
+  );
+}
+
 function stubPiNodeInternalsPlugin() {
   return {
     name: 'stub-pi-node-internals',
@@ -56,6 +63,9 @@ function stubPiNodeInternalsPlugin() {
         }
         if (source.endsWith('/config.js') || source === '../config.js') {
           return resolve(Dirname, 'src/stubs/pi-config-stub.ts');
+        }
+        if (isPiEditDiffNodeImport(source, normalizedImporter)) {
+          return resolve(Dirname, 'src/stubs/pi-edit-diff-node-stub.ts');
         }
       }
 
@@ -83,19 +93,6 @@ function stubPageRealmSpeechPlugin() {
       return /(^|\/)speech\/(speak|hear)\.js$/.test(source)
         ? resolve(Dirname, 'src/stubs/speech-page-realm-stub.ts')
         : undefined;
-    },
-  };
-}
-
-function isolatePiEditToolPlugin() {
-  const marker = '?pi-edit-lazy';
-  return {
-    name: 'isolate-pi-edit-tool',
-    enforce: 'pre' as const,
-    resolveId(source: string, importer: string | undefined) {
-      if (!importer?.endsWith(marker) || !source.startsWith('.')) return undefined;
-      const cleanImporter = importer.slice(0, -marker.length);
-      return `${resolve(dirname(cleanImporter), source)}${marker}`;
     },
   };
 }
@@ -321,9 +318,13 @@ const MODULE_ALIASES: Record<string, string> = {
     'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js'
   ),
 
-  '@earendil-works/pi-agent-core/edit-tool': resolve(
+  '@earendil-works/pi-coding-agent/dist/core/tools/edit-diff.js': resolve(
     workspaceRoot,
-    'node_modules/@earendil-works/pi-agent-core/dist/harness/tools/edit.js?pi-edit-lazy'
+    'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/edit-diff.js'
+  ),
+  '@earendil-works/pi-coding-agent/dist/utils/text.js': resolve(
+    workspaceRoot,
+    'node_modules/@earendil-works/pi-coding-agent/dist/utils/text.js'
   ),
 
   '@pierre/diffs/dist/components/web-components.js': resolve(
@@ -349,7 +350,6 @@ export default defineConfig(({ mode }) => ({
     stripOrtWasmAssetPlugin(),
     curatedShikiBundlePlugin(),
     stubPiNodeInternalsPlugin(),
-    isolatePiEditToolPlugin(),
     buildWebappRuntimeAssetsPlugin(),
 
     stripFfmpegCoreCdnLiteralPlugin(),
@@ -404,7 +404,6 @@ export default defineConfig(({ mode }) => ({
       curatedShikiBundlePlugin(),
       stubPiNodeInternalsPlugin(),
       stubPageRealmSpeechPlugin(),
-      isolatePiEditToolPlugin(),
     ],
   },
   build: {
