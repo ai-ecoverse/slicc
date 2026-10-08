@@ -289,13 +289,16 @@ export class BroadcastManager {
     models: TrayModelCatalogEntry[],
     hidden: TrayModelCatalogEntry[] = []
   ): void {
-    if (models.length === 0 && !follower.modelCatalogSent) {
+    // A catalog with only picker-hidden models (e.g. a policy that allows just
+    // Haiku) is a real one too: automation must still receive it.
+    const ready = models.length > 0 || hidden.length > 0;
+    if (!ready && !follower.modelCatalogSent) {
       this.context.log.debug('Model catalog empty; deferring models.list', {
         bootstrapId: follower.bootstrapId,
       });
       return;
     }
-    if (models.length > 0) follower.modelCatalogSent = true;
+    if (ready) follower.modelCatalogSent = true;
     // Picker-hidden models travel apart from `models` (see the protocol type),
     // and only when there are any, so the message is unchanged otherwise.
     follower.sync.send(
