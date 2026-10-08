@@ -76,6 +76,7 @@ import {
 import {
   getAccounts,
   getAllAvailableModels,
+  getPickerHiddenModels,
   getProviderConfig,
   resolveCurrentModel,
   resolveModelById,
@@ -234,7 +235,15 @@ function modelTheAgentRuns(pinned: WorkUnitModel | undefined) {
 }
 
 function modelCatalogForTray(): TrayModelCatalogEntry[] {
-  return getAllAvailableModels().flatMap((group) =>
+  return catalogEntries(getAllAvailableModels());
+}
+
+function hiddenModelCatalogForTray(): TrayModelCatalogEntry[] {
+  return catalogEntries(getPickerHiddenModels());
+}
+
+function catalogEntries(groups: ReturnType<typeof getAllAvailableModels>): TrayModelCatalogEntry[] {
+  return groups.flatMap((group) =>
     group.models.map((model) => ({
       providerName: group.providerName,
       modelId: `${group.providerId}:${model.id}`,
@@ -659,7 +668,9 @@ function leaderModelCallbacks(
       };
     },
     onFollowerModelSelect: (modelId, scoopJid) => {
-      const entry = modelCatalogForTray().find((model) => model.modelId === modelId);
+      const entry =
+        modelCatalogForTray().find((model) => model.modelId === modelId) ??
+        hiddenModelCatalogForTray().find((model) => model.modelId === modelId);
       if (!entry) return false;
 
       const target = rootForSelection(units, scoopJid ? { id: scoopJid } : null);
@@ -767,6 +778,7 @@ export function createLeaderOptionsFactory(
         turnsFromUnits(deps.workUnits.currentUnits())
       ),
     getModelCatalog: modelCatalogForTray,
+    getHiddenModelCatalog: hiddenModelCatalogForTray,
     ...leaderModelCallbacks(deps),
     onFollowerThinkingSet: (scoopJid, thinkingLevel, effortOverride) =>
       client.setScoopThinkingLevel(scoopJid, thinkingLevel, effortOverride),

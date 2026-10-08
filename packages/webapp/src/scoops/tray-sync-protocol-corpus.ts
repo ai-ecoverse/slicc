@@ -334,6 +334,14 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           reasoning: true,
         },
       ],
+      hiddenModels: [
+        {
+          providerName: 'Example Provider',
+          modelId: 'example:hidden-small',
+          modelName: 'Hidden Small',
+          reasoning: false,
+        },
+      ],
     },
   },
   'model.state': {

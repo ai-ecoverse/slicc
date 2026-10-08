@@ -40,6 +40,15 @@ export function degradeOversizeAgentEvent(event: AgentEvent): AgentEvent | null 
   }
 }
 
+function catalogEntry(model: TrayModelCatalogEntry): TrayModelCatalogEntry {
+  return {
+    providerName: model.providerName,
+    modelId: model.modelId,
+    modelName: model.modelName,
+    reasoning: model.reasoning === true,
+  };
+}
+
 export class BroadcastManager {
   constructor(private readonly context: LeaderSyncContext) {}
 
@@ -189,7 +198,7 @@ export class BroadcastManager {
     if (!follower) return;
     const models = this.buildModelCatalog();
     if (!models) return;
-    this.publishModelCatalog(follower, models);
+    this.publishModelCatalog(follower, models, this.buildHiddenModelCatalog());
     this.sendModelStateToFollower(bootstrapId);
   }
 
@@ -197,21 +206,32 @@ export class BroadcastManager {
     if (this.context.followers.followers.size === 0) return;
     const models = this.buildModelCatalog();
     if (!models) return;
+    const hidden = this.buildHiddenModelCatalog();
     for (const follower of this.context.followers.followers.values()) {
-      this.publishModelCatalog(follower, models);
+      this.publishModelCatalog(follower, models, hidden);
     }
     this.broadcastModelState();
   }
 
-  private publishModelCatalog(follower: ConnectedFollower, models: TrayModelCatalogEntry[]): void {
-    if (models.length === 0 && !follower.modelCatalogSent) {
+  private publishModelCatalog(
+    follower: ConnectedFollower,
+    models: TrayModelCatalogEntry[],
+    hidden: TrayModelCatalogEntry[] = []
+  ): void {
+    const ready = models.length > 0 || hidden.length > 0;
+    if (!ready && !follower.modelCatalogSent) {
       this.context.log.debug('Model catalog empty; deferring models.list', {
         bootstrapId: follower.bootstrapId,
       });
       return;
     }
-    if (models.length > 0) follower.modelCatalogSent = true;
-    follower.sync.send({ type: 'models.list', models });
+    if (ready) follower.modelCatalogSent = true;
+
+    follower.sync.send(
+      hidden.length > 0
+        ? { type: 'models.list', models, hiddenModels: hidden }
+        : { type: 'models.list', models }
+    );
   }
 
   broadcastModelState(): void {
@@ -247,17 +267,25 @@ export class BroadcastManager {
     const getCatalog = this.context.options.getModelCatalog;
     if (!getCatalog) return null;
     try {
-      return getCatalog().map((model) => ({
-        providerName: model.providerName,
-        modelId: model.modelId,
-        modelName: model.modelName,
-        reasoning: model.reasoning === true,
-      }));
+      return getCatalog().map(catalogEntry);
     } catch (err) {
       this.context.log.warn('Failed to compute model catalog', {
         error: err instanceof Error ? err.message : String(err),
       });
       return null;
+    }
+  }
+
+  private buildHiddenModelCatalog(): TrayModelCatalogEntry[] {
+    const getHidden = this.context.options.getHiddenModelCatalog;
+    if (!getHidden) return [];
+    try {
+      return getHidden().map(catalogEntry);
+    } catch (err) {
+      this.context.log.warn('Failed to compute hidden model catalog', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
     }
   }
 

@@ -260,6 +260,91 @@ func TestCLIModelListsTheCatalogue(t *testing.T) {
 	}
 }
 
+
+
+var hiddenHaiku = protocol.ModelCatalogEntry{ProviderName: "AWS Bedrock", ModelID: "bedrock-camp:global.anthropic.claude-haiku-5-5", ModelName: "Claude Haiku 5.5 (Global)", Reasoning: true}
+
+func TestCLIModelSelectsAPickerHiddenModel(t *testing.T) {
+	var mu sync.Mutex
+	active := "bedrock-camp:us.anthropic.claude-opus-5-5"
+	leader := newControlLeader(t, func(typ string, msg map[string]any) []any {
+		mu.Lock()
+		defer mu.Unlock()
+		switch typ {
+		case protocol.TypeModelsRequest:
+			return []any{
+				protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog, HiddenModels: []protocol.ModelCatalogEntry{hiddenHaiku}},
+				protocol.ModelState{Type: protocol.TypeModelState, State: protocol.ModelSelectionState{ActiveModelID: active, ScoopJid: "cone_1"}},
+			}
+		case protocol.TypeModelSelect:
+			active, _ = msg["modelId"].(string)
+			return []any{protocol.ModelState{Type: protocol.TypeModelState, State: protocol.ModelSelectionState{ActiveModelID: active, ScoopJid: "cone_1"}}}
+		}
+		return nil
+	})
+	stdout, stderr, code := runCLI(t, leader.joinURL, "model", "claude-haiku-5-5")
+	if code != 0 || strings.TrimSpace(stdout) != hiddenHaiku.ModelID {
+		t.Fatalf("exit %d stdout %q stderr %s", code, stdout, stderr)
+	}
+	if sent := leader.received(protocol.TypeModelSelect); len(sent) != 1 || sent[0]["modelId"] != hiddenHaiku.ModelID {
+		t.Fatalf("model.select: %v", sent)
+	}
+}
+
+func TestCLIModelListingLeavesPickerHiddenModelsOut(t *testing.T) {
+	frames := func() []any {
+		return []any{
+			protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog, HiddenModels: []protocol.ModelCatalogEntry{hiddenHaiku}},
+			protocol.ModelState{Type: protocol.TypeModelState, State: protocol.ModelSelectionState{ActiveModelID: "bedrock-camp:us.anthropic.claude-opus-5-5", ScoopJid: "cone_1"}},
+		}
+	}
+	leader := newControlLeader(t, func(typ string, _ map[string]any) []any {
+		if typ == protocol.TypeModelsRequest {
+			return frames()
+		}
+		return nil
+	})
+	stdout, stderr, code := runCLI(t, leader.joinURL, "model")
+	if code != 0 || strings.Contains(stdout, "haiku") {
+		t.Fatalf("exit %d; stdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	second := newControlLeader(t, func(typ string, _ map[string]any) []any {
+		if typ == protocol.TypeModelsRequest {
+			return frames()
+		}
+		return nil
+	})
+	stdout, _, code = runCLI(t, second.joinURL, "model", "--json")
+	var listing modelListing
+	if code != 0 || json.Unmarshal([]byte(stdout), &listing) != nil || len(listing.Models) != len(catalog) || strings.Contains(stdout, "haiku") {
+		t.Fatalf("json listing (exit %d): %s", code, stdout)
+	}
+}
+
+func TestCLIModelCannotSelectAHiddenModelAnOlderLeaderDoesNotSend(t *testing.T) {
+	
+	leader := newControlLeader(t, func(typ string, _ map[string]any) []any {
+		if typ == protocol.TypeModelsRequest {
+			return modelFrames("bedrock-camp:us.anthropic.claude-opus-5-5")
+		}
+		return nil
+	})
+	_, stderr, code := runCLI(t, leader.joinURL, "model", "claude-haiku-5-5")
+	if code != 1 || !strings.Contains(stderr, "no model matches") {
+		t.Fatalf("exit %d; stderr:\n%s", code, stderr)
+	}
+}
+
+func TestSelectableModelsAppendsHiddenAfterVisible(t *testing.T) {
+	got := selectableModels(protocol.ModelsList{Models: catalog[:1], HiddenModels: []protocol.ModelCatalogEntry{hiddenHaiku}})
+	if len(got) != 2 || got[0].ModelID != catalog[0].ModelID || got[1].ModelID != hiddenHaiku.ModelID {
+		t.Fatalf("selectable: %v", got)
+	}
+	if got := selectableModels(protocol.ModelsList{Models: catalog}); len(got) != len(catalog) {
+		t.Fatalf("no hidden: %d", len(got))
+	}
+}
+
 func TestCLIModelSwitchesTheConeAndWaitsForTheLeader(t *testing.T) {
 	var mu sync.Mutex
 	active := "bedrock-camp:us.anthropic.claude-opus-5-5"

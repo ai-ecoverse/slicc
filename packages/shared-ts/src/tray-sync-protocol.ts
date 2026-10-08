@@ -193,7 +193,13 @@ export type LeaderToFollowerMessage =
       events: ComputerInputEvent[];
       display?: number;
     }
-  | { type: 'models.list'; models: TrayModelCatalogEntry[] }
+  | {
+      type: 'models.list';
+
+      models: TrayModelCatalogEntry[];
+
+      hiddenModels?: TrayModelCatalogEntry[];
+    }
   | { type: 'model.state'; state: TrayModelSelectionState }
   | { type: 'sprinkles.list'; sprinkles: SprinkleSummary[] }
   | {

@@ -470,6 +470,29 @@ export function policyVisible<T extends { id: string }>(models: T[], providerId:
   return models.filter((m) => !isModelDeniedByPolicy(policy, selected, providerId, m.id));
 }
 
+export function getPickerHiddenModels(): GroupedModels[] {
+  const accounts = getAccounts();
+  if (accounts.length === 0) return [];
+  const seen = new Map<string, GroupedModels>();
+  for (const account of accounts) {
+    if (seen.has(account.providerId)) continue;
+    const config = getProviderConfig(account.providerId);
+    if (config.hidden) continue;
+    if (isBuildExcludedPiProvider(account.providerId)) continue;
+    const models = policyVisible(
+      getProviderModels(account.providerId).filter((m) => isModelHiddenFromPicker(m.id)),
+      account.providerId
+    );
+    if (models.length === 0) continue;
+    seen.set(account.providerId, {
+      providerId: account.providerId,
+      providerName: config.name,
+      models,
+    });
+  }
+  return [...seen.values()];
+}
+
 export function getAllAvailableModels(): GroupedModels[] {
   const accounts = getAccounts();
   if (accounts.length === 0) return [];

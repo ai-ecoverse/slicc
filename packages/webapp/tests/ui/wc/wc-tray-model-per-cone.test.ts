@@ -19,7 +19,14 @@ import { createLeaderOptionsFactory } from '../../../src/ui/wc/wc-tray.js';
 import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
 
-const { modelGroups, currentModel } = vi.hoisted(() => ({
+const { modelGroups, hiddenModelGroups, currentModel } = vi.hoisted(() => ({
+  hiddenModelGroups: {
+    current: [] as Array<{
+      providerId: string;
+      providerName: string;
+      models: Array<{ id: string; name: string; reasoning?: boolean }>;
+    }>,
+  },
   currentModel: {
     current: {
       id: 'claude-sonnet-4-6',
@@ -58,6 +65,7 @@ vi.mock('../../../src/ui/provider-settings.js', async () => {
   return {
     ...actual,
     getAllAvailableModels: () => modelGroups.current,
+    getPickerHiddenModels: () => hiddenModelGroups.current,
     resolveCurrentModel: () => currentModel.current,
   };
 });
@@ -220,6 +228,29 @@ describe('follower model selection is per cone (#2310)', () => {
     expect(harness.options.getModelSelectionState?.('cone_1').activeModelId).toBe(
       'anthropic:claude-opus-4-6'
     );
+  });
+
+  it('applies a picker-hidden model a follower selects by id (automation, e.g. the bench)', async () => {
+    hiddenModelGroups.current = [
+      {
+        providerId: 'anthropic',
+        providerName: 'Anthropic',
+        models: [{ id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', reasoning: true }],
+      },
+    ];
+    try {
+      const { options, setScoopModel } = makeOptions([coneA, coneB], coneA.jid);
+      await expect(
+        options.onFollowerModelSelect?.('anthropic:claude-haiku-5-5', coneB.jid)
+      ).resolves.toBe(true);
+      expect(setScoopModel).toHaveBeenCalledWith(coneB.jid, {
+        provider: 'anthropic',
+        id: 'claude-haiku-5-5',
+      });
+      expect(options.onFollowerModelSelect?.('evil:secret-model', coneB.jid)).toBe(false);
+    } finally {
+      hiddenModelGroups.current = [];
+    }
   });
 
   it('rejects a model id that is not in the advertised catalogue', () => {

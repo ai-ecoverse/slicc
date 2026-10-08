@@ -99,6 +99,8 @@ export interface LeaderSyncManagerOptions {
 
   getModelCatalog?: () => TrayModelCatalogEntry[];
 
+  getHiddenModelCatalog?: () => TrayModelCatalogEntry[];
+
   getModelSelectionState?: (scoopJid: string) => TrayModelSelectionState;
 
   onFollowerModelSelect?: (modelId: string, scoopJid?: string) => boolean | Promise<boolean>;

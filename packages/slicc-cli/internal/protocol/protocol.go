@@ -240,9 +240,13 @@ type ModelCatalogEntry struct {
 }
 
 
+
+
+
 type ModelsList struct {
-	Type   string              `json:"type"` 
-	Models []ModelCatalogEntry `json:"models"`
+	Type         string              `json:"type"` 
+	Models       []ModelCatalogEntry `json:"models"`
+	HiddenModels []ModelCatalogEntry `json:"hiddenModels,omitempty"`
 }
 
 
