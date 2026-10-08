@@ -2,6 +2,15 @@
   "originHash" : "d49c8af03fb09697f8a4e7439e06a02c08609e455f52205272b2ebcdde8c1ee1",
   "pins" : [
     {
+      "identity" : "displaylink",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Lakr233/DisplayLink.git",
+      "state" : {
+        "revision" : "41bea2661e04bebcb1c4f15fc0b6197850100fdd",
+        "version" : "3.0.1"
+      }
+    },
+    {
       "identity" : "eventsource",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/mattt/EventSource.git",
@@ -15,17 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Lakr233/libghostty-spm",
       "state" : {
-        "revision" : "37557cd6db4f8af3157f90cd3ad549d1107a9ab1",
-        "version" : "1.6.20260929"
-      }
-    },
-    {
-      "identity" : "msdisplaylink",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Lakr233/MSDisplayLink.git",
-      "state" : {
-        "revision" : "87eb0af130744c8cbe2e31b6e1a5bcd659f1c220",
-        "version" : "2.2.0"
+        "revision" : "a5785e01166131f0012280f1fa05a74a7402f29b",
+        "version" : "1.6.20261001"
       }
     },
     {
@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-huggingface",
       "state" : {
-        "revision" : "f2f99991f2d7d8fdb3187e4fd539cd2facf5c13d",
-        "version" : "0.11.0"
+        "revision" : "0ece9a1ef443309d26a69af9897ee8ad82f43a9a",
+        "version" : "0.12.0"
       }
     },
     {
