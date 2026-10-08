@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-huggingface",
       "state" : {
-        "revision" : "f2f99991f2d7d8fdb3187e4fd539cd2facf5c13d",
-        "version" : "0.11.0"
+        "revision" : "0ece9a1ef443309d26a69af9897ee8ad82f43a9a",
+        "version" : "0.12.0"
       }
     },
     {
