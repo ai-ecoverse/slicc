@@ -5,7 +5,7 @@ import { executePiEdit } from '../../src/tools/pi-edit-execution.js';
 
 let dbCounter = 0;
 
-test('Pi 0.99 edit tool writes through the VFS context adapter', async () => {
+test('Pi edit rules write through the VFS', async () => {
   const fs = await VirtualFS.create({ dbName: `pi-edit-${dbCounter++}`, wipe: true });
   await fs.mkdir('/workspace', { recursive: true });
   await fs.writeFile('/workspace/note.txt', 'before\n');

@@ -1,67 +1,32 @@
-/** Pi's edit tool bound to SLICC's browser-backed virtual filesystem. */
+/**
+ * Pi's edit algorithm bound to SLICC's browser-backed virtual filesystem.
+ *
+ * Pi 1.x moved the edit tool out of pi-agent-core's harness (which SLICC drove
+ * through an `ExecutionEnv` adapter) into pi-coding-agent, as a tool over
+ * Node's `fs`. SLICC keeps Pi's matching and line-ending rules by calling the
+ * same pure functions that tool uses (`edit-diff.js`, `splitBom`) and does the
+ * file I/O itself against the VFS, with the same messages and error codes.
+ */
 
-import type {
-  AgentHarnessToolInvocation,
-  EditToolInput,
-  ExecutionEnv,
-  ExecutionError,
-  FileError,
-  FileErrorCode,
-  FileInfo,
-} from '@earendil-works/pi-agent-core';
 import {
-  type Context as PiContext,
-  TODO_CONTEXT,
-  withAbortSignal,
-} from '@earendil-works/pi-agent-core/harness/context';
-import { FsError, joinPath, normalizePath, splitPath, type VirtualFS } from '../fs/index.js';
+  applyEditsToNormalizedContent,
+  detectLineEnding,
+  normalizeToLF,
+  restoreLineEndings,
+} from '@earendil-works/pi-coding-agent/dist/core/tools/edit-diff.js';
+import { splitBom } from '@earendil-works/pi-coding-agent/dist/utils/text.js';
+import { FsError, joinPath, normalizePath, type VirtualFS } from '../fs/index.js';
 import type { EditArguments } from './edit-tool.js';
 import type { ToolResult } from './types.js';
 import { verifyWriteLanded } from './write-verification.js';
 
-type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
-type PiCore = typeof import('@earendil-works/pi-agent-core/edit-tool');
-type PiEditTool = ReturnType<PiCore['createEditTool']>;
-
-let piEditToolPromise: Promise<PiEditTool> | undefined;
-
-function loadPiEditTool(): Promise<PiEditTool> {
-  piEditToolPromise ??= import('@earendil-works/pi-agent-core/edit-tool').then(
-    ({ createEditTool }) => createEditTool()
-  );
-  return piEditToolPromise;
+interface EditInput {
+  path: string;
+  edits: Array<{ oldText: string; newText: string }>;
 }
 
-function ok<T, E = never>(value: T): Result<T, E> {
-  return { ok: true, value };
-}
-
-function err<T = never, E = Error>(error: E): Result<T, E> {
-  return { ok: false, error };
-}
-
-class VfsFileError extends Error implements FileError {
-  constructor(
-    readonly code: FileErrorCode,
-    message: string,
-    readonly path?: string,
-    cause?: Error
-  ) {
-    super(message, cause === undefined ? undefined : { cause });
-    this.name = 'FileError';
-  }
-}
-
-class VfsExecutionError extends Error implements ExecutionError {
-  readonly code = 'shell_unavailable' as const;
-
-  constructor(message: string) {
-    super(message);
-    this.name = 'ExecutionError';
-  }
-}
-
-function fileErrorCode(error: unknown): FileErrorCode {
+/** Pi's stable file error codes, as the edit tool reports them. */
+function fileErrorCode(error: unknown): string {
   if (!(error instanceof FsError)) return 'unknown';
   switch (error.code) {
     case 'ENOENT':
@@ -80,201 +45,80 @@ function fileErrorCode(error: unknown): FileErrorCode {
   }
 }
 
-function asFileError(error: unknown, path?: string): FileError {
-  if (error instanceof VfsFileError) return error;
-  const cause = error instanceof Error ? error : new Error(String(error));
-  return new VfsFileError(fileErrorCode(error), cause.message, path, cause);
-}
-
-function aborted<T>(signal: AbortSignal | undefined, path?: string): Result<T, FileError> | null {
-  return signal?.aborted ? err(new VfsFileError('aborted', 'aborted', path)) : null;
+function validateEditInput(input: EditArguments): EditInput {
+  if (typeof input.path !== 'string' || input.path.length === 0) {
+    throw new Error('Edit tool input is invalid. path must be a non-empty string.');
+  }
+  if (!Array.isArray(input.edits) || input.edits.length === 0) {
+    throw new Error('Edit tool input is invalid. edits must contain at least one replacement.');
+  }
+  for (const edit of input.edits) {
+    const e = edit as { oldText?: unknown; newText?: unknown } | null;
+    if (!e || typeof e.oldText !== 'string' || typeof e.newText !== 'string') {
+      throw new Error('Edit tool input is invalid. Each edit needs string oldText and newText.');
+    }
+  }
+  return { path: input.path, edits: input.edits as EditInput['edits'] };
 }
 
 /**
- * Pi currently consumes only these five filesystem operations. The rest fail
- * explicitly so future Pi changes cannot escape the VFS or throw across its
- * Result-based environment boundary.
+ * Per-file mutation queue, keyed by VFS view and absolute path, so concurrent
+ * edits to one file apply one after the other (Pi's `withFileMutationQueue`).
  */
-class VfsEditExecutionEnv {
-  constructor(
-    private readonly fs: VirtualFS,
-    readonly cwd: string
-  ) {}
+const fileQueues = new WeakMap<VirtualFS, Map<string, Promise<unknown>>>();
 
-  async absolutePath(path: string, context: PiContext): Promise<Result<string, FileError>> {
-    const stopped = aborted<string>(context.abortSignal, path);
-    if (stopped) return stopped;
-    return ok(normalizePath(path.startsWith('/') ? path : joinPath(this.cwd, path)));
-  }
-
-  async canonicalPath(path: string, context: PiContext): Promise<Result<string, FileError>> {
-    const absolute = await this.absolutePath(path, context);
-    if (!absolute.ok) return absolute;
-    try {
-      return ok(await this.fs.realpath(absolute.value));
-    } catch (error) {
-      return err(asFileError(error, absolute.value));
-    }
-  }
-
-  async fileInfo(path: string, context: PiContext): Promise<Result<FileInfo, FileError>> {
-    const absolute = await this.absolutePath(path, context);
-    if (!absolute.ok) return absolute;
-    try {
-      const stats = await this.fs.lstat(absolute.value);
-      return ok({
-        name: splitPath(absolute.value).base,
-        path: absolute.value,
-        kind: stats.type,
-        size: stats.size,
-        mtimeMs: stats.mtime,
-      });
-    } catch (error) {
-      return err(asFileError(error, absolute.value));
-    }
-  }
-
-  async readTextFile(path: string, context: PiContext): Promise<Result<string, FileError>> {
-    const absolute = await this.absolutePath(path, context);
-    if (!absolute.ok) return absolute;
-    try {
-      const content = await this.fs.readTextFile(absolute.value);
-      return aborted<string>(context.abortSignal, absolute.value) ?? ok(content);
-    } catch (error) {
-      return err(asFileError(error, absolute.value));
-    }
-  }
-
-  async writeFile(
-    path: string,
-    content: string | Uint8Array,
-    context: PiContext
-  ): Promise<Result<void, FileError>> {
-    const absolute = await this.absolutePath(path, context);
-    if (!absolute.ok) return absolute;
-    try {
-      await this.fs.writeFile(absolute.value, content);
-      if (typeof content === 'string') {
-        const durabilityError = await verifyWriteLanded(this.fs, absolute.value, content);
-        if (durabilityError) {
-          return err(new VfsFileError('unknown', durabilityError, absolute.value));
-        }
-      }
-      return aborted<void>(context.abortSignal, absolute.value) ?? ok(undefined);
-    } catch (error) {
-      return err(asFileError(error, absolute.value));
-    }
-  }
-
-  private unsupported<T>(operation: string, path?: string): Result<T, FileError> {
-    return err(
-      new VfsFileError('not_supported', `${operation} is unavailable to the edit tool`, path)
-    );
-  }
-
-  async joinPath(parts: string[]): Promise<Result<string, FileError>> {
-    return ok(joinPath(...parts));
-  }
-
-  async readTextLines(
-    path: string,
-    options?: { maxLines?: number; abortSignal?: AbortSignal }
-  ): Promise<Result<string[], FileError>> {
-    const result = await this.readTextFile(
-      path,
-      options?.abortSignal ? withAbortSignal(options.abortSignal, TODO_CONTEXT) : TODO_CONTEXT
-    );
-    if (!result.ok) return result;
-    const lines = result.value.split(/\r?\n/);
-    return ok(options?.maxLines === undefined ? lines : lines.slice(0, options.maxLines));
-  }
-
-  async readBinaryFile(path: string): Promise<Result<Uint8Array, FileError>> {
-    return this.unsupported('readBinaryFile', path);
-  }
-
-  async appendFile(path: string): Promise<Result<void, FileError>> {
-    return this.unsupported('appendFile', path);
-  }
-
-  async renameFile(sourcePath: string): Promise<Result<void, FileError>> {
-    return this.unsupported('renameFile', sourcePath);
-  }
-
-  async listDir(path: string): Promise<Result<FileInfo[], FileError>> {
-    return this.unsupported('listDir', path);
-  }
-
-  async exists(path: string): Promise<Result<boolean, FileError>> {
-    return this.unsupported('exists', path);
-  }
-
-  async createDir(path: string): Promise<Result<void, FileError>> {
-    return this.unsupported('createDir', path);
-  }
-
-  async remove(path: string): Promise<Result<void, FileError>> {
-    return this.unsupported('remove', path);
-  }
-
-  async createTempDir(): Promise<Result<string, FileError>> {
-    return this.unsupported('createTempDir');
-  }
-
-  async createTempFile(): Promise<Result<string, FileError>> {
-    return this.unsupported('createTempFile');
-  }
-
-  async exec(): Promise<
-    Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>
-  > {
-    return err(new VfsExecutionError('Shell is unavailable to the edit tool'));
-  }
-
-  async cleanup(): Promise<void> {}
+function withFileMutationQueue<T>(fs: VirtualFS, path: string, run: () => Promise<T>): Promise<T> {
+  let byPath = fileQueues.get(fs);
+  if (!byPath) fileQueues.set(fs, (byPath = new Map()));
+  const previous = byPath.get(path) ?? Promise.resolve();
+  const next = previous.then(run, run);
+  const settled = next.catch(() => undefined);
+  byPath.set(path, settled);
+  void settled.then(() => {
+    if (byPath.get(path) === settled) byPath.delete(path);
+  });
+  return next;
 }
 
-const editEnvironments = new WeakMap<VirtualFS, Map<string, VfsEditExecutionEnv>>();
-
-function editEnvironment(fs: VirtualFS, cwd: string): VfsEditExecutionEnv {
-  let byCwd = editEnvironments.get(fs);
-  if (!byCwd) editEnvironments.set(fs, (byCwd = new Map()));
-  let env = byCwd.get(cwd);
-  if (!env) byCwd.set(cwd, (env = new VfsEditExecutionEnv(fs, cwd)));
-  return env;
-}
-
-/** Execute an edit with Pi's public implementation against SLICC's VFS. */
+/** Execute an edit with Pi's matching rules against SLICC's VFS. */
 export async function executePiEdit(
   fs: VirtualFS,
   cwd: string,
   input: EditArguments,
   signal?: AbortSignal
 ): Promise<ToolResult> {
-  const piTool = await loadPiEditTool();
-  const invocation: AgentHarnessToolInvocation = {
-    invocationId: 'slicc-edit',
-    operationId: 'slicc-edit',
-    turnId: 'slicc-edit',
-    getMemo: async () => undefined,
-    setMemo: async () => {},
-  };
-  const result = await piTool.execute(
-    'slicc-edit',
-    input as EditToolInput,
-    () => {},
-    {
-      // Pi keys its file-mutation queues by ExecutionEnv identity. Reusing the
-      // environment per VFS view + cwd serializes concurrent same-file edits.
-      env: editEnvironment(fs, cwd) as unknown as ExecutionEnv,
-    },
-    invocation,
-    signal ? withAbortSignal(signal, TODO_CONTEXT) : TODO_CONTEXT
-  );
-  return {
-    content: result.content
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n'),
-  };
+  const { path, edits } = validateEditInput(input);
+  const absolutePath = normalizePath(path.startsWith('/') ? path : joinPath(cwd, path));
+  return withFileMutationQueue(fs, absolutePath, async () => {
+    // Checked after each await rather than from an abort listener, so the
+    // queue stays locked until the current VFS operation has settled.
+    const throwIfAborted = () => {
+      if (signal?.aborted) throw new Error('Operation aborted');
+    };
+    throwIfAborted();
+    let rawContent: string;
+    try {
+      rawContent = await fs.readTextFile(absolutePath);
+    } catch (error) {
+      throwIfAborted();
+      throw new Error(`Could not edit file: ${path}. Error code: ${fileErrorCode(error)}.`);
+    }
+    throwIfAborted();
+    // Strip a BOM before matching: the model never includes it in oldText.
+    const { bom, text: content } = splitBom(rawContent);
+    const originalEnding = detectLineEnding(content);
+    const { newContent } = applyEditsToNormalizedContent(normalizeToLF(content), edits, path);
+    throwIfAborted();
+    const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+    try {
+      await fs.writeFile(absolutePath, finalContent);
+    } catch (error) {
+      throw new Error(`Could not edit file: ${path}. Error code: ${fileErrorCode(error)}.`);
+    }
+    if (await verifyWriteLanded(fs, absolutePath, finalContent)) {
+      throw new Error(`Could not edit file: ${path}. Error code: unknown.`);
+    }
+    throwIfAborted();
+    return { content: `Successfully replaced ${edits.length} block(s) in ${path}.` };
+  });
 }

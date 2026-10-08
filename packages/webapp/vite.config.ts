@@ -66,6 +66,17 @@ function curatedShikiBundlePlugin() {
 }
 
 /**
+ * edit-diff.js reads files through Node's fs for pi's own edit tool; SLICC
+ * only calls its pure matching functions and reads the VFS.
+ */
+function isPiEditDiffNodeImport(source: string, importer: string): boolean {
+  return (
+    importer.endsWith('/core/tools/edit-diff.js') &&
+    (source === 'fs' || source === 'fs/promises' || source === './path-utils.js')
+  );
+}
+
+/**
  * Vite plugin: replace pi-coding-agent's Node-only modules
  * (session-manager.js, config.js — which pull in fs/path/url/jiti via Node
  * imports and top-level fileURLToPath calls) with browser-safe stubs.
@@ -86,6 +97,9 @@ function stubPiNodeInternalsPlugin() {
         }
         if (source.endsWith('/config.js') || source === '../config.js') {
           return resolve(Dirname, 'src/stubs/pi-config-stub.ts');
+        }
+        if (isPiEditDiffNodeImport(source, normalizedImporter)) {
+          return resolve(Dirname, 'src/stubs/pi-edit-diff-node-stub.ts');
         }
       }
       // pi-mcp's index re-exports StdioTransport, which pulls cross-spawn
@@ -129,24 +143,6 @@ function stubPageRealmSpeechPlugin() {
       return /(^|\/)speech\/(speak|hear)\.js$/.test(source)
         ? resolve(Dirname, 'src/stubs/speech-page-realm-stub.ts')
         : undefined;
-    },
-  };
-}
-
-/**
- * Preserve the edit leaf's duplicate module identity through its relative
- * imports. Without the query marker on those children, Rolldown reunifies the
- * lazy edit graph with Pi's eager root barrel and hoists the diff code at boot.
- */
-function isolatePiEditToolPlugin() {
-  const marker = '?pi-edit-lazy';
-  return {
-    name: 'isolate-pi-edit-tool',
-    enforce: 'pre' as const,
-    resolveId(source: string, importer: string | undefined) {
-      if (!importer?.endsWith(marker) || !source.startsWith('.')) return undefined;
-      const cleanImporter = importer.slice(0, -marker.length);
-      return `${resolve(dirname(cleanImporter), source)}${marker}`;
     },
   };
 }
@@ -471,12 +467,16 @@ const MODULE_ALIASES: Record<string, string> = {
     workspaceRoot,
     'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js'
   ),
-  // Pi publishes createEditTool from its root barrel, which the worker already
-  // imports eagerly. Resolving the edit-only dynamic import to the leaf keeps
-  // its diff machinery out of that shared cold-start chunk until first use.
-  '@earendil-works/pi-agent-core/edit-tool': resolve(
+  // Pi's edit matching (edit-diff.js) and BOM helper (utils/text.js): the edit
+  // tool replays them against the VFS (`tools/pi-edit-execution.ts`). Pure
+  // string ops; edit-diff's own fs imports are stubbed by stubPiNodeInternals.
+  '@earendil-works/pi-coding-agent/dist/core/tools/edit-diff.js': resolve(
     workspaceRoot,
-    'node_modules/@earendil-works/pi-agent-core/dist/harness/tools/edit.js?pi-edit-lazy'
+    'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/edit-diff.js'
+  ),
+  '@earendil-works/pi-coding-agent/dist/utils/text.js': resolve(
+    workspaceRoot,
+    'node_modules/@earendil-works/pi-coding-agent/dist/utils/text.js'
   ),
   // `slicc-diff-entry.ts` registers `<diffs-container>` from a path that is
   // NOT in @pierre/diffs' exports map. esbuild resolved it straight off
@@ -505,7 +505,6 @@ export default defineConfig(({ mode }) => ({
     stripOrtWasmAssetPlugin(),
     curatedShikiBundlePlugin(),
     stubPiNodeInternalsPlugin(),
-    isolatePiEditToolPlugin(),
     buildWebappRuntimeAssetsPlugin(),
     // Sanitize the unpkg ffmpeg-core URL literal that @ffmpeg/ffmpeg bakes
     // into its wrapper-worker chunk. Same plugin the extension config uses
@@ -598,7 +597,6 @@ export default defineConfig(({ mode }) => ({
       curatedShikiBundlePlugin(),
       stubPiNodeInternalsPlugin(),
       stubPageRealmSpeechPlugin(),
-      isolatePiEditToolPlugin(),
     ],
   },
   build: {
