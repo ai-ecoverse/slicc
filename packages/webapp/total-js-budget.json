@@ -1,8 +1,4 @@
 {
   "//": "Per-PR growth allowance for every JS file in dist/ui, including lazy chunks. The absolute size-limit cap (40 MiB since the native wasm realm, #3530; was 27 MiB) remains the backstop. This check catches substantial growth in the change that caused it, while ordinary small changes cannot inherit a near-zero absolute budget. 128 KiB admits routine code and dependency updates while flagging a new large library or duplicate chunk for review.",
-  "maxDeltaKb": 128,
-  "dependencyUpgradeException": {
-    "lockfileSha256": "149dffe89103ce1116107952040f493b7210575463e5a5cdb6d93a3e4bc9d67d",
-    "reason": "pi 0.99.2 to 1.1.0 (PR #3859) changes 158 lockfile dependencies, mostly pi-coding-agent's nested copy of the pi stack deduping away; the baseline realignment guard permits 25. Measured on the same machine against merge-base 10e7cd3a3: total JS 27,729,039 -> 27,746,370 B (+16.9 KiB, under the 128 KiB per-PR allowance). This exact lockfile is reviewed with the bump, while the absolute total-JS cap remains enforced. Remove this exception after the upgrade merges."
-  }
+  "maxDeltaKb": 128
 }
