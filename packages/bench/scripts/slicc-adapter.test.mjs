@@ -1135,6 +1135,22 @@ describe('runTask', () => {
     expect(closeAt).toBeGreaterThan(exportAt);
   });
 
+  it('passes --save (or --skip) through setup and teardown when sessionAction is set', async () => {
+    const { leader, calls } = leaderFor();
+    await runTask({
+      leader,
+      task: { id: 't', task: 'Do it.' },
+      runId: 'r-save',
+      model: 'claude-sonnet-5',
+      sessionAction: 'save',
+      capture: { pollMs: 5 },
+    });
+    const sessions = calls
+      .filter((c) => c.kind === 'cli' && c.args[0] === 'new-session')
+      .map((c) => c.args.join(' '));
+    expect(sessions).toEqual(['new-session --save', 'new-session --save']);
+  });
+
   it('parses alias@thinking and leaves a plain alias at default', () => {
     expect(parseModelSpec('claude-opus-5-5')).toEqual({
       spec: 'claude-opus-5-5',

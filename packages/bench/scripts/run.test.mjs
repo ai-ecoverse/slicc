@@ -41,6 +41,7 @@ describe('runConfig', () => {
       thinking: 'default',
       skills: 'none',
       default_skills: false,
+      new_session: 'erase',
     });
     expect(
       runConfig('sliccy@1', 'claude-opus-5-5@max', { name: 'builtin', builtin: true })
@@ -50,6 +51,7 @@ describe('runConfig', () => {
       thinking: 'max',
       skills: 'builtin',
       default_skills: true,
+      new_session: 'erase',
     });
     expect(
       runConfig('sliccy@1', 'm', { name: 'none+ecoverse', builtin: false }).default_skills
@@ -57,6 +59,9 @@ describe('runConfig', () => {
     expect(runConfig('sliccy@1', 'm', { name: 'builtin', builtin: true }).default_skills).toBe(
       true
     );
+    expect(
+      runConfig('sliccy@1', 'm', { name: 'builtin', builtin: true }, null, 'save').new_session
+    ).toBe('save');
   });
 });
 
@@ -135,6 +140,7 @@ describe('parseCli', () => {
     expect(() => parseCli(['--set', 'x', '--fresh-leader-every', '-1'])).toThrow(
       /--fresh-leader-every/
     );
+    expect(() => parseCli(['--set', 'x', '--new-session', 'wipe'])).toThrow(/--new-session/);
     expect(() => parseCli(['--set', 'x', '--leader-down-limit', '0'])).toThrow(
       /--leader-down-limit/
     );
@@ -147,7 +153,9 @@ describe('parseCli', () => {
     expect(parseCli(['--set', 'x', '--fresh-leader-every', '5'])).toMatchObject({
       freshLeaderEvery: 5,
       leaderDownLimit: 2,
+      newSession: 'erase',
     });
+    expect(parseCli(['--set', 'x', '--new-session', 'save'])).toMatchObject({ newSession: 'save' });
     expect(parseCli(['--help']).help).toBe(true);
   });
 });
@@ -759,6 +767,28 @@ describe('resumeAction', () => {
     // Pre-flag builtin (missing marker) still matches expected true.
     expect(resumeAction(done({ config: { skills: 'builtin' } }), TASK, ctx)).toBe('done');
     expect(resumeAction(done({ config: { default_skills: false } }), TASK, ctx)).toBe('run');
+  });
+
+  it('re-runs when new_session differs; missing means erase', () => {
+    expect(resumeAction(done({ config: { default_skills: true } }), TASK, ctx)).toBe('done');
+    expect(
+      resumeAction(done({ config: { default_skills: true, new_session: 'erase' } }), TASK, ctx)
+    ).toBe('done');
+    expect(
+      resumeAction(done({ config: { default_skills: true, new_session: 'save' } }), TASK, ctx)
+    ).toBe('run');
+    expect(
+      resumeAction(done({ config: { default_skills: true } }), TASK, {
+        ...ctx,
+        newSession: 'save',
+      })
+    ).toBe('run');
+    expect(
+      resumeAction(done({ config: { default_skills: true, new_session: 'save' } }), TASK, {
+        ...ctx,
+        newSession: 'save',
+      })
+    ).toBe('done');
   });
 
   it('keeps a run the fallback judge scored for this judge', () => {

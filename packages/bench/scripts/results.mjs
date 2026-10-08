@@ -23,14 +23,16 @@ function isNoneSkills(skills) {
 
 /**
  * Grouping key for a run config. Pre-flag `none` records omit `default_skills` and must not
- * share a cell with post-flag `none` (`default_skills: false`).
+ * share a cell with post-flag `none` (`default_skills: false`). `new_session` other than erase
+ * (or missing, which means erase) is a separate configuration so save/skip do not pool with it.
  */
 export function configKey(c) {
   const model = canonicalModel(c.model);
+  const session = c.new_session && c.new_session !== 'erase' ? `|session:${c.new_session}` : '';
   if (isNoneSkills(c.skills) && c.default_skills !== false && c.default_skills !== true) {
-    return `${model}|${c.skills}|preflag`;
+    return `${model}|${c.skills}|preflag${session}`;
   }
-  return `${model}|${c.skills}`;
+  return `${model}|${c.skills}${session}`;
 }
 
 /**
@@ -66,7 +68,11 @@ export function summaryFileName(benchmark, config) {
   ) {
     skills = `${skills}_preflag`;
   }
-  return `SLICC_${safe(config.harness)}_skills_${skills}_model_${safe(config.model)}_bench_${safe(benchmark)}.json`;
+  const session =
+    config.new_session && config.new_session !== 'erase'
+      ? `_session_${safe(config.new_session)}`
+      : '';
+  return `SLICC_${safe(config.harness)}_skills_${skills}_model_${safe(config.model)}${session}_bench_${safe(benchmark)}.json`;
 }
 
 /**

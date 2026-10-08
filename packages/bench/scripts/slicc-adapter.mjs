@@ -5,14 +5,16 @@
  * from outside with the `slicc` CLI (see executors.mjs); nothing is installed on the leader:
  *
  * 1. setup (`exec`): a scratch dir, the task's files, no open tabs, a `cost` snapshot;
- *    `new-session --erase` so no earlier task — or memory extracted from one — is in context;
+ *    `new-session --<action>` (default `--erase`: no earlier task or extracted memory in context;
+ *    `--save` / `--skip` keep the leader's memory store so a curator can accumulate across tasks);
  *    `model <m>` so the cone runs the model under test; `/etc/models` pinned so its scoops can't
  *    run any other model (restored at teardown);
  * 2. the task: `prompt -` with the task on stdin, while a host-side loop screenshots the tabs
  *    (agents close their tabs when they finish, so the end state is gone by the time the reply is);
  * 3. capture (`exec`): the conversation via `session export`, the screenshots, the spend (every
  *    unit's delta in `cost --json`: the cone plus any scoop it delegated to);
- * 4. teardown: tabs closed, `new-session --erase`, scratch dir removed — also when the run failed.
+ * 4. teardown: tabs closed, the same `new-session --<action>`, scratch dir removed — also when
+ *    the run failed.
  *
  * The prompt is the task text plus upstream's closing instruction (a FINAL ANSWER line, no
  * clarifying questions); how to drive the browser is left to SLICC and its installed skills,
@@ -45,6 +47,10 @@ export const PROMPT_ALL_SETTLED = '2m';
 const POLL_MS = 10_000;
 const RECAPTURE_MS = 30_000;
 const STEP_CHARS = 4000;
+
+/** `slicc new-session` actions the adapter may pass (`--erase` / `--save` / `--skip`). */
+export const NEW_SESSION_ACTIONS = Object.freeze(['erase', 'save', 'skip']);
+export const DEFAULT_NEW_SESSION = 'erase';
 
 export const FINAL_INSTRUCTION = [
   "Don't ask clarifying questions: if the task is ambiguous, pick the most reasonable reading and go on.",
@@ -1639,8 +1645,15 @@ export async function runTask({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   condition = null,
   arm = null,
+  sessionAction = DEFAULT_NEW_SESSION,
 }) {
   if (!RUN_ID_PATTERN.test(runId)) throw new Error(`bad run id ${runId}`);
+  if (!NEW_SESSION_ACTIONS.includes(sessionAction)) {
+    throw new Error(
+      `sessionAction must be one of ${NEW_SESSION_ACTIONS.join(', ')}; got ${sessionAction}`
+    );
+  }
+  const sessionFlag = `--${sessionAction}`;
   const dir = `/tmp/bench/${runId}`;
   const timeout = task.slicc?.timeoutSeconds ?? timeoutSeconds;
   const t0 = now();
@@ -1661,7 +1674,7 @@ export async function runTask({
       staged.push(leaves[i]);
     }
     await closeTabs(leader);
-    await mustCli(leader, ['new-session', '--erase']);
+    await mustCli(leader, ['new-session', sessionFlag]);
     if (condition) await assertStagedSkills(leader, condition);
     const prepared = await prepareModel(leader, model);
     const pinned = await pinScoopModels(leader, prepared.modelId);
@@ -1777,7 +1790,7 @@ export async function runTask({
     throw err;
   } finally {
     await closeTabs(leader).catch(() => {});
-    await leader.cli(['new-session', '--erase']).catch(() => {});
+    await leader.cli(['new-session', sessionFlag]).catch(() => {});
     await restoreAfterRun(restorePolicy, pin);
     const leftovers = stagedCleanupPaths(staged);
     if (leftovers.length)

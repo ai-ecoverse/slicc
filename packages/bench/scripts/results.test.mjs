@@ -68,6 +68,8 @@ describe('file names', () => {
     );
     expect(summaryFileName('a/b', S('m', 's'))).not.toBe(summaryFileName('a b', S('m', 's')));
     expect(configKey(S('m', 's'))).toBe('m|s');
+    expect(configKey({ ...S('m', 's'), new_session: 'erase' })).toBe('m|s');
+    expect(configKey({ ...S('m', 's'), new_session: 'save' })).toBe('m|s|session:save');
     expect(configKey({ ...S('m', 'none'), default_skills: false })).toBe('m|none');
     expect(configKey(S('m', 'none'))).toBe('m|none|preflag');
     expect(configKey({ ...S('m', 'none+ecoverse'), default_skills: false })).toBe(
@@ -77,6 +79,12 @@ describe('file names', () => {
     expect(summaryFileName('B', S('m', 'none'))).toContain('skills_none_preflag_');
     expect(summaryFileName('B', { ...S('m', 'none'), default_skills: false })).toContain(
       'skills_none_model_'
+    );
+    expect(summaryFileName('B', { ...S('m', 's'), new_session: 'save' })).toContain(
+      '_session_save_bench_'
+    );
+    expect(summaryFileName('B', { ...S('m', 's'), new_session: 'erase' })).not.toContain(
+      '_session_'
     );
     expect(summaryFileName('B', { ...S('m', 'none'), default_skills: false })).not.toContain(
       'preflag'
