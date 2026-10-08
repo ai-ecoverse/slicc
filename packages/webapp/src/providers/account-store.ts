@@ -88,6 +88,14 @@ const LEGACY_KEYS = [
 // module first and call `resolveCurrentModel()` before layout has booted.
 const LEGACY_AUTH_ONLY_PROVIDERS = new Set(['github']);
 
+// pi-ai provider ids that pi renamed, old → new. Stored accounts and the
+// `selected-model` prefix move to the new id so a saved login survives the
+// upgrade instead of turning into a row pi no longer lists.
+// (pi-ai 1.0.3: `azure-openai-responses` → `azure`.)
+const RENAMED_PI_PROVIDERS: Readonly<Record<string, string>> = Object.freeze({
+  'azure-openai-responses': 'azure',
+});
+
 /**
  * True when `providerId` is a pi-ai provider that the build config
  * (`packages/dev-tools/providers.build.json` → `shouldIncludeProvider`)
@@ -143,7 +151,55 @@ function cleanLegacyKeys(): void {
       /* noop */
     }
   }
+  migrateRenamedPiProviders();
   migrateLegacyAuthOnlySelection();
+}
+
+/**
+ * Move stored accounts and the `selected-model` prefix from renamed pi-ai
+ * provider ids to their new ids (see `RENAMED_PI_PROVIDERS`). When an account
+ * under the new id already exists, it wins and the old row is dropped.
+ * Idempotent; never throws.
+ *
+ * Exported only for tests — production runs it through `cleanLegacyKeys()`.
+ */
+export function migrateRenamedPiProviders(): void {
+  try {
+    const raw = localStorage.getItem(MODEL_KEY);
+    const sep = raw ? raw.indexOf(':') : -1;
+    if (raw && sep > 0) {
+      const renamed = RENAMED_PI_PROVIDERS[raw.slice(0, sep)];
+      if (renamed) localStorage.setItem(MODEL_KEY, `${renamed}${raw.slice(sep)}`);
+    }
+  } catch {
+    /* leave the selection alone if storage is unavailable. */
+  }
+  try {
+    const rawAccounts = localStorage.getItem(ACCOUNTS_KEY);
+    if (!rawAccounts) return;
+    const parsed = JSON.parse(rawAccounts);
+    if (!Array.isArray(parsed)) return;
+    const present = new Set(
+      parsed
+        .filter((entry) => entry != null && typeof entry === 'object')
+        .map((entry) => entry.providerId)
+    );
+    let changed = false;
+    const migrated = parsed.flatMap((entry) => {
+      const renamed =
+        entry != null && typeof entry === 'object' && typeof entry.providerId === 'string'
+          ? RENAMED_PI_PROVIDERS[entry.providerId]
+          : undefined;
+      if (!renamed) return [entry];
+      changed = true;
+      if (present.has(renamed)) return [];
+      present.add(renamed);
+      return [{ ...entry, providerId: renamed }];
+    });
+    if (changed) localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(migrated));
+  } catch {
+    /* leave accounts alone if storage is unavailable or the row is malformed. */
+  }
 }
 
 /**

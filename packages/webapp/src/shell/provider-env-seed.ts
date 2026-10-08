@@ -41,7 +41,7 @@ export const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = Object.fre
   // reads the same variable as `qwen-token-plan`.
   'qwen-token-plan-individual': 'QWEN_TOKEN_PLAN_API_KEY',
   openai: 'OPENAI_API_KEY',
-  'azure-openai-responses': 'AZURE_OPENAI_API_KEY',
+  azure: 'AZURE_OPENAI_API_KEY',
   nvidia: 'NVIDIA_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   google: 'GEMINI_API_KEY',
