@@ -48,6 +48,7 @@ import {
   MODELS_POLICY_FILE,
   policyHintFor,
 } from './model-policy.js';
+import { canonicalProviderId } from './renamed-providers.js';
 import type { CompatOverrides } from './types.js';
 
 export type { ProviderConfig } from './index.js';
@@ -87,14 +88,6 @@ const LEGACY_KEYS = [
 // it only runs on the page boot path; the worker context can `import` this
 // module first and call `resolveCurrentModel()` before layout has booted.
 const LEGACY_AUTH_ONLY_PROVIDERS = new Set(['github']);
-
-// pi-ai provider ids that pi renamed, old → new. Stored accounts and the
-// `selected-model` prefix move to the new id so a saved login survives the
-// upgrade instead of turning into a row pi no longer lists.
-// (pi-ai 1.0.3: `azure-openai-responses` → `azure`.)
-const RENAMED_PI_PROVIDERS: Readonly<Record<string, string>> = Object.freeze({
-  'azure-openai-responses': 'azure',
-});
 
 /**
  * True when `providerId` is a pi-ai provider that the build config
@@ -157,7 +150,7 @@ function cleanLegacyKeys(): void {
 
 /**
  * Move stored accounts and the `selected-model` prefix from renamed pi-ai
- * provider ids to their new ids (see `RENAMED_PI_PROVIDERS`). When an account
+ * provider ids to their new ids (see `renamed-providers.ts`). When an account
  * under the new id already exists, it wins and the old row is dropped.
  * Idempotent; never throws.
  *
@@ -168,8 +161,9 @@ export function migrateRenamedPiProviders(): void {
     const raw = localStorage.getItem(MODEL_KEY);
     const sep = raw ? raw.indexOf(':') : -1;
     if (raw && sep > 0) {
-      const renamed = RENAMED_PI_PROVIDERS[raw.slice(0, sep)];
-      if (renamed) localStorage.setItem(MODEL_KEY, `${renamed}${raw.slice(sep)}`);
+      const provider = raw.slice(0, sep);
+      const renamed = canonicalProviderId(provider);
+      if (renamed !== provider) localStorage.setItem(MODEL_KEY, `${renamed}${raw.slice(sep)}`);
     }
   } catch {
     /* leave the selection alone if storage is unavailable. */
@@ -188,9 +182,9 @@ export function migrateRenamedPiProviders(): void {
     const migrated = parsed.flatMap((entry) => {
       const renamed =
         entry != null && typeof entry === 'object' && typeof entry.providerId === 'string'
-          ? RENAMED_PI_PROVIDERS[entry.providerId]
+          ? canonicalProviderId(entry.providerId)
           : undefined;
-      if (!renamed) return [entry];
+      if (renamed === undefined || renamed === entry.providerId) return [entry];
       changed = true;
       if (present.has(renamed)) return [];
       present.add(renamed);

@@ -111,3 +111,30 @@ describe('work-unit model + thinking on the record (#2310)', () => {
     expect(record.model?.id).toBe('claude-opus-4-6');
   });
 });
+
+describe('renamed pi-ai provider ids on restore', () => {
+  it('moves a cone pinned to azure-openai-responses to azure', () => {
+    const cone = setUnitModel(rootRecord(), { provider: 'azure-openai-responses', id: 'gpt-5' });
+    const restored = normalizeScoopRecord(JSON.parse(JSON.stringify(cone)));
+
+    expect(modelFor(restored)).toEqual({ provider: 'azure', id: 'gpt-5' });
+  });
+
+  it('moves a legacy config pin on the renamed provider to azure', () => {
+    const legacy = rootRecord({
+      config: { modelId: 'gpt-5', modelProviderId: 'azure-openai-responses' },
+    });
+    const restored = normalizeScoopRecord(legacy);
+
+    expect(modelFor(restored)).toEqual({ provider: 'azure', id: 'gpt-5' });
+    expect(restored.config?.modelProviderId).toBeUndefined();
+  });
+
+  it('leaves SLICC’s own azure-openai provider alone', () => {
+    const cone = setUnitModel(rootRecord(), { provider: 'azure-openai', id: 'gpt-4o' });
+    expect(modelFor(normalizeScoopRecord(cone))).toEqual({
+      provider: 'azure-openai',
+      id: 'gpt-4o',
+    });
+  });
+});

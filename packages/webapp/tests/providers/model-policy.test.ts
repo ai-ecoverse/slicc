@@ -144,3 +144,37 @@ describe('policyHintFor', () => {
     expect(hint).toContain('openrouter:*');
   });
 });
+
+describe('renamed pi-ai provider ids', () => {
+  it('applies an azure-openai-responses section and denial to azure', () => {
+    const policy = parseModelPolicy(`
+[azure-openai-responses]
+-azure-openai-responses:gpt-5
+anthropic:claude-opus-4-6
+`);
+    expect(isModelAllowedByPolicy(policy, 'azure', 'azure', 'gpt-5')).toBe(false);
+    expect(isModelDeniedByPolicy(policy, 'azure', 'azure', 'gpt-5')).toBe(true);
+    expect(isModelAllowedByPolicy(policy, 'azure', 'anthropic', 'claude-opus-4-6')).toBe(true);
+  });
+
+  it('merges an old and a new section, keeping every denial', () => {
+    const policy = parseModelPolicy(`
+[azure]
+openrouter:*
+[azure-openai-responses]
+-azure:gpt-5
+`);
+    expect(isModelAllowedByPolicy(policy, 'azure', 'openrouter', 'x')).toBe(true);
+    expect(isModelAllowedByPolicy(policy, 'azure', 'azure', 'gpt-5')).toBe(false);
+  });
+
+  it('applies a denial of the old id under another section', () => {
+    const policy = parseModelPolicy(`
+[adobe]
+azure-openai-responses:*
+-azure-openai-responses:gpt-5
+`);
+    expect(isModelAllowedByPolicy(policy, 'adobe', 'azure', 'gpt-4o')).toBe(true);
+    expect(isModelAllowedByPolicy(policy, 'adobe', 'azure', 'gpt-5')).toBe(false);
+  });
+});
