@@ -6,7 +6,8 @@
  *
  * 1. setup (`exec`): a scratch dir, the task's files, no open tabs, a `cost` snapshot;
  *    `new-session --erase` so no earlier task — or memory extracted from one — is in context;
- *    `model <m>` so the cone runs the model under test;
+ *    `model <m>` so the cone runs the model under test; `/etc/models` pinned so its scoops can't
+ *    run any other model (restored at teardown);
  * 2. the task: `prompt -` with the task on stdin, while a host-side loop screenshots the tabs
  *    (agents close their tabs when they finish, so the end state is gone by the time the reply is);
  * 3. capture (`exec`): the conversation via `session export`, the screenshots, the spend (every
@@ -399,6 +400,107 @@ export async function prepareModel(leader, model) {
     );
   }
   return { spec, modelId, thinkingEffective };
+}
+
+/** The model access policy the leader enforces when a scoop is spawned with an explicit model. */
+export const MODELS_POLICY_PATH = '/etc/models';
+
+/** A provider id goes into a shell command and a policy section header: plain characters only. */
+const PROVIDER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * `/etc/models` text that lets a run spawn scoops on its configured model only.
+ *
+ * A cone can name a scoop's model (`scoop_scoop` takes `model`), and some copy the tool schema's
+ * example verbatim: 7 of 188 GPT-6 Luna runs spawned Sonnet 4.6 scoops, which were 85% of that
+ * row's spend (2026-10-09). The selected provider's own catalogue is allowed unless denied, and
+ * a deny always beats an allow, so "everything but this model" has to name every other id in the
+ * catalogue. Other providers need an explicit allow, which this section never grants. A scoop
+ * spawned without `model` inherits the cone's, the configured one.
+ */
+export function modelPinPolicy(modelId, catalogue) {
+  const sep = String(modelId).indexOf(':');
+  if (sep <= 0)
+    throw new Error(`model pin needs a provider:model id, not ${JSON.stringify(modelId)}`);
+  const provider = modelId.slice(0, sep);
+  const id = modelId.slice(sep + 1);
+  if (!PROVIDER_ID_PATTERN.test(provider))
+    throw new Error(`bad provider id ${JSON.stringify(provider)}`);
+  const others = [...new Set(catalogue.map((m) => m?.id).filter((x) => typeof x === 'string' && x))]
+    .filter((x) => x !== id)
+    .sort();
+  return [
+    `# Written by the bench for one run: scoops may use ${modelId} only.`,
+    `[${provider}]`,
+    ...others.map((other) => `-${provider}:${other}`),
+    '',
+  ].join('\n');
+}
+
+/**
+ * Pin the run's scoops to its configured model (see {@link modelPinPolicy}): read the provider's
+ * full catalogue on the leader (picker-hidden models included, the set `scoop_scoop` resolves
+ * against), write the policy, and read it back. A run whose pin cannot be confirmed does not
+ * start. Returns what was pinned and a `restore` that puts the previous file back.
+ */
+export async function pinScoopModels(leader, modelId) {
+  const provider = String(modelId).slice(0, Math.max(0, String(modelId).indexOf(':')));
+  if (!PROVIDER_ID_PATTERN.test(provider))
+    throw new Error(`model pin needs a provider:model id, not ${JSON.stringify(modelId)}`);
+  const listed = await must(
+    leader,
+    `models --provider ${provider} --all-versions --no-benchmarks --json`
+  );
+  let catalogue;
+  try {
+    catalogue = JSON.parse(listed.stdout);
+  } catch {
+    catalogue = null;
+  }
+  if (!Array.isArray(catalogue) || catalogue.length === 0)
+    throw new Error(`model pin: \`models --json\` printed no catalogue for ${provider}`);
+  const policy = modelPinPolicy(modelId, catalogue);
+  const original = await readPolicy(leader);
+  const write = (text) =>
+    must(leader, `base64 -d > ${MODELS_POLICY_PATH}`, {
+      stdin: Buffer.from(text).toString('base64'),
+    });
+  const restore = () =>
+    original === null ? must(leader, `rm -f ${MODELS_POLICY_PATH}`) : write(original);
+  try {
+    await write(policy);
+    const back = await must(leader, `cat ${MODELS_POLICY_PATH}`);
+    if (back.stdout.trim() !== policy.trim())
+      throw new Error(`model pin: ${MODELS_POLICY_PATH} did not take the policy`);
+  } catch (err) {
+    // A write may have landed even when its check failed: put the previous policy back first.
+    await restore().catch((undo) => {
+      err.message += `; and restoring ${MODELS_POLICY_PATH} failed: ${undo.message}`;
+      err.leaderDown = true;
+    });
+    throw err;
+  }
+  return {
+    pin: {
+      provider,
+      model: modelId,
+      denied: policy.split('\n').filter((l) => l.startsWith('-')).length,
+    },
+    restore,
+  };
+}
+
+/**
+ * The leader's current `/etc/models`, or null when there is none. Only a confirmed absence counts
+ * as none: an unreadable file or an unreachable leader throws, so restoring cannot delete a policy
+ * that was merely not read.
+ */
+async function readPolicy(leader) {
+  const exists = await leader.exec(`test -e ${MODELS_POLICY_PATH}`);
+  if (exists.leaderDown || (exists.status !== 0 && exists.status !== 1))
+    throw failure(`leader: \`test -e ${MODELS_POLICY_PATH}\``, exists);
+  if (exists.status === 1) return null;
+  return (await must(leader, `cat ${MODELS_POLICY_PATH}`)).stdout;
 }
 
 /**
@@ -1097,6 +1199,7 @@ export function traceFromResult(result) {
       tabs: result.tabs ?? [],
       model: result.modelId ?? null,
       modelsUsed: t.models,
+      ...(result.modelPin ? { model_pin: result.modelPin } : {}),
       ...toolMetrics(result.transcript),
       ...(result.phases ? { phases: result.phases } : {}),
       ...(ex ? { transcript: transcriptSummary(ex) } : {}),
@@ -1498,6 +1601,27 @@ function finalTextOf(armOut, { resumedAfterSettle, transcript, reply }) {
   return resumedAfterSettle ? lastConeAssistantText(transcript) : reply.stdout;
 }
 
+/**
+ * A failed run still gives the leader its `/etc/models` back. If it can't, the error says so and
+ * marks the leader down, so the lane restarts it with a wiped profile instead of carrying this
+ * run's pin into the next one.
+ */
+async function restoreAfterFailedRun(undo, err) {
+  if (!undo) return;
+  await undo().catch((e) => {
+    err.message += `; and restoring ${MODELS_POLICY_PATH} failed: ${e.message}`;
+    err.leaderDown = true;
+  });
+}
+
+/** After a finished run (its result already built), a restore that fails is recorded on its pin. */
+async function restoreAfterRun(undo, pin) {
+  if (!undo) return;
+  await undo().catch((e) => {
+    if (pin) pin.restore_error = e.message.slice(0, 300);
+  });
+}
+
 export async function runTask({
   leader,
   task,
@@ -1522,6 +1646,8 @@ export async function runTask({
   const t0 = now();
   const health = { before: await leaderHealth(leader, now) };
   const staged = [];
+  let restorePolicy = null;
+  let pin = null;
   try {
     await must(leader, `rm -rf ${dir} && mkdir -p ${dir}`);
     const goalFile = await prepareArmRun(leader, arm, dir, task);
@@ -1538,6 +1664,9 @@ export async function runTask({
     await mustCli(leader, ['new-session', '--erase']);
     if (condition) await assertStagedSkills(leader, condition);
     const prepared = await prepareModel(leader, model);
+    const pinned = await pinScoopModels(leader, prepared.modelId);
+    restorePolicy = pinned.restore;
+    pin = pinned.pin;
     const before = await spend(leader);
 
     const started = now();
@@ -1614,6 +1743,7 @@ export async function runTask({
       modelId: prepared.modelId,
       thinking: prepared.spec.thinking,
       thinkingEffective: prepared.thinkingEffective,
+      modelPin: pin,
       exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
       // An arm that ran out its own --time-limit exits before the exec deadline: only its result says so.
       timedOut: Boolean(
@@ -1640,9 +1770,15 @@ export async function runTask({
       },
       health,
     };
+  } catch (err) {
+    const undo = restorePolicy;
+    restorePolicy = null;
+    await restoreAfterFailedRun(undo, err);
+    throw err;
   } finally {
     await closeTabs(leader).catch(() => {});
     await leader.cli(['new-session', '--erase']).catch(() => {});
+    await restoreAfterRun(restorePolicy, pin);
     const leftovers = stagedCleanupPaths(staged);
     if (leftovers.length)
       await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});

@@ -317,8 +317,27 @@ function leader({ failOn, down = () => false } = {}) {
     }
     return reply(command);
   });
-  const exec = vi.fn(async (command) => {
+  let policy = null; // the leader's /etc/models, for the per-run scoop model pin
+  const exec = vi.fn(async (command, opts = {}) => {
     commands.push(command);
+    if (command.startsWith('models --provider '))
+      return reply(command, JSON.stringify([{ id: 'global.anthropic.other' }]));
+    if (command === 'test -e /etc/models')
+      return policy === null
+        ? { stdout: '', stderr: '', status: 1, timedOut: false }
+        : reply(command);
+    if (command === 'cat /etc/models')
+      return policy === null
+        ? { stdout: '', stderr: 'no such file', status: 1, timedOut: false }
+        : reply(command, policy);
+    if (command === 'base64 -d > /etc/models') {
+      policy = Buffer.from(opts.stdin ?? '', 'base64').toString();
+      return reply(command);
+    }
+    if (command === 'rm -f /etc/models') {
+      policy = null;
+      return reply(command);
+    }
     if (command.includes('| wc -l')) return reply(command, '3\n');
     if (command === 'cost --json --all')
       return reply(
