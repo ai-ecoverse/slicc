@@ -106,6 +106,35 @@ describe('createRecycler', () => {
     await expect(noProfile()).resolves.toMatchObject({ url: 'u' });
   });
 
+  it('keeps the profile when keepProfile is set (save/skip recovery)', async () => {
+    const profileDir = tmp();
+    writeFileSync(join(profileDir, 'scoops.db'), 'memories');
+    const seen = [];
+    const run = vi.fn(async (script) => {
+      seen.push([script.split('/').pop(), existsSync(join(profileDir, 'scoops.db'))]);
+      return { status: 0, output: '' };
+    });
+    let reads = 0;
+    const read = () => (reads++ === 0 ? { joinUrl: 'u0', profileDir } : { joinUrl: 'u1' });
+    const recycle = createRecycler({ scriptsDir: '/s', run, read, mask: () => {} });
+    await recycle({ keepProfile: true });
+    expect(seen).toEqual([
+      ['stop-leader.mjs', true],
+      ['start-leader.mjs', true],
+    ]);
+    expect(existsSync(join(profileDir, 'scoops.db'))).toBe(true);
+    // Constructor default keepProfile also works.
+    const keep = createRecycler({
+      scriptsDir: '/s',
+      run: async () => ({ status: 0, output: '' }),
+      read: () => ({ joinUrl: 'u', profileDir }),
+      mask: () => {},
+      keepProfile: true,
+    });
+    await keep();
+    expect(existsSync(join(profileDir, 'scoops.db'))).toBe(true);
+  });
+
   it('fails loudly when a script fails or no leader comes up', async () => {
     const read = () => ({ joinUrl: 'u' });
     const stopFails = createRecycler({

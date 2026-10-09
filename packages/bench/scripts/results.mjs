@@ -23,14 +23,16 @@ function isNoneSkills(skills) {
 
 /**
  * Grouping key for a run config. Pre-flag `none` records omit `default_skills` and must not
- * share a cell with post-flag `none` (`default_skills: false`).
+ * share a cell with post-flag `none` (`default_skills: false`). `new_session` other than erase
+ * (or missing, which means erase) is a separate configuration so save/skip do not pool with it.
  */
 export function configKey(c) {
   const model = canonicalModel(c.model);
+  const session = c.new_session && c.new_session !== 'erase' ? `|session:${c.new_session}` : '';
   if (isNoneSkills(c.skills) && c.default_skills !== false && c.default_skills !== true) {
-    return `${model}|${c.skills}|preflag`;
+    return `${model}|${c.skills}|preflag${session}`;
   }
-  return `${model}|${c.skills}`;
+  return `${model}|${c.skills}${session}`;
 }
 
 /**
@@ -66,7 +68,11 @@ export function summaryFileName(benchmark, config) {
   ) {
     skills = `${skills}_preflag`;
   }
-  return `SLICC_${safe(config.harness)}_skills_${skills}_model_${safe(config.model)}_bench_${safe(benchmark)}.json`;
+  const session =
+    config.new_session && config.new_session !== 'erase'
+      ? `_session_${safe(config.new_session)}`
+      : '';
+  return `SLICC_${safe(config.harness)}_skills_${skills}_model_${safe(config.model)}${session}_bench_${safe(benchmark)}.json`;
 }
 
 /**
@@ -218,6 +224,8 @@ function configStats(c, cs) {
   return {
     model: c.model,
     skills: c.skills,
+    // erase (or missing) is the default; surface save/skip so memory arms label distinctly.
+    new_session: c.new_session && c.new_session !== 'erase' ? c.new_session : 'erase',
     harness: c.harness ?? null,
     slicc_versions: versionCounts(cs),
     runs: cs.length,
@@ -346,8 +354,12 @@ export function versionLine(counts) {
   return `SLICC version: ${list || 'not recorded'}${known.length ? tail : ''}.`;
 }
 
+function sessionLabel(c) {
+  return c.new_session && c.new_session !== 'erase' ? c.new_session : 'erase';
+}
+
 function configRow(c) {
-  return `| ${c.model} | ${c.skills} | ${c.runs} | ${c.pass} | ${c.partial} | ${c.fail} | ${c.not_judged} | ${c.errors} | ${fmt(c.mean_score)} | ${fmt(c.mean_duration, 0)} | ${fmt(c.mean_cost, 3)} |`;
+  return `| ${c.model} | ${c.skills} | ${sessionLabel(c)} | ${c.runs} | ${c.pass} | ${c.partial} | ${c.fail} | ${c.not_judged} | ${c.errors} | ${fmt(c.mean_score)} | ${fmt(c.mean_duration, 0)} | ${fmt(c.mean_cost, 3)} |`;
 }
 
 /** Markdown for the job summary: one row per configuration, then skill and model deltas. */
@@ -369,8 +381,8 @@ export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
           ]
         : []),
       '',
-      '| model | skills | runs | pass | partial | fail | not judged | errors | mean score | mean s | mean $ |',
-      '|---|---|---|---|---|---|---|---|---|---|---|',
+      '| model | skills | new_session | runs | pass | partial | fail | not judged | errors | mean score | mean s | mean $ |',
+      '|---|---|---|---|---|---|---|---|---|---|---|---|',
       ...b.configs.map(configRow),
       '',
       versionLine(b.slicc_versions)
@@ -383,7 +395,7 @@ export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
         '',
         ...toolKnown.map(
           (c) =>
-            `- ${c.model}, \`${c.skills}\`: ${c.no_tool_runs}/${c.tool_known} (${(c.no_tool_rate * 100).toFixed(0)}%), mean score ${fmt(c.no_tool_mean_score)} without tools vs ${fmt(c.tool_mean_score)} with`
+            `- ${c.model}, \`${c.skills}\`, \`${sessionLabel(c)}\`: ${c.no_tool_runs}/${c.tool_known} (${(c.no_tool_rate * 100).toFixed(0)}%), mean score ${fmt(c.no_tool_mean_score)} without tools vs ${fmt(c.tool_mean_score)} with`
         )
       );
     }

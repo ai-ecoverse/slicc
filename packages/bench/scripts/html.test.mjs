@@ -103,6 +103,9 @@ describe('reportHtml', () => {
     expect(html).toMatch(/<style>\.bench-0 \{ --series-1: hsl\(/);
     expect(html).toContain('<section class="bench-0">');
     expect(html).toContain('<h3>Answered without tools');
+    expect(html).toContain('<th>new_session</th>');
+    expect(html).toContain('<td>erase</td>');
+    expect(html).toContain('<dt>new_session</dt><dd>erase</dd>');
     expect(html).toContain('<td class="cell pass"');
     expect(html).toContain('<td class="cell error" title="error · error: leader went away');
     expect(html).toContain('<td class="cell unjudged"');

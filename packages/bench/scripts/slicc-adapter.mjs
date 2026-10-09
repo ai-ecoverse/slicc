@@ -5,14 +5,17 @@
  * from outside with the `slicc` CLI (see executors.mjs); nothing is installed on the leader:
  *
  * 1. setup (`exec`): a scratch dir, the task's files, no open tabs, a `cost` snapshot;
- *    `new-session --erase` so no earlier task — or memory extracted from one — is in context;
+ *    `new-session --<action>` (default `--erase`: no earlier task or extracted memory in context;
+ *    `--save` / `--skip` keep the leader's memory store so a curator can accumulate across tasks);
  *    `model <m>` so the cone runs the model under test; `/etc/models` pinned so its scoops can't
- *    run any other model (restored at teardown);
+ *    run any other model (restored at teardown); on `--save`, `/etc/MEMORY.md` widened so the
+ *    curator can see `/tmp/` and `/etc/` (also restored at teardown);
  * 2. the task: `prompt -` with the task on stdin, while a host-side loop screenshots the tabs
  *    (agents close their tabs when they finish, so the end state is gone by the time the reply is);
  * 3. capture (`exec`): the conversation via `session export`, the screenshots, the spend (every
  *    unit's delta in `cost --json`: the cone plus any scoop it delegated to);
- * 4. teardown: tabs closed, `new-session --erase`, scratch dir removed — also when the run failed.
+ * 4. teardown: tabs closed, the same `new-session --<action>`, scratch dir removed — also when
+ *    the run failed.
  *
  * The prompt is the task text plus upstream's closing instruction (a FINAL ANSWER line, no
  * clarifying questions); how to drive the browser is left to SLICC and its installed skills,
@@ -25,8 +28,13 @@
 
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { cutBefore } from './judge.mjs';
+
+const ADAPTER_DIR = dirname(fileURLToPath(import.meta.url));
+/** Bundled `/etc/MEMORY.md` in the monorepo — body is reused; frontmatter is widened for bench. */
+export const BUNDLED_MEMORY_INSTRUCTIONS = join(ADAPTER_DIR, '../../vfs-root/etc/MEMORY.md');
 
 export const SKILLS_DIR = '/workspace/skills';
 export const SKILLS_STASH = '/workspace/.bench-skills-builtin';
@@ -45,6 +53,281 @@ export const PROMPT_ALL_SETTLED = '2m';
 const POLL_MS = 10_000;
 const RECAPTURE_MS = 30_000;
 const STEP_CHARS = 4000;
+
+/** `slicc new-session` actions the adapter may pass (`--erase` / `--save` / `--skip`). */
+export const NEW_SESSION_ACTIONS = Object.freeze(['erase', 'save', 'skip']);
+export const DEFAULT_NEW_SESSION = 'erase';
+
+/**
+ * How long after `--save` to wait for durable memory to land.
+ *
+ * `new-session --save` returns when the chat is empty. With `agentic-memory` off
+ * (the default), legacy enrichment continues in the background after a 20s race;
+ * with it on, the curator can run for up to `/etc/MEMORY.md` `timeoutSeconds`
+ * (bundled default 1200s). Three minutes covers a slow legacy extract without
+ * waiting out a full curator bound.
+ */
+export const MEMORY_SETTLE_MS = 180_000;
+/** Poll interval while waiting for CLAUDE.md / the sessions ledger after `--save`. */
+export const MEMORY_SETTLE_POLL_MS = 2_000;
+/**
+ * After `--save`, if `/sessions/index.json` has no new archive by this deadline,
+ * the freeze was skipped (session below `MIN_MESSAGES_TO_FREEZE`, usually 4).
+ */
+export const FREEZE_DETECT_MS = 15_000;
+/**
+ * Empty `/workspace/CLAUDE.md` on a fresh leader is ~286 bytes. Anything at or
+ * above this after a prior plant counts as a retained store when a short follow-up
+ * task skips freeze.
+ */
+export const MIN_RETAINED_MEMORY_BYTES = 300;
+/** `new-session --save` itself: freeze + snapshot can exceed the CLI's 30s default. */
+export const NEW_SESSION_SAVE_TIMEOUT = '120s';
+/** Bench-widened memory-pass instructions (drives curator visiblePaths / sudoers grants). */
+export const MEMORY_INSTRUCTIONS_PATH = '/etc/MEMORY.md';
+
+/** Fingerprint of the cone memory file used to detect post-save enrichment. */
+export function parseMemoryFingerprint(stdout) {
+  const text = String(stdout ?? '');
+  const bytes = Number((text.match(/^bytes=(\d+)/m) || [])[1]);
+  const sha = (text.match(/^sha=([0-9a-f]+)/m) || [])[1] || '';
+  const auto = Number((text.match(/^auto_extracted=(\d+)/m) || [])[1]);
+  return {
+    bytes: Number.isFinite(bytes) ? bytes : 0,
+    sha,
+    autoExtracted: Number.isFinite(auto) ? auto : 0,
+  };
+}
+
+/** Shell that prints a stable fingerprint of `/workspace/CLAUDE.md` (missing file → zeros). */
+export function memoryFingerprintCommand() {
+  return [
+    'f=/workspace/CLAUDE.md',
+    'if [ ! -f "$f" ]; then echo bytes=0; echo sha=; echo auto_extracted=0; exit 0; fi',
+    'echo bytes=$(wc -c < "$f" | tr -d " ")',
+    'echo sha=$(sha256sum "$f" | awk \'{print $1}\')',
+    'echo auto_extracted=$(grep -c "^## Auto-extracted" "$f" || true)',
+  ].join('; ');
+}
+
+/** Shell that prints `/sessions/index.json`, or `[]` when the ledger is missing. */
+export function sessionsIndexCommand() {
+  return "if [ -f /sessions/index.json ]; then cat /sessions/index.json; else echo '[]'; fi";
+}
+
+export function memoryFingerprintChanged(before, after) {
+  if (!before || !after) return false;
+  if (after.sha && before.sha && after.sha !== before.sha) return true;
+  if (after.autoExtracted > before.autoExtracted) return true;
+  if (after.bytes !== before.bytes) return true;
+  return false;
+}
+
+/**
+ * True when CLAUDE.md already holds durable content and did not regress across `--save`.
+ * Used when a short follow-up task skips freeze but the plant's memory must remain.
+ */
+export function memoryStoreRetained(before, after) {
+  if (!before || !after) return false;
+  if (memoryFingerprintChanged(before, after)) return false;
+  if ((before.autoExtracted ?? 0) > 0) return true;
+  return (before.bytes ?? 0) >= MIN_RETAINED_MEMORY_BYTES;
+}
+
+/**
+ * Read `/workspace/CLAUDE.md` fingerprint via `slicc exec`.
+ * @param {{ exec: Function }} leader
+ */
+export async function readMemoryFingerprint(leader) {
+  const r = await leader.exec(memoryFingerprintCommand());
+  if (r.status !== 0) {
+    return { bytes: 0, sha: '', autoExtracted: 0, error: (r.stderr || '').slice(0, 200) };
+  }
+  return parseMemoryFingerprint(r.stdout);
+}
+
+/** Parse `/sessions/index.json` (freezer ledger). Malformed → `[]`. */
+export function parseSessionsIndex(stdout) {
+  try {
+    const parsed = JSON.parse(String(stdout ?? '').trim() || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Read the freezer sessions ledger via `slicc exec`.
+ * @param {{ exec: Function }} leader
+ */
+export async function readSessionsIndex(leader) {
+  const r = await leader.exec(sessionsIndexCommand());
+  if (r.status !== 0) return [];
+  return parseSessionsIndex(r.stdout);
+}
+
+/** Newest archive by `frozenAt` (ISO strings sort lexicographically). */
+export function newestSessionArchive(index) {
+  if (!Array.isArray(index) || index.length === 0) return null;
+  return [...index].sort((a, b) =>
+    String(b.frozenAt ?? '').localeCompare(String(a.frozenAt ?? ''))
+  )[0];
+}
+
+/**
+ * Whether enrichment / curation has finished for an archive (success or failure).
+ * Pending markers mean the background pass is still owed.
+ */
+export function sessionArchiveSettled(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (entry.memoryFailed != null && entry.memoryFailed !== '') return true;
+  if (entry.pendingEnrichment === true || entry.memoryPending === true) return false;
+  return true;
+}
+
+function memorySettleError(message, fields = {}) {
+  const err = new Error(message);
+  err.memoryNotSettled = true;
+  Object.assign(err, fields);
+  return err;
+}
+
+function memorySettleOk(changed, { before, after, started, now, index, newest }) {
+  return {
+    settled: true,
+    changed,
+    before,
+    after,
+    waitedMs: now() - started,
+    archives: index.length,
+    newest,
+  };
+}
+
+/**
+ * When freeze never happened: keep going if prior memory is retained, else fail.
+ * Returns `'retained'` so the poller can exit successfully.
+ */
+function freezeSkippedOutcome({ elapsedMs, freezeDetectMs, archivesBefore, index, before, after }) {
+  if (elapsedMs < freezeDetectMs) return null;
+  if (memoryStoreRetained(before, after)) return 'retained';
+  throw memorySettleError(
+    `new-session --save did not freeze a session within ${freezeDetectMs} ms ` +
+      `(sessions ${archivesBefore}→${index.length}; need ≥4 cone messages to freeze)`,
+    { memoryReason: 'freeze_skipped', before, after, archivesBefore, archivesAfter: index.length }
+  );
+}
+
+/** Throw when enrichment finished without writing memory (unless retained). */
+function throwIfExtractEmpty({ sawFreeze, newest, before, after }) {
+  if (!sawFreeze || !sessionArchiveSettled(newest)) return;
+  if (memoryStoreRetained(before, after)) return;
+  if (newest?.memoryFailed) {
+    throw memorySettleError(
+      `memory curation failed after new-session --save: ${String(newest.memoryFailed).slice(0, 200)}`,
+      { memoryReason: 'curation_failed', before, after, newest }
+    );
+  }
+  throw memorySettleError(
+    `memory extraction finished with no durable memories after new-session --save ` +
+      `(CLAUDE.md bytes ${before?.bytes ?? '?'}→${after.bytes}, archive ${newest?.filename ?? '?'})`,
+    { memoryReason: 'extract_empty', before, after, newest }
+  );
+}
+
+function settleTimeoutDetail(newest, sawFreeze, archivesBefore, indexLength) {
+  if (newest && (newest.pendingEnrichment === true || newest.memoryPending === true)) {
+    return (
+      `; archive ${newest.filename} still pending` +
+      (newest.memoryPending ? ' (memoryPending — agentic curator)' : ' (pendingEnrichment)')
+    );
+  }
+  if (!sawFreeze) return `; no new session archive (sessions ${archivesBefore}→${indexLength})`;
+  return '';
+}
+
+/**
+ * After `new-session --save`, wait until CLAUDE.md changes (enrichment / curator).
+ *
+ * Distinguishes three failure modes when `requireChange` is true:
+ * - freeze skipped: no new `/sessions` archive within {@link FREEZE_DETECT_MS}
+ * - extract empty: archive settled but CLAUDE.md unchanged (legacy returned NONE)
+ * - timeout: still pending (or agentic curator still running) when `timeoutMs` elapses
+ */
+export async function awaitMemorySettle(
+  leader,
+  {
+    before,
+    archivesBefore = 0,
+    timeoutMs = MEMORY_SETTLE_MS,
+    pollMs = MEMORY_SETTLE_POLL_MS,
+    freezeDetectMs = FREEZE_DETECT_MS,
+    requireChange = false,
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+    now = Date.now,
+  } = {}
+) {
+  const started = now();
+  let after = await readMemoryFingerprint(leader);
+  let index = await readSessionsIndex(leader);
+  let newest = newestSessionArchive(index);
+  const ctx = { before, started, now, index, newest };
+
+  if (memoryFingerprintChanged(before, after)) {
+    return memorySettleOk(true, { ...ctx, after });
+  }
+  if (!requireChange || timeoutMs <= 0) {
+    return memorySettleOk(false, { ...ctx, after });
+  }
+
+  while (now() - started < timeoutMs) {
+    const sawFreeze = index.length > archivesBefore;
+    if (!sawFreeze) {
+      const skipped = freezeSkippedOutcome({
+        elapsedMs: now() - started,
+        freezeDetectMs,
+        archivesBefore,
+        index,
+        before,
+        after,
+      });
+      if (skipped === 'retained') {
+        return memorySettleOk(false, { before, after, started, now, index, newest });
+      }
+    } else {
+      throwIfExtractEmpty({ sawFreeze, newest, before, after });
+      if (memoryStoreRetained(before, after) && sessionArchiveSettled(newest)) {
+        return memorySettleOk(false, { before, after, started, now, index, newest });
+      }
+    }
+    await sleep(Math.min(pollMs, Math.max(0, timeoutMs - (now() - started))));
+    after = await readMemoryFingerprint(leader);
+    index = await readSessionsIndex(leader);
+    newest = newestSessionArchive(index);
+    if (memoryFingerprintChanged(before, after)) {
+      return memorySettleOk(true, { before, after, started, now, index, newest });
+    }
+  }
+
+  const sawFreeze = index.length > archivesBefore;
+  if (memoryStoreRetained(before, after)) {
+    return memorySettleOk(false, { before, after, started, now, index, newest });
+  }
+  throw memorySettleError(
+    `memory did not settle after new-session --save within ${timeoutMs} ms ` +
+      `(CLAUDE.md bytes ${before?.bytes ?? '?'}→${after.bytes}, ` +
+      `Auto-extracted ${before?.autoExtracted ?? '?'}→${after.autoExtracted}` +
+      `${settleTimeoutDetail(newest, sawFreeze, archivesBefore, index.length)})`,
+    {
+      memoryReason: sawFreeze ? 'timeout_pending' : 'freeze_skipped',
+      before,
+      after,
+      newest,
+      archivesBefore,
+      archivesAfter: index.length,
+    }
+  );
+}
 
 export const FINAL_INSTRUCTION = [
   "Don't ask clarifying questions: if the task is ambiguous, pick the most reasonable reading and go on.",
@@ -496,11 +779,105 @@ export async function pinScoopModels(leader, modelId) {
  * that was merely not read.
  */
 async function readPolicy(leader) {
-  const exists = await leader.exec(`test -e ${MODELS_POLICY_PATH}`);
+  return readEtcText(leader, MODELS_POLICY_PATH);
+}
+
+/**
+ * Read a text file under `/etc/` via `slicc exec`, or null when it is confirmed absent.
+ * @param {{ exec: Function }} leader
+ * @param {string} path
+ */
+async function readEtcText(leader, path) {
+  const exists = await leader.exec(`test -e ${path}`);
   if (exists.leaderDown || (exists.status !== 0 && exists.status !== 1))
-    throw failure(`leader: \`test -e ${MODELS_POLICY_PATH}\``, exists);
+    throw failure(`leader: \`test -e ${path}\``, exists);
   if (exists.status === 1) return null;
-  return (await must(leader, `cat ${MODELS_POLICY_PATH}`)).stdout;
+  return (await must(leader, `cat ${path}`)).stdout;
+}
+
+/**
+ * Frontmatter for the bench memory pass: same body as the bundled file, but `visiblePaths`
+ * also includes `/tmp/` (plant scratch) and `/etc/` (policy). That grant set is what the
+ * runtime turns into the curator scoop's sudoers drop-in.
+ */
+export function benchMemoryInstructions(bundledText) {
+  const body = String(bundledText ?? '').replace(/^---[\s\S]*?---\r?\n*/, '');
+  return [
+    '---',
+    '# Written by the bench for --new-session save: wider curator visiblePaths (→ sudoers grants).',
+    'writablePaths:',
+    '  - /workspace/CLAUDE.md',
+    '  - /shared/wiki/',
+    'visiblePaths:',
+    '  - /sessions/',
+    '  - /shared/',
+    '  - /workspace/',
+    '  - /tmp/',
+    '  - /etc/',
+    'allowedCommands:',
+    '  - awk',
+    '  - cat',
+    '  - cp',
+    '  - cut',
+    '  - echo',
+    '  - file',
+    '  - find',
+    '  - grep',
+    '  - head',
+    '  - jq',
+    '  - ls',
+    '  - mkdir',
+    '  - mv',
+    '  - od',
+    '  - printf',
+    '  - rg',
+    '  - sed',
+    '  - sort',
+    '  - tail',
+    '  - tr',
+    '  - uniq',
+    '  - uname',
+    '  - upskill',
+    '  - wc',
+    'timeoutSeconds: 600',
+    'dreamTimeoutSeconds: 3600',
+    'thinkingLevel: medium',
+    '---',
+    '',
+    body.trimStart(),
+  ].join('\n');
+}
+
+/**
+ * Seed a widened `/etc/MEMORY.md` for save-mode runs so the memory-curator scoop can see
+ * plant scratch under `/tmp/` and policy under `/etc/`. Restores the previous file (or removes
+ * the bench copy) when the returned `restore` runs.
+ */
+export async function seedBenchMemoryInstructions(
+  leader,
+  { readFile = (p) => readFileSync(p, 'utf8'), bundledPath = BUNDLED_MEMORY_INSTRUCTIONS } = {}
+) {
+  const text = benchMemoryInstructions(readFile(bundledPath));
+  const original = await readEtcText(leader, MEMORY_INSTRUCTIONS_PATH);
+  const write = (content) =>
+    must(leader, `base64 -d > ${MEMORY_INSTRUCTIONS_PATH}`, {
+      stdin: Buffer.from(content).toString('base64'),
+    });
+  const restore = () =>
+    original === null ? must(leader, `rm -f ${MEMORY_INSTRUCTIONS_PATH}`) : write(original);
+  try {
+    await write(text);
+    const back = await must(leader, `cat ${MEMORY_INSTRUCTIONS_PATH}`);
+    if (!back.stdout.includes('/tmp/') || !back.stdout.includes('visiblePaths:'))
+      throw new Error(`${MEMORY_INSTRUCTIONS_PATH} did not take the bench memory pass`);
+  } catch (err) {
+    await restore().catch((undo) => {
+      err.message += `; and restoring ${MEMORY_INSTRUCTIONS_PATH} failed: ${undo.message}`;
+      err.leaderDown = true;
+    });
+    throw err;
+  }
+  return { restore, path: MEMORY_INSTRUCTIONS_PATH };
 }
 
 /**
@@ -1622,6 +1999,132 @@ async function restoreAfterRun(undo, pin) {
   });
 }
 
+function newSessionCliArgs(sessionAction) {
+  const args = ['new-session', `--${sessionAction}`];
+  if (sessionAction === 'save') args.push('--timeout', NEW_SESSION_SAVE_TIMEOUT);
+  return args;
+}
+
+/**
+ * `new-session` plus, for `--save`, a wait until CLAUDE.md reflects enrichment.
+ * `requireMemoryChange` is true on teardown after a real agent turn so the next
+ * task cannot start with a still-empty memory store.
+ */
+async function runNewSession(
+  leader,
+  sessionAction,
+  { requireMemoryChange = false, memorySettleMs = MEMORY_SETTLE_MS, sleep, now } = {}
+) {
+  const args = newSessionCliArgs(sessionAction);
+  if (sessionAction !== 'save' || memorySettleMs <= 0) {
+    await mustCli(leader, args);
+    return { changed: false, waitedMs: 0 };
+  }
+  const before = await readMemoryFingerprint(leader);
+  const archivesBefore = (await readSessionsIndex(leader)).length;
+  await mustCli(leader, args);
+  return awaitMemorySettle(leader, {
+    before,
+    archivesBefore,
+    timeoutMs: memorySettleMs,
+    requireChange: requireMemoryChange,
+    sleep,
+    now,
+  });
+}
+
+/** Soft `new-session` + scratch cleanup after a failed run (never throws). */
+async function cleanupFailedRun(leader, sessionAction, staged, dir) {
+  await closeTabs(leader).catch(() => {});
+  await leader.cli(newSessionCliArgs(sessionAction)).catch(() => {});
+  await cleanupScratch(leader, staged, dir);
+}
+
+async function cleanupScratch(leader, staged, dir) {
+  const leftovers = stagedCleanupPaths(staged);
+  if (leftovers.length)
+    await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});
+  await leader.exec(`rm -rf ${dir}`).catch(() => {});
+}
+
+/**
+ * Teardown after a successful agent turn: `--save` must land memory or the run
+ * errors; a leader that drops during teardown still soft-fails.
+ */
+async function teardownSuccessfulRun(
+  leader,
+  sessionAction,
+  { memorySettleMs, sleep, now, staged, dir, restore, pin }
+) {
+  try {
+    await runNewSession(leader, sessionAction, {
+      requireMemoryChange: sessionAction === 'save' && memorySettleMs > 0,
+      memorySettleMs,
+      sleep,
+      now,
+    });
+  } catch (err) {
+    if (err?.memoryNotSettled) throw err;
+  }
+  // Restore `/etc/models` before scratch cleanup so the pin does not outlive the run.
+  if (restore) await restoreAfterRun(restore, pin);
+  await cleanupScratch(leader, staged, dir);
+}
+
+function taskResultBody({
+  runId,
+  prepared,
+  collected,
+  reply,
+  armOut,
+  resumedAfterSettle,
+  transcript,
+  durationMs,
+  done,
+  started,
+  t0,
+  before,
+  after,
+  openTabs,
+  images,
+  taken,
+  health,
+  modelPin,
+}) {
+  return {
+    runId,
+    model: prepared.spec.spec,
+    modelId: prepared.modelId,
+    thinking: prepared.spec.thinking,
+    thinkingEffective: prepared.thinkingEffective,
+    modelPin,
+    exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
+    timedOut: Boolean(
+      reply.timedOut || collected.timedOut || armOut?.record?.arm?.result?.timedOut
+    ),
+    costCapped: Boolean(reply.aborted || collected.costCapped),
+    finalText: finalTextOf(armOut, { resumedAfterSettle, transcript, reply }),
+    ...armOut?.record,
+    stderr: reply.stderr.slice(-4000),
+    durationMs: resumedAfterSettle
+      ? (collected.stoppedAt ?? collected.settledAt ?? done) - started
+      : durationMs,
+    ...spendDelta(before, after),
+    transcript,
+    transcriptExport: collected.transcriptExport,
+    resumedAfterSettle,
+    tabs: openTabs,
+    screenshots: images,
+    screenshotsTaken: taken,
+    phases: {
+      setupMs: started - t0,
+      promptMs: durationMs,
+      collectMs: done - started - durationMs,
+    },
+    health,
+  };
+}
+
 export async function runTask({
   leader,
   task,
@@ -1639,8 +2142,16 @@ export async function runTask({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   condition = null,
   arm = null,
+  sessionAction = DEFAULT_NEW_SESSION,
+  /** 0 skips the post-save CLAUDE.md wait; default waits when sessionAction is save. */
+  memorySettleMs = sessionAction === 'save' ? MEMORY_SETTLE_MS : 0,
 }) {
   if (!RUN_ID_PATTERN.test(runId)) throw new Error(`bad run id ${runId}`);
+  if (!NEW_SESSION_ACTIONS.includes(sessionAction)) {
+    throw new Error(
+      `sessionAction must be one of ${NEW_SESSION_ACTIONS.join(', ')}; got ${sessionAction}`
+    );
+  }
   const dir = `/tmp/bench/${runId}`;
   const timeout = task.slicc?.timeoutSeconds ?? timeoutSeconds;
   const t0 = now();
@@ -1648,6 +2159,8 @@ export async function runTask({
   const staged = [];
   let restorePolicy = null;
   let pin = null;
+  /** Restores applied in reverse (models pin, then MEMORY.md). */
+  const undos = [];
   try {
     await must(leader, `rm -rf ${dir} && mkdir -p ${dir}`);
     const goalFile = await prepareArmRun(leader, arm, dir, task);
@@ -1661,11 +2174,24 @@ export async function runTask({
       staged.push(leaves[i]);
     }
     await closeTabs(leader);
-    await mustCli(leader, ['new-session', '--erase']);
+    // Save mode: widen curator visiblePaths (/tmp, /etc) before any freeze/curate.
+    if (sessionAction === 'save') {
+      undos.push((await seedBenchMemoryInstructions(leader)).restore);
+    }
+    // Setup: prior chat may be empty — do not require a CLAUDE.md change.
+    await runNewSession(leader, sessionAction, {
+      requireMemoryChange: false,
+      memorySettleMs,
+      sleep,
+      now,
+    });
     if (condition) await assertStagedSkills(leader, condition);
     const prepared = await prepareModel(leader, model);
     const pinned = await pinScoopModels(leader, prepared.modelId);
-    restorePolicy = pinned.restore;
+    undos.push(pinned.restore);
+    restorePolicy = async () => {
+      for (const undo of [...undos].reverse()) await undo();
+    };
     pin = pinned.pin;
     const before = await spend(leader);
 
@@ -1731,57 +2257,54 @@ export async function runTask({
       stopProbeBudgetMs,
     });
     after = collected.after;
-    const { transcript, transcriptExport, resumedAfterSettle } = collected;
+    const { transcript, resumedAfterSettle } = collected;
     await closeTabs(leader).catch(() => {});
     const { taken, images } = await readShots(leader, shots);
     const armOut = await collectArmRun(leader, arm, reply, transcript, started);
     health.after = await leaderHealth(leader, now);
     const done = now();
-    return {
+    const body = taskResultBody({
       runId,
-      model: prepared.spec.spec,
-      modelId: prepared.modelId,
-      thinking: prepared.spec.thinking,
-      thinkingEffective: prepared.thinkingEffective,
-      modelPin: pin,
-      exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
-      // An arm that ran out its own --time-limit exits before the exec deadline: only its result says so.
-      timedOut: Boolean(
-        reply.timedOut || collected.timedOut || armOut?.record?.arm?.result?.timedOut
-      ),
-      costCapped: Boolean(reply.aborted || collected.costCapped),
-      finalText: finalTextOf(armOut, { resumedAfterSettle, transcript, reply }),
-      ...armOut?.record,
-      stderr: reply.stderr.slice(-4000),
-      durationMs: resumedAfterSettle
-        ? (collected.stoppedAt ?? collected.settledAt ?? done) - started
-        : durationMs,
-      ...spendDelta(before, after),
-      transcript,
-      transcriptExport,
+      prepared,
+      collected,
+      reply,
+      armOut,
       resumedAfterSettle,
-      tabs: openTabs,
-      screenshots: images,
-      screenshotsTaken: taken,
-      phases: {
-        setupMs: started - t0,
-        promptMs: durationMs,
-        collectMs: done - started - durationMs,
-      },
+      transcript,
+      durationMs,
+      done,
+      started,
+      t0,
+      before,
+      after,
+      openTabs,
+      images,
+      taken,
       health,
-    };
+      modelPin: pin,
+    });
+    try {
+      await teardownSuccessfulRun(leader, sessionAction, {
+        memorySettleMs,
+        sleep,
+        now,
+        staged,
+        dir,
+        restore: restorePolicy,
+        pin,
+      });
+      restorePolicy = null;
+    } catch (err) {
+      // Keep the agent turn for diagnosis when settle fails (freeze skip / empty extract).
+      if (err?.memoryNotSettled) err.partialResult = body;
+      throw err;
+    }
+    return body;
   } catch (err) {
     const undo = restorePolicy;
     restorePolicy = null;
     await restoreAfterFailedRun(undo, err);
+    await cleanupFailedRun(leader, sessionAction, staged, dir);
     throw err;
-  } finally {
-    await closeTabs(leader).catch(() => {});
-    await leader.cli(['new-session', '--erase']).catch(() => {});
-    await restoreAfterRun(restorePolicy, pin);
-    const leftovers = stagedCleanupPaths(staged);
-    if (leftovers.length)
-      await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});
-    await leader.exec(`rm -rf ${dir}`).catch(() => {});
   }
 }

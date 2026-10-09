@@ -1,0 +1,26 @@
+{
+  "benchmark": "SLICC_Memory_Smoke",
+  "last_updated": "2026-10-09",
+  "n_tasks": 2,
+  "notice": "Two tasks that prove new-session --save durable memory on one leader (fresh-leader-every=0). Plant states a durable preference and forces enough cone messages for freeze (≥4); retrieve must answer from CLAUDE.md after save settles. Run with --new-session save, shards=1, leaders=1. Settle polls the sessions ledger + CLAUDE.md (see slicc-adapter MEMORY_SETTLE_MS).",
+  "tasks": [
+    {
+      "id": "mem-plant-001",
+      "title": "Plant a durable preference",
+      "summary": "State a durable status-line color preference and force several shell turns so the session freezes and legacy extraction has a clear preference to keep.",
+      "task": "This is a durable preference for this install — not an ephemeral task, and not only for this chat. Whenever I ask for a status line color, always use the exact code word cerulean-bench-7.\n\nDo each of these as separate shell tool calls (do not combine them into one command):\n1. Write exactly `cerulean-bench-7` as the only contents of /tmp/bench-mem-pref-ack.txt.\n2. Read that file back with cat and write the same line to /tmp/bench-mem-pref-ack-2.txt.\n3. Append one more line `status-line-color=cerulean-bench-7` to /tmp/bench-mem-pref-ack-2.txt.\n\nThen confirm in your reply that future sessions on this install should honor cerulean-bench-7 as my durable status line color preference.\n\nDo not browse the web. Do not ask questions.",
+      "rubric": "# Rubric: mem-plant-001\n\n## How to judge\nJudge from the trajectory and the final result. The point of this task is to leave a durable preference the next session can recall after `new-session --save`.\n\n## Source facts\n- The durable code word is `cerulean-bench-7`.\n\n## Items\nA1_ack — The final result (or last assistant message) acknowledges the preference `cerulean-bench-7`.\nA2_shell — The trajectory shows shell/tool writes that mention `cerulean-bench-7` or `/tmp/bench-mem-pref-ack`.\nA3_durable_framing — The trajectory treats this as a preference to remember across sessions (not only as a one-off task).\n",
+      "weights": { "A1_ack": 40, "A2_shell": 40, "A3_durable_framing": 20 },
+      "slicc": { "timeoutSeconds": 300 }
+    },
+    {
+      "id": "mem-retrieve-001",
+      "title": "Retrieve the planted preference",
+      "summary": "After a prior save session, report the status-line color code word from durable memory only.",
+      "task": "What status line color code word did I ask you to remember as a durable preference in an earlier session?\n\nAnswer from durable cone memory only (/workspace/CLAUDE.md or what was loaded from it). Do not search /tmp, the web, or frozen session archives. If you do not have it, answer NONE.",
+      "rubric": "# Rubric: mem-retrieve-001\n\n## How to judge\nJudge from the final result. Credit only the planted durable preference.\n\n## Source facts\n- The planted code word is `cerulean-bench-7`.\n\n## Rulings\n- `NONE` or any other token fails A1.\n- Reading `/tmp/bench-mem-pref-ack.txt` or browsing violates A2 even if the answer is correct.\n\n## Items\nA1_code_word — The final result gives exactly `cerulean-bench-7`.\nA2_from_memory — The trajectory does not read `/tmp/bench-mem-pref-ack.txt` or other plant scratch files to recover the answer.\n",
+      "weights": { "A1_code_word": 70, "A2_from_memory": 30 },
+      "slicc": { "timeoutSeconds": 300 }
+    }
+  ]
+}

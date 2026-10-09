@@ -42,6 +42,8 @@ describe('resumeInputs', () => {
       publish: false,
       'resume-run': '',
       'auto-resumed-from': '',
+      empty: null,
+      missing: undefined,
     };
     expect(resumeInputs(inputs, 42)).toEqual({
       sets: 'bu-v2',
@@ -49,6 +51,10 @@ describe('resumeInputs', () => {
       publish: 'false',
       'resume-run': '42',
       'auto-resumed-from': '42',
+    });
+    expect(resumeInputs(null, 7)).toEqual({
+      'resume-run': '7',
+      'auto-resumed-from': '7',
     });
   });
 });
