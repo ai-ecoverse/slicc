@@ -1,6 +1,7 @@
 import { isAllowedDomain } from '@slicc/shared-ts';
 import type { Command, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { GITHUB_DOMAINS } from '../../git/github-domains.js';
 import { resolveFloatTopology } from '../float-topology.js';
 import { stdinAsText } from '../just-bash-compat.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
@@ -15,8 +16,6 @@ export const PLUMBING: ReadonlyMap<string, string> = new Map([
   ['git-remote-http', 'git'],
   ['git-remote-https', 'git'],
 ]);
-
-export const GITHUB_DOMAINS = ['github.com', '*.github.com'];
 
 const TOKEN_USERNAME = 'x-access-token';
 

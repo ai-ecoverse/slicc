@@ -1,6 +1,6 @@
 import { readOAuthExtras } from '@slicc/shared-ts';
 import { getRegisteredProviderConfig } from '../providers/index.js';
-import { GITHUB_DOMAINS } from '../shell/supplemental-commands/git-credential-command.js';
+import { GITHUB_DOMAINS } from './github-domains.js';
 
 export async function ensureFreshGithubToken(opts?: { force?: boolean }): Promise<void> {
   const github = getRegisteredProviderConfig('github');
