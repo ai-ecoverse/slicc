@@ -47,6 +47,7 @@ import {
   claudeSupportsPromptCaching,
   claudeTurnsThinkingOffExplicitly,
 } from '../claude-model-version.js';
+import { withOutputTokenFloor } from '../output-token-floor.js';
 import { toLegacyPiContext, toPiTranscriptContext } from '../pi-transcript-context.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
@@ -1020,7 +1021,8 @@ function buildInferenceConfig(
   options: BedrockCampOptions
 ): BedrockCampInferenceConfig {
   const inferenceConfig: BedrockCampInferenceConfig = {};
-  if (options.maxTokens !== undefined) inferenceConfig.maxTokens = options.maxTokens;
+  const maxTokens = withOutputTokenFloor(model, options.maxTokens);
+  if (maxTokens !== undefined) inferenceConfig.maxTokens = maxTokens;
   if (options.temperature !== undefined && supportsTemperature(model.id, model.name)) {
     inferenceConfig.temperature = options.temperature;
   }

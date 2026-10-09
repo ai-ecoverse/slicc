@@ -590,6 +590,61 @@ describe('bedrock-camp built-in provider', () => {
  * (`account-store.ts`), so a default naming a model the filter hides silently
  * falls through to "first visible model". Runs against the real catalogue.
  */
+/**
+ * pi-ai's `buildBaseOptions` caps `maxTokens` at the context room left (window − estimate − 4096)
+ * with a floor of 1, so a 4,097-token window gives exactly 1: a nearly full context. Bedrock's
+ * non-Claude backends reject that with `400 integer_below_min_value` (GPT-6 Luna, BU Bench bu2-022,
+ * 2026-10-09).
+ */
+describe('max output tokens near a full context', () => {
+  const nearlyFull = { contextWindow: 4097, maxTokens: 128_000 };
+
+  it.each([
+    ['GPT-6 Luna', 'global.openai.gpt-6-luna'],
+    ['Kimi K3', 'global.moonshotai.kimi-k3'],
+    ['Grok 4.7', 'global.xai.grok-4.7'],
+  ])('sends at least 16 for %s', async (_label, id) => {
+    const payload = await capturePayload(baseModel({ id, name: id, ...nearlyFull }));
+    expect(payload.inferenceConfig.maxTokens).toBe(16);
+  });
+
+  it('keeps the single token for Claude, which accepts it', async () => {
+    const payload = await capturePayload(baseModel(nearlyFull));
+    expect(payload.inferenceConfig.maxTokens).toBe(1);
+  });
+
+  it('floors an explicit budget on the direct stream too', async () => {
+    const fetchMock = mockOkResponse();
+    vi.stubGlobal('fetch', fetchMock);
+    let captured: any;
+    const stream = streamBedrockCamp(
+      baseModel({ id: 'global.openai.gpt-6-luna', name: 'GPT-6 Luna (Global)' }),
+      { messages: [{ role: 'user', content: 'hi' }] } as any,
+      {
+        apiKey: 'ABSK-test',
+        maxTokens: 1,
+        onPayload(payload) {
+          captured = payload;
+        },
+      }
+    );
+    await stream.result();
+    expect(captured.inferenceConfig.maxTokens).toBe(16);
+  });
+
+  it('leaves a roomy budget alone', async () => {
+    const payload = await capturePayload(
+      baseModel({
+        id: 'global.openai.gpt-6-luna',
+        name: 'GPT-6 Luna (Global)',
+        contextWindow: 1_000_000,
+      }),
+      { maxTokens: 4096 }
+    );
+    expect(payload.inferenceConfig.maxTokens).toBe(4096);
+  });
+});
+
 describe('config.defaultModelId resolves against the real catalogue', () => {
   const REGION = 'us-west-2';
 

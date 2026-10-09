@@ -2402,6 +2402,16 @@ Consequences of that gating, easy to miss:
   `low`, and xhigh and max send `high`. pi-ai's catalogue lists only the
   `global.` and `us.` profiles (Global $2 input / $6 output / $0.50 cache read
   per million tokens, US +10%, a 500,000-token window, no long-context tier).
+- **Non-Claude models need at least 16 output tokens.** pi-ai's
+  `buildBaseOptions` caps `maxTokens` at the context room left (window −
+  estimate − 4096) with a floor of 1, so a nearly full context sends
+  `maxTokens: 1`. Every allowlisted non-Claude model answers anything below
+  16 with `400 integer_below_min_value`; Claude accepts 1 (2026-10-09). A GPT-6
+  Luna bench run (bu2-022) failed its last turn this way.
+  `providers/output-token-floor.ts` holds measured minimums keyed by wire API
+  and model, and `buildInferenceConfig` applies them. pi-ai's OpenAI Responses
+  builders already floor `max_output_tokens` at 16; providers slicc implements
+  must apply the floor themselves.
 - **The allowlist is anchored per variant** (`sol|terra|luna`), not a
   `gpt-5.6-` prefix. A prefix would auto-admit any future variant the
   catalogue gains without anyone measuring its caching, which is the
