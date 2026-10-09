@@ -113,6 +113,9 @@ on:
         description: 'Publish the results to the Hugging Face dataset ai-ecoverse/slicc-bench'
         type: boolean
         default: true
+      auto-resumed-from:
+        description: 'Set by the auto-resume job: the run this one resumes after Cloud Run took its shards away. A run that has it is never auto-resumed again. Leave empty.'
+        default: ''
   pull_request:
     paths:
       - 'packages/bench/**'
@@ -147,6 +150,7 @@ jobs:
       DEADLINE: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '45' }}
       RESUME_RUN: ${{ inputs.resume-run || '' }}
       PIN_WEBAPP: ${{ github.event_name == 'workflow_dispatch' && inputs.pin-webapp || '' }}
+      AUTO_RESUMED_FROM: ${{ inputs.auto-resumed-from || '' }}
     steps:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -182,6 +186,12 @@ jobs:
           echo "slicc-version=$version" >> "$GITHUB_OUTPUT"
           echo "shards=$(jq -cn --argjson n "$SHARDS" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
           echo "sliccy $version, $SHARDS shard(s)" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$AUTO_RESUMED_FROM" ]; then
+            if ! [[ "$AUTO_RESUMED_FROM" =~ ^[0-9]+$ ]]; then
+              echo "::error::auto-resumed-from must be a run id, not '$AUTO_RESUMED_FROM'"; exit 1
+            fi
+            echo "Auto-resume of run $AUTO_RESUMED_FROM, after Cloud Run took some of its shards away (not resumed again)." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   bench:
     name: Shard ${{ matrix.shard }}
@@ -529,3 +539,35 @@ jobs:
         run: |
           echo "::error::at least one shard failed or stopped early (${{ needs.bench.result }}); use \"Re-run failed jobs\" to resume them from their artifacts"
           exit 1
+
+  # Cloud Run replaces worker-pool instances under running jobs (host maintenance): the shard's
+  # step exits 130 and GitHub records "The self-hosted runner lost communication with the server".
+  # Those tasks belong to an approved run, so dispatch it once more with resume-run and its own
+  # inputs; finished runs are skipped. Never for a run that is itself an auto-resume, and never
+  # for the bench's own failures. See packages/bench/scripts/auto-resume.mjs.
+  auto-resume:
+    name: Auto-resume
+    needs: [plan, bench]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.plan.result == 'success' && needs.bench.result == 'failure' && inputs.auto-resumed-from == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write # dispatch the resume
+      checks: read # read the shards' annotations
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: packages/bench/scripts
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Resume shards Cloud Run took away
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REF: ${{ github.ref_name }}
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+        run: node packages/bench/scripts/auto-resume.mjs

@@ -146,6 +146,21 @@ defends against it and records what the next occurrence needs:
   teardown, and the record's `metrics.model_pin` names the provider, the model
   and how many ids were denied. This covers arm runs too: the driver's agent runs
   on the configured model.
+- **Shards Cloud Run takes away are resumed once, automatically.** Cloud Run
+  replaces worker-pool instances under running jobs (host maintenance): the
+  container gets SIGTERM ("Termination requested, stopping runner"), the bench
+  step exits 130, the post-steps still upload the shard, and GitHub marks the
+  job failed about ten minutes later with "The self-hosted runner lost
+  communication with the server" (2026-10-08 19:23, 2026-10-09 00:46). The
+  `auto-resume` job (`scripts/auto-resume.mjs`) reads the failed shards'
+  annotations and, if every failed shard was killed that way (exit 130, lost
+  communication, or "Termination requested"), dispatches the run again with
+  `resume-run=<run>` and its own inputs, so only the lost tasks are paid for.
+  The new run carries `auto-resumed-from` and is never auto-resumed again. The
+  bench's own failures (exit 1) are left alone, and so is a run where one shard
+  was killed and another failed on its own (a resume would retry those runs
+  too); its summary names the `resume-run` to use by hand. Both runs say so in their summaries. Keep shards
+  short (a wide layout) to bound what an instance replacement can lose.
 - Journal in the out dir: `calls.jsonl`, `events.jsonl` (per task: phases,
   leader generation and age, `uptime`/`meminfo`/`ps` before and after),
   `diagnostics/`; with `BENCH_LEADER_LOG`, events are also marked in the
