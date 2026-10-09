@@ -13,9 +13,11 @@ import {
   DEFAULT_MODELS,
   defaultSkillsMatch,
   guardrails,
+  keepProfileOnRecovery,
   loadArm,
   loadSet,
   main,
+  memoryChainAllowsSkip,
   parseCli,
   parseShard,
   planRuns,
@@ -41,6 +43,7 @@ describe('runConfig', () => {
       thinking: 'default',
       skills: 'none',
       default_skills: false,
+      new_session: 'erase',
     });
     expect(
       runConfig('sliccy@1', 'claude-opus-5-5@max', { name: 'builtin', builtin: true })
@@ -50,6 +53,7 @@ describe('runConfig', () => {
       thinking: 'max',
       skills: 'builtin',
       default_skills: true,
+      new_session: 'erase',
     });
     expect(
       runConfig('sliccy@1', 'm', { name: 'none+ecoverse', builtin: false }).default_skills
@@ -57,6 +61,9 @@ describe('runConfig', () => {
     expect(runConfig('sliccy@1', 'm', { name: 'builtin', builtin: true }).default_skills).toBe(
       true
     );
+    expect(
+      runConfig('sliccy@1', 'm', { name: 'builtin', builtin: true }, null, 'save').new_session
+    ).toBe('save');
   });
 });
 
@@ -135,8 +142,15 @@ describe('parseCli', () => {
     expect(() => parseCli(['--set', 'x', '--fresh-leader-every', '-1'])).toThrow(
       /--fresh-leader-every/
     );
+    expect(() => parseCli(['--set', 'x', '--fresh-leader-every', 'nope'])).toThrow(
+      /--fresh-leader-every/
+    );
+    expect(() => parseCli(['--set', 'x', '--new-session', 'wipe'])).toThrow(/--new-session/);
     expect(() => parseCli(['--set', 'x', '--leader-down-limit', '0'])).toThrow(
       /--leader-down-limit/
+    );
+    expect(() => parseCli(['--set', 'x', '--deadline-minutes', 'nope'])).toThrow(
+      /--deadline-minutes/
     );
     expect(() => parseCli(['--set', 'x', '--models', 'claude-opus-5-5@turbo'])).toThrow(
       /alias@level/
@@ -147,7 +161,9 @@ describe('parseCli', () => {
     expect(parseCli(['--set', 'x', '--fresh-leader-every', '5'])).toMatchObject({
       freshLeaderEvery: 5,
       leaderDownLimit: 2,
+      newSession: 'erase',
     });
+    expect(parseCli(['--set', 'x', '--new-session', 'save'])).toMatchObject({ newSession: 'save' });
     expect(parseCli(['--help']).help).toBe(true);
   });
 });
@@ -756,6 +772,45 @@ describe('resumeAction', () => {
     expect(resumeAction(done({ config: { default_skills: false } }), TASK, ctx)).toBe('run');
   });
 
+  it('re-runs when new_session differs; missing means erase', () => {
+    expect(resumeAction(done({ config: { default_skills: true } }), TASK, ctx)).toBe('done');
+    expect(
+      resumeAction(done({ config: { default_skills: true, new_session: 'erase' } }), TASK, ctx)
+    ).toBe('done');
+    expect(
+      resumeAction(done({ config: { default_skills: true, new_session: 'save' } }), TASK, ctx)
+    ).toBe('run');
+    expect(
+      resumeAction(done({ config: { default_skills: true } }), TASK, {
+        ...ctx,
+        newSession: 'save',
+      })
+    ).toBe('run');
+  });
+
+  it('replays save/skip done unless the memory profile was restored', () => {
+    const saveDone = done({ config: { default_skills: true, new_session: 'save' } });
+    const skipDone = done({ config: { default_skills: true, new_session: 'skip' } });
+    expect(memoryChainAllowsSkip('erase', false)).toBe(true);
+    expect(memoryChainAllowsSkip('save', false)).toBe(false);
+    expect(memoryChainAllowsSkip('save', true)).toBe(true);
+    expect(keepProfileOnRecovery('erase')).toBe(false);
+    expect(keepProfileOnRecovery('save')).toBe(true);
+    expect(keepProfileOnRecovery('skip')).toBe(true);
+    expect(resumeAction(saveDone, TASK, { ...ctx, newSession: 'save' })).toBe('run');
+    expect(resumeAction(skipDone, TASK, { ...ctx, newSession: 'skip' })).toBe('run');
+    expect(resumeAction(saveDone, TASK, { ...ctx, newSession: 'save', memoryRestored: true })).toBe(
+      'done'
+    );
+    expect(resumeAction(skipDone, TASK, { ...ctx, newSession: 'skip', memoryRestored: true })).toBe(
+      'done'
+    );
+
+    expect(resumeAction(saveDone, TASK, { ...ctx, newSession: 'save', judgeModel: 'j2' })).toBe(
+      'rejudge'
+    );
+  });
+
   it('keeps a run the fallback judge scored for this judge', () => {
     const byFallback = done({ judge: { model: 'fb', fallback_from: 'j1' } });
     expect(resumeAction(byFallback, TASK, ctx)).toBe('done');
@@ -878,7 +933,7 @@ describe('re-judging on resume', () => {
       metrics: { duration: 5 },
     });
     expect(readFileSync(join(outDir, 'report.md'), 'utf8')).toContain(
-      '| m | builtin | 1 | 0 | 0 | 0 | 1 | 0 | – | 5 | 0.010 |'
+      '| m | builtin | erase | 1 | 0 | 0 | 0 | 1 | 0 | – | 5 | 0.010 |'
     );
 
     const again = leader();

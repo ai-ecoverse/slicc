@@ -63,6 +63,9 @@ on:
       fresh-leader-every:
         description: 'Restart a leader every N tasks with a wiped profile (1: every task is isolated; 0: never)'
         default: '1'
+      new-session:
+        description: 'Between tasks: erase (default, wipe memories), save (extract memories then fresh chat), or skip (fresh chat without extracting). For memory accumulation use save with fresh-leader-every=0, shards=1, leaders=1'
+        default: 'erase'
       pin-webapp:
         description: 'Empty: production UI. true: the pinned sliccy package webapp. A commit, tag, or branch: build that revision and run it like the local node harness (its node-server and dist/ui, production tray and flags)'
         type: string
@@ -172,6 +175,7 @@ jobs:
       BENCH_JUDGE_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.judge-model || 'global.openai.gpt-5.6-luna' }}
       BENCH_JUDGE_FALLBACK_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.judge-fallback-model || 'global.openai.gpt-5.6-sol' }}
       BENCH_FRESH_LEADER_EVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.fresh-leader-every || '1' }}
+      BENCH_NEW_SESSION: ${{ github.event_name == 'workflow_dispatch' && inputs.new-session || 'erase' }}
       BENCH_LEADERS: ${{ github.event_name == 'workflow_dispatch' && inputs.leaders || '2' }}
       BENCH_DEADLINE_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '45' }}
       BENCH_MAX_TASK_COST: ${{ github.event_name == 'workflow_dispatch' && inputs.max-task-cost || '2' }}
@@ -301,6 +305,7 @@ jobs:
                 --judge-fallback-model "$fallback"
                 --leaders "$BENCH_LEADERS" --boot-leaders --shard "$BENCH_SHARD"
                 --fresh-leader-every "$BENCH_FRESH_LEADER_EVERY"
+                --new-session "$BENCH_NEW_SESSION"
                 --deadline-minutes "$BENCH_DEADLINE_MINUTES"
                 --max-task-cost "$BENCH_MAX_TASK_COST" --max-cost "$BENCH_MAX_COST"
                 --harness "$SLICC_VERSION" --out "$RUNNER_TEMP/bench-out")

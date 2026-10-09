@@ -10,6 +10,9 @@ import {
   armConversation,
   armTurns,
   assertStagedSkills,
+  awaitMemorySettle,
+  BUNDLED_MEMORY_INSTRUCTIONS,
+  benchMemoryInstructions,
   buildPrompt,
   collectArmFiles,
   costTotals,
@@ -22,25 +25,40 @@ import {
   exportTranscriptCommand,
   FINAL_INSTRUCTION,
   FLAGS_PROBE,
+  FREEZE_DETECT_MS,
   lastScoopAssistantText,
   lastTurnProviderError,
   leaderHealth,
+  MEMORY_SETTLE_MS,
+  MIN_RETAINED_MEMORY_BYTES,
+  memoryFingerprintChanged,
+  memoryFingerprintCommand,
+  memoryStoreRetained,
   modelPinPolicy,
+  NEW_SESSION_SAVE_TIMEOUT,
   NO_DEFAULT_SKILLS_MISSING,
+  newestSessionArchive,
   PROMPT_ALL_SETTLED,
   parseArmResult,
   parseExportListing,
+  parseMemoryFingerprint,
   parseModelSpec,
+  parseSessionsIndex,
   parseSkillNames,
   parseSkillsCondition,
   parseTabList,
   pinScoopModels,
   planStagedCleanup,
   quote,
+  readMemoryFingerprint,
+  readSessionsIndex,
   readShots,
   restoreSkills,
   restoreSkillsCommand,
   runTask,
+  seedBenchMemoryInstructions,
+  sessionArchiveSettled,
+  sessionsIndexCommand,
   skillsFlagCommand,
   skillsMismatch,
   spendDelta,
@@ -74,7 +92,11 @@ function fakeLeader({
   policyWritable = true,
   policyReadable = true,
   readback = null,
+
+  etcReadback = null,
   removable = true,
+
+  rmFailPaths = [],
   probe = null,
   catalogueRaw = null,
 } = {}) {
@@ -84,34 +106,47 @@ function fakeLeader({
   const pinRoutes = [
     [/^models --provider /, () => ok(catalogueRaw ?? JSON.stringify(catalogue))],
     [
-      /^test -e \/etc\/models$/,
-      () =>
-        probe ??
-        (files.has('/etc/models') ? ok() : { stdout: '', stderr: '', status: 1, timedOut: false }),
-    ],
-    [
-      /^cat \/etc\/models$/,
-      () => {
-        if (!policyReadable) return fail('cat: /etc/models: input/output error');
-
-        if (readback !== null && files.get('/etc/models')?.startsWith('# Written by the bench'))
-          return ok(readback);
-        return files.has('/etc/models') ? ok(files.get('/etc/models')) : fail('no such file');
+      /^test -e (\/etc\/\S+)$/,
+      (command) => {
+        const path = command.replace(/^test -e /, '');
+        if (path === '/etc/models' && probe) return probe;
+        return files.has(path) ? ok() : { stdout: '', stderr: '', status: 1, timedOut: false };
       },
     ],
     [
-      /^base64 -d > \/etc\/models$/,
-      (_c, opts) => {
-        if (policyWritable)
-          files.set('/etc/models', Buffer.from(opts.stdin ?? '', 'base64').toString());
+      /^cat (\/etc\/\S+)$/,
+      (command) => {
+        const path = command.replace(/^cat /, '');
+        if (path === '/etc/models' && !policyReadable)
+          return fail('cat: /etc/models: input/output error');
+
+        if (
+          path === '/etc/models' &&
+          readback !== null &&
+          files.get('/etc/models')?.startsWith('# Written by the bench')
+        )
+          return ok(readback);
+        if (etcReadback && Object.hasOwn(etcReadback, path) && files.has(path))
+          return ok(etcReadback[path]);
+        return files.has(path) ? ok(files.get(path)) : fail(`no such file: ${path}`);
+      },
+    ],
+    [
+      /^base64 -d > (\/etc\/\S+)$/,
+      (command, opts) => {
+        const path = command.replace(/^base64 -d > /, '');
+        if (path === '/etc/models' && !policyWritable) return ok();
+        files.set(path, Buffer.from(opts.stdin ?? '', 'base64').toString());
         return ok();
       },
     ],
     [
-      /^rm -f \/etc\/models$/,
-      () => {
-        if (!removable) return fail('rm: /etc/models: permission denied');
-        files.delete('/etc/models');
+      /^rm -f (\/etc\/\S+)$/,
+      (command) => {
+        const path = command.replace(/^rm -f /, '');
+        if (path === '/etc/models' && !removable) return fail('rm: /etc/models: permission denied');
+        if (rmFailPaths.includes(path)) return fail(`rm: ${path}: permission denied`);
+        files.delete(path);
         return ok();
       },
     ],
@@ -968,6 +1003,515 @@ describe('transcript export', () => {
   });
 });
 
+describe('memory settle fingerprints', () => {
+  it('parses CLAUDE.md fingerprint lines', () => {
+    expect(parseMemoryFingerprint('bytes=12758\nsha=abc\nauto_extracted=2\n')).toEqual({
+      bytes: 12758,
+      sha: 'abc',
+      autoExtracted: 2,
+    });
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: 'a', autoExtracted: 0 },
+        {
+          bytes: 1,
+          sha: 'a',
+          autoExtracted: 0,
+        }
+      )
+    ).toBe(false);
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: 'a', autoExtracted: 0 },
+        { bytes: 2, sha: 'b', autoExtracted: 1 }
+      )
+    ).toBe(true);
+
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: 'a', autoExtracted: 0 },
+        { bytes: 1, sha: 'b', autoExtracted: 0 }
+      )
+    ).toBe(true);
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: 'a', autoExtracted: 0 },
+        { bytes: 1, sha: 'a', autoExtracted: 1 }
+      )
+    ).toBe(true);
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: '', autoExtracted: 0 },
+        { bytes: 9, sha: '', autoExtracted: 0 }
+      )
+    ).toBe(true);
+    expect(memoryStoreRetained(null, { bytes: 999, sha: 'x', autoExtracted: 0 })).toBe(false);
+    expect(
+      memoryStoreRetained(
+        { bytes: 10, sha: 'a', autoExtracted: 2 },
+        { bytes: 10, sha: 'a', autoExtracted: 2 }
+      )
+    ).toBe(true);
+    expect(memoryFingerprintCommand()).toContain('/workspace/CLAUDE.md');
+    expect(MEMORY_SETTLE_MS).toBeGreaterThan(0);
+  });
+
+  it('awaitMemorySettle returns when requireChange is false and nothing moves', async () => {
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok('[]')],
+      ],
+    });
+    const before = parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n');
+    const out = await awaitMemorySettle(leader, {
+      before,
+      requireChange: false,
+      timeoutMs: 1000,
+    });
+    expect(out).toMatchObject({ settled: true, changed: false });
+  });
+
+  it('awaitMemorySettle resolves once Auto-extracted grows', async () => {
+    let n = 0;
+    const { leader } = fakeLeader({
+      commands: [
+        [
+          /auto_extracted=/,
+          () => {
+            n += 1;
+            return ok(
+              n === 1 ? 'bytes=1\nsha=a\nauto_extracted=0\n' : 'bytes=9\nsha=b\nauto_extracted=1\n'
+            );
+          },
+        ],
+        [
+          /sessions\/index\.json/,
+          ok(
+            JSON.stringify([
+              {
+                filename: 'pending-x.md',
+                frozenAt: '2026-10-09T00:00:00Z',
+                pendingEnrichment: true,
+              },
+            ])
+          ),
+        ],
+      ],
+    });
+    const before = parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n');
+    const out = await awaitMemorySettle(leader, {
+      before,
+      archivesBefore: 0,
+      requireChange: true,
+      timeoutMs: 5_000,
+      pollMs: 1,
+      sleep: async () => {},
+    });
+    expect(out).toMatchObject({ settled: true, changed: true });
+    expect(out.after.autoExtracted).toBe(1);
+  });
+
+  it('fails fast when --save never freezes a session', async () => {
+    let t = 0;
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok('[]')],
+      ],
+    });
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n'),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 60_000,
+        freezeDetectMs: 10,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => {
+          t += 20;
+          return t;
+        },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'freeze_skipped',
+      message: expect.stringMatching(/did not freeze/),
+    });
+  });
+
+  it('treats a short follow-up --save as settled when prior memory is retained', async () => {
+    let t = 0;
+    const populated = `bytes=${MIN_RETAINED_MEMORY_BYTES}\nsha=abc\nauto_extracted=0\n`;
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok(populated)],
+        [
+          /sessions\/index\.json/,
+          ok(JSON.stringify([{ filename: 'plant.md', frozenAt: '2026-10-09T00:00:00Z' }])),
+        ],
+      ],
+    });
+    const out = await awaitMemorySettle(leader, {
+      before: parseMemoryFingerprint(populated),
+      archivesBefore: 1,
+      requireChange: true,
+      timeoutMs: 60_000,
+      freezeDetectMs: 10,
+      pollMs: 1,
+      sleep: async () => {},
+      now: () => {
+        t += 20;
+        return t;
+      },
+    });
+    expect(out).toMatchObject({ settled: true, changed: false });
+    expect(memoryStoreRetained(out.before, out.after)).toBe(true);
+  });
+
+  it('widens /etc/MEMORY.md visiblePaths for the curator (and restores it)', async () => {
+    const bundled = readFileSync(BUNDLED_MEMORY_INSTRUCTIONS, 'utf8');
+    const widened = benchMemoryInstructions(bundled);
+    expect(widened).toContain('/tmp/');
+    expect(widened).toContain('/etc/');
+    expect(widened).toContain('# Memory pass');
+    const { leader, files } = fakeLeader();
+    files.set('/etc/MEMORY.md', bundled);
+    const seeded = await seedBenchMemoryInstructions(leader, {
+      readFile: () => bundled,
+    });
+    expect(files.get('/etc/MEMORY.md')).toContain('/tmp/');
+    await seeded.restore();
+    expect(files.get('/etc/MEMORY.md')).toBe(bundled);
+  });
+
+  it('fails when enrichment settles without changing CLAUDE.md', async () => {
+    let t = 0;
+    const settled = [
+      { filename: '2026-10-09T00-00-00Z-plant.md', frozenAt: '2026-10-09T00:00:00Z' },
+    ];
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok(JSON.stringify(settled))],
+      ],
+    });
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n'),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 60_000,
+        freezeDetectMs: 10,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => {
+          t += 5;
+          return t;
+        },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'extract_empty',
+      message: expect.stringMatching(/no durable memories/),
+    });
+  });
+
+  it('parses the sessions ledger and knows when an archive has settled', () => {
+    expect(parseSessionsIndex('not json')).toEqual([]);
+    expect(sessionsIndexCommand()).toContain('/sessions/index.json');
+    expect(
+      newestSessionArchive([
+        { filename: 'a.md', frozenAt: '2026-01-01T00:00:00Z' },
+        { filename: 'b.md', frozenAt: '2026-02-01T00:00:00Z' },
+      ])?.filename
+    ).toBe('b.md');
+    expect(sessionArchiveSettled({ pendingEnrichment: true })).toBe(false);
+    expect(sessionArchiveSettled({ memoryPending: true })).toBe(false);
+    expect(sessionArchiveSettled({ memoryFailed: 'timeout' })).toBe(true);
+    expect(sessionArchiveSettled({ filename: 'x.md' })).toBe(true);
+    expect(FREEZE_DETECT_MS).toBeGreaterThan(0);
+    expect(MEMORY_SETTLE_MS).toBeGreaterThanOrEqual(180_000);
+  });
+
+  it('treats a missing fingerprint field as zero / empty', () => {
+    expect(parseMemoryFingerprint('')).toEqual({ bytes: 0, sha: '', autoExtracted: 0 });
+    expect(memoryFingerprintChanged(null, { bytes: 1, sha: 'x', autoExtracted: 0 })).toBe(false);
+  });
+
+  it('readMemoryFingerprint returns zeros when slicc exec fails', async () => {
+    const { leader } = fakeLeader({
+      commands: [[/auto_extracted=/, fail('no CLAUDE.md')]],
+    });
+    await expect(readMemoryFingerprint(leader)).resolves.toMatchObject({
+      bytes: 0,
+      sha: '',
+      autoExtracted: 0,
+      error: expect.stringMatching(/no CLAUDE/),
+    });
+  });
+
+  it('readSessionsIndex returns [] when the ledger is unreadable', async () => {
+    const { leader } = fakeLeader({
+      commands: [[/sessions\/index\.json/, fail('permission denied')]],
+    });
+    await expect(readSessionsIndex(leader)).resolves.toEqual([]);
+    expect(parseSessionsIndex('{"not":"an array"}')).toEqual([]);
+    expect(newestSessionArchive(null)).toBeNull();
+    expect(sessionArchiveSettled(null)).toBe(false);
+  });
+
+  it('fails when curation marks memoryFailed without retained store', async () => {
+    let t = 0;
+    const failed = [
+      {
+        filename: 'plant.md',
+        frozenAt: '2026-10-09T00:00:00Z',
+        memoryFailed: 'curator timed out waiting for scoop',
+      },
+    ];
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok(JSON.stringify(failed))],
+      ],
+    });
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n'),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 60_000,
+        freezeDetectMs: 10,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => {
+          t += 5;
+          return t;
+        },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'curation_failed',
+      message: expect.stringMatching(/memory curation failed/),
+    });
+  });
+
+  it('times out while an archive is still memoryPending (agentic curator)', async () => {
+    let t = 0;
+    const pending = [
+      {
+        filename: 'pending-curator.md',
+        frozenAt: '2026-10-09T00:00:00Z',
+        memoryPending: true,
+      },
+    ];
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok(JSON.stringify(pending))],
+      ],
+    });
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n'),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 40,
+        freezeDetectMs: 10_000,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => {
+          t += 25;
+          return t;
+        },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'timeout_pending',
+      message: expect.stringMatching(/memoryPending — agentic curator/),
+    });
+  });
+
+  it('times out while pendingEnrichment is still true (legacy extract)', async () => {
+    let t = 0;
+    const pending = [
+      {
+        filename: 'pending-enrich.md',
+        frozenAt: '2026-10-09T00:00:00Z',
+        pendingEnrichment: true,
+      },
+    ];
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok(JSON.stringify(pending))],
+      ],
+    });
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n'),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 40,
+        freezeDetectMs: 10_000,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => {
+          t += 25;
+          return t;
+        },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'timeout_pending',
+      message: expect.stringMatching(/pendingEnrichment/),
+    });
+  });
+
+  it('times out with freeze_skipped detail when no archive ever appears', async () => {
+    let t = 0;
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok('[]')],
+      ],
+    });
+
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n'),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 40,
+        freezeDetectMs: 10_000,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => {
+          t += 25;
+          return t;
+        },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'freeze_skipped',
+      message: expect.stringMatching(/no new session archive/),
+    });
+  });
+
+  it('times out with an empty detail when a settled archive never wrote memory', async () => {
+    let n = 0;
+    const settled = [{ filename: 'empty.md', frozenAt: '2026-10-09T00:00:00Z' }];
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok(JSON.stringify(settled))],
+      ],
+    });
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n'),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 40,
+        freezeDetectMs: 10_000,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => (n++ === 0 ? 0 : 100),
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'timeout_pending',
+      message: expect.stringMatching(/within 40 ms/),
+    });
+  });
+
+  it('exits retained when a settled archive keeps prior memory unchanged', async () => {
+    let t = 0;
+    const populated = `bytes=${MIN_RETAINED_MEMORY_BYTES}\nsha=keep\nauto_extracted=0\n`;
+    const settled = [{ filename: 'follow.md', frozenAt: '2026-10-09T01:00:00Z' }];
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok(populated)],
+        [/sessions\/index\.json/, ok(JSON.stringify(settled))],
+      ],
+    });
+    const out = await awaitMemorySettle(leader, {
+      before: parseMemoryFingerprint(populated),
+      archivesBefore: 0,
+      requireChange: true,
+      timeoutMs: 60_000,
+      freezeDetectMs: 10,
+      pollMs: 1,
+      sleep: async () => {},
+      now: () => {
+        t += 5;
+        return t;
+      },
+    });
+    expect(out).toMatchObject({ settled: true, changed: false });
+  });
+
+  it('treats retained memory as settled after the timeout window', async () => {
+    let t = 0;
+    const populated = `bytes=${MIN_RETAINED_MEMORY_BYTES}\nsha=keep\nauto_extracted=0\n`;
+
+    const pending = [
+      {
+        filename: 'slow.md',
+        frozenAt: '2026-10-09T00:00:00Z',
+        pendingEnrichment: true,
+      },
+    ];
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok(populated)],
+        [/sessions\/index\.json/, ok(JSON.stringify(pending))],
+      ],
+    });
+    const out = await awaitMemorySettle(leader, {
+      before: parseMemoryFingerprint(populated),
+      archivesBefore: 0,
+      requireChange: true,
+      timeoutMs: 40,
+      freezeDetectMs: 10_000,
+      pollMs: 1,
+      sleep: async () => {},
+      now: () => {
+        t += 25;
+        return t;
+      },
+    });
+    expect(out).toMatchObject({ settled: true, changed: false });
+  });
+
+  it('fails seed when /etc/MEMORY.md readback drops the widened pass', async () => {
+    const bundled = readFileSync(BUNDLED_MEMORY_INSTRUCTIONS, 'utf8');
+    const { leader } = fakeLeader({
+      etcReadback: { '/etc/MEMORY.md': '# Memory pass\n(no visiblePaths)\n' },
+    });
+    await expect(seedBenchMemoryInstructions(leader, { readFile: () => bundled })).rejects.toThrow(
+      /did not take the bench memory pass/
+    );
+  });
+
+  it('marks the leader down when MEMORY.md seed fails and restore cannot undo', async () => {
+    const bundled = readFileSync(BUNDLED_MEMORY_INSTRUCTIONS, 'utf8');
+    const { leader } = fakeLeader({
+      etcReadback: { '/etc/MEMORY.md': 'stale' },
+      rmFailPaths: ['/etc/MEMORY.md'],
+    });
+    const err = await seedBenchMemoryInstructions(leader, { readFile: () => bundled }).catch(
+      (e) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/did not take the bench memory pass/);
+    expect(err.message).toMatch(/restoring \/etc\/MEMORY\.md failed/);
+    expect(err.leaderDown).toBe(true);
+  });
+});
+
 describe('runTask', () => {
   const COST = (total) =>
     ok(
@@ -1079,9 +1623,8 @@ describe('runTask', () => {
       interrupt: true,
     });
     expect(prompt.opts.signal).toBeInstanceOf(AbortSignal);
-    expect(calls.slice(-6).map(label)).toEqual([
-      'playwright-cli tab-list',
-      'playwright-cli tab-close',
+
+    expect(calls.slice(-4).map(label)).toEqual([
       'slicc new-session --erase',
       'rm -f',
       'rm -rf',
@@ -1096,6 +1639,13 @@ describe('runTask', () => {
     });
 
     expect(calls.at(-2).command).toBe("rm -rf '/workspace/in/a.txt'");
+
+    const tabCloseAt = calls.findIndex((c) => label(c) === 'playwright-cli tab-close');
+    const teardownSessionAt = calls.findIndex(
+      (c, i) => i > 10 && label(c) === 'slicc new-session --erase'
+    );
+    expect(tabCloseAt).toBeGreaterThan(-1);
+    expect(teardownSessionAt).toBeGreaterThan(tabCloseAt);
     expect(result).toMatchObject({
       runId: 'r1',
       model: 'claude-sonnet-5',
@@ -1124,6 +1674,130 @@ describe('runTask', () => {
     const exportAt = calls.findIndex((c) => c.command?.startsWith('session export'));
     expect(closeAt).toBeGreaterThan(promptAt);
     expect(closeAt).toBeGreaterThan(exportAt);
+  });
+
+  it('passes --save (or --skip) through setup and teardown when sessionAction is set', async () => {
+    const { leader, calls } = leaderFor();
+    await runTask({
+      leader,
+      task: { id: 't', task: 'Do it.' },
+      runId: 'r-save',
+      model: 'claude-sonnet-5',
+      sessionAction: 'save',
+
+      memorySettleMs: 0,
+      capture: { pollMs: 5 },
+    });
+    const sessions = calls
+      .filter((c) => c.kind === 'cli' && c.args[0] === 'new-session')
+      .map((c) => c.args.join(' '));
+    expect(sessions).toEqual([
+      `new-session --save --timeout ${NEW_SESSION_SAVE_TIMEOUT}`,
+      `new-session --save --timeout ${NEW_SESSION_SAVE_TIMEOUT}`,
+    ]);
+  });
+
+  it('rejects an unknown sessionAction before touching the leader', async () => {
+    const { leader, calls } = leaderFor();
+    await expect(
+      runTask({
+        leader,
+        task: { id: 't', task: 'x' },
+        runId: 'r-bad-session',
+        model: 'm',
+        sessionAction: 'wipe',
+      })
+    ).rejects.toThrow(/sessionAction must be one of/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('after --save requires CLAUDE.md to change when memory settle is on', async () => {
+    let prompted = false;
+    let afterPromptReads = 0;
+    const unchanged = ok('bytes=100\nsha=aaa\nauto_extracted=0\n');
+    const changed = ok('bytes=200\nsha=bbb\nauto_extracted=1\n');
+    const pending = ok(
+      JSON.stringify([
+        { filename: 'pending-x.md', frozenAt: '2026-10-09T00:00:00Z', pendingEnrichment: true },
+      ])
+    );
+    const { leader } = fakeLeader({
+      verbs: {
+        'new-session': ok('new session (save)'),
+        model: ok('bedrock-camp:global.anthropic.claude-sonnet-5\n'),
+        thinking: ok('off\n'),
+        prompt: () => {
+          prompted = true;
+          return ok('FINAL ANSWER: done\n');
+        },
+      },
+      commands: [
+        [
+          /auto_extracted=/,
+          () => {
+            if (!prompted) return unchanged;
+            afterPromptReads += 1;
+
+            return afterPromptReads === 1 ? unchanged : changed;
+          },
+        ],
+        [/sessions\/index\.json/, pending],
+        [/^cost --json --all$/, ok(JSON.stringify({ scoops: [] }))],
+        [/^playwright-cli tab-list$/, ok('')],
+        [/^playwright-cli tab-close$/, ok('')],
+        [/session export/, ok('ok')],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'Do it.' },
+      runId: 'r-settle',
+      model: 'claude-sonnet-5',
+      sessionAction: 'save',
+      memorySettleMs: 5_000,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    });
+    expect(result.finalText).toContain('FINAL ANSWER');
+  });
+
+  it('fails the run when --save never freezes (no sessions archive)', async () => {
+    let t = 0;
+    const { leader } = fakeLeader({
+      verbs: {
+        'new-session': ok('new session (save)'),
+        model: ok('bedrock-camp:m\n'),
+        thinking: ok('off\n'),
+        prompt: ok('FINAL ANSWER: done\n'),
+      },
+      commands: [
+        [/^cost --json --all$/, ok(JSON.stringify({ scoops: [] }))],
+        [/^playwright-cli tab-list$/, ok('')],
+        [/^playwright-cli tab-close$/, ok('')],
+        [/session export/, ok('ok')],
+        [/auto_extracted=/, ok('bytes=100\nsha=aaa\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok('[]')],
+      ],
+    });
+    await expect(
+      runTask({
+        leader,
+        task: { id: 't', task: 'Do it.' },
+        runId: 'r-nosettle',
+        model: 'claude-sonnet-5',
+        sessionAction: 'save',
+        memorySettleMs: 60_000,
+        sleep: async () => {},
+        now: () => {
+          t += 1_000;
+          return t;
+        },
+        capture: { pollMs: 5 },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'freeze_skipped',
+    });
   });
 
   it('parses alias@thinking and leaves a plain alias at default', () => {

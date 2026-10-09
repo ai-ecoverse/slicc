@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { cutBefore } from './judge.mjs';
+
+const ADAPTER_DIR = dirname(fileURLToPath(import.meta.url));
+
+export const BUNDLED_MEMORY_INSTRUCTIONS = join(ADAPTER_DIR, '../../vfs-root/etc/MEMORY.md');
 
 export const SKILLS_DIR = '/workspace/skills';
 export const SKILLS_STASH = '/workspace/.bench-skills-builtin';
@@ -13,6 +18,230 @@ export const PROMPT_ALL_SETTLED = '2m';
 const POLL_MS = 10_000;
 const RECAPTURE_MS = 30_000;
 const STEP_CHARS = 4000;
+
+export const NEW_SESSION_ACTIONS = Object.freeze(['erase', 'save', 'skip']);
+export const DEFAULT_NEW_SESSION = 'erase';
+
+export const MEMORY_SETTLE_MS = 180_000;
+
+export const MEMORY_SETTLE_POLL_MS = 2_000;
+
+export const FREEZE_DETECT_MS = 15_000;
+
+export const MIN_RETAINED_MEMORY_BYTES = 300;
+
+export const NEW_SESSION_SAVE_TIMEOUT = '120s';
+
+export const MEMORY_INSTRUCTIONS_PATH = '/etc/MEMORY.md';
+
+export function parseMemoryFingerprint(stdout) {
+  const text = String(stdout ?? '');
+  const bytes = Number((text.match(/^bytes=(\d+)/m) || [])[1]);
+  const sha = (text.match(/^sha=([0-9a-f]+)/m) || [])[1] || '';
+  const auto = Number((text.match(/^auto_extracted=(\d+)/m) || [])[1]);
+  return {
+    bytes: Number.isFinite(bytes) ? bytes : 0,
+    sha,
+    autoExtracted: Number.isFinite(auto) ? auto : 0,
+  };
+}
+
+export function memoryFingerprintCommand() {
+  return [
+    'f=/workspace/CLAUDE.md',
+    'if [ ! -f "$f" ]; then echo bytes=0; echo sha=; echo auto_extracted=0; exit 0; fi',
+    'echo bytes=$(wc -c < "$f" | tr -d " ")',
+    'echo sha=$(sha256sum "$f" | awk \'{print $1}\')',
+    'echo auto_extracted=$(grep -c "^## Auto-extracted" "$f" || true)',
+  ].join('; ');
+}
+
+export function sessionsIndexCommand() {
+  return "if [ -f /sessions/index.json ]; then cat /sessions/index.json; else echo '[]'; fi";
+}
+
+export function memoryFingerprintChanged(before, after) {
+  if (!before || !after) return false;
+  if (after.sha && before.sha && after.sha !== before.sha) return true;
+  if (after.autoExtracted > before.autoExtracted) return true;
+  if (after.bytes !== before.bytes) return true;
+  return false;
+}
+
+export function memoryStoreRetained(before, after) {
+  if (!before || !after) return false;
+  if (memoryFingerprintChanged(before, after)) return false;
+  if ((before.autoExtracted ?? 0) > 0) return true;
+  return (before.bytes ?? 0) >= MIN_RETAINED_MEMORY_BYTES;
+}
+
+export async function readMemoryFingerprint(leader) {
+  const r = await leader.exec(memoryFingerprintCommand());
+  if (r.status !== 0) {
+    return { bytes: 0, sha: '', autoExtracted: 0, error: (r.stderr || '').slice(0, 200) };
+  }
+  return parseMemoryFingerprint(r.stdout);
+}
+
+export function parseSessionsIndex(stdout) {
+  try {
+    const parsed = JSON.parse(String(stdout ?? '').trim() || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function readSessionsIndex(leader) {
+  const r = await leader.exec(sessionsIndexCommand());
+  if (r.status !== 0) return [];
+  return parseSessionsIndex(r.stdout);
+}
+
+export function newestSessionArchive(index) {
+  if (!Array.isArray(index) || index.length === 0) return null;
+  return [...index].sort((a, b) =>
+    String(b.frozenAt ?? '').localeCompare(String(a.frozenAt ?? ''))
+  )[0];
+}
+
+export function sessionArchiveSettled(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (entry.memoryFailed != null && entry.memoryFailed !== '') return true;
+  if (entry.pendingEnrichment === true || entry.memoryPending === true) return false;
+  return true;
+}
+
+function memorySettleError(message, fields = {}) {
+  const err = new Error(message);
+  err.memoryNotSettled = true;
+  Object.assign(err, fields);
+  return err;
+}
+
+function memorySettleOk(changed, { before, after, started, now, index, newest }) {
+  return {
+    settled: true,
+    changed,
+    before,
+    after,
+    waitedMs: now() - started,
+    archives: index.length,
+    newest,
+  };
+}
+
+function freezeSkippedOutcome({ elapsedMs, freezeDetectMs, archivesBefore, index, before, after }) {
+  if (elapsedMs < freezeDetectMs) return null;
+  if (memoryStoreRetained(before, after)) return 'retained';
+  throw memorySettleError(
+    `new-session --save did not freeze a session within ${freezeDetectMs} ms ` +
+      `(sessions ${archivesBefore}→${index.length}; need ≥4 cone messages to freeze)`,
+    { memoryReason: 'freeze_skipped', before, after, archivesBefore, archivesAfter: index.length }
+  );
+}
+
+function throwIfExtractEmpty({ sawFreeze, newest, before, after }) {
+  if (!sawFreeze || !sessionArchiveSettled(newest)) return;
+  if (memoryStoreRetained(before, after)) return;
+  if (newest?.memoryFailed) {
+    throw memorySettleError(
+      `memory curation failed after new-session --save: ${String(newest.memoryFailed).slice(0, 200)}`,
+      { memoryReason: 'curation_failed', before, after, newest }
+    );
+  }
+  throw memorySettleError(
+    `memory extraction finished with no durable memories after new-session --save ` +
+      `(CLAUDE.md bytes ${before?.bytes ?? '?'}→${after.bytes}, archive ${newest?.filename ?? '?'})`,
+    { memoryReason: 'extract_empty', before, after, newest }
+  );
+}
+
+function settleTimeoutDetail(newest, sawFreeze, archivesBefore, indexLength) {
+  if (newest && (newest.pendingEnrichment === true || newest.memoryPending === true)) {
+    return (
+      `; archive ${newest.filename} still pending` +
+      (newest.memoryPending ? ' (memoryPending — agentic curator)' : ' (pendingEnrichment)')
+    );
+  }
+  if (!sawFreeze) return `; no new session archive (sessions ${archivesBefore}→${indexLength})`;
+  return '';
+}
+
+export async function awaitMemorySettle(
+  leader,
+  {
+    before,
+    archivesBefore = 0,
+    timeoutMs = MEMORY_SETTLE_MS,
+    pollMs = MEMORY_SETTLE_POLL_MS,
+    freezeDetectMs = FREEZE_DETECT_MS,
+    requireChange = false,
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+    now = Date.now,
+  } = {}
+) {
+  const started = now();
+  let after = await readMemoryFingerprint(leader);
+  let index = await readSessionsIndex(leader);
+  let newest = newestSessionArchive(index);
+  const ctx = { before, started, now, index, newest };
+
+  if (memoryFingerprintChanged(before, after)) {
+    return memorySettleOk(true, { ...ctx, after });
+  }
+  if (!requireChange || timeoutMs <= 0) {
+    return memorySettleOk(false, { ...ctx, after });
+  }
+
+  while (now() - started < timeoutMs) {
+    const sawFreeze = index.length > archivesBefore;
+    if (!sawFreeze) {
+      const skipped = freezeSkippedOutcome({
+        elapsedMs: now() - started,
+        freezeDetectMs,
+        archivesBefore,
+        index,
+        before,
+        after,
+      });
+      if (skipped === 'retained') {
+        return memorySettleOk(false, { before, after, started, now, index, newest });
+      }
+    } else {
+      throwIfExtractEmpty({ sawFreeze, newest, before, after });
+      if (memoryStoreRetained(before, after) && sessionArchiveSettled(newest)) {
+        return memorySettleOk(false, { before, after, started, now, index, newest });
+      }
+    }
+    await sleep(Math.min(pollMs, Math.max(0, timeoutMs - (now() - started))));
+    after = await readMemoryFingerprint(leader);
+    index = await readSessionsIndex(leader);
+    newest = newestSessionArchive(index);
+    if (memoryFingerprintChanged(before, after)) {
+      return memorySettleOk(true, { before, after, started, now, index, newest });
+    }
+  }
+
+  const sawFreeze = index.length > archivesBefore;
+  if (memoryStoreRetained(before, after)) {
+    return memorySettleOk(false, { before, after, started, now, index, newest });
+  }
+  throw memorySettleError(
+    `memory did not settle after new-session --save within ${timeoutMs} ms ` +
+      `(CLAUDE.md bytes ${before?.bytes ?? '?'}→${after.bytes}, ` +
+      `Auto-extracted ${before?.autoExtracted ?? '?'}→${after.autoExtracted}` +
+      `${settleTimeoutDetail(newest, sawFreeze, archivesBefore, index.length)})`,
+    {
+      memoryReason: sawFreeze ? 'timeout_pending' : 'freeze_skipped',
+      before,
+      after,
+      newest,
+      archivesBefore,
+      archivesAfter: index.length,
+    }
+  );
+}
 
 export const FINAL_INSTRUCTION = [
   "Don't ask clarifying questions: if the task is ambiguous, pick the most reasonable reading and go on.",
@@ -361,11 +590,90 @@ export async function pinScoopModels(leader, modelId) {
 }
 
 async function readPolicy(leader) {
-  const exists = await leader.exec(`test -e ${MODELS_POLICY_PATH}`);
+  return readEtcText(leader, MODELS_POLICY_PATH);
+}
+
+async function readEtcText(leader, path) {
+  const exists = await leader.exec(`test -e ${path}`);
   if (exists.leaderDown || (exists.status !== 0 && exists.status !== 1))
-    throw failure(`leader: \`test -e ${MODELS_POLICY_PATH}\``, exists);
+    throw failure(`leader: \`test -e ${path}\``, exists);
   if (exists.status === 1) return null;
-  return (await must(leader, `cat ${MODELS_POLICY_PATH}`)).stdout;
+  return (await must(leader, `cat ${path}`)).stdout;
+}
+
+export function benchMemoryInstructions(bundledText) {
+  const body = String(bundledText ?? '').replace(/^---[\s\S]*?---\r?\n*/, '');
+  return [
+    '---',
+    '# Written by the bench for --new-session save: wider curator visiblePaths (→ sudoers grants).',
+    'writablePaths:',
+    '  - /workspace/CLAUDE.md',
+    '  - /shared/wiki/',
+    'visiblePaths:',
+    '  - /sessions/',
+    '  - /shared/',
+    '  - /workspace/',
+    '  - /tmp/',
+    '  - /etc/',
+    'allowedCommands:',
+    '  - awk',
+    '  - cat',
+    '  - cp',
+    '  - cut',
+    '  - echo',
+    '  - file',
+    '  - find',
+    '  - grep',
+    '  - head',
+    '  - jq',
+    '  - ls',
+    '  - mkdir',
+    '  - mv',
+    '  - od',
+    '  - printf',
+    '  - rg',
+    '  - sed',
+    '  - sort',
+    '  - tail',
+    '  - tr',
+    '  - uniq',
+    '  - uname',
+    '  - upskill',
+    '  - wc',
+    'timeoutSeconds: 600',
+    'dreamTimeoutSeconds: 3600',
+    'thinkingLevel: medium',
+    '---',
+    '',
+    body.trimStart(),
+  ].join('\n');
+}
+
+export async function seedBenchMemoryInstructions(
+  leader,
+  { readFile = (p) => readFileSync(p, 'utf8'), bundledPath = BUNDLED_MEMORY_INSTRUCTIONS } = {}
+) {
+  const text = benchMemoryInstructions(readFile(bundledPath));
+  const original = await readEtcText(leader, MEMORY_INSTRUCTIONS_PATH);
+  const write = (content) =>
+    must(leader, `base64 -d > ${MEMORY_INSTRUCTIONS_PATH}`, {
+      stdin: Buffer.from(content).toString('base64'),
+    });
+  const restore = () =>
+    original === null ? must(leader, `rm -f ${MEMORY_INSTRUCTIONS_PATH}`) : write(original);
+  try {
+    await write(text);
+    const back = await must(leader, `cat ${MEMORY_INSTRUCTIONS_PATH}`);
+    if (!back.stdout.includes('/tmp/') || !back.stdout.includes('visiblePaths:'))
+      throw new Error(`${MEMORY_INSTRUCTIONS_PATH} did not take the bench memory pass`);
+  } catch (err) {
+    await restore().catch((undo) => {
+      err.message += `; and restoring ${MEMORY_INSTRUCTIONS_PATH} failed: ${undo.message}`;
+      err.leaderDown = true;
+    });
+    throw err;
+  }
+  return { restore, path: MEMORY_INSTRUCTIONS_PATH };
 }
 
 export function parseSkillsCondition(text) {
@@ -1312,6 +1620,122 @@ async function restoreAfterRun(undo, pin) {
   });
 }
 
+function newSessionCliArgs(sessionAction) {
+  const args = ['new-session', `--${sessionAction}`];
+  if (sessionAction === 'save') args.push('--timeout', NEW_SESSION_SAVE_TIMEOUT);
+  return args;
+}
+
+async function runNewSession(
+  leader,
+  sessionAction,
+  { requireMemoryChange = false, memorySettleMs = MEMORY_SETTLE_MS, sleep, now } = {}
+) {
+  const args = newSessionCliArgs(sessionAction);
+  if (sessionAction !== 'save' || memorySettleMs <= 0) {
+    await mustCli(leader, args);
+    return { changed: false, waitedMs: 0 };
+  }
+  const before = await readMemoryFingerprint(leader);
+  const archivesBefore = (await readSessionsIndex(leader)).length;
+  await mustCli(leader, args);
+  return awaitMemorySettle(leader, {
+    before,
+    archivesBefore,
+    timeoutMs: memorySettleMs,
+    requireChange: requireMemoryChange,
+    sleep,
+    now,
+  });
+}
+
+async function cleanupFailedRun(leader, sessionAction, staged, dir) {
+  await closeTabs(leader).catch(() => {});
+  await leader.cli(newSessionCliArgs(sessionAction)).catch(() => {});
+  await cleanupScratch(leader, staged, dir);
+}
+
+async function cleanupScratch(leader, staged, dir) {
+  const leftovers = stagedCleanupPaths(staged);
+  if (leftovers.length)
+    await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});
+  await leader.exec(`rm -rf ${dir}`).catch(() => {});
+}
+
+async function teardownSuccessfulRun(
+  leader,
+  sessionAction,
+  { memorySettleMs, sleep, now, staged, dir, restore, pin }
+) {
+  try {
+    await runNewSession(leader, sessionAction, {
+      requireMemoryChange: sessionAction === 'save' && memorySettleMs > 0,
+      memorySettleMs,
+      sleep,
+      now,
+    });
+  } catch (err) {
+    if (err?.memoryNotSettled) throw err;
+  }
+
+  if (restore) await restoreAfterRun(restore, pin);
+  await cleanupScratch(leader, staged, dir);
+}
+
+function taskResultBody({
+  runId,
+  prepared,
+  collected,
+  reply,
+  armOut,
+  resumedAfterSettle,
+  transcript,
+  durationMs,
+  done,
+  started,
+  t0,
+  before,
+  after,
+  openTabs,
+  images,
+  taken,
+  health,
+  modelPin,
+}) {
+  return {
+    runId,
+    model: prepared.spec.spec,
+    modelId: prepared.modelId,
+    thinking: prepared.spec.thinking,
+    thinkingEffective: prepared.thinkingEffective,
+    modelPin,
+    exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
+    timedOut: Boolean(
+      reply.timedOut || collected.timedOut || armOut?.record?.arm?.result?.timedOut
+    ),
+    costCapped: Boolean(reply.aborted || collected.costCapped),
+    finalText: finalTextOf(armOut, { resumedAfterSettle, transcript, reply }),
+    ...armOut?.record,
+    stderr: reply.stderr.slice(-4000),
+    durationMs: resumedAfterSettle
+      ? (collected.stoppedAt ?? collected.settledAt ?? done) - started
+      : durationMs,
+    ...spendDelta(before, after),
+    transcript,
+    transcriptExport: collected.transcriptExport,
+    resumedAfterSettle,
+    tabs: openTabs,
+    screenshots: images,
+    screenshotsTaken: taken,
+    phases: {
+      setupMs: started - t0,
+      promptMs: durationMs,
+      collectMs: done - started - durationMs,
+    },
+    health,
+  };
+}
+
 export async function runTask({
   leader,
   task,
@@ -1329,8 +1753,16 @@ export async function runTask({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   condition = null,
   arm = null,
+  sessionAction = DEFAULT_NEW_SESSION,
+
+  memorySettleMs = sessionAction === 'save' ? MEMORY_SETTLE_MS : 0,
 }) {
   if (!RUN_ID_PATTERN.test(runId)) throw new Error(`bad run id ${runId}`);
+  if (!NEW_SESSION_ACTIONS.includes(sessionAction)) {
+    throw new Error(
+      `sessionAction must be one of ${NEW_SESSION_ACTIONS.join(', ')}; got ${sessionAction}`
+    );
+  }
   const dir = `/tmp/bench/${runId}`;
   const timeout = task.slicc?.timeoutSeconds ?? timeoutSeconds;
   const t0 = now();
@@ -1338,6 +1770,8 @@ export async function runTask({
   const staged = [];
   let restorePolicy = null;
   let pin = null;
+
+  const undos = [];
   try {
     await must(leader, `rm -rf ${dir} && mkdir -p ${dir}`);
     const goalFile = await prepareArmRun(leader, arm, dir, task);
@@ -1351,11 +1785,24 @@ export async function runTask({
       staged.push(leaves[i]);
     }
     await closeTabs(leader);
-    await mustCli(leader, ['new-session', '--erase']);
+
+    if (sessionAction === 'save') {
+      undos.push((await seedBenchMemoryInstructions(leader)).restore);
+    }
+
+    await runNewSession(leader, sessionAction, {
+      requireMemoryChange: false,
+      memorySettleMs,
+      sleep,
+      now,
+    });
     if (condition) await assertStagedSkills(leader, condition);
     const prepared = await prepareModel(leader, model);
     const pinned = await pinScoopModels(leader, prepared.modelId);
-    restorePolicy = pinned.restore;
+    undos.push(pinned.restore);
+    restorePolicy = async () => {
+      for (const undo of [...undos].reverse()) await undo();
+    };
     pin = pinned.pin;
     const before = await spend(leader);
 
@@ -1418,57 +1865,53 @@ export async function runTask({
       stopProbeBudgetMs,
     });
     after = collected.after;
-    const { transcript, transcriptExport, resumedAfterSettle } = collected;
+    const { transcript, resumedAfterSettle } = collected;
     await closeTabs(leader).catch(() => {});
     const { taken, images } = await readShots(leader, shots);
     const armOut = await collectArmRun(leader, arm, reply, transcript, started);
     health.after = await leaderHealth(leader, now);
     const done = now();
-    return {
+    const body = taskResultBody({
       runId,
-      model: prepared.spec.spec,
-      modelId: prepared.modelId,
-      thinking: prepared.spec.thinking,
-      thinkingEffective: prepared.thinkingEffective,
-      modelPin: pin,
-      exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
-
-      timedOut: Boolean(
-        reply.timedOut || collected.timedOut || armOut?.record?.arm?.result?.timedOut
-      ),
-      costCapped: Boolean(reply.aborted || collected.costCapped),
-      finalText: finalTextOf(armOut, { resumedAfterSettle, transcript, reply }),
-      ...armOut?.record,
-      stderr: reply.stderr.slice(-4000),
-      durationMs: resumedAfterSettle
-        ? (collected.stoppedAt ?? collected.settledAt ?? done) - started
-        : durationMs,
-      ...spendDelta(before, after),
-      transcript,
-      transcriptExport,
+      prepared,
+      collected,
+      reply,
+      armOut,
       resumedAfterSettle,
-      tabs: openTabs,
-      screenshots: images,
-      screenshotsTaken: taken,
-      phases: {
-        setupMs: started - t0,
-        promptMs: durationMs,
-        collectMs: done - started - durationMs,
-      },
+      transcript,
+      durationMs,
+      done,
+      started,
+      t0,
+      before,
+      after,
+      openTabs,
+      images,
+      taken,
       health,
-    };
+      modelPin: pin,
+    });
+    try {
+      await teardownSuccessfulRun(leader, sessionAction, {
+        memorySettleMs,
+        sleep,
+        now,
+        staged,
+        dir,
+        restore: restorePolicy,
+        pin,
+      });
+      restorePolicy = null;
+    } catch (err) {
+      if (err?.memoryNotSettled) err.partialResult = body;
+      throw err;
+    }
+    return body;
   } catch (err) {
     const undo = restorePolicy;
     restorePolicy = null;
     await restoreAfterFailedRun(undo, err);
+    await cleanupFailedRun(leader, sessionAction, staged, dir);
     throw err;
-  } finally {
-    await closeTabs(leader).catch(() => {});
-    await leader.cli(['new-session', '--erase']).catch(() => {});
-    await restoreAfterRun(restorePolicy, pin);
-    const leftovers = stagedCleanupPaths(staged);
-    if (leftovers.length)
-      await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});
-    await leader.exec(`rm -rf ${dir}`).catch(() => {});
   }
 }

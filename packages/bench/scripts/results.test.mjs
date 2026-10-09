@@ -68,6 +68,8 @@ describe('file names', () => {
     );
     expect(summaryFileName('a/b', S('m', 's'))).not.toBe(summaryFileName('a b', S('m', 's')));
     expect(configKey(S('m', 's'))).toBe('m|s');
+    expect(configKey({ ...S('m', 's'), new_session: 'erase' })).toBe('m|s');
+    expect(configKey({ ...S('m', 's'), new_session: 'save' })).toBe('m|s|session:save');
     expect(configKey({ ...S('m', 'none'), default_skills: false })).toBe('m|none');
     expect(configKey(S('m', 'none'))).toBe('m|none|preflag');
     expect(configKey({ ...S('m', 'none+ecoverse'), default_skills: false })).toBe(
@@ -77,6 +79,12 @@ describe('file names', () => {
     expect(summaryFileName('B', S('m', 'none'))).toContain('skills_none_preflag_');
     expect(summaryFileName('B', { ...S('m', 'none'), default_skills: false })).toContain(
       'skills_none_model_'
+    );
+    expect(summaryFileName('B', { ...S('m', 's'), new_session: 'save' })).toContain(
+      '_session_save_bench_'
+    );
+    expect(summaryFileName('B', { ...S('m', 's'), new_session: 'erase' })).not.toContain(
+      '_session_'
     );
     expect(summaryFileName('B', { ...S('m', 'none'), default_skills: false })).not.toContain(
       'preflag'
@@ -250,13 +258,31 @@ describe('tool use', () => {
     });
     const md = reportMarkdown(records);
     expect(md).toContain('**Answered without tools**');
-    expect(md).toContain('- m, `none`: 2/3 (67%), mean score 0.40 without tools vs 1.00 with');
+    expect(md).toContain(
+      '- m, `none`, `erase`: 2/3 (67%), mean score 0.40 without tools vs 1.00 with'
+    );
     expect(reportMarkdown([rec('t1', 'm', 'none', 1)])).not.toContain('Answered without tools');
     expect(reportData([rec('t1', 'm', 'none', 1)]).benchmarks[0].configs[0]).toMatchObject({
       tool_known: 0,
       no_tool_rate: null,
       no_tool_mean_score: null,
+      new_session: 'erase',
     });
+  });
+
+  it('labels save/skip configs in report data and markdown', () => {
+    const save = {
+      ...rec('t1', 'm', 'builtin', 0.5),
+      config: { ...S('m', 'builtin'), new_session: 'save' },
+    };
+    const erase = rec('t1', 'm', 'builtin', 0.6);
+    const data = reportData([save, erase]);
+    const sessions = data.benchmarks[0].configs.map((c) => c.new_session).sort();
+    expect(sessions).toEqual(['erase', 'save']);
+    const md = reportMarkdown([save, erase]);
+    expect(md).toContain('| model | skills | new_session |');
+    expect(md).toMatch(/\| m \| builtin \| save \|/);
+    expect(md).toMatch(/\| m \| builtin \| erase \|/);
   });
 });
 
@@ -339,7 +365,7 @@ describe('reportMarkdown', () => {
   it('tables every configuration and states skill and model deltas', () => {
     const md = reportMarkdown(RECORDS);
     expect(md).toContain('Judge: `judge`');
-    expect(md).toContain('| sonnet | none | 3 | 0 | 1 | 1 | 0 | 1 | 0.25 | 10 | 0.100 |');
+    expect(md).toContain('| sonnet | none | erase | 3 | 0 | 1 | 1 | 0 | 1 | 0.25 | 10 | 0.100 |');
     expect(md).toContain('**What skills add** (lift over `none`, paired by task and repeat):');
     expect(md).toContain('- sonnet, `builtin`: score +300.0% (0.25 → 1.00)');
 
@@ -350,7 +376,7 @@ describe('reportMarkdown', () => {
     const md = reportMarkdown([unjudged('t1', 'm', 'none'), unjudged('t1', 'm', 'builtin')]);
     expect(md).not.toContain('NaN');
     expect(md).not.toContain('Judge:');
-    expect(md).toContain('| m | none | 1 | 0 | 0 | 0 | 1 | 0 | – | 30 | 0.200 |');
+    expect(md).toContain('| m | none | erase | 1 | 0 | 0 | 0 | 1 | 0 | – | 30 | 0.200 |');
     expect(md).toContain(
       '- m, `builtin`: score – (– → –), time +0.0% (+0 s), cost +0.0% (+0.000 $) (n=0)'
     );

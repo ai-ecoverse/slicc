@@ -26,7 +26,9 @@ import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
   ARM_SKILL_SET,
   ARM_THINKING_LEVELS,
+  DEFAULT_NEW_SESSION,
   lastTurnProviderError,
+  NEW_SESSION_ACTIONS,
   parseModelSpec,
   parseSkillsCondition,
   restoreSkills,
@@ -43,6 +45,19 @@ export const MAX_LEADERS = 8;
 
 export const RUN_OVERHEAD_MS = 20 * 60_000;
 
+function parseLifecycleFlags(values) {
+  const freshLeaderEvery = Number.parseInt(values['fresh-leader-every'], 10);
+  const leaderDownLimit = Number.parseInt(values['leader-down-limit'], 10);
+  const newSession = values['new-session'];
+  if (!Number.isInteger(freshLeaderEvery) || freshLeaderEvery < 0)
+    throw new Error('--fresh-leader-every must be 0 (never) or a positive number of tasks');
+  if (!Number.isInteger(leaderDownLimit) || leaderDownLimit < 1)
+    throw new Error('--leader-down-limit must be a positive integer');
+  if (!NEW_SESSION_ACTIONS.includes(newSession))
+    throw new Error(`--new-session must be one of ${NEW_SESSION_ACTIONS.join(', ')}`);
+  return { freshLeaderEvery, leaderDownLimit, newSession };
+}
+
 export function parseCli(argv) {
   const { values } = parseArgs({
     args: argv,
@@ -56,6 +71,7 @@ export function parseCli(argv) {
       shard: { type: 'string' },
       timeout: { type: 'string', default: '900' },
       'fresh-leader-every': { type: 'string', default: '0' },
+      'new-session': { type: 'string', default: DEFAULT_NEW_SESSION },
       'leader-down-limit': { type: 'string', default: '2' },
       leaders: { type: 'string', default: '1' },
       'boot-leaders': { type: 'boolean', default: false },
@@ -86,12 +102,7 @@ export function parseCli(argv) {
     throw new Error('--repeats must be a positive integer');
   if (!Number.isInteger(timeout) || timeout < 30)
     throw new Error('--timeout must be at least 30 seconds');
-  const freshLeaderEvery = Number.parseInt(values['fresh-leader-every'], 10);
-  const leaderDownLimit = Number.parseInt(values['leader-down-limit'], 10);
-  if (!Number.isInteger(freshLeaderEvery) || freshLeaderEvery < 0)
-    throw new Error('--fresh-leader-every must be 0 (never) or a positive number of tasks');
-  if (!Number.isInteger(leaderDownLimit) || leaderDownLimit < 1)
-    throw new Error('--leader-down-limit must be a positive integer');
+  const { freshLeaderEvery, leaderDownLimit, newSession } = parseLifecycleFlags(values);
   const models = list(values.models);
   if (!values.help) {
     for (const spec of models) parseModelSpec(spec);
@@ -133,6 +144,7 @@ export function parseCli(argv) {
     harness: values.harness,
     plan: values.plan,
     freshLeaderEvery,
+    newSession,
     leaderDownLimit,
     leaders,
     bootLeaders: values['boot-leaders'] || leaders > 1,
@@ -439,7 +451,7 @@ function failInto(record, stage, err) {
   record.error_stage = stage;
 }
 
-export function runConfig(harness, model, condition, arm = null) {
+export function runConfig(harness, model, condition, arm = null, newSession = DEFAULT_NEW_SESSION) {
   const spec = parseModelSpec(model);
   return {
     harness,
@@ -447,6 +459,8 @@ export function runConfig(harness, model, condition, arm = null) {
     thinking: spec.thinking,
     skills: condition.name,
     default_skills: Boolean(condition.builtin),
+
+    new_session: newSession,
 
     ...(arm ? { arm: arm.name } : {}),
   };
@@ -459,7 +473,7 @@ export function runIdFor(taskId, model, skills, repeat, now = Date.now()) {
 
 async function runOne(r, ctx) {
   const { leader, opts, judge } = ctx;
-  const config = runConfig(opts.harness, r.model, r.condition, opts.arm);
+  const config = runConfig(opts.harness, r.model, r.condition, opts.arm, opts.newSession);
   const runId = runIdFor(r.task.id, r.model, config.skills, r.repeat);
   const record = {
     benchmark: r.set.benchmark,
@@ -480,6 +494,7 @@ async function runOne(r, ctx) {
       model: r.model,
       timeoutSeconds: opts.timeout,
       condition: r.condition,
+      sessionAction: opts.newSession,
       ...(opts.arm ? { arm: opts.arm } : {}),
       ...(opts.maxTaskCost ? { maxCost: opts.maxTaskCost } : {}),
       ...(ctx.capture ? { capture: ctx.capture } : {}),
@@ -488,7 +503,9 @@ async function runOne(r, ctx) {
   } catch (err) {
     failInto(record, 'run', err);
     if (err?.leaderDown) record.leader_down = true;
-    return { record, result: null };
+    if (err?.memoryReason) record.memory_settle = err.memoryReason;
+
+    return { record, result: err?.partialResult ?? null };
   }
   record.metrics = traceFromResult(result).metrics;
   record.model_id = result.modelId ?? null;
@@ -529,7 +546,15 @@ export function defaultSkillsMatch(recorded, expected) {
 export function resumeAction(
   record,
   task,
-  { judge, judgeModel, traceExists, defaultSkills, arm = null }
+  {
+    judge,
+    judgeModel,
+    traceExists,
+    defaultSkills,
+    arm = null,
+    newSession = DEFAULT_NEW_SESSION,
+    memoryRestored = false,
+  }
 ) {
   if (!record) return 'run';
   const d = taskDigests(task);
@@ -537,16 +562,31 @@ export function resumeAction(
 
   if ((record.config?.arm ?? null) !== (arm ?? null)) return 'run';
   if (!defaultSkillsMatch(record.config?.default_skills, defaultSkills)) return 'run';
+
+  if ((record.config?.new_session ?? DEFAULT_NEW_SESSION) !== newSession) return 'run';
   if (record.error && record.error_stage !== 'judge') return 'run';
-  if (!judge) return 'done';
+  if (!judge) {
+    return memoryChainAllowsSkip(newSession, memoryRestored) ? 'done' : 'run';
+  }
   const stale =
     record.error_stage === 'judge' ||
     typeof record.score !== 'number' ||
     (record.judge?.model !== judgeModel && record.judge?.fallback_from !== judgeModel) ||
     record.digests.rubric_sha !== d.rubric_sha ||
     record.digests.weights_sha !== d.weights_sha;
-  if (!stale) return 'done';
+  if (!stale) {
+    return memoryChainAllowsSkip(newSession, memoryRestored) ? 'done' : 'run';
+  }
   return traceExists ? 'rejudge' : 'run';
+}
+
+export function memoryChainAllowsSkip(newSession, memoryRestored) {
+  if (newSession !== 'save' && newSession !== 'skip') return true;
+  return Boolean(memoryRestored);
+}
+
+export function keepProfileOnRecovery(newSession) {
+  return newSession === 'save' || newSession === 'skip';
 }
 
 async function rejudgeOne(r, ctx, record) {
@@ -603,7 +643,7 @@ function leaderStamp(lane, id = 0) {
   };
 }
 
-async function restartLeader(ctx, reason, log) {
+async function restartLeader(ctx, reason, log, { keepProfile = false } = {}) {
   const { lane, journal } = ctx;
   const t0 = Date.now();
   journal.event('leader-restart', {
@@ -611,9 +651,10 @@ async function restartLeader(ctx, reason, log) {
     reason,
     generation: lane.generation,
     tasks: lane.tasks,
+    keep_profile: keepProfile,
   });
-  log(`restarting the leader (${reason})`);
-  const next = await bootTwice(() => ctx.recycle(), journal, ctx.id, log);
+  log(`restarting the leader (${reason}${keepProfile ? ', keeping profile' : ''})`);
+  const next = await bootTwice(() => ctx.recycle({ keepProfile }), journal, ctx.id, log);
   ctx.leader.setUrl(next.url);
   Object.assign(lane, {
     generation: lane.generation + 1,
@@ -627,6 +668,7 @@ async function restartLeader(ctx, reason, log) {
     generation: lane.generation,
     slicc_version: next.sliccVersion,
     boot_ms: Date.now() - t0,
+    keep_profile: keepProfile,
   });
 }
 
@@ -689,7 +731,9 @@ async function prepareOrRestart(r, ctx, log) {
       task_id: r.task.id,
       leader: leaderStamp(ctx.lane, ctx.id),
     });
-    await restartLeader(ctx, 'leader unreachable while preparing', log);
+    await restartLeader(ctx, 'leader unreachable while preparing', log, {
+      keepProfile: keepProfileOnRecovery(ctx.opts.newSession),
+    });
     await prepareLeader(r, ctx, log);
   }
 }
@@ -699,7 +743,9 @@ async function runFresh(r, ctx, log) {
   let outcome = await runOne(r, ctx);
   if (outcome.record.leader_down && ctx.recycle) {
     ctx.journal.event('leader-down', { task_id: r.task.id, leader: outcome.record.leader });
-    await restartLeader(ctx, 'leader unreachable', log);
+    await restartLeader(ctx, 'leader unreachable', log, {
+      keepProfile: keepProfileOnRecovery(ctx.opts.newSession),
+    });
     await prepareLeader(r, ctx, log);
     outcome = await runOne(r, ctx);
   }
@@ -811,6 +857,9 @@ async function processRun(i, r, runs, ctx, say) {
     traceExists: before.traceExists,
     defaultSkills: Boolean(r.condition.builtin),
     arm: opts.arm?.name ?? null,
+    newSession: opts.newSession,
+
+    memoryRestored: process.env.BENCH_MEMORY_RESTORED === '1',
   });
   if (action === 'done') {
     say(
@@ -959,6 +1008,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       runs: runs.length,
       lanes: lanes.length,
       fresh_leader_every: opts.freshLeaderEvery,
+      new_session: opts.newSession,
       deadline_minutes: opts.deadlineMinutes || null,
       max_task_cost: opts.maxTaskCost || null,
       max_cost: opts.maxCost || null,
