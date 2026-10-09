@@ -581,6 +581,55 @@ describe('bedrock-camp built-in provider', () => {
   });
 });
 
+describe('max output tokens near a full context', () => {
+  const nearlyFull = { contextWindow: 4097, maxTokens: 128_000 };
+
+  it.each([
+    ['GPT-6 Luna', 'global.openai.gpt-6-luna'],
+    ['Kimi K3', 'global.moonshotai.kimi-k3'],
+    ['Grok 4.7', 'global.xai.grok-4.7'],
+  ])('sends at least 16 for %s', async (_label, id) => {
+    const payload = await capturePayload(baseModel({ id, name: id, ...nearlyFull }));
+    expect(payload.inferenceConfig.maxTokens).toBe(16);
+  });
+
+  it('keeps the single token for Claude, which accepts it', async () => {
+    const payload = await capturePayload(baseModel(nearlyFull));
+    expect(payload.inferenceConfig.maxTokens).toBe(1);
+  });
+
+  it('floors an explicit budget on the direct stream too', async () => {
+    const fetchMock = mockOkResponse();
+    vi.stubGlobal('fetch', fetchMock);
+    let captured: any;
+    const stream = streamBedrockCamp(
+      baseModel({ id: 'global.openai.gpt-6-luna', name: 'GPT-6 Luna (Global)' }),
+      { messages: [{ role: 'user', content: 'hi' }] } as any,
+      {
+        apiKey: 'ABSK-test',
+        maxTokens: 1,
+        onPayload(payload) {
+          captured = payload;
+        },
+      }
+    );
+    await stream.result();
+    expect(captured.inferenceConfig.maxTokens).toBe(16);
+  });
+
+  it('leaves a roomy budget alone', async () => {
+    const payload = await capturePayload(
+      baseModel({
+        id: 'global.openai.gpt-6-luna',
+        name: 'GPT-6 Luna (Global)',
+        contextWindow: 1_000_000,
+      }),
+      { maxTokens: 4096 }
+    );
+    expect(payload.inferenceConfig.maxTokens).toBe(4096);
+  });
+});
+
 describe('config.defaultModelId resolves against the real catalogue', () => {
   const REGION = 'us-west-2';
 
