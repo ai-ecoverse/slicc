@@ -142,9 +142,15 @@ describe('parseCli', () => {
     expect(() => parseCli(['--set', 'x', '--fresh-leader-every', '-1'])).toThrow(
       /--fresh-leader-every/
     );
+    expect(() => parseCli(['--set', 'x', '--fresh-leader-every', 'nope'])).toThrow(
+      /--fresh-leader-every/
+    );
     expect(() => parseCli(['--set', 'x', '--new-session', 'wipe'])).toThrow(/--new-session/);
     expect(() => parseCli(['--set', 'x', '--leader-down-limit', '0'])).toThrow(
       /--leader-down-limit/
+    );
+    expect(() => parseCli(['--set', 'x', '--deadline-minutes', 'nope'])).toThrow(
+      /--deadline-minutes/
     );
     expect(() => parseCli(['--set', 'x', '--models', 'claude-opus-5-5@turbo'])).toThrow(
       /alias@level/
