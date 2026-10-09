@@ -53,12 +53,22 @@ export const NEW_SESSION_ACTIONS = Object.freeze(['erase', 'save', 'skip']);
 export const DEFAULT_NEW_SESSION = 'erase';
 
 /**
- * How long after `--save` to wait for `/workspace/CLAUDE.md` to show new durable memory.
- * The CLI returns when the chat is empty; legacy enrichment and the agentic curator finish later.
+ * How long after `--save` to wait for durable memory to land.
+ *
+ * `new-session --save` returns when the chat is empty. With `agentic-memory` off
+ * (the default), legacy enrichment continues in the background after a 20s race;
+ * with it on, the curator can run for up to `/etc/MEMORY.md` `timeoutSeconds`
+ * (bundled default 1200s). Three minutes covers a slow legacy extract without
+ * waiting out a full curator bound.
  */
-export const MEMORY_SETTLE_MS = 90_000;
-/** Poll interval while waiting for CLAUDE.md to change after `--save`. */
+export const MEMORY_SETTLE_MS = 180_000;
+/** Poll interval while waiting for CLAUDE.md / the sessions ledger after `--save`. */
 export const MEMORY_SETTLE_POLL_MS = 2_000;
+/**
+ * After `--save`, if `/sessions/index.json` has no new archive by this deadline,
+ * the freeze was skipped (session below `MIN_MESSAGES_TO_FREEZE`, usually 4).
+ */
+export const FREEZE_DETECT_MS = 15_000;
 /** `new-session --save` itself: freeze + snapshot can exceed the CLI's 30s default. */
 export const NEW_SESSION_SAVE_TIMEOUT = '120s';
 
@@ -86,6 +96,11 @@ export function memoryFingerprintCommand() {
   ].join('; ');
 }
 
+/** Shell that prints `/sessions/index.json`, or `[]` when the ledger is missing. */
+export function sessionsIndexCommand() {
+  return "if [ -f /sessions/index.json ]; then cat /sessions/index.json; else echo '[]'; fi";
+}
+
 export function memoryFingerprintChanged(before, after) {
   if (!before || !after) return false;
   if (after.sha && before.sha && after.sha !== before.sha) return true;
@@ -106,17 +121,123 @@ export async function readMemoryFingerprint(leader) {
   return parseMemoryFingerprint(r.stdout);
 }
 
+/** Parse `/sessions/index.json` (freezer ledger). Malformed → `[]`. */
+export function parseSessionsIndex(stdout) {
+  try {
+    const parsed = JSON.parse(String(stdout ?? '').trim() || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
- * After `new-session --save`, wait until CLAUDE.md changes (enrichment / curator) or time out.
- * When `requireChange` is true and nothing lands, throws — the next task would otherwise run
- * with an empty memory store while the record still says `new_session: save`.
+ * Read the freezer sessions ledger via `slicc exec`.
+ * @param {{ exec: Function }} leader
+ */
+export async function readSessionsIndex(leader) {
+  const r = await leader.exec(sessionsIndexCommand());
+  if (r.status !== 0) return [];
+  return parseSessionsIndex(r.stdout);
+}
+
+/** Newest archive by `frozenAt` (ISO strings sort lexicographically). */
+export function newestSessionArchive(index) {
+  if (!Array.isArray(index) || index.length === 0) return null;
+  return [...index].sort((a, b) =>
+    String(b.frozenAt ?? '').localeCompare(String(a.frozenAt ?? ''))
+  )[0];
+}
+
+/**
+ * Whether enrichment / curation has finished for an archive (success or failure).
+ * Pending markers mean the background pass is still owed.
+ */
+export function sessionArchiveSettled(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (entry.memoryFailed != null && entry.memoryFailed !== '') return true;
+  if (entry.pendingEnrichment === true || entry.memoryPending === true) return false;
+  return true;
+}
+
+function memorySettleError(message, fields = {}) {
+  const err = new Error(message);
+  err.memoryNotSettled = true;
+  Object.assign(err, fields);
+  return err;
+}
+
+function memorySettleOk(changed, { before, after, started, now, index, newest }) {
+  return {
+    settled: true,
+    changed,
+    before,
+    after,
+    waitedMs: now() - started,
+    archives: index.length,
+    newest,
+  };
+}
+
+/** Throw when freeze never happened or enrichment finished without writing memory. */
+function throwIfSettleStuck({
+  sawFreeze,
+  elapsedMs,
+  freezeDetectMs,
+  archivesBefore,
+  index,
+  newest,
+  before,
+  after,
+}) {
+  if (!sawFreeze && elapsedMs >= freezeDetectMs) {
+    throw memorySettleError(
+      `new-session --save did not freeze a session within ${freezeDetectMs} ms ` +
+        `(sessions ${archivesBefore}→${index.length}; need ≥4 cone messages to freeze)`,
+      { memoryReason: 'freeze_skipped', before, after, archivesBefore, archivesAfter: index.length }
+    );
+  }
+  if (!sawFreeze || !sessionArchiveSettled(newest)) return;
+  if (newest?.memoryFailed) {
+    throw memorySettleError(
+      `memory curation failed after new-session --save: ${String(newest.memoryFailed).slice(0, 200)}`,
+      { memoryReason: 'curation_failed', before, after, newest }
+    );
+  }
+  throw memorySettleError(
+    `memory extraction finished with no durable memories after new-session --save ` +
+      `(CLAUDE.md bytes ${before?.bytes ?? '?'}→${after.bytes}, archive ${newest?.filename ?? '?'})`,
+    { memoryReason: 'extract_empty', before, after, newest }
+  );
+}
+
+function settleTimeoutDetail(newest, sawFreeze, archivesBefore, indexLength) {
+  if (newest && (newest.pendingEnrichment === true || newest.memoryPending === true)) {
+    return (
+      `; archive ${newest.filename} still pending` +
+      (newest.memoryPending ? ' (memoryPending — agentic curator)' : ' (pendingEnrichment)')
+    );
+  }
+  if (!sawFreeze) return `; no new session archive (sessions ${archivesBefore}→${indexLength})`;
+  return '';
+}
+
+/**
+ * After `new-session --save`, wait until CLAUDE.md changes (enrichment / curator).
+ *
+ * Distinguishes three failure modes when `requireChange` is true:
+ * - freeze skipped: no new `/sessions` archive within {@link FREEZE_DETECT_MS}
+ * - extract empty: archive settled but CLAUDE.md unchanged (legacy returned NONE)
+ * - timeout: still pending (or agentic curator still running) when `timeoutMs` elapses
  */
 export async function awaitMemorySettle(
   leader,
   {
     before,
+    archivesBefore = 0,
     timeoutMs = MEMORY_SETTLE_MS,
     pollMs = MEMORY_SETTLE_POLL_MS,
+    freezeDetectMs = FREEZE_DETECT_MS,
     requireChange = false,
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
     now = Date.now,
@@ -124,28 +245,52 @@ export async function awaitMemorySettle(
 ) {
   const started = now();
   let after = await readMemoryFingerprint(leader);
+  let index = await readSessionsIndex(leader);
+  let newest = newestSessionArchive(index);
+  const ctx = { before, started, now, index, newest };
+
   if (memoryFingerprintChanged(before, after)) {
-    return { settled: true, changed: true, before, after, waitedMs: now() - started };
+    return memorySettleOk(true, { ...ctx, after });
   }
   if (!requireChange || timeoutMs <= 0) {
-    return { settled: true, changed: false, before, after, waitedMs: now() - started };
+    return memorySettleOk(false, { ...ctx, after });
   }
+
   while (now() - started < timeoutMs) {
+    throwIfSettleStuck({
+      sawFreeze: index.length > archivesBefore,
+      elapsedMs: now() - started,
+      freezeDetectMs,
+      archivesBefore,
+      index,
+      newest,
+      before,
+      after,
+    });
     await sleep(Math.min(pollMs, Math.max(0, timeoutMs - (now() - started))));
     after = await readMemoryFingerprint(leader);
+    index = await readSessionsIndex(leader);
+    newest = newestSessionArchive(index);
     if (memoryFingerprintChanged(before, after)) {
-      return { settled: true, changed: true, before, after, waitedMs: now() - started };
+      return memorySettleOk(true, { before, after, started, now, index, newest });
     }
   }
-  const err = new Error(
+
+  const sawFreeze = index.length > archivesBefore;
+  throw memorySettleError(
     `memory did not settle after new-session --save within ${timeoutMs} ms ` +
       `(CLAUDE.md bytes ${before?.bytes ?? '?'}→${after.bytes}, ` +
-      `Auto-extracted ${before?.autoExtracted ?? '?'}→${after.autoExtracted})`
+      `Auto-extracted ${before?.autoExtracted ?? '?'}→${after.autoExtracted}` +
+      `${settleTimeoutDetail(newest, sawFreeze, archivesBefore, index.length)})`,
+    {
+      memoryReason: sawFreeze ? 'timeout_pending' : 'freeze_skipped',
+      before,
+      after,
+      newest,
+      archivesBefore,
+      archivesAfter: index.length,
+    }
   );
-  err.memoryNotSettled = true;
-  err.before = before;
-  err.after = after;
-  throw err;
 }
 
 export const FINAL_INSTRUCTION = [
@@ -1746,9 +1891,11 @@ async function runNewSession(
     return { changed: false, waitedMs: 0 };
   }
   const before = await readMemoryFingerprint(leader);
+  const archivesBefore = (await readSessionsIndex(leader)).length;
   await mustCli(leader, args);
   return awaitMemorySettle(leader, {
     before,
+    archivesBefore,
     timeoutMs: memorySettleMs,
     requireChange: requireMemoryChange,
     sleep,
@@ -1977,18 +2124,7 @@ export async function runTask({
     const armOut = await collectArmRun(leader, arm, reply, transcript, started);
     health.after = await leaderHealth(leader, now);
     const done = now();
-    const undo = restorePolicy;
-    restorePolicy = null;
-    await teardownSuccessfulRun(leader, sessionAction, {
-      memorySettleMs,
-      sleep,
-      now,
-      staged,
-      dir,
-      restore: undo,
-      pin,
-    });
-    return taskResultBody({
+    const body = taskResultBody({
       runId,
       prepared,
       collected,
@@ -2008,6 +2144,23 @@ export async function runTask({
       health,
       modelPin: pin,
     });
+    try {
+      await teardownSuccessfulRun(leader, sessionAction, {
+        memorySettleMs,
+        sleep,
+        now,
+        staged,
+        dir,
+        restore: restorePolicy,
+        pin,
+      });
+      restorePolicy = null;
+    } catch (err) {
+      // Keep the agent turn for diagnosis when settle fails (freeze skip / empty extract).
+      if (err?.memoryNotSettled) err.partialResult = body;
+      throw err;
+    }
+    return body;
   } catch (err) {
     const undo = restorePolicy;
     restorePolicy = null;

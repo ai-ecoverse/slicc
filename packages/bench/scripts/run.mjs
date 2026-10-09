@@ -580,7 +580,9 @@ async function runOne(r, ctx) {
   } catch (err) {
     failInto(record, 'run', err);
     if (err?.leaderDown) record.leader_down = true;
-    return { record, result: null };
+    if (err?.memoryReason) record.memory_settle = err.memoryReason;
+    // A settle failure after a finished agent turn still carries the transcript.
+    return { record, result: err?.partialResult ?? null };
   }
   record.metrics = traceFromResult(result).metrics;
   record.model_id = result.modelId ?? null;

@@ -23,6 +23,7 @@ import {
   exportTranscriptCommand,
   FINAL_INSTRUCTION,
   FLAGS_PROBE,
+  FREEZE_DETECT_MS,
   lastScoopAssistantText,
   lastTurnProviderError,
   leaderHealth,
@@ -32,11 +33,13 @@ import {
   modelPinPolicy,
   NEW_SESSION_SAVE_TIMEOUT,
   NO_DEFAULT_SKILLS_MISSING,
+  newestSessionArchive,
   PROMPT_ALL_SETTLED,
   parseArmResult,
   parseExportListing,
   parseMemoryFingerprint,
   parseModelSpec,
+  parseSessionsIndex,
   parseSkillNames,
   parseSkillsCondition,
   parseTabList,
@@ -47,6 +50,8 @@ import {
   restoreSkills,
   restoreSkillsCommand,
   runTask,
+  sessionArchiveSettled,
+  sessionsIndexCommand,
   skillsFlagCommand,
   skillsMismatch,
   spendDelta,
@@ -1012,7 +1017,10 @@ describe('memory settle fingerprints', () => {
 
   it('awaitMemorySettle returns when requireChange is false and nothing moves', async () => {
     const { leader } = fakeLeader({
-      commands: [[/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')]],
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok('[]')],
+      ],
     });
     const before = parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n');
     const out = await awaitMemorySettle(leader, {
@@ -1036,11 +1044,24 @@ describe('memory settle fingerprints', () => {
             );
           },
         ],
+        [
+          /sessions\/index\.json/,
+          ok(
+            JSON.stringify([
+              {
+                filename: 'pending-x.md',
+                frozenAt: '2026-10-09T00:00:00Z',
+                pendingEnrichment: true,
+              },
+            ])
+          ),
+        ],
       ],
     });
     const before = parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n');
     const out = await awaitMemorySettle(leader, {
       before,
+      archivesBefore: 0,
       requireChange: true,
       timeoutMs: 5_000,
       pollMs: 1,
@@ -1048,6 +1069,84 @@ describe('memory settle fingerprints', () => {
     });
     expect(out).toMatchObject({ settled: true, changed: true });
     expect(out.after.autoExtracted).toBe(1);
+  });
+
+  it('fails fast when --save never freezes a session', async () => {
+    let t = 0;
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok('[]')],
+      ],
+    });
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n'),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 60_000,
+        freezeDetectMs: 10,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => {
+          t += 20;
+          return t;
+        },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'freeze_skipped',
+      message: expect.stringMatching(/did not freeze/),
+    });
+  });
+
+  it('fails when enrichment settles without changing CLAUDE.md', async () => {
+    let t = 0;
+    const settled = [
+      { filename: '2026-10-09T00-00-00Z-plant.md', frozenAt: '2026-10-09T00:00:00Z' },
+    ];
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok(JSON.stringify(settled))],
+      ],
+    });
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n'),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 60_000,
+        freezeDetectMs: 10,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => {
+          t += 5;
+          return t;
+        },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'extract_empty',
+      message: expect.stringMatching(/no durable memories/),
+    });
+  });
+
+  it('parses the sessions ledger and knows when an archive has settled', () => {
+    expect(parseSessionsIndex('not json')).toEqual([]);
+    expect(sessionsIndexCommand()).toContain('/sessions/index.json');
+    expect(
+      newestSessionArchive([
+        { filename: 'a.md', frozenAt: '2026-01-01T00:00:00Z' },
+        { filename: 'b.md', frozenAt: '2026-02-01T00:00:00Z' },
+      ])?.filename
+    ).toBe('b.md');
+    expect(sessionArchiveSettled({ pendingEnrichment: true })).toBe(false);
+    expect(sessionArchiveSettled({ memoryPending: true })).toBe(false);
+    expect(sessionArchiveSettled({ memoryFailed: 'timeout' })).toBe(true);
+    expect(sessionArchiveSettled({ filename: 'x.md' })).toBe(true);
+    expect(FREEZE_DETECT_MS).toBeGreaterThan(0);
+    expect(MEMORY_SETTLE_MS).toBeGreaterThanOrEqual(180_000);
   });
 
   it('treats a missing fingerprint field as zero / empty', () => {
@@ -1246,6 +1345,11 @@ describe('runTask', () => {
     let afterPromptReads = 0;
     const unchanged = ok('bytes=100\nsha=aaa\nauto_extracted=0\n');
     const changed = ok('bytes=200\nsha=bbb\nauto_extracted=1\n');
+    const pending = ok(
+      JSON.stringify([
+        { filename: 'pending-x.md', frozenAt: '2026-10-09T00:00:00Z', pendingEnrichment: true },
+      ])
+    );
     const { leader } = fakeLeader({
       verbs: {
         'new-session': ok('new session (save)'),
@@ -1266,6 +1370,7 @@ describe('runTask', () => {
             return afterPromptReads === 1 ? unchanged : changed;
           },
         ],
+        [/sessions\/index\.json/, pending],
         [/^cost --json --all$/, ok(JSON.stringify({ scoops: [] }))],
         [/^playwright-cli tab-list$/, ok('')],
         [/^playwright-cli tab-close$/, ok('')],
@@ -1285,7 +1390,8 @@ describe('runTask', () => {
     expect(result.finalText).toContain('FINAL ANSWER');
   });
 
-  it('fails the run when --save never lands memory', async () => {
+  it('fails the run when --save never freezes (no sessions archive)', async () => {
+    let t = 0;
     const { leader } = fakeLeader({
       verbs: {
         'new-session': ok('new session (save)'),
@@ -1298,8 +1404,8 @@ describe('runTask', () => {
         [/^playwright-cli tab-list$/, ok('')],
         [/^playwright-cli tab-close$/, ok('')],
         [/session export/, ok('ok')],
-        // Fingerprint never changes.
         [/auto_extracted=/, ok('bytes=100\nsha=aaa\nauto_extracted=0\n')],
+        [/sessions\/index\.json/, ok('[]')],
       ],
     });
     await expect(
@@ -1309,11 +1415,18 @@ describe('runTask', () => {
         runId: 'r-nosettle',
         model: 'claude-sonnet-5',
         sessionAction: 'save',
-        memorySettleMs: 20,
+        memorySettleMs: 60_000,
         sleep: async () => {},
+        now: () => {
+          t += 1_000;
+          return t;
+        },
         capture: { pollMs: 5 },
       })
-    ).rejects.toThrow(/memory did not settle/);
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'freeze_skipped',
+    });
   });
 
   it('parses alias@thinking and leaves a plain alias at default', () => {
