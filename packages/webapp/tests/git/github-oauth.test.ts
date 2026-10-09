@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ensureFreshGithubToken, githubOAuthDomains } from '../../src/git/github-oauth.js';
 import { getRegisteredProviderConfig } from '../../src/providers/index.js';
-import { GITHUB_DOMAINS } from '../../src/shell/supplemental-commands/git-credential-command.js';
 
 vi.mock('../../src/providers/index.js', () => ({
   getRegisteredProviderConfig: vi.fn(),
 }));
+
+vi.mock('../../src/shell/supplemental-commands/git-credential-command.js', () => {
+  throw new Error('GitHub OAuth must not load the shell credential command');
+});
 
 const getConfig = vi.mocked(getRegisteredProviderConfig);
 
@@ -36,9 +39,14 @@ describe('ensureFreshGithubToken', () => {
 });
 
 describe('githubOAuthDomains', () => {
-  it('falls back to the credential helper domains when github is unregistered', () => {
+  it('falls back to GitHub domains when github is unregistered', () => {
     getConfig.mockReturnValue(undefined);
-    expect(githubOAuthDomains()).toEqual(GITHUB_DOMAINS);
+    expect(githubOAuthDomains()).toEqual(['github.com', '*.github.com']);
+  });
+
+  it('falls back to GitHub domains when the provider has no domain list', () => {
+    getConfig.mockReturnValue({} as never);
+    expect(githubOAuthDomains()).toEqual(['github.com', '*.github.com']);
   });
 
   it('uses the provider domain list when registered', () => {
