@@ -33,6 +33,7 @@ import {
   MIN_RETAINED_MEMORY_BYTES,
   memoryFingerprintChanged,
   memoryFingerprintCommand,
+  memorySettleProgressed,
   memoryStoreRetained,
   modelPinPolicy,
   NEW_SESSION_SAVE_TIMEOUT,
@@ -1014,55 +1015,211 @@ describe('transcript export', () => {
 
 describe('memory settle fingerprints', () => {
   it('parses CLAUDE.md fingerprint lines', () => {
-    expect(parseMemoryFingerprint('bytes=12758\nsha=abc\nauto_extracted=2\n')).toEqual({
+    expect(
+      parseMemoryFingerprint('bytes=12758\nsha=abc\nauto_extracted=2\nplaceholders=0\n')
+    ).toEqual({
       bytes: 12758,
       sha: 'abc',
       autoExtracted: 2,
+      placeholders: 0,
     });
     expect(
       memoryFingerprintChanged(
-        { bytes: 1, sha: 'a', autoExtracted: 0 },
+        { bytes: 1, sha: 'a', autoExtracted: 0, placeholders: 1 },
         {
           bytes: 1,
           sha: 'a',
           autoExtracted: 0,
+          placeholders: 1,
         }
       )
     ).toBe(false);
     expect(
       memoryFingerprintChanged(
-        { bytes: 1, sha: 'a', autoExtracted: 0 },
-        { bytes: 2, sha: 'b', autoExtracted: 1 }
+        { bytes: 1, sha: 'a', autoExtracted: 0, placeholders: 1 },
+        { bytes: 2, sha: 'b', autoExtracted: 1, placeholders: 0 }
       )
     ).toBe(true);
-    // Each signal alone counts as a change (sha / Auto-extracted / bytes).
+    // Each signal alone counts as a change (sha / Auto-extracted / bytes / placeholders).
     expect(
       memoryFingerprintChanged(
-        { bytes: 1, sha: 'a', autoExtracted: 0 },
-        { bytes: 1, sha: 'b', autoExtracted: 0 }
-      )
-    ).toBe(true);
-    expect(
-      memoryFingerprintChanged(
-        { bytes: 1, sha: 'a', autoExtracted: 0 },
-        { bytes: 1, sha: 'a', autoExtracted: 1 }
+        { bytes: 1, sha: 'a', autoExtracted: 0, placeholders: 0 },
+        { bytes: 1, sha: 'b', autoExtracted: 0, placeholders: 0 }
       )
     ).toBe(true);
     expect(
       memoryFingerprintChanged(
-        { bytes: 1, sha: '', autoExtracted: 0 },
-        { bytes: 9, sha: '', autoExtracted: 0 }
+        { bytes: 1, sha: 'a', autoExtracted: 0, placeholders: 0 },
+        { bytes: 1, sha: 'a', autoExtracted: 1, placeholders: 0 }
       )
     ).toBe(true);
-    expect(memoryStoreRetained(null, { bytes: 999, sha: 'x', autoExtracted: 0 })).toBe(false);
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: '', autoExtracted: 0, placeholders: 0 },
+        { bytes: 9, sha: '', autoExtracted: 0, placeholders: 0 }
+      )
+    ).toBe(true);
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: 'a', autoExtracted: 0, placeholders: 1 },
+        { bytes: 1, sha: 'a', autoExtracted: 0, placeholders: 0 }
+      )
+    ).toBe(true);
+    // Nullish placeholders still participate in the change / retain / progress checks.
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: 'a', autoExtracted: 0 },
+        { bytes: 1, sha: 'a', autoExtracted: 0, placeholders: 1 }
+      )
+    ).toBe(true);
     expect(
       memoryStoreRetained(
-        { bytes: 10, sha: 'a', autoExtracted: 2 },
-        { bytes: 10, sha: 'a', autoExtracted: 2 }
+        { bytes: MIN_RETAINED_MEMORY_BYTES, sha: 'a' },
+        { bytes: MIN_RETAINED_MEMORY_BYTES, sha: 'a' }
       )
     ).toBe(true);
+    expect(
+      memoryStoreRetained(
+        { sha: 'a', autoExtracted: 0, placeholders: 0 },
+        { sha: 'a', autoExtracted: 0, placeholders: 0 }
+      )
+    ).toBe(false);
+    expect(
+      memorySettleProgressed({ bytes: 1, sha: 'a' }, { bytes: 1, sha: 'a', autoExtracted: 1 })
+    ).toBe(true);
+    expect(
+      memorySettleProgressed({ bytes: 1, sha: 'a', placeholders: 2 }, { bytes: 1, sha: 'a' })
+    ).toBe(true);
+    expect(
+      memoryStoreRetained(null, { bytes: 999, sha: 'x', autoExtracted: 0, placeholders: 0 })
+    ).toBe(false);
+    // Seed placeholders are never "retained" even at large byte counts.
+    expect(
+      memoryStoreRetained(
+        { bytes: 999, sha: 'a', autoExtracted: 0, placeholders: 1 },
+        { bytes: 999, sha: 'a', autoExtracted: 0, placeholders: 1 }
+      )
+    ).toBe(false);
+    expect(
+      memoryStoreRetained(
+        { bytes: 10, sha: 'a', autoExtracted: 2, placeholders: 0 },
+        { bytes: 10, sha: 'a', autoExtracted: 2, placeholders: 0 }
+      )
+    ).toBe(true);
+    expect(
+      memoryStoreRetained(
+        {
+          bytes: MIN_RETAINED_MEMORY_BYTES,
+          sha: 'a',
+          autoExtracted: 0,
+          placeholders: 0,
+        },
+        {
+          bytes: MIN_RETAINED_MEMORY_BYTES,
+          sha: 'a',
+          autoExtracted: 0,
+          placeholders: 0,
+        }
+      )
+    ).toBe(true);
+    expect(
+      memoryStoreRetained(
+        { bytes: 10, sha: 'a', autoExtracted: 0, placeholders: 0 },
+        { bytes: 10, sha: 'a', autoExtracted: 0, placeholders: 0 }
+      )
+    ).toBe(false);
+    // A wipe back to the seed must not count as settle progress.
+    expect(
+      memorySettleProgressed(
+        { bytes: 277, sha: 'planted', autoExtracted: 0, placeholders: 0 },
+        { bytes: 286, sha: 'seed', autoExtracted: 0, placeholders: 1 }
+      )
+    ).toBe(false);
+    expect(memorySettleProgressed({ bytes: 1, sha: 'a', autoExtracted: 0 }, null)).toBe(false);
+    expect(
+      memorySettleProgressed(null, {
+        bytes: 1,
+        sha: 'a',
+        autoExtracted: 1,
+        placeholders: 0,
+      })
+    ).toBe(true);
+    expect(
+      memorySettleProgressed(
+        { bytes: 1, sha: 'a', autoExtracted: 0, placeholders: 1 },
+        { bytes: 1, sha: 'a', autoExtracted: 2, placeholders: 1 }
+      )
+    ).toBe(true);
+    expect(
+      memorySettleProgressed(
+        { bytes: 286, sha: 'seed', autoExtracted: 0, placeholders: 1 },
+        { bytes: 300, sha: 'planted', autoExtracted: 0, placeholders: 0 }
+      )
+    ).toBe(true);
+    // Non-seed growth without Auto-extracted still counts when placeholders stay cleared.
+    expect(
+      memorySettleProgressed(
+        { bytes: 50, sha: 'a', autoExtracted: 0, placeholders: 0 },
+        {
+          bytes: MIN_RETAINED_MEMORY_BYTES,
+          sha: 'b',
+          autoExtracted: 0,
+          placeholders: 0,
+        }
+      )
+    ).toBe(true);
+    expect(
+      memorySettleProgressed(
+        { bytes: 50, sha: 'a', autoExtracted: 1, placeholders: 0 },
+        { bytes: 60, sha: 'b', autoExtracted: 1, placeholders: 0 }
+      )
+    ).toBe(true);
+    expect(
+      memorySettleProgressed(
+        { bytes: 10, sha: 'a', autoExtracted: 0, placeholders: 0 },
+        { bytes: 20, sha: 'b', autoExtracted: 0, placeholders: 0 }
+      )
+    ).toBe(false);
+    expect(
+      memorySettleProgressed(
+        { bytes: 50, sha: 'a', autoExtracted: 0, placeholders: 2 },
+        { bytes: 100, sha: 'b', autoExtracted: 0, placeholders: 2 }
+      )
+    ).toBe(false);
     expect(memoryFingerprintCommand()).toContain('/workspace/CLAUDE.md');
+    expect(memoryFingerprintCommand()).toContain('placeholders=');
     expect(MEMORY_SETTLE_MS).toBeGreaterThan(0);
+  });
+
+  it('rejects requireChange settle when CLAUDE.md only moves back to the seed', async () => {
+    let t = 0;
+    const seed = ok('bytes=286\nsha=seed\nauto_extracted=0\nplaceholders=1\n');
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=|placeholders=/, seed],
+        [/sessions\/index\.json/, ok('[]')],
+      ],
+    });
+    await expect(
+      awaitMemorySettle(leader, {
+        before: parseMemoryFingerprint(
+          'bytes=277\nsha=planted\nauto_extracted=0\nplaceholders=0\n'
+        ),
+        archivesBefore: 0,
+        requireChange: true,
+        timeoutMs: 40,
+        freezeDetectMs: 10_000,
+        pollMs: 1,
+        sleep: async () => {},
+        now: () => {
+          t += 25;
+          return t;
+        },
+      })
+    ).rejects.toMatchObject({
+      memoryNotSettled: true,
+      memoryReason: 'freeze_skipped',
+    });
   });
 
   it('awaitMemorySettle returns when requireChange is false and nothing moves', async () => {
@@ -1245,7 +1402,12 @@ describe('memory settle fingerprints', () => {
   });
 
   it('treats a missing fingerprint field as zero / empty', () => {
-    expect(parseMemoryFingerprint('')).toEqual({ bytes: 0, sha: '', autoExtracted: 0 });
+    expect(parseMemoryFingerprint('')).toEqual({
+      bytes: 0,
+      sha: '',
+      autoExtracted: 0,
+      placeholders: 0,
+    });
     expect(memoryFingerprintChanged(null, { bytes: 1, sha: 'x', autoExtracted: 0 })).toBe(false);
   });
 
