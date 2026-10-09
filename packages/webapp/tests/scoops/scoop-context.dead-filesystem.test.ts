@@ -138,6 +138,39 @@ describe('directory seeding on a broken filesystem', () => {
     expect(fs.writeFile).not.toHaveBeenCalled();
   });
 
+  it('seeds when the read probe is a message-only ENOENT (no .code)', async () => {
+    // Several ScoopContext unit suites use `throw new Error('ENOENT')` mocks.
+    const ctx = new ScoopContext(coneRecord(), callbacks(), await makeFs());
+    const fs = {
+      mkdir: vi.fn(async () => {}),
+      readFile: vi.fn(async () => {
+        throw new Error('ENOENT');
+      }),
+      writeFile: vi.fn(async () => {}),
+      exists: vi.fn(async () => true),
+    } as unknown as VirtualFS;
+
+    await expect(seedDirs(ctx, fs)).resolves.toBeUndefined();
+    expect(fs.writeFile).toHaveBeenCalled();
+  });
+
+  it('skips seeding when the read probe is EACCES', async () => {
+    const ctx = new ScoopContext(coneRecord(), callbacks(), await makeFs());
+    const fs = {
+      mkdir: vi.fn(async () => {}),
+      readFile: vi.fn(async () => {
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      }),
+      writeFile: vi.fn(async () => {
+        throw new Error('writeFile must not run on EACCES read');
+      }),
+      exists: vi.fn(async () => true),
+    } as unknown as VirtualFS;
+
+    await expect(seedDirs(ctx, fs)).resolves.toBeUndefined();
+    expect(fs.writeFile).not.toHaveBeenCalled();
+  });
+
   it('rethrows verbatim when the root is fine and only the write failed', async () => {
     const ctx = new ScoopContext(coneRecord(), callbacks(), await makeFs());
     const fs = {

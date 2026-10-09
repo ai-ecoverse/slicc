@@ -17,8 +17,12 @@ import { TMP_ROOT } from '../../work-unit/descriptor.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import type { RegisteredScoop } from '../types.js';
 
-function errCode(err: unknown): string | undefined {
-  return (err as { code?: string } | null)?.code;
+/** Node/`FsError` `.code`, or message-only mocks like `Error('ENOENT')`. */
+function isErrno(err: unknown, code: 'ENOENT' | 'EACCES'): boolean {
+  return (
+    (err as { code?: string } | null)?.code === code ||
+    (err instanceof Error && err.message.includes(code))
+  );
 }
 
 const log = createLogger('scoop-context');
@@ -79,9 +83,8 @@ export async function ensureDirectoryStructure(
   try {
     await fs.readFile(memoryPath);
   } catch (err) {
-    const readCode = errCode(err);
     // Read-only sandboxes may refuse the probe; leave them without a seed.
-    if (readCode === 'EACCES') {
+    if (isErrno(err, 'EACCES')) {
       log.debug('Skipping default memory seed (sandbox cannot read memory path)', {
         folder: scoop.folder,
         path: memoryPath,
@@ -90,7 +93,9 @@ export async function ensureDirectoryStructure(
     }
     // Only a confirmed absence seeds. Any other fault must not overwrite an
     // existing durable memory file with the placeholder template.
-    if (readCode !== 'ENOENT') throw err;
+    // Match `.code` and message-includes (same as memory-health `isEnoent`) so
+    // test mocks that throw `Error('ENOENT')` still seed on a missing file.
+    if (!isErrno(err, 'ENOENT')) throw err;
     const defaultMemory = `# ${scoop.assistantLabel} Memory
 
 ${unit.display.role === 'primary' ? 'Role: Cone (main orchestrator)' : `Scoop: ${scoop.name}`}
