@@ -407,6 +407,10 @@ export class OffscreenClient implements KernelClientFacade {
     this.send({ type: 'refresh-model' });
   }
 
+  reloadSkills(): void {
+    this.send({ type: 'reload-skills' });
+  }
+
   setScoopModel(jid: string, model: WorkUnitModel | undefined): Promise<boolean> {
     const requestId = `model-${uid()}`;
     const ack = new Promise<boolean>((resolve) => {

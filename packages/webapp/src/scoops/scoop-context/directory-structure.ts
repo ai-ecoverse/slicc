@@ -5,6 +5,13 @@ import { TMP_ROOT } from '../../work-unit/descriptor.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import type { RegisteredScoop } from '../types.js';
 
+function isErrno(err: unknown, code: 'ENOENT' | 'EACCES'): boolean {
+  return (
+    (err as { code?: string } | null)?.code === code ||
+    (err instanceof Error && err.message.includes(code))
+  );
+}
+
 const log = createLogger('scoop-context');
 
 export async function ensureDirectoryStructure(
@@ -39,7 +46,16 @@ export async function ensureDirectoryStructure(
   const memoryPath = unit.workspace.memoryPath;
   try {
     await fs.readFile(memoryPath);
-  } catch {
+  } catch (err) {
+    if (isErrno(err, 'EACCES')) {
+      log.debug('Skipping default memory seed (sandbox cannot read memory path)', {
+        folder: scoop.folder,
+        path: memoryPath,
+      });
+      return;
+    }
+
+    if (!isErrno(err, 'ENOENT')) throw err;
     const defaultMemory = `# ${scoop.assistantLabel} Memory
 
 ${unit.display.role === 'primary' ? 'Role: Cone (main orchestrator)' : `Scoop: ${scoop.name}`}
@@ -54,8 +70,8 @@ Created: ${new Date().toISOString()}
 `;
     try {
       await fs.writeFile(memoryPath, defaultMemory);
-    } catch (err) {
-      const code = (err as { code?: string })?.code;
+    } catch (writeErr) {
+      const code = (writeErr as { code?: string })?.code;
       if (code === 'EACCES') {
         log.debug('Skipping default memory write (sandbox is read-only)', {
           folder: scoop.folder,
@@ -65,10 +81,10 @@ Created: ${new Date().toISOString()}
         throw new Error(
           `workspace filesystem unavailable: ${unit.workspace.root} is missing and could not be created` +
             ` (${code ?? 'unknown error'}) — reload the session`,
-          { cause: err }
+          { cause: writeErr }
         );
       } else {
-        throw err;
+        throw writeErr;
       }
     }
   }

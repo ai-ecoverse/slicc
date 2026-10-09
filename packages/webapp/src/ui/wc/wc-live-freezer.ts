@@ -62,7 +62,7 @@ interface ArchiveConeSessionDeps {
   writer: Awaited<ReturnType<FreezerRailDeps['openVfs']>>['writer'];
 
   root: RegisteredScoop | undefined;
-  client: Pick<OffscreenClient, 'spawnAgent' | 'sendSprinkleLick' | 'getScoops'>;
+  client: Pick<OffscreenClient, 'spawnAgent' | 'sendSprinkleLick' | 'getScoops' | 'reloadSkills'>;
   freezerNew(): HTMLElement | null;
   refreshFreezer(): void;
   runNewSessionFreeze: typeof import('../new-session.js').runNewSessionFreeze;
@@ -118,6 +118,11 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
     captureCompleteSnapshotFor(root, frozen, signal);
 
   const onSessionSettled = (entry: FrozenSessionIndexEntry | null): void => {
+    try {
+      deps.client.reloadSkills();
+    } catch (err) {
+      deps.log.warn('post-settle prompt reload failed', err);
+    }
     void import('./wc-gelatiere.js')
       .then(({ notifyGelatiereOfSessionEnd }) =>
         notifyGelatiereOfSessionEnd({

@@ -39,20 +39,25 @@ export function parseMemoryFingerprint(stdout) {
   const bytes = Number((text.match(/^bytes=(\d+)/m) || [])[1]);
   const sha = (text.match(/^sha=([0-9a-f]+)/m) || [])[1] || '';
   const auto = Number((text.match(/^auto_extracted=(\d+)/m) || [])[1]);
+  const placeholders = Number((text.match(/^placeholders=(\d+)/m) || [])[1]);
   return {
     bytes: Number.isFinite(bytes) ? bytes : 0,
     sha,
     autoExtracted: Number.isFinite(auto) ? auto : 0,
+
+    placeholders: Number.isFinite(placeholders) ? placeholders : 0,
   };
 }
 
 export function memoryFingerprintCommand() {
   return [
     'f=/workspace/CLAUDE.md',
-    'if [ ! -f "$f" ]; then echo bytes=0; echo sha=; echo auto_extracted=0; exit 0; fi',
+    'if [ ! -f "$f" ]; then echo bytes=0; echo sha=; echo auto_extracted=0; echo placeholders=0; exit 0; fi',
     'echo bytes=$(wc -c < "$f" | tr -d " ")',
     'echo sha=$(sha256sum "$f" | awk \'{print $1}\')',
     'echo auto_extracted=$(grep -c "^## Auto-extracted" "$f" || true)',
+
+    `echo placeholders=$(grep -cF '(Add preferences here)' "$f" || true)`,
   ].join('; ');
 }
 
@@ -65,20 +70,43 @@ export function memoryFingerprintChanged(before, after) {
   if (after.sha && before.sha && after.sha !== before.sha) return true;
   if (after.autoExtracted > before.autoExtracted) return true;
   if (after.bytes !== before.bytes) return true;
+  if ((after.placeholders ?? 0) !== (before.placeholders ?? 0)) return true;
   return false;
 }
 
 export function memoryStoreRetained(before, after) {
   if (!before || !after) return false;
   if (memoryFingerprintChanged(before, after)) return false;
+  if ((before.placeholders ?? 0) > 0) return false;
   if ((before.autoExtracted ?? 0) > 0) return true;
   return (before.bytes ?? 0) >= MIN_RETAINED_MEMORY_BYTES;
+}
+
+export function memorySettleProgressed(before, after) {
+  if (!after) return false;
+  if ((after.autoExtracted ?? 0) > (before?.autoExtracted ?? 0)) return true;
+  if ((after.placeholders ?? 0) < (before?.placeholders ?? 0)) return true;
+
+  if (
+    memoryFingerprintChanged(before, after) &&
+    (after.placeholders ?? 0) === 0 &&
+    ((after.autoExtracted ?? 0) > 0 || (after.bytes ?? 0) >= MIN_RETAINED_MEMORY_BYTES)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export async function readMemoryFingerprint(leader) {
   const r = await leader.exec(memoryFingerprintCommand());
   if (r.status !== 0) {
-    return { bytes: 0, sha: '', autoExtracted: 0, error: (r.stderr || '').slice(0, 200) };
+    return {
+      bytes: 0,
+      sha: '',
+      autoExtracted: 0,
+      placeholders: 0,
+      error: (r.stderr || '').slice(0, 200),
+    };
   }
   return parseMemoryFingerprint(r.stdout);
 }
@@ -187,11 +215,11 @@ export async function awaitMemorySettle(
   let newest = newestSessionArchive(index);
   const ctx = { before, started, now, index, newest };
 
-  if (memoryFingerprintChanged(before, after)) {
-    return memorySettleOk(true, { ...ctx, after });
-  }
   if (!requireChange || timeoutMs <= 0) {
-    return memorySettleOk(false, { ...ctx, after });
+    return memorySettleOk(memoryFingerprintChanged(before, after), { ...ctx, after });
+  }
+  if (memorySettleProgressed(before, after)) {
+    return memorySettleOk(true, { ...ctx, after });
   }
 
   while (now() - started < timeoutMs) {
@@ -218,7 +246,7 @@ export async function awaitMemorySettle(
     after = await readMemoryFingerprint(leader);
     index = await readSessionsIndex(leader);
     newest = newestSessionArchive(index);
-    if (memoryFingerprintChanged(before, after)) {
+    if (memorySettleProgressed(before, after)) {
       return memorySettleOk(true, { before, after, started, now, index, newest });
     }
   }

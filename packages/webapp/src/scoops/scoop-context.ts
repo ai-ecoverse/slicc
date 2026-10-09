@@ -581,6 +581,14 @@ export class ScoopContext {
     this.clearMessages();
     await this.sessions.clear();
     await this.settleLiveSnapshot(options.discardLiveSnapshot === true);
+    try {
+      await this.reloadSkills();
+    } catch (err) {
+      log.warn('clearSession: could not rebuild system prompt from memory', {
+        folder: this.scoop.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private idleCompactionEnabled(): boolean {
