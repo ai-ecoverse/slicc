@@ -2331,34 +2331,37 @@ That is a catalogue gap, not a filter bug.
 The picker is default-deny for non-Claude (rule 2 in
 `bedrock-camp-compat.ts`). The allowlist holds
 `openai.gpt-5.6-{sol,terra,luna}`, `openai.gpt-6-{sol,luna,astra}`,
-`openai.gpt-6.1-sol` and
-`moonshotai.kimi-k3`, each admitted only after live verification, because
-these models differ from Claude in three ways that each fail silently or
-mid-loop:
+`openai.gpt-6.1-sol`, `moonshotai.kimi-k3` and `xai.grok-4.7`, each
+admitted only after live verification, because these models differ from
+Claude in three ways that each fail silently or mid-loop:
 
-|                | Claude                                            | gpt-5.6                                          | gpt-6                                          | kimi-k3                              |
-| -------------- | ------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------- | ------------------------------------ |
-| prompt caching | explicit `cachePoint` block                       | **implicit**; a `cachePoint` block returns `403` | **implicit**                                   | **implicit**                         |
-| `temperature`  | rejected from Opus 4.7 / Sonnet 5.0 / Haiku 5.0   | rejected                                         | rejected                                       | rejected                             |
-| thinking shape | `thinking.type.adaptive` + `output_config.effort` | **none accepted**; 400s `unknown_parameter`      | only `reasoning.effort` (`none` 400s on Astra) | every shape accepted **and ignored** |
+|                | Claude                                            | gpt-5.6                                          | gpt-6                                          | kimi-k3                              | grok-4.7                                   |
+| -------------- | ------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------- | ------------------------------------ | ------------------------------------------ |
+| prompt caching | explicit `cachePoint` block                       | **implicit**; a `cachePoint` block returns `403` | **implicit**                                   | **implicit**                         | **implicit**; never reports a cache write  |
+| `temperature`  | rejected from Opus 4.7 / Sonnet 5.0 / Haiku 5.0   | rejected                                         | rejected                                       | rejected                             | rejected                                   |
+| thinking shape | `thinking.type.adaptive` + `output_config.effort` | **none accepted**; 400s `unknown_parameter`      | only `reasoning.effort` (`none` 400s on Astra) | every shape accepted **and ignored** | flat `reasoning_effort`: low, medium, high |
 
 `supportsPromptCaching` gates on `isAnthropicClaudeModel`, so caching needed
 no change. `buildAdditionalModelRequestFields` emits nothing for gpt-5.6 and
-kimi-k3, and a `reasoning.effort` block only for gpt-6. The `temperature`
+kimi-k3, a `reasoning.effort` block for gpt-6, and a flat `reasoning_effort`
+for grok-4.7. The `temperature`
 reject-list, previously Claude-only, also had to grow.
 
 Consequences of that gating, easy to miss:
 
-- **GPT-6 vision depends on where the image sits in Converse.** Live probes
+- **GPT-6 and Grok 4.7 vision depends on where the image sits in Converse.** Live probes
   on `bedrock-runtime` with Luna, Sol and Astra returned `200` for a top-level
   user `image` block, but `400` ("This model doesn't support the image field
   for user messages") for the same valid PNG inside `toolResult.content`.
   [AWS's API reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultContentBlock.html)
   also documents that nested tool-result images have narrower model support.
   Converse also rejects OpenAI-style `image_url` as an unknown content block.
+  Grok 4.7 answered the same way on `global.` and `us.` (2026-10-09): `200`
+  for a user image and for an image beside the `toolResult`, `400` with the
+  same message for one inside it.
   `bedrock-camp.ts` therefore keeps user attachments as ordinary user images,
-  while moving image blocks from GPT-6 tool results beside the `toolResult`
-  block in the enclosing user message. A text marker remains in the tool result
+  while moving image blocks from GPT-6 and Grok 4.7 tool results beside the
+  `toolResult` block in the enclosing user message. A text marker remains in the tool result
   at each image's original position. For opaque application inference profile
   ARNs, the GPT-6 capability check uses the model name as the existing Claude
   checks do. Keep GPT-6's image input modality in the catalogue; it can see
@@ -2366,7 +2369,7 @@ Consequences of that gating, easy to miss:
   result image can come from a browser screenshot or `open --view` through
   `core/tool-adapter.ts`. Benchmark task files are staged in the VFS and are
   not themselves inline image messages.
-- **Effort control is Claude and gpt-6 only.** gpt-6 gets
+- **Effort control is Claude, gpt-6 and grok-4.7 only.** gpt-6 gets
   `additionalModelRequestFields.reasoning.effort` from
   `BEDROCK_CAMP_GPT6_EFFORT_MAP` (`bedrock-camp-compat.ts`): off → `none`,
   minimal rounds up to `low` (`minimal` 400s), low … xhigh pass through, and
@@ -2375,7 +2378,8 @@ Consequences of that gating, easy to miss:
   no field (model default). For gpt-5.6 and kimi-k3 every level produces a
   byte-identical request. The composer gates its thinking-level selector on
   `model.reasoning`, so `account-store.ts` (`toBedrockCampPickerModel`) keeps
-  that flag only for Claude and gpt-6 and swaps in the gpt-6 effort map. This
+  that flag only for Claude, gpt-6 and grok-4.7 and swaps in their effort
+  maps. This
   does not suppress `reasoningContent` — gpt-5.6 still reasons, it just
   cannot be told how hard.
 - **GPT-6.1 Sol has its own effort map.** The global inference profile
@@ -2391,6 +2395,13 @@ Consequences of that gating, easy to miss:
   price tier above 272,000 input tokens. [OpenAI's pricing guide](https://developers.openai.com/api/docs/pricing)
   says commercial-region Bedrock billing matches direct pricing for equivalent
   services; no separate AWS GPT-6.1 price card was available at release.
+- **Grok 4.7 takes a flat `reasoning_effort`**, not gpt-6's
+  `reasoning.effort` object. `BEDROCK_CAMP_GROK_EFFORT_MAP` offers low,
+  medium and high. Bedrock also accepts `minimal` and `xhigh` without error
+  (2026-10-09), but the picker does not offer them: off and minimal send
+  `low`, and xhigh and max send `high`. pi-ai's catalogue lists only the
+  `global.` and `us.` profiles (Global $2 input / $6 output / $0.50 cache read
+  per million tokens, US +10%, a 500,000-token window, no long-context tier).
 - **The allowlist is anchored per variant** (`sol|terra|luna`), not a
   `gpt-5.6-` prefix. A prefix would auto-admit any future variant the
   catalogue gains without anyone measuring its caching, which is the
@@ -2403,6 +2414,12 @@ a model (`bedrock-runtime.us-west-2`):
   first call, then `cacheReadInputTokens` on every repeat, including with a
   system prompt and `toolConfig` attached. The cache is shared across
   profiles: a `us.` call reads what a `global.` call wrote.
+- **grok-4.7** — reliable (2026-10-09). With a fresh prefix per run, 10 of 10
+  repeat calls read the whole system prompt from cache on `global.` and `us.`
+  at 43k tokens and on `global.` at 20k, with `toolConfig` attached and a tool
+  call on every response. Grok reports `cacheWriteInputTokens: 0` even on the
+  first call, which bills as full input. Reuse a prefix across runs and
+  call 1 reads too, since the cache is shared across profiles.
 - **grok-4.6** — NOT allowlisted. Fully functional (200s, tool calls, system
   prompts) but cached on only 2 of 15 attempts at ~18-20k tokens, so it would
   bill full input on nearly every turn.
@@ -2418,12 +2435,12 @@ the shape the agent actually sends. And pi-ai's catalogue prices `cacheRead`
 whether caching is explicit, implicit, or effectively absent, so **cost
 metadata is not evidence** — only `usage` on a live repeat is.
 
-One structural gotcha if grok is ever revisited: Bedrock serves it only
-through an inference profile (bare `xai.grok-4.6` 400s with "on-demand
-throughput isn't supported"), while pi-ai's catalogue ships only the bare id.
-`global.xai.grok-4.6` and `us.xai.grok-4.6` both work when invoked directly,
-so admitting it needs an upstream catalogue fix or a synthesized entry — an
-allowlist alone cannot surface it.
+One structural gotcha with grok: Bedrock serves it only through an inference
+profile (bare `xai.grok-4.6` 400s with "on-demand throughput isn't
+supported"). pi-ai's catalogue ships only the bare id for 4.6, so admitting it
+would need an upstream catalogue fix or a synthesized entry. For 4.7, pi-ai
+1.1.0 ships the `global.` and `us.` profile ids, so the allowlist alone
+surfaces them; the anchored regex does not admit a bare `xai.grok-4.7`.
 
 ### 6. AWS ships models before pi-ai's catalogue lists them
 

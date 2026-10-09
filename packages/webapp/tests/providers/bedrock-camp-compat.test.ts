@@ -20,6 +20,8 @@ import {
   BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
   BEDROCK_CAMP_GPT6_EFFORT_MAP,
   BEDROCK_CAMP_GPT61_EFFORT_MAP,
+  BEDROCK_CAMP_GROK_EFFORT_MAP,
+  bedrockCampGrokEffortMap,
   bedrockCampOpenAIEffortMap,
   bedrockCampRegionFromBaseUrl,
   isBedrockCampClaudeModel,
@@ -141,6 +143,7 @@ describe('isBedrockCampCompatible', () => {
       'global.openai.gpt-6-astra',
       'global.openai.gpt-6.1-sol',
       'global.moonshotai.kimi-k3',
+      'global.xai.grok-4.7',
     ]) {
       expect(isBedrockCampCompatible({ id }, 'us-west-2'), id).toBe(true);
       // `global.` is reachable from every region.
@@ -418,5 +421,41 @@ describe('parity with the private copies in bedrock-camp.ts', () => {
         providerIsCompatible({ id }, region)
       );
     }
+  });
+});
+
+// Verified live 2026-10-09 on us-west-2 with a flat `reasoning_effort`.
+describe('bedrockCampGrokEffortMap', () => {
+  it('maps Grok 4.7 by id and by an opaque profile name, and nothing else', () => {
+    expect(bedrockCampGrokEffortMap({ id: 'global.xai.grok-4.7' })).toBe(
+      BEDROCK_CAMP_GROK_EFFORT_MAP
+    );
+    expect(bedrockCampGrokEffortMap({ id: 'us.xai.grok-4.7' })).toBe(BEDROCK_CAMP_GROK_EFFORT_MAP);
+    expect(
+      bedrockCampGrokEffortMap({
+        id: 'arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/opaque',
+        name: 'Grok 4.7 (Global)',
+      })
+    ).toBe(BEDROCK_CAMP_GROK_EFFORT_MAP);
+    for (const id of ['global.xai.grok-4.6', 'global.xai.grok-4.70', 'global.openai.gpt-6-sol'])
+      expect(bedrockCampGrokEffortMap({ id }), id).toBeNull();
+  });
+
+  it('offers low, medium and high only', () => {
+    expect(BEDROCK_CAMP_GROK_EFFORT_MAP).toEqual({
+      off: null,
+      minimal: null,
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: null,
+      max: null,
+    });
+  });
+
+  it('is reachable from us-west-2 on the global and us profiles', () => {
+    expect(isBedrockCampCompatible({ id: 'us.xai.grok-4.7' }, 'us-west-2')).toBe(true);
+    expect(providerIsCompatible({ id: 'global.xai.grok-4.7' }, 'us-west-2')).toBe(true);
+    expect(isBedrockCampCompatible({ id: 'xai.grok-4.7' }, 'us-west-2')).toBe(false);
   });
 });

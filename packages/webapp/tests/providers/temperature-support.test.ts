@@ -95,6 +95,8 @@ describe('non-Claude Bedrock models that reject temperature', () => {
     ['us.openai.gpt-6-astra'],
     ['global.moonshotai.kimi-k3'],
     ['us.moonshotai.kimi-k3'],
+    ['global.xai.grok-4.7'],
+    ['us.xai.grok-4.7'],
   ])('%s does not support temperature', (id) => {
     expect(modelSupportsTemperature(id)).toBe(false);
   });
@@ -146,6 +148,7 @@ describe('non-Claude Bedrock models that reject temperature', () => {
       // Not allowlisted, so never reached — and must not be misdetected.
       'global.xai.grok-4.6',
       'global.xai.grok-4.3',
+      'global.xai.grok-4.70',
     ]) {
       expect(modelSupportsTemperature(id), id).toBe(true);
     }

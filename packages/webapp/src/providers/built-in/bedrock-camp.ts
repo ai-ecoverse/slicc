@@ -52,9 +52,11 @@ import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
 import {
   type BedrockCampEffortMap,
+  bedrockCampGrokEffortMap,
   bedrockCampOpenAIEffortMap,
   getModelMatchCandidates,
   isBedrockCampGpt6Model,
+  isBedrockCampGrokModel,
 } from './bedrock-camp-compat.js';
 
 export const config: ProviderConfig = {
@@ -108,7 +110,10 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // The bar for this list is prompt caching, which is why xai.grok-4.6 is NOT
 // here: it is functional (200s, tool calls) but cached on only 2 of 15
 // attempts at ~18-20k tokens, so it would bill full input on nearly every
-// turn. Re-measure before adding it.
+// turn. xai.grok-4.7 clears it (re-measured 2026-10-09 on us-west-2: with a
+// ~43k-token system prompt and toolConfig, calls 2-5 each read 43,264 tokens
+// from cache, 4/4, and tool calls came back 5/5). It takes a flat
+// `reasoning_effort` (see `bedrockCampGrokEffortMap`).
 //
 // All of them reject `temperature` (`temperature-support.ts` strips it).
 // gpt-5.6 rejects every `additionalModelRequestFields` thinking shape, and
@@ -123,7 +128,7 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // exact default-deny hole this list exists to avoid — and would accept the
 // `gpt-5-6-` spelling, which no Bedrock id uses and which was never verified.
 const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
-  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3)$/;
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3|xai\.grok-4\.7)$/;
 // Matches standard (us-east-1), FIPS (us-east-1-fips) and China
 // (cn-north-1.amazonaws.com.cn) Bedrock runtime hosts.
 const BEDROCK_RUNTIME_HOST_RE =
@@ -271,6 +276,10 @@ type BedrockCampOpenAIReasoningFields = {
   reasoning: { effort: string };
 };
 
+type BedrockCampGrokReasoningFields = {
+  reasoning_effort: string;
+};
+
 type BedrockCampDisabledThinkingFields = {
   thinking: { type: 'disabled' };
 };
@@ -279,6 +288,7 @@ type BedrockCampAdditionalModelRequestFields =
   | BedrockCampAdaptiveFields
   | BedrockCampLegacyThinkingFields
   | BedrockCampOpenAIReasoningFields
+  | BedrockCampGrokReasoningFields
   | BedrockCampDisabledThinkingFields;
 
 type BedrockCampInferenceConfig = {
@@ -556,10 +566,10 @@ function coalesceToolResults(
   message: BedrockCampUserMessage;
   nextIndex: number;
 } {
-  // Bedrock's GPT-6 Converse adapter accepts a user image, but rejects an
-  // image nested inside toolResult.content. Keep the tool result and attach
-  // its images as sibling user content in the same message.
-  const liftImages = isBedrockCampGpt6Model(model);
+  // Bedrock's GPT-6 and Grok 4.7 Converse adapters accept a user image, but
+  // reject an image nested inside toolResult.content. Keep the tool result and
+  // attach its images as sibling user content in the same message.
+  const liftImages = isBedrockCampGpt6Model(model) || isBedrockCampGrokModel(model);
   const toolResults: BedrockCampToolResultBlock[] = [];
   const images: BedrockCampImageBlock[] = [];
   let j = startIndex;
@@ -747,10 +757,24 @@ function openAIReasoningEffort(
   return undefined;
 }
 
+// Grok always gets an effort: off and minimal round up to the lowest level it
+// has, xhigh and max (and the `max` effort override) down to the highest.
+function grokReasoningEffort(map: BedrockCampEffortMap, options: BedrockCampOptions): string {
+  const supported = OPENAI_EFFORT_ORDER.map((level) => map[level]).filter(
+    (v): v is string => typeof v === 'string'
+  );
+  if (options.effort === 'max' || options.reasoning === 'xhigh' || options.reasoning === 'max')
+    return supported[supported.length - 1];
+  const mapped = options.reasoning ? map[options.reasoning as keyof BedrockCampEffortMap] : null;
+  return mapped ?? supported[0];
+}
+
 function buildAdditionalModelRequestFields(
   model: Model<Api>,
   options: BedrockCampOptions
 ): BedrockCampAdditionalModelRequestFields | undefined {
+  const grokMap = bedrockCampGrokEffortMap(model);
+  if (grokMap) return { reasoning_effort: grokReasoningEffort(grokMap, options) };
   const effortMap = bedrockCampOpenAIEffortMap(model);
   if (effortMap) {
     const effort = openAIReasoningEffort(effortMap, options);
