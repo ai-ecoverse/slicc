@@ -794,7 +794,9 @@ export class ScoopContext {
    * stale prompt across New chat / `new-session --save` made the next turn
    * answer from empty Preferences placeholders while `/workspace/CLAUDE.md`
    * on disk already held the preference (memory-smoke retrieve → NONE).
-   * `rebuildSystemPrompt` preserves `toolsAdded` (#review tools-on-rewrite).
+   * When agentic curation / legacy enrichment still runs after this clear,
+   * `wc-live-freezer`'s `onSessionSettled` fires `reload-skills` again once
+   * memory has landed. `rebuildSystemPrompt` preserves `toolsAdded`.
    */
   async clearSession(options: ClearSessionOptions = {}): Promise<void> {
     this.sessionGeneration++;
