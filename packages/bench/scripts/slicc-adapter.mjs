@@ -460,25 +460,47 @@ export async function pinScoopModels(leader, modelId) {
   if (!Array.isArray(catalogue) || catalogue.length === 0)
     throw new Error(`model pin: \`models --json\` printed no catalogue for ${provider}`);
   const policy = modelPinPolicy(modelId, catalogue);
-  const previous = await leader.exec(`cat ${MODELS_POLICY_PATH}`);
-  const original = previous.status === 0 ? previous.stdout : null;
+  const original = await readPolicy(leader);
   const write = (text) =>
     must(leader, `base64 -d > ${MODELS_POLICY_PATH}`, {
       stdin: Buffer.from(text).toString('base64'),
     });
-  await write(policy);
-  const back = await must(leader, `cat ${MODELS_POLICY_PATH}`);
-  if (back.stdout.trim() !== policy.trim())
-    throw new Error(`model pin: ${MODELS_POLICY_PATH} did not take the policy`);
+  const restore = () =>
+    original === null ? must(leader, `rm -f ${MODELS_POLICY_PATH}`) : write(original);
+  try {
+    await write(policy);
+    const back = await must(leader, `cat ${MODELS_POLICY_PATH}`);
+    if (back.stdout.trim() !== policy.trim())
+      throw new Error(`model pin: ${MODELS_POLICY_PATH} did not take the policy`);
+  } catch (err) {
+    // A write may have landed even when its check failed: put the previous policy back first.
+    await restore().catch((undo) => {
+      err.message += `; and restoring ${MODELS_POLICY_PATH} failed: ${undo.message}`;
+      err.leaderDown = true;
+    });
+    throw err;
+  }
   return {
     pin: {
       provider,
       model: modelId,
       denied: policy.split('\n').filter((l) => l.startsWith('-')).length,
     },
-    restore: () =>
-      original === null ? leader.exec(`rm -f ${MODELS_POLICY_PATH}`) : write(original),
+    restore,
   };
+}
+
+/**
+ * The leader's current `/etc/models`, or null when there is none. Only a confirmed absence counts
+ * as none: an unreadable file or an unreachable leader throws, so restoring cannot delete a policy
+ * that was merely not read.
+ */
+async function readPolicy(leader) {
+  const exists = await leader.exec(`test -e ${MODELS_POLICY_PATH}`);
+  if (exists.leaderDown || (exists.status !== 0 && exists.status !== 1))
+    throw failure(`leader: \`test -e ${MODELS_POLICY_PATH}\``, exists);
+  if (exists.status === 1) return null;
+  return (await must(leader, `cat ${MODELS_POLICY_PATH}`)).stdout;
 }
 
 /**
@@ -1579,6 +1601,27 @@ function finalTextOf(armOut, { resumedAfterSettle, transcript, reply }) {
   return resumedAfterSettle ? lastConeAssistantText(transcript) : reply.stdout;
 }
 
+/**
+ * A failed run still gives the leader its `/etc/models` back. If it can't, the error says so and
+ * marks the leader down, so the lane restarts it with a wiped profile instead of carrying this
+ * run's pin into the next one.
+ */
+async function restoreAfterFailedRun(undo, err) {
+  if (!undo) return;
+  await undo().catch((e) => {
+    err.message += `; and restoring ${MODELS_POLICY_PATH} failed: ${e.message}`;
+    err.leaderDown = true;
+  });
+}
+
+/** After a finished run (its result already built), a restore that fails is recorded on its pin. */
+async function restoreAfterRun(undo, pin) {
+  if (!undo) return;
+  await undo().catch((e) => {
+    if (pin) pin.restore_error = e.message.slice(0, 300);
+  });
+}
+
 export async function runTask({
   leader,
   task,
@@ -1727,10 +1770,15 @@ export async function runTask({
       },
       health,
     };
+  } catch (err) {
+    const undo = restorePolicy;
+    restorePolicy = null;
+    await restoreAfterFailedRun(undo, err);
+    throw err;
   } finally {
     await closeTabs(leader).catch(() => {});
     await leader.cli(['new-session', '--erase']).catch(() => {});
-    if (restorePolicy) await Promise.resolve(restorePolicy()).catch(() => {});
+    await restoreAfterRun(restorePolicy, pin);
     const leftovers = stagedCleanupPaths(staged);
     if (leftovers.length)
       await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});

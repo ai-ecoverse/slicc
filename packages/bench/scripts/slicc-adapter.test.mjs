@@ -76,6 +76,10 @@ function fakeLeader({
   commands = [],
   catalogue = DEFAULT_CATALOGUE,
   policyWritable = true,
+  policyReadable = true,
+  readback = null,
+  removable = true,
+  probe = null,
 } = {}) {
   const calls = [];
   // The leader's /etc/models and model catalogue, for the per-run scoop model pin.
@@ -83,8 +87,20 @@ function fakeLeader({
   const pinRoutes = [
     [/^models --provider /, () => ok(JSON.stringify(catalogue))],
     [
+      /^test -e \/etc\/models$/,
+      () =>
+        probe ??
+        (files.has('/etc/models') ? ok() : { stdout: '', stderr: '', status: 1, timedOut: false }),
+    ],
+    [
       /^cat \/etc\/models$/,
-      () => (files.has('/etc/models') ? ok(files.get('/etc/models')) : fail('no such file')),
+      () => {
+        if (!policyReadable) return fail('cat: /etc/models: input/output error');
+        // A read-back that disagrees with what the bench wrote (only its own pin, not a snapshot).
+        if (readback !== null && files.get('/etc/models')?.startsWith('# Written by the bench'))
+          return ok(readback);
+        return files.has('/etc/models') ? ok(files.get('/etc/models')) : fail('no such file');
+      },
     ],
     [
       /^base64 -d > \/etc\/models$/,
@@ -97,6 +113,7 @@ function fakeLeader({
     [
       /^rm -f \/etc\/models$/,
       () => {
+        if (!removable) return fail('rm: /etc/models: permission denied');
         files.delete('/etc/models');
         return ok();
       },
@@ -1022,7 +1039,7 @@ describe('runTask', () => {
       'slicc model claude-sonnet-5',
       'slicc thinking',
       'models --provider',
-      'cat /etc/models',
+      'test -e',
       'base64 -d',
       'cat /etc/models',
       'cost --json',
@@ -2658,5 +2675,37 @@ describe('scoop model pin', () => {
     const { leader, files } = fakeLeader({ policyWritable: false });
     files.set('/etc/models', '[bedrock-camp]\n');
     await expect(pinScoopModels(leader, HAIKU)).rejects.toThrow(/did not take the policy/);
+  });
+
+  it('aborts, and keeps the policy, when an existing /etc/models cannot be read', async () => {
+    const { leader, files } = fakeLeader({ policyReadable: false });
+    files.set('/etc/models', '[bedrock-camp]\nopenrouter:*\n');
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toThrow(/input\/output error/);
+    expect(files.get('/etc/models')).toBe('[bedrock-camp]\nopenrouter:*\n');
+  });
+
+  it('treats an unreachable leader as leader-down, not as a missing policy', async () => {
+    const down = {
+      stdout: '',
+      stderr: 'tray connect timed out',
+      status: 1,
+      timedOut: false,
+      leaderDown: true,
+    };
+    const { leader } = fakeLeader({ probe: down });
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toMatchObject({ leaderDown: true });
+  });
+
+  it('puts the previous policy back when the pin does not read back', async () => {
+    const { leader, files } = fakeLeader({ readback: '[bedrock-camp]\n-bedrock-camp:x\n' });
+    files.set('/etc/models', '[bedrock-camp]\nopenrouter:*\n');
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toThrow(/did not take the policy/);
+    expect(files.get('/etc/models')).toBe('[bedrock-camp]\nopenrouter:*\n');
+  });
+
+  it('lets a failed restore surface instead of passing silently', async () => {
+    const { leader } = fakeLeader({ removable: false });
+    const pinned = await pinScoopModels(leader, HAIKU);
+    await expect(pinned.restore()).rejects.toThrow(/permission denied/);
   });
 });

@@ -322,6 +322,10 @@ function leader({ failOn, down = () => false } = {}) {
     commands.push(command);
     if (command.startsWith('models --provider '))
       return reply(command, JSON.stringify([{ id: 'global.anthropic.other' }]));
+    if (command === 'test -e /etc/models')
+      return policy === null
+        ? { stdout: '', stderr: '', status: 1, timedOut: false }
+        : reply(command);
     if (command === 'cat /etc/models')
       return policy === null
         ? { stdout: '', stderr: 'no such file', status: 1, timedOut: false }
