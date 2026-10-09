@@ -1167,9 +1167,8 @@ describe('runTask', () => {
       interrupt: true,
     });
     expect(prompt.opts.signal).toBeInstanceOf(AbortSignal);
-    expect(calls.slice(-6).map(label)).toEqual([
-      'playwright-cli tab-list',
-      'playwright-cli tab-close',
+    // Tabs close before capture/health; teardown is new-session, pin restore, then scratch.
+    expect(calls.slice(-4).map(label)).toEqual([
       'slicc new-session --erase',
       'rm -f',
       'rm -rf',
@@ -1290,7 +1289,7 @@ describe('runTask', () => {
     const { leader } = fakeLeader({
       verbs: {
         'new-session': ok('new session (save)'),
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         thinking: ok('off\n'),
         prompt: ok('FINAL ANSWER: done\n'),
       },
