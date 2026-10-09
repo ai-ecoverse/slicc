@@ -11,6 +11,8 @@ import {
   armTurns,
   assertStagedSkills,
   awaitMemorySettle,
+  BUNDLED_MEMORY_INSTRUCTIONS,
+  benchMemoryInstructions,
   buildPrompt,
   collectArmFiles,
   costTotals,
@@ -28,8 +30,10 @@ import {
   lastTurnProviderError,
   leaderHealth,
   MEMORY_SETTLE_MS,
+  MIN_RETAINED_MEMORY_BYTES,
   memoryFingerprintChanged,
   memoryFingerprintCommand,
+  memoryStoreRetained,
   modelPinPolicy,
   NEW_SESSION_SAVE_TIMEOUT,
   NO_DEFAULT_SKILLS_MISSING,
@@ -50,6 +54,7 @@ import {
   restoreSkills,
   restoreSkillsCommand,
   runTask,
+  seedBenchMemoryInstructions,
   sessionArchiveSettled,
   sessionsIndexCommand,
   skillsFlagCommand,
@@ -94,39 +99,49 @@ function fakeLeader({
   catalogueRaw = null,
 } = {}) {
   const calls = [];
-  // The leader's /etc/models and model catalogue, for the per-run scoop model pin.
+  // Leader `/etc/*` bag: model pin (`/etc/models`) and save-mode MEMORY.md seed.
   const files = new Map();
   const pinRoutes = [
     [/^models --provider /, () => ok(catalogueRaw ?? JSON.stringify(catalogue))],
     [
-      /^test -e \/etc\/models$/,
-      () =>
-        probe ??
-        (files.has('/etc/models') ? ok() : { stdout: '', stderr: '', status: 1, timedOut: false }),
-    ],
-    [
-      /^cat \/etc\/models$/,
-      () => {
-        if (!policyReadable) return fail('cat: /etc/models: input/output error');
-        // A read-back that disagrees with what the bench wrote (only its own pin, not a snapshot).
-        if (readback !== null && files.get('/etc/models')?.startsWith('# Written by the bench'))
-          return ok(readback);
-        return files.has('/etc/models') ? ok(files.get('/etc/models')) : fail('no such file');
+      /^test -e (\/etc\/\S+)$/,
+      (command) => {
+        const path = command.replace(/^test -e /, '');
+        if (path === '/etc/models' && probe) return probe;
+        return files.has(path) ? ok() : { stdout: '', stderr: '', status: 1, timedOut: false };
       },
     ],
     [
-      /^base64 -d > \/etc\/models$/,
-      (_c, opts) => {
-        if (policyWritable)
-          files.set('/etc/models', Buffer.from(opts.stdin ?? '', 'base64').toString());
+      /^cat (\/etc\/\S+)$/,
+      (command) => {
+        const path = command.replace(/^cat /, '');
+        if (path === '/etc/models' && !policyReadable)
+          return fail('cat: /etc/models: input/output error');
+        // A read-back that disagrees with what the bench wrote (only its own pin, not a snapshot).
+        if (
+          path === '/etc/models' &&
+          readback !== null &&
+          files.get('/etc/models')?.startsWith('# Written by the bench')
+        )
+          return ok(readback);
+        return files.has(path) ? ok(files.get(path)) : fail(`no such file: ${path}`);
+      },
+    ],
+    [
+      /^base64 -d > (\/etc\/\S+)$/,
+      (command, opts) => {
+        const path = command.replace(/^base64 -d > /, '');
+        if (path === '/etc/models' && !policyWritable) return ok();
+        files.set(path, Buffer.from(opts.stdin ?? '', 'base64').toString());
         return ok();
       },
     ],
     [
-      /^rm -f \/etc\/models$/,
-      () => {
-        if (!removable) return fail('rm: /etc/models: permission denied');
-        files.delete('/etc/models');
+      /^rm -f (\/etc\/\S+)$/,
+      (command) => {
+        const path = command.replace(/^rm -f /, '');
+        if (path === '/etc/models' && !removable) return fail('rm: /etc/models: permission denied');
+        files.delete(path);
         return ok();
       },
     ],
@@ -1098,6 +1113,51 @@ describe('memory settle fingerprints', () => {
       memoryReason: 'freeze_skipped',
       message: expect.stringMatching(/did not freeze/),
     });
+  });
+
+  it('treats a short follow-up --save as settled when prior memory is retained', async () => {
+    let t = 0;
+    const populated = `bytes=${MIN_RETAINED_MEMORY_BYTES}\nsha=abc\nauto_extracted=0\n`;
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok(populated)],
+        [
+          /sessions\/index\.json/,
+          ok(JSON.stringify([{ filename: 'plant.md', frozenAt: '2026-10-09T00:00:00Z' }])),
+        ],
+      ],
+    });
+    const out = await awaitMemorySettle(leader, {
+      before: parseMemoryFingerprint(populated),
+      archivesBefore: 1,
+      requireChange: true,
+      timeoutMs: 60_000,
+      freezeDetectMs: 10,
+      pollMs: 1,
+      sleep: async () => {},
+      now: () => {
+        t += 20;
+        return t;
+      },
+    });
+    expect(out).toMatchObject({ settled: true, changed: false });
+    expect(memoryStoreRetained(out.before, out.after)).toBe(true);
+  });
+
+  it('widens /etc/MEMORY.md visiblePaths for the curator (and restores it)', async () => {
+    const bundled = readFileSync(BUNDLED_MEMORY_INSTRUCTIONS, 'utf8');
+    const widened = benchMemoryInstructions(bundled);
+    expect(widened).toContain('/tmp/');
+    expect(widened).toContain('/etc/');
+    expect(widened).toContain('# Memory pass');
+    const { leader, files } = fakeLeader();
+    files.set('/etc/MEMORY.md', bundled);
+    const seeded = await seedBenchMemoryInstructions(leader, {
+      readFile: () => bundled,
+    });
+    expect(files.get('/etc/MEMORY.md')).toContain('/tmp/');
+    await seeded.restore();
+    expect(files.get('/etc/MEMORY.md')).toBe(bundled);
   });
 
   it('fails when enrichment settles without changing CLAUDE.md', async () => {
