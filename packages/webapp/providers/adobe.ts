@@ -41,6 +41,7 @@ import {
 import { getModels, getProviders } from '../src/core/model-catalog.js';
 import { getPanelRpcClient } from '../src/kernel/panel-rpc.js';
 import { withAdaptiveThinkingShim } from '../src/providers/adaptive-thinking.js';
+import { adobeAnthropicModel } from '../src/providers/adobe-anthropic-model.js';
 import {
   type AdobeModelMetadata,
   type EnrichedAdobeModel,
@@ -1119,17 +1120,11 @@ async function pumpAdobeStream(
       for await (const event of inner) stream.push(event);
     } else {
       // Route to Anthropic Messages API
-      const proxyModel = {
-        ...model,
-        baseUrl: getProxyEndpoint(),
-        api: 'anthropic-messages' as Api,
-      };
-      // SAFETY: proxyModel is structurally identical to Model<'anthropic-messages'>;
-      // we rebuilt it with the correct `api` literal and proxy `baseUrl`. The
-      // options cast is safe: the agent layer only sends anthropic-shaped options
-      // to an anthropic-routed model, so narrowing to AnthropicOptions holds.
+      const proxyModel = adobeAnthropicModel(model, getProxyEndpoint());
+      // SAFETY: this branch receives Anthropic options; the helper also applies
+      // Bedrock transport compatibility overrides to inherited catalog models.
       const inner = streamAnthropic(
-        proxyModel as unknown as Model<'anthropic-messages'>,
+        proxyModel,
         toPiTranscriptContext(context),
         withSliccVersionHeader(
           ensureSessionIdHeader(
@@ -1200,16 +1195,11 @@ async function pumpSimpleAdobeStream(
       for await (const event of inner) stream.push(event);
     } else {
       // Route to Anthropic Messages API
-      const proxyModel = {
-        ...model,
-        baseUrl: getProxyEndpoint(),
-        api: 'anthropic-messages' as Api,
-      };
-      // SAFETY: proxyModel is structurally Model<'anthropic-messages'> with
-      // corrected api literal and proxy baseUrl. Options narrowing is safe:
-      // this branch is only taken for anthropic-shaped options.
+      const proxyModel = adobeAnthropicModel(model, getProxyEndpoint());
+      // SAFETY: this branch receives Anthropic options; the helper also applies
+      // Bedrock transport compatibility overrides to inherited catalog models.
       const inner = streamSimpleAnthropic(
-        proxyModel as unknown as Model<'anthropic-messages'>,
+        proxyModel,
         toPiTranscriptContext(context),
         withSliccVersionHeader(
           ensureSessionIdHeader(

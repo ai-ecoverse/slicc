@@ -1,6 +1,6 @@
 # SLICC — Code Review
 
-Review `webapp`, extension, Node, Swift, and iOS. Details: `docs/review-patterns.md`.
+Review webapp/extension/Node/Swift/iOS. Details: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage
 
@@ -29,18 +29,19 @@ entitlements. Avoid `keychain-access-groups` without an appex-specific Developer
 
 ## 6. Model metadata / provider pipeline
 
-Pi 0.99 stores tools in system messages. Reload, compact, clear-chat:
-preserve prompt and tools. Never summarize system messages.
+Adobe→Bedrock: disable native mid-conversation flags in both streams.
+Wire messages omit `output_config`; retain request effort/tools.
 
-Model ID/metadata changes: verify reasoning, input, cost, thinking through
-discovery→enrichment→storage→API. OpenRouter (Free): all pricing dims zero;
+Pi system messages hold tools: preserve both on reload/compact/clear; never summarize.
+
+Track reasoning/input/cost/thinking through discovery→API. OpenRouter (Free): all pricing dims zero;
 stream refuses IDs not in the live free catalog.
-Ordinary scoops freeze model at creation; Gelatiere alone follows
+Scoops freeze model at creation; Gelatiere follows
 `modelFor(leadingRootOf(roster))` on boot/run/leader changes, never global selection.
 
 ## 7. Tests
 
-Probe FS limits through real shells; custom commands must use them.
+Test FS limits via real shells, including custom commands.
 
 Require mirrored tests and floors. Check OPFS retries, concurrent append, scoped identity, metadata errors, and ACL/sudo gates.
 

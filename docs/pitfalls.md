@@ -2252,6 +2252,23 @@ tracks **generations, not families** — Opus picked it up at 4.7, Sonnet at
 Assume the next new family also rejects it and verify against the real
 endpoint before adding it.
 
+### Adobe transport must override native Anthropic conversation capabilities
+
+pi-ai catalog models can enable `supportsMidConvoEffort`, which inserts
+system-role messages containing `output_config.effort` into the conversation.
+Adobe inherits those catalog entries but forwards requests to Bedrock, which
+rejects them with `messages.N.output_config: Extra inputs are not permitted`.
+This can affect background curator scoops as well as cones.
+
+`adobeAnthropicModel` overrides `supportsMidConvoEffort`,
+`supportsMidConvoSystemMessages`, and `supportsMidConvoToolChanges` at both
+Adobe Anthropic streaming entry points. pi-ai then folds later system prompts
+into the top-level system prompt, sends the current tools at request level,
+and keeps adaptive-thinking effort in the request-level `output_config`.
+Apply transport overrides after catalog discovery, including cached/fallback
+models; keep native Anthropic and Adobe OpenAI routing independent. Regression
+tests must inspect the real pi-ai wire payload with later system messages.
+
 ### 2. Adaptive thinking required (Opus/Sonnet/Fable ≥ 4.6, Haiku ≥ 5.0)
 
 With thinking **enabled**, Bedrock returns `400 "thinking.type.enabled is
