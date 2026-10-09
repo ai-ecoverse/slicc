@@ -16,6 +16,7 @@ import {
   streamSimpleOpenAIResponses,
 } from '@earendil-works/pi-ai/compat';
 import { getModel, getModels } from '../src/core/model-catalog.js';
+import { copilotAnthropicModel } from '../src/providers/copilot-anthropic-model.js';
 import { fetchCopilotUsage } from '../src/providers/github-copilot-usage.js';
 import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
 import type {
@@ -609,13 +610,17 @@ async function pumpCopilotStream(
         `GitHub Copilot does not recognize "${model.id}" — open the picker (the model list refreshes on login) and pick a current model.`
       );
     }
-    const inner: Model<Api> = {
-      ...model,
-      api: resolved.api as Api,
-      baseUrl: resolved.baseUrl,
-      headers: resolved.headers,
-      provider: 'github-copilot',
-    } as Model<Api>;
+
+    const inner: Model<Api> =
+      resolved.api === 'anthropic-messages'
+        ? (copilotAnthropicModel(model, resolved) as Model<Api>)
+        : ({
+            ...model,
+            api: resolved.api as Api,
+            baseUrl: resolved.baseUrl,
+            headers: resolved.headers,
+            provider: 'github-copilot',
+          } as Model<Api>);
 
     const opts = { ...options, apiKey };
     const fn = pickCopilotStreamFn(resolved.api, simple);
