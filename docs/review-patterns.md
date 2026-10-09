@@ -183,7 +183,7 @@ on a Developer ID appex unless a profile for _that_ bundle id is embedded.
 
 ### 6. Model metadata / provider pipeline gaps
 
-- Inherited catalog compatibility flags describe the original transport. Adobe Anthropic streams must override native mid-conversation effort/system/tool capabilities before pi-ai serialization; Bedrock rejects message-level `output_config`. Test the real wire body for both stream entry points and preserve request-level effort and current tools.
+- Inherited catalog compatibility flags describe the original transport. Proxy Anthropic streams (Adobe→Bedrock, GitHub Copilot→Copilot gateway) must override native mid-conversation effort/system/tool capabilities before pi-ai serialization; those gateways reject message-level `output_config`. Test the real wire body for both stream entry points and preserve request-level effort and current tools.
 
 - Pi 0.99 system messages carry the active tool declarations. When a live cone reloads skills, compacts history, or clears chat, preserve the resolved `toolsAdded`/`toolsRemoved` state with the current prompt; otherwise the next provider request silently loses shell and browser access. Exclude system messages from the conversation summary cut, so a system-only prefix cannot trigger compaction. Test a tool call after each transcript rewrite.
 
