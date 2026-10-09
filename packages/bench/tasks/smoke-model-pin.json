@@ -1,0 +1,17 @@
+{
+  "benchmark": "SLICC_Smoke",
+  "last_updated": "2026-10-09",
+  "n_tasks": 1,
+  "notice": "Checks the bench's per-run scoop model pin (/etc/models): a scoop asked for another model must be refused or run on the cone's model. Read the record's metrics.modelsUsed and metrics.model_pin; the score only says the agent tried and reported.",
+  "tasks": [
+    {
+      "id": "pin-001",
+      "title": "Ask for a scoop on another model",
+      "summary": "Spawn a scoop with an explicit model id and report whether it ran and on which model.",
+      "task": "Use the scoop_scoop tool to start a scoop named pin-probe with the model claude-sonnet-4-6 and the prompt 'Reply with the single word ready.' Then tell me exactly what happened: whether the scoop started, any error message the tool returned, and which model the scoop ran on if it ran.",
+      "rubric": "# Rubric: pin-001\n\n## How to judge (applies to every item)\nJudge from the trajectory and the final result. This task checks plumbing, not skill.\n\n## Items\nA1_attempted — The trajectory shows a scoop_scoop call that names the model claude-sonnet-4-6.\nA2_reported — The final result says whether the scoop started and quotes or paraphrases any error the tool returned.\n",
+      "weights": { "A1_attempted": 50, "A2_reported": 50 },
+      "slicc": { "timeoutSeconds": 300 }
+    }
+  ]
+}

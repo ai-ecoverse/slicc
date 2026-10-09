@@ -134,6 +134,18 @@ defends against it and records what the next occurrence needs:
   between stop and start, and `bench.yml` restarts before every task by default
   (`fresh-leader-every: 1`, about 15–40 s each). A terminal-open timeout counts
   as the leader being down.
+- **Scoops run the configured model only.** A cone can name a scoop's model
+  (`scoop_scoop` takes `model`), and some copy the tool schema's example: 7 of
+  188 GPT-6 Luna runs spawned Sonnet 4.6 scoops, 85% of that row's spend
+  (2026-10-09). After `model <m>`, every run writes `/etc/models` with a section
+  for the selected provider that denies each other model in its catalogue
+  (`models --provider <p> --all-versions --json`, picker-hidden models
+  included). Other providers need an explicit allow, which it never grants, and
+  a scoop spawned without `model` inherits the cone's. The run does not start
+  unless the file reads back as written, the previous file is restored at
+  teardown, and the record's `metrics.model_pin` names the provider, the model
+  and how many ids were denied. This covers arm runs too: the driver's agent runs
+  on the configured model.
 - Journal in the out dir: `calls.jsonl`, `events.jsonl` (per task: phases,
   leader generation and age, `uptime`/`meminfo`/`ps` before and after),
   `diagnostics/`; with `BENCH_LEADER_LOG`, events are also marked in the
