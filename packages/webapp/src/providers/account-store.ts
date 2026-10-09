@@ -26,6 +26,7 @@ import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 // the full provider statically drags pi-ai's compat layer (~400 kB) into
 // this eagerly-loaded module's graph in both realms (#first-load ratchet).
 import {
+  bedrockCampGrokEffortMap,
   bedrockCampOpenAIEffortMap,
   bedrockCampRegionFromBaseUrl,
   isBedrockCampClaudeModel,
@@ -448,7 +449,7 @@ function applyModelMetadata(
  * only `xhigh`, which would hide `max` and the Sol/Luna `off` → `none` mapping.
  */
 function toBedrockCampPickerModel(m: Model<Api>): Model<Api> {
-  const effortMap = bedrockCampOpenAIEffortMap(m);
+  const effortMap = bedrockCampOpenAIEffortMap(m) ?? bedrockCampGrokEffortMap(m);
   return {
     ...m,
     api: 'bedrock-camp-converse' as Api,

@@ -56,7 +56,10 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // The bar for this list is prompt caching, which is why xai.grok-4.6 is NOT
 // here: it is functional (200s, tool calls) but cached on only 2 of 15
 // attempts at ~18-20k tokens, so it would bill full input on nearly every
-// turn. Re-measure before adding it.
+// turn. xai.grok-4.7 clears it (re-measured 2026-10-09 on us-west-2: with a
+// ~43k-token system prompt and toolConfig, calls 2-5 each read 43,264 tokens
+// from cache, 4/4, and tool calls came back 5/5). It takes a flat
+// `reasoning_effort` (see `bedrockCampGrokEffortMap`).
 //
 // All of them reject `temperature` (`temperature-support.ts` strips it).
 // gpt-5.6 rejects every `additionalModelRequestFields` thinking shape, and
@@ -71,7 +74,7 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // exact default-deny hole this list exists to avoid — and would accept the
 // `gpt-5-6-` spelling, which no Bedrock id uses and which was never verified.
 const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
-  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3)$/;
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3|xai\.grok-4\.7)$/;
 // Matches standard (us-east-1), FIPS (us-east-1-fips) and China
 // (cn-north-1.amazonaws.com.cn) Bedrock runtime hosts.
 const BEDROCK_RUNTIME_HOST_RE =
@@ -148,6 +151,37 @@ export const BEDROCK_CAMP_GPT61_EFFORT_MAP: BedrockCampEffortMap = Object.freeze
   ...BEDROCK_CAMP_GPT6_EFFORT_MAP,
   off: null,
 });
+
+/**
+ * `additionalModelRequestFields.reasoning_effort` values Grok 4.7 answers on
+ * Bedrock, verified live on `bedrock-runtime.us-west-2` (2026-10-09): `low`,
+ * `medium` and `high` scale its output (455 / 556 / 732 tokens on one
+ * prompt). `minimal` and `xhigh` return 200 but do not follow the scale, so
+ * they are not offered. Grok cannot be told to skip reasoning, and without
+ * an effort it can spend a small token cap on reasoning and return no text,
+ * so a request always carries one (off rounds up to `low`).
+ */
+export const BEDROCK_CAMP_GROK_EFFORT_MAP: BedrockCampEffortMap = Object.freeze({
+  off: null,
+  minimal: null,
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: null,
+  max: null,
+});
+
+const BEDROCK_CAMP_GROK_RE = /(?:^|[.-]xai[.-])grok-4[.-]7(?:-\([^)]+\))?$/;
+
+/** The effort map for Grok 4.7, which takes a flat `reasoning_effort`, or null. */
+export function bedrockCampGrokEffortMap(model: {
+  id: string;
+  name?: string;
+}): BedrockCampEffortMap | null {
+  return getModelMatchCandidates(model.id, model.name).some((c) => BEDROCK_CAMP_GROK_RE.test(c))
+    ? BEDROCK_CAMP_GROK_EFFORT_MAP
+    : null;
+}
 
 /** Opaque application inference profiles identify the underlying model by name. */
 export function getModelMatchCandidates(modelId: string, modelName?: string): string[] {

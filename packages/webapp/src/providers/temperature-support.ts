@@ -33,9 +33,10 @@ import { claudeRejectsTemperature } from './claude-model-version.js';
  * `built-in/bedrock-camp-compat.ts` is the other half of this pair, so extend
  * both together.
  *
- * `xai.grok-4.6` also rejects `temperature`, but it is not allowlisted (it
- * does not cache), so it is deliberately absent — add it here in the same
- * change that admits it to the picker.
+ * `xai.grok-4.7` rejects it too (same 400, verified 2026-10-09) and is
+ * allowlisted. `xai.grok-4.6` also rejects `temperature`, but it is not
+ * allowlisted (it does not cache), so it is deliberately absent — add it here
+ * in the same change that admits it to the picker.
  *
  * Matched WITHOUT the vendor prefix so the display name of an opaque
  * application-inference-profile ARN ("GPT-5.6 Sol (Global)") hits the same
@@ -46,7 +47,7 @@ import { claudeRejectsTemperature } from './claude-model-version.js';
  * match a future `kimi-k3.5` or `kimi-k30` nobody has measured.
  */
 const NON_CLAUDE_REJECTS_TEMPERATURE_RE =
-  /gpt-5[.-]6|gpt-6-(?:sol|luna|astra)|gpt-6[.-]1-sol(?=$|-\()|kimi-k3(?![\d.])/;
+  /gpt-5[.-]6|gpt-6-(?:sol|luna|astra)|gpt-6[.-]1-sol(?=$|-\()|kimi-k3(?![\d.])|grok-4[.-]7(?![\d])/;
 
 function nonClaudeRejectsTemperature(modelId: string, modelName?: string): boolean {
   const values = modelName ? [modelId, modelName] : [modelId];

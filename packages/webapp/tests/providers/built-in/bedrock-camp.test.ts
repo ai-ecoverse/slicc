@@ -812,6 +812,41 @@ describe('GPT-6 reasoning effort', () => {
   });
 });
 
+// Verified live 2026-10-09 on us-west-2: flat `reasoning_effort` low/medium/high.
+describe('Grok 4.7 reasoning effort', () => {
+  const grok = () =>
+    baseModel({ id: 'global.xai.grok-4.7', name: 'Grok 4.7 (Global)', reasoning: true });
+
+  it.each([
+    ['low', 'low'],
+    ['medium', 'medium'],
+    ['high', 'high'],
+    ['minimal', 'low'],
+    ['xhigh', 'high'],
+  ])('maps reasoning=%s to reasoning_effort %s', async (level, effort) => {
+    const payload = await capturePayload(grok(), { reasoning: level });
+    expect(payload.additionalModelRequestFields).toEqual({ reasoning_effort: effort });
+  });
+
+  it('always sends an effort: off is low, the max override is high', async () => {
+    expect((await capturePayload(grok(), {})).additionalModelRequestFields).toEqual({
+      reasoning_effort: 'low',
+    });
+    expect(
+      (await capturePayload(grok(), { reasoning: 'xhigh', effort: 'max' }))
+        .additionalModelRequestFields
+    ).toEqual({ reasoning_effort: 'high' });
+  });
+
+  it('never sends temperature, the OpenAI or Claude shapes, or a cachePoint', async () => {
+    const payload = await capturePayload(grok(), { reasoning: 'high', temperature: 0.3 });
+    expect(payload.inferenceConfig).not.toHaveProperty('temperature');
+    expect(payload.additionalModelRequestFields).not.toHaveProperty('reasoning');
+    expect(payload.additionalModelRequestFields).not.toHaveProperty('thinking');
+    expect(JSON.stringify(payload)).not.toContain('cachePoint');
+  });
+});
+
 describe('GPT-6.1 Sol reasoning effort', () => {
   const model = () =>
     baseModel({
