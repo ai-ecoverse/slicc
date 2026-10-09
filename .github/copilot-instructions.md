@@ -29,7 +29,7 @@ entitlements. Avoid `keychain-access-groups` without an appex-specific Developer
 
 ## 6. Model metadata / provider pipeline
 
-Adobe→Bedrock: disable native mid-conversation flags in both streams.
+Adobe/Copilot Anthropic proxies: clear native mid-convo flags on rebuild.
 Wire messages omit `output_config`; retain request effort/tools.
 
 Pi system messages hold tools: preserve both on reload/compact/clear; never summarize.
