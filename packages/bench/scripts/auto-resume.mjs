@@ -10,7 +10,8 @@
  * the run again with `resume-run` and the run's own inputs: finished runs are skipped, only the
  * lost ones are paid for. It happens once per run: the new run carries `auto-resumed-from`,
  * and a run that has it is never auto-resumed again. Any other failure (a bench error exits 1)
- * is left for a person.
+ * is left for a person, and so is a run where one shard was killed and another failed on its
+ * own: a resume re-runs every errored run in every shard, so it would retry those too.
  *
  * CLI (bench.yml): GH_TOKEN, GITHUB_REPOSITORY, RUN_ID, REF, INPUTS_JSON (toJSON(inputs)).
  */
@@ -110,6 +111,16 @@ export async function autoResume({ repo, runId, ref, inputs, token, fetchImpl = 
   const killed = killedShards(jobs, annotations);
   if (!killed.length)
     return { action: 'none', killed, reason: 'no shard was killed; failures were the bench’s own' };
+  const failed = jobs
+    .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
+    .map((j) => j.name);
+  const own = failed.filter((n) => !killed.includes(n));
+  if (own.length)
+    return {
+      action: 'none',
+      killed,
+      reason: `${killed.join(', ')} lost their runner, but ${own.join(', ')} failed on their own, and a resume would retry those runs too; resume by hand with resume-run=${runId}`,
+    };
   await api('POST', `/repos/${repo}/actions/workflows/bench.yml/dispatches`, {
     ref,
     inputs: resumeInputs(inputs, runId),
