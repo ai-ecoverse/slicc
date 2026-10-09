@@ -80,12 +80,13 @@ function fakeLeader({
   readback = null,
   removable = true,
   probe = null,
+  catalogueRaw = null,
 } = {}) {
   const calls = [];
   // The leader's /etc/models and model catalogue, for the per-run scoop model pin.
   const files = new Map();
   const pinRoutes = [
-    [/^models --provider /, () => ok(JSON.stringify(catalogue))],
+    [/^models --provider /, () => ok(catalogueRaw ?? JSON.stringify(catalogue))],
     [
       /^test -e \/etc\/models$/,
       () =>
@@ -994,9 +995,11 @@ describe('runTask', () => {
     prompt = ok('FINAL ANSWER: done\n'),
     model = ok('bedrock-camp:global.anthropic.claude-sonnet-5\n'),
     commands: extra = [],
+    ...pinOptions
   } = {}) {
     let costCalls = 0;
     return fakeLeader({
+      ...pinOptions,
       verbs: { 'new-session': ok('new session (erase)'), model, prompt },
       commands: [
         ...extra,
@@ -1009,6 +1012,38 @@ describe('runTask', () => {
   }
   const label = (c) =>
     c.kind === 'cli' ? `slicc ${c.args.join(' ')}` : c.command.split(' ').slice(0, 2).join(' ');
+
+  it('adds a failed policy restore to a failed run and marks the leader down', async () => {
+    const down = {
+      stdout: '',
+      stderr: 'tray connect timed out',
+      status: 1,
+      timedOut: false,
+      leaderDown: true,
+    };
+    const { leader } = leaderFor({ prompt: down, removable: false });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r9',
+      model: 'm',
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err.message).toMatch(/and restoring \/etc\/models failed: .*permission denied/);
+    expect(err.leaderDown).toBe(true);
+  });
+
+  it('records a failed policy restore on a finished run instead of dropping it', async () => {
+    const { leader } = leaderFor({ removable: false });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r10',
+      model: 'm',
+      capture: { pollMs: 5 },
+    });
+    expect(result.modelPin.restore_error).toMatch(/permission denied/);
+  });
 
   it('drives setup, the prompt, capture and teardown through the slicc CLI', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'bench-task-'));
@@ -2707,5 +2742,19 @@ describe('scoop model pin', () => {
     const { leader } = fakeLeader({ removable: false });
     const pinned = await pinScoopModels(leader, HAIKU);
     await expect(pinned.restore()).rejects.toThrow(/permission denied/);
+  });
+
+  it('needs a provider in the model id and a catalogue that parses', async () => {
+    await expect(pinScoopModels(fakeLeader().leader, 'm')).rejects.toThrow(/provider:model/);
+    const { leader } = fakeLeader({ catalogueRaw: '<html>login</html>' });
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toThrow(/printed no catalogue/);
+  });
+
+  it('marks the leader down when a failed pin cannot be undone either', async () => {
+    const { leader } = fakeLeader({ readback: 'other', removable: false });
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toMatchObject({
+      message: expect.stringMatching(/did not take the policy; and restoring \/etc\/models failed/),
+      leaderDown: true,
+    });
   });
 });
