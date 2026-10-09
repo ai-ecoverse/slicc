@@ -614,6 +614,16 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   /**
+   * Rebuild every ready/processing unit's system prompt from on-disk skills
+   * and memories. Used after upskill install and after New chat's background
+   * memory curator / enrichment settles — `clearSession` reloads too early
+   * when those passes finish after the chat is cleared.
+   */
+  reloadSkills(): void {
+    this.send({ type: 'reload-skills' });
+  }
+
+  /**
    * Set ONE unit's model (#2310) — the selected cone. Persisted on that
    * unit's record by the kernel, mirrored onto the panel's copy when the ack
    * lands, and applied to no other unit: scoops keep the model they were

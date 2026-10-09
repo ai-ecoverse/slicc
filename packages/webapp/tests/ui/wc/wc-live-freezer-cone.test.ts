@@ -16,18 +16,29 @@ const freezeCalls = vi.hoisted(
     [] as Array<{
       kind: 'save' | 'quick' | 'archive-only';
       cone?: { folder: string; label?: string };
+      onSessionSettled?: (entry: null) => void;
     }>
 );
 vi.mock('../../../src/ui/new-session.js', () => ({
   resetNewSessionTmp: vi.fn(async () => undefined),
-  runNewSessionFreeze: vi.fn(async (opts: { cone?: { folder: string; label?: string } }) => {
-    freezeCalls.push({ kind: 'save', cone: opts.cone });
-    return null;
-  }),
-  runNewSessionFreezeQuick: vi.fn(async (opts: { cone?: { folder: string; label?: string } }) => {
-    freezeCalls.push({ kind: 'quick', cone: opts.cone });
-    return null;
-  }),
+  runNewSessionFreeze: vi.fn(
+    async (opts: {
+      cone?: { folder: string; label?: string };
+      onSessionSettled?: (entry: null) => void;
+    }) => {
+      freezeCalls.push({ kind: 'save', cone: opts.cone, onSessionSettled: opts.onSessionSettled });
+      return null;
+    }
+  ),
+  runNewSessionFreezeQuick: vi.fn(
+    async (opts: {
+      cone?: { folder: string; label?: string };
+      onSessionSettled?: (entry: null) => void;
+    }) => {
+      freezeCalls.push({ kind: 'quick', cone: opts.cone, onSessionSettled: opts.onSessionSettled });
+      return null;
+    }
+  ),
   runNewSessionArchiveOnly: vi.fn(async (opts: { cone?: { folder: string; label?: string } }) => {
     freezeCalls.push({ kind: 'archive-only', cone: opts.cone });
     return null;
@@ -87,6 +98,7 @@ interface Harness {
   loaded: unknown[][];
   log: { debug: Mock; info: Mock; warn: Mock; error: Mock };
   clearCalls: Array<string | undefined>;
+  reloadSkills: Mock;
   /** Thread-replacing steps of a thaw, in the order they happened. */
   order: string[];
   selected: WorkUnitSummary | null;
@@ -99,6 +111,7 @@ function harness(selected: WorkUnitSummary | null): Harness {
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const files = new Map<string, string>();
   const clearCalls: Array<string | undefined> = [];
+  const reloadSkills = vi.fn();
   const order: string[] = [];
   const selections: string[] = [];
   const freezer = document.createElement('slicc-freezer');
@@ -131,6 +144,7 @@ function harness(selected: WorkUnitSummary | null): Harness {
     loaded,
     log,
     clearCalls,
+    reloadSkills,
     order,
     selected,
     selections,
@@ -149,6 +163,7 @@ function harness(selected: WorkUnitSummary | null): Harness {
         clearCalls.push(jid);
       },
       spawnAgent: vi.fn(),
+      reloadSkills,
     } as unknown as OffscreenClient,
     getController: () =>
       ({
@@ -188,12 +203,25 @@ describe('New chat targets the selected cone (#2272)', () => {
 
     await runNewChat(state, 'save');
 
-    expect(freezeCalls).toEqual([
-      { kind: 'save', cone: { folder: 'cone-research', label: 'Research', jid: 'cone_2' } },
-    ]);
+    expect(freezeCalls).toHaveLength(1);
+    expect(freezeCalls[0]).toMatchObject({
+      kind: 'save',
+      cone: { folder: 'cone-research', label: 'Research', jid: 'cone_2' },
+    });
     expect(state.clearCalls).toEqual(['cone_2']);
     // Stays on the cone it just cleared.
     expect(state.selections.at(-1)).toBe('cone_2');
+  });
+
+  it('reloads the system prompt when background memory settles after --save', async () => {
+    freezeCalls.length = 0;
+    const state = harness(recordToWorkUnitSummary(research, {}));
+
+    await runNewChat(state, 'save');
+
+    expect(state.reloadSkills).not.toHaveBeenCalled();
+    freezeCalls[0]?.onSessionSettled?.(null);
+    expect(state.reloadSkills).toHaveBeenCalledTimes(1);
   });
 
   it('resolves a selected scoop to the cone that owns it', async () => {
@@ -202,9 +230,11 @@ describe('New chat targets the selected cone (#2272)', () => {
 
     await runNewChat(state, 'skip');
 
-    expect(freezeCalls).toEqual([
-      { kind: 'quick', cone: { folder: 'cone-research', label: 'Research', jid: 'cone_2' } },
-    ]);
+    expect(freezeCalls).toHaveLength(1);
+    expect(freezeCalls[0]).toMatchObject({
+      kind: 'quick',
+      cone: { folder: 'cone-research', label: 'Research', jid: 'cone_2' },
+    });
     expect(state.clearCalls).toEqual(['cone_2']);
   });
 
@@ -214,9 +244,11 @@ describe('New chat targets the selected cone (#2272)', () => {
 
     await runNewChat(state, 'save');
 
-    expect(freezeCalls).toEqual([
-      { kind: 'save', cone: { folder: 'cone', label: 'sliccy', jid: 'cone_1' } },
-    ]);
+    expect(freezeCalls).toHaveLength(1);
+    expect(freezeCalls[0]).toMatchObject({
+      kind: 'save',
+      cone: { folder: 'cone', label: 'sliccy', jid: 'cone_1' },
+    });
     expect(state.clearCalls).toEqual(['cone_1']);
   });
 

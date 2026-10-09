@@ -71,7 +71,7 @@ interface ArchiveConeSessionDeps {
   writer: Awaited<ReturnType<FreezerRailDeps['openVfs']>>['writer'];
   /** Root being archived; `undefined` only if the roster is empty. */
   root: RegisteredScoop | undefined;
-  client: Pick<OffscreenClient, 'spawnAgent' | 'sendSprinkleLick' | 'getScoops'>;
+  client: Pick<OffscreenClient, 'spawnAgent' | 'sendSprinkleLick' | 'getScoops' | 'reloadSkills'>;
   freezerNew(): HTMLElement | null;
   refreshFreezer(): void;
   runNewSessionFreeze: typeof import('../new-session.js').runNewSessionFreeze;
@@ -151,6 +151,14 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   // module drags the bundled GELATIERE.md along, which has no place on the
   // first-load path.
   const onSessionSettled = (entry: FrozenSessionIndexEntry | null): void => {
+    // Agentic curator / legacy timer-won enrichment finish AFTER clearSession
+    // already rebuilt the prompt from the pre-enrichment CLAUDE.md. Reload
+    // again so the next turn sees newly extracted memories (#3910 Codex P2).
+    try {
+      deps.client.reloadSkills();
+    } catch (err) {
+      deps.log.warn('post-settle prompt reload failed', err);
+    }
     void import('./wc-gelatiere.js')
       .then(({ notifyGelatiereOfSessionEnd }) =>
         notifyGelatiereOfSessionEnd({

@@ -1365,6 +1365,68 @@ describe('ScoopContext image error recovery', () => {
   });
 });
 
+describe('ScoopContext.clearSession', () => {
+  it('rebuilds the system prompt from on-disk memory after clearing chat', async () => {
+    const callbacks = createMockCallbacks();
+    callbacks.getGlobalMemory = vi.fn(async () => 'global-memory-body');
+    const ctx = new ScoopContext(testScoop, callbacks, {} as VirtualFS);
+
+    const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
+    const vfs = await VirtualFS.create({ dbName: 'test-clear-session-memory', wipe: true });
+    await vfs.mkdir('/workspace', { recursive: true });
+    await vfs.writeFile(
+      '/workspace/CLAUDE.md',
+      '# Cone Memory\n\n## Preferences\n- status-line-color=cerulean-bench-7\n'
+    );
+    (ctx as any).fs = vfs;
+    (ctx as any).skillsFs = vfs;
+    (ctx as any).unit = {
+      display: { role: 'primary' },
+      policy: {
+        canManageChildren: true,
+        canWriteSharedMemory: true,
+        filesystem: { kind: 'full-workspace' },
+      },
+      workspace: { root: '/workspace', memoryPath: '/workspace/CLAUDE.md' },
+    };
+
+    const shell = { name: 'bash', description: 'Run a command', parameters: { type: 'object' } };
+    const agent = {
+      prompt: vi.fn(),
+      abort: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+      followUp: vi.fn(),
+      clearAllQueues: vi.fn(),
+      state: {
+        isStreaming: false,
+        messages: [
+          {
+            role: 'system',
+            content: 'stale prompt with (Add preferences here)',
+            toolsAdded: [shell],
+            timestamp: 0,
+          },
+          { role: 'user', content: 'plant turn', timestamp: 1 },
+        ],
+      },
+    };
+    (ctx as any).agent = agent;
+    (ctx as any).status = 'ready';
+    (ctx as any).sessions = { clear: vi.fn(async () => {}) };
+    (ctx as any).settleLiveSnapshot = vi.fn(async () => {});
+    (ctx as any).idleCompaction = { cancel: vi.fn() };
+
+    await ctx.clearSession();
+
+    expect(agent.state.messages).toHaveLength(1);
+    expect(agent.state.messages[0].role).toBe('system');
+    expect(agent.state.messages[0].content).toContain('cerulean-bench-7');
+    expect(agent.state.messages[0].content).not.toContain('(Add preferences here)');
+    // Pi tool declarations must survive the transcript rewrite (review-patterns).
+    expect(agent.state.messages[0].toolsAdded).toEqual([shell]);
+  });
+});
+
 describe('ScoopContext.reloadSkills', () => {
   it('updates system prompt when new skills are installed', async () => {
     const callbacks = createMockCallbacks();

@@ -787,6 +787,16 @@ export class ScoopContext {
    * by the time its clear reaches here, so this only matters for a bare
    * `clear-chat` — where the snapshot would otherwise stay `live` and the
    * NEXT session's compactions would append to it.
+   *
+   * After the clear, the system prompt is rebuilt from on-disk memories
+   * (and skills). The prompt is snapshotted at unit init; a `memory_write`
+   * during the session updates the file but not that snapshot. Keeping the
+   * stale prompt across New chat / `new-session --save` made the next turn
+   * answer from empty Preferences placeholders while `/workspace/CLAUDE.md`
+   * on disk already held the preference (memory-smoke retrieve → NONE).
+   * When agentic curation / legacy enrichment still runs after this clear,
+   * `wc-live-freezer`'s `onSessionSettled` fires `reload-skills` again once
+   * memory has landed. `rebuildSystemPrompt` preserves `toolsAdded`.
    */
   async clearSession(options: ClearSessionOptions = {}): Promise<void> {
     this.sessionGeneration++;
@@ -794,6 +804,14 @@ export class ScoopContext {
     this.clearMessages();
     await this.sessions.clear();
     await this.settleLiveSnapshot(options.discardLiveSnapshot === true);
+    try {
+      await this.reloadSkills();
+    } catch (err) {
+      log.warn('clearSession: could not rebuild system prompt from memory', {
+        folder: this.scoop.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
