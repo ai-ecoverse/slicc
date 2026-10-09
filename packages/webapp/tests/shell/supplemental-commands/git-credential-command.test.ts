@@ -56,6 +56,18 @@ function githubChain(file?: string) {
 }
 
 describe('git-credential-slicc get', () => {
+  it.each(['github.com', 'api.github.com'])(
+    'uses the default GitHub scope for %s without a domain callback',
+    async (host) => {
+      const r = await helper(
+        'get',
+        { protocol: 'https', host },
+        { githubToken: githubChain(OAUTH_MASK) }
+      );
+      expect(r.stdout).toBe(`username=x-access-token\npassword=${OAUTH_MASK}\n`);
+    }
+  );
+
   it('answers a GitHub host with the OAuth mask SLICC git uses, freshened first', async () => {
     const githubToken = githubChain(OAUTH_MASK);
     const r = await helper(

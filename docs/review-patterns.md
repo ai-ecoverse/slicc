@@ -334,6 +334,9 @@ attention-promotion paths without rebuilding live panel state.
 
 **Trigger patterns**
 
+- Same-rung imports can still couple sibling subsystems: git auth must not import a shell
+  command for pure domain data. Keep that data in a dependency-free git module consumed
+  by both auth and shell; the shared `shell/git` rank cannot catch this direction.
 - Any new `import`/`import type`/`import(...)`/`require(...)` that points UP a documented
   layer stack. Imports must point down, never up.
   - **webapp** `fs → shell/git → cdp → tools → core → scoops → ui` — a `ui/` import from any

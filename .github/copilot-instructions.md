@@ -57,7 +57,7 @@ the owner captured at opening, not later focus.
 
 ## 10. Layer import direction
 
-CI-gated (`lint:layer-back-edges`; never grow baselines): webapp `fs/base → shell/git → cdp → tools → core → scoops → ui` + other TS apps. Flag up-stack, scoops→kernel and fs/base→unranked values, and cross-package imports. chrome-extension/webcomponents→webapp is zero-tolerance bar kernel-message types. Swift: SPM + `public`; widgets must not import WebRTC. Probes below `ui/` use `CapabilityBroker`.
+CI: `lint:layer-back-edges`; never grow baselines. Webapp `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack, scoops→kernel, fs/base→unranked values, cross-package imports, and git auth→shell commands (same-rung blind spot). chrome-extension/webcomponents→webapp: only kernel-message types. Swift: SPM + `public`; no widget WebRTC. Probes below `ui/` use `CapabilityBroker`.
 
 ## 11. Untyped string-keyed bags
 

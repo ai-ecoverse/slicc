@@ -12,6 +12,7 @@
 import { isAllowedDomain } from '@slicc/shared-ts';
 import type { Command, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { GITHUB_DOMAINS } from '../../git/github-domains.js';
 import { resolveFloatTopology } from '../float-topology.js';
 import { stdinAsText } from '../just-bash-compat.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
@@ -38,9 +39,6 @@ export const PLUMBING: ReadonlyMap<string, string> = new Map([
   ['git-remote-http', 'git'],
   ['git-remote-https', 'git'],
 ]);
-
-/** Where SLICC's GitHub token counts when nothing narrower is known about it. */
-export const GITHUB_DOMAINS = ['github.com', '*.github.com'];
 
 /** The username a token authenticates with when the URL names none. */
 const TOKEN_USERNAME = 'x-access-token';
