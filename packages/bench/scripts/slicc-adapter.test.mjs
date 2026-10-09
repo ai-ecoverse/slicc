@@ -10,6 +10,7 @@ import {
   armConversation,
   armTurns,
   assertStagedSkills,
+  awaitMemorySettle,
   buildPrompt,
   collectArmFiles,
   costTotals,
@@ -25,11 +26,16 @@ import {
   lastScoopAssistantText,
   lastTurnProviderError,
   leaderHealth,
+  MEMORY_SETTLE_MS,
+  memoryFingerprintChanged,
+  memoryFingerprintCommand,
   modelPinPolicy,
+  NEW_SESSION_SAVE_TIMEOUT,
   NO_DEFAULT_SKILLS_MISSING,
   PROMPT_ALL_SETTLED,
   parseArmResult,
   parseExportListing,
+  parseMemoryFingerprint,
   parseModelSpec,
   parseSkillNames,
   parseSkillsCondition,
@@ -977,6 +983,79 @@ describe('transcript export', () => {
   });
 });
 
+describe('memory settle fingerprints', () => {
+  it('parses CLAUDE.md fingerprint lines', () => {
+    expect(parseMemoryFingerprint('bytes=12758\nsha=abc\nauto_extracted=2\n')).toEqual({
+      bytes: 12758,
+      sha: 'abc',
+      autoExtracted: 2,
+    });
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: 'a', autoExtracted: 0 },
+        {
+          bytes: 1,
+          sha: 'a',
+          autoExtracted: 0,
+        }
+      )
+    ).toBe(false);
+    expect(
+      memoryFingerprintChanged(
+        { bytes: 1, sha: 'a', autoExtracted: 0 },
+        { bytes: 2, sha: 'b', autoExtracted: 1 }
+      )
+    ).toBe(true);
+    expect(memoryFingerprintCommand()).toContain('/workspace/CLAUDE.md');
+    expect(MEMORY_SETTLE_MS).toBeGreaterThan(0);
+  });
+
+  it('awaitMemorySettle returns when requireChange is false and nothing moves', async () => {
+    const { leader } = fakeLeader({
+      commands: [[/auto_extracted=/, ok('bytes=1\nsha=a\nauto_extracted=0\n')]],
+    });
+    const before = parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n');
+    const out = await awaitMemorySettle(leader, {
+      before,
+      requireChange: false,
+      timeoutMs: 1000,
+    });
+    expect(out).toMatchObject({ settled: true, changed: false });
+  });
+
+  it('awaitMemorySettle resolves once Auto-extracted grows', async () => {
+    let n = 0;
+    const { leader } = fakeLeader({
+      commands: [
+        [
+          /auto_extracted=/,
+          () => {
+            n += 1;
+            return ok(
+              n === 1 ? 'bytes=1\nsha=a\nauto_extracted=0\n' : 'bytes=9\nsha=b\nauto_extracted=1\n'
+            );
+          },
+        ],
+      ],
+    });
+    const before = parseMemoryFingerprint('bytes=1\nsha=a\nauto_extracted=0\n');
+    const out = await awaitMemorySettle(leader, {
+      before,
+      requireChange: true,
+      timeoutMs: 5_000,
+      pollMs: 1,
+      sleep: async () => {},
+    });
+    expect(out).toMatchObject({ settled: true, changed: true });
+    expect(out.after.autoExtracted).toBe(1);
+  });
+
+  it('treats a missing fingerprint field as zero / empty', () => {
+    expect(parseMemoryFingerprint('')).toEqual({ bytes: 0, sha: '', autoExtracted: 0 });
+    expect(memoryFingerprintChanged(null, { bytes: 1, sha: 'x', autoExtracted: 0 })).toBe(false);
+  });
+});
+
 describe('runTask', () => {
   const COST = (total) =>
     ok(
@@ -1105,6 +1184,13 @@ describe('runTask', () => {
     });
     // The staged file's directory existed and the file was new, so only the file goes.
     expect(calls.at(-2).command).toBe("rm -rf '/workspace/in/a.txt'");
+    // Tabs are closed before teardown so screenshots still see the agent's pages.
+    const tabCloseAt = calls.findIndex((c) => label(c) === 'playwright-cli tab-close');
+    const teardownSessionAt = calls.findIndex(
+      (c, i) => i > 10 && label(c) === 'slicc new-session --erase'
+    );
+    expect(tabCloseAt).toBeGreaterThan(-1);
+    expect(teardownSessionAt).toBeGreaterThan(tabCloseAt);
     expect(result).toMatchObject({
       runId: 'r1',
       model: 'claude-sonnet-5',
@@ -1143,12 +1229,92 @@ describe('runTask', () => {
       runId: 'r-save',
       model: 'claude-sonnet-5',
       sessionAction: 'save',
+      // Unit test has no real CLAUDE.md enrichment; skip the settle wait.
+      memorySettleMs: 0,
       capture: { pollMs: 5 },
     });
     const sessions = calls
       .filter((c) => c.kind === 'cli' && c.args[0] === 'new-session')
       .map((c) => c.args.join(' '));
-    expect(sessions).toEqual(['new-session --save', 'new-session --save']);
+    expect(sessions).toEqual([
+      `new-session --save --timeout ${NEW_SESSION_SAVE_TIMEOUT}`,
+      `new-session --save --timeout ${NEW_SESSION_SAVE_TIMEOUT}`,
+    ]);
+  });
+
+  it('after --save requires CLAUDE.md to change when memory settle is on', async () => {
+    let prompted = false;
+    let afterPromptReads = 0;
+    const unchanged = ok('bytes=100\nsha=aaa\nauto_extracted=0\n');
+    const changed = ok('bytes=200\nsha=bbb\nauto_extracted=1\n');
+    const { leader } = fakeLeader({
+      verbs: {
+        'new-session': ok('new session (save)'),
+        model: ok('bedrock-camp:global.anthropic.claude-sonnet-5\n'),
+        thinking: ok('off\n'),
+        prompt: () => {
+          prompted = true;
+          return ok('FINAL ANSWER: done\n');
+        },
+      },
+      commands: [
+        [
+          /auto_extracted=/,
+          () => {
+            if (!prompted) return unchanged;
+            afterPromptReads += 1;
+            // Teardown before-read is still the pre-enrichment fingerprint; later polls land.
+            return afterPromptReads === 1 ? unchanged : changed;
+          },
+        ],
+        [/^cost --json --all$/, ok(JSON.stringify({ scoops: [] }))],
+        [/^playwright-cli tab-list$/, ok('')],
+        [/^playwright-cli tab-close$/, ok('')],
+        [/session export/, ok('ok')],
+      ],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'Do it.' },
+      runId: 'r-settle',
+      model: 'claude-sonnet-5',
+      sessionAction: 'save',
+      memorySettleMs: 5_000,
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    });
+    expect(result.finalText).toContain('FINAL ANSWER');
+  });
+
+  it('fails the run when --save never lands memory', async () => {
+    const { leader } = fakeLeader({
+      verbs: {
+        'new-session': ok('new session (save)'),
+        model: ok('m\n'),
+        thinking: ok('off\n'),
+        prompt: ok('FINAL ANSWER: done\n'),
+      },
+      commands: [
+        [/^cost --json --all$/, ok(JSON.stringify({ scoops: [] }))],
+        [/^playwright-cli tab-list$/, ok('')],
+        [/^playwright-cli tab-close$/, ok('')],
+        [/session export/, ok('ok')],
+        // Fingerprint never changes.
+        [/auto_extracted=/, ok('bytes=100\nsha=aaa\nauto_extracted=0\n')],
+      ],
+    });
+    await expect(
+      runTask({
+        leader,
+        task: { id: 't', task: 'Do it.' },
+        runId: 'r-nosettle',
+        model: 'claude-sonnet-5',
+        sessionAction: 'save',
+        memorySettleMs: 20,
+        sleep: async () => {},
+        capture: { pollMs: 5 },
+      })
+    ).rejects.toThrow(/memory did not settle/);
   });
 
   it('parses alias@thinking and leaves a plain alias at default', () => {

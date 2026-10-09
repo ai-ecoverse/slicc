@@ -52,6 +52,102 @@ const STEP_CHARS = 4000;
 export const NEW_SESSION_ACTIONS = Object.freeze(['erase', 'save', 'skip']);
 export const DEFAULT_NEW_SESSION = 'erase';
 
+/**
+ * How long after `--save` to wait for `/workspace/CLAUDE.md` to show new durable memory.
+ * The CLI returns when the chat is empty; legacy enrichment and the agentic curator finish later.
+ */
+export const MEMORY_SETTLE_MS = 90_000;
+/** Poll interval while waiting for CLAUDE.md to change after `--save`. */
+export const MEMORY_SETTLE_POLL_MS = 2_000;
+/** `new-session --save` itself: freeze + snapshot can exceed the CLI's 30s default. */
+export const NEW_SESSION_SAVE_TIMEOUT = '120s';
+
+/** Fingerprint of the cone memory file used to detect post-save enrichment. */
+export function parseMemoryFingerprint(stdout) {
+  const text = String(stdout ?? '');
+  const bytes = Number((text.match(/^bytes=(\d+)/m) || [])[1]);
+  const sha = (text.match(/^sha=([0-9a-f]+)/m) || [])[1] || '';
+  const auto = Number((text.match(/^auto_extracted=(\d+)/m) || [])[1]);
+  return {
+    bytes: Number.isFinite(bytes) ? bytes : 0,
+    sha,
+    autoExtracted: Number.isFinite(auto) ? auto : 0,
+  };
+}
+
+/** Shell that prints a stable fingerprint of `/workspace/CLAUDE.md` (missing file → zeros). */
+export function memoryFingerprintCommand() {
+  return [
+    'f=/workspace/CLAUDE.md',
+    'if [ ! -f "$f" ]; then echo bytes=0; echo sha=; echo auto_extracted=0; exit 0; fi',
+    'echo bytes=$(wc -c < "$f" | tr -d " ")',
+    'echo sha=$(sha256sum "$f" | awk \'{print $1}\')',
+    'echo auto_extracted=$(grep -c "^## Auto-extracted" "$f" || true)',
+  ].join('; ');
+}
+
+export function memoryFingerprintChanged(before, after) {
+  if (!before || !after) return false;
+  if (after.sha && before.sha && after.sha !== before.sha) return true;
+  if (after.autoExtracted > before.autoExtracted) return true;
+  if (after.bytes !== before.bytes) return true;
+  return false;
+}
+
+/**
+ * Read `/workspace/CLAUDE.md` fingerprint via `slicc exec`.
+ * @param {{ exec: Function }} leader
+ */
+export async function readMemoryFingerprint(leader) {
+  const r = await leader.exec(memoryFingerprintCommand());
+  if (r.status !== 0) {
+    return { bytes: 0, sha: '', autoExtracted: 0, error: (r.stderr || '').slice(0, 200) };
+  }
+  return parseMemoryFingerprint(r.stdout);
+}
+
+/**
+ * After `new-session --save`, wait until CLAUDE.md changes (enrichment / curator) or time out.
+ * When `requireChange` is true and nothing lands, throws — the next task would otherwise run
+ * with an empty memory store while the record still says `new_session: save`.
+ */
+export async function awaitMemorySettle(
+  leader,
+  {
+    before,
+    timeoutMs = MEMORY_SETTLE_MS,
+    pollMs = MEMORY_SETTLE_POLL_MS,
+    requireChange = false,
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+    now = Date.now,
+  } = {}
+) {
+  const started = now();
+  let after = await readMemoryFingerprint(leader);
+  if (memoryFingerprintChanged(before, after)) {
+    return { settled: true, changed: true, before, after, waitedMs: now() - started };
+  }
+  if (!requireChange || timeoutMs <= 0) {
+    return { settled: true, changed: false, before, after, waitedMs: now() - started };
+  }
+  while (now() - started < timeoutMs) {
+    await sleep(Math.min(pollMs, Math.max(0, timeoutMs - (now() - started))));
+    after = await readMemoryFingerprint(leader);
+    if (memoryFingerprintChanged(before, after)) {
+      return { settled: true, changed: true, before, after, waitedMs: now() - started };
+    }
+  }
+  const err = new Error(
+    `memory did not settle after new-session --save within ${timeoutMs} ms ` +
+      `(CLAUDE.md bytes ${before?.bytes ?? '?'}→${after.bytes}, ` +
+      `Auto-extracted ${before?.autoExtracted ?? '?'}→${after.autoExtracted})`
+  );
+  err.memoryNotSettled = true;
+  err.before = before;
+  err.after = after;
+  throw err;
+}
+
 export const FINAL_INSTRUCTION = [
   "Don't ask clarifying questions: if the task is ambiguous, pick the most reasonable reading and go on.",
   'When the task is done, end your last message with exactly one line:',
@@ -1628,6 +1724,130 @@ async function restoreAfterRun(undo, pin) {
   });
 }
 
+function newSessionCliArgs(sessionAction) {
+  const args = ['new-session', `--${sessionAction}`];
+  if (sessionAction === 'save') args.push('--timeout', NEW_SESSION_SAVE_TIMEOUT);
+  return args;
+}
+
+/**
+ * `new-session` plus, for `--save`, a wait until CLAUDE.md reflects enrichment.
+ * `requireMemoryChange` is true on teardown after a real agent turn so the next
+ * task cannot start with a still-empty memory store.
+ */
+async function runNewSession(
+  leader,
+  sessionAction,
+  { requireMemoryChange = false, memorySettleMs = MEMORY_SETTLE_MS, sleep, now } = {}
+) {
+  const args = newSessionCliArgs(sessionAction);
+  if (sessionAction !== 'save' || memorySettleMs <= 0) {
+    await mustCli(leader, args);
+    return { changed: false, waitedMs: 0 };
+  }
+  const before = await readMemoryFingerprint(leader);
+  await mustCli(leader, args);
+  return awaitMemorySettle(leader, {
+    before,
+    timeoutMs: memorySettleMs,
+    requireChange: requireMemoryChange,
+    sleep,
+    now,
+  });
+}
+
+/** Soft `new-session` + scratch cleanup after a failed run (never throws). */
+async function cleanupFailedRun(leader, sessionAction, staged, dir) {
+  await closeTabs(leader).catch(() => {});
+  await leader.cli(newSessionCliArgs(sessionAction)).catch(() => {});
+  await cleanupScratch(leader, staged, dir);
+}
+
+async function cleanupScratch(leader, staged, dir) {
+  const leftovers = stagedCleanupPaths(staged);
+  if (leftovers.length)
+    await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});
+  await leader.exec(`rm -rf ${dir}`).catch(() => {});
+}
+
+/**
+ * Teardown after a successful agent turn: `--save` must land memory or the run
+ * errors; a leader that drops during teardown still soft-fails.
+ */
+async function teardownSuccessfulRun(
+  leader,
+  sessionAction,
+  { memorySettleMs, sleep, now, staged, dir, restore, pin }
+) {
+  try {
+    await runNewSession(leader, sessionAction, {
+      requireMemoryChange: sessionAction === 'save' && memorySettleMs > 0,
+      memorySettleMs,
+      sleep,
+      now,
+    });
+  } catch (err) {
+    if (err?.memoryNotSettled) throw err;
+  }
+  // Restore `/etc/models` before scratch cleanup so the pin does not outlive the run.
+  if (restore) await restoreAfterRun(restore, pin);
+  await cleanupScratch(leader, staged, dir);
+}
+
+function taskResultBody({
+  runId,
+  prepared,
+  collected,
+  reply,
+  armOut,
+  resumedAfterSettle,
+  transcript,
+  durationMs,
+  done,
+  started,
+  t0,
+  before,
+  after,
+  openTabs,
+  images,
+  taken,
+  health,
+  modelPin,
+}) {
+  return {
+    runId,
+    model: prepared.spec.spec,
+    modelId: prepared.modelId,
+    thinking: prepared.spec.thinking,
+    thinkingEffective: prepared.thinkingEffective,
+    modelPin,
+    exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
+    timedOut: Boolean(
+      reply.timedOut || collected.timedOut || armOut?.record?.arm?.result?.timedOut
+    ),
+    costCapped: Boolean(reply.aborted || collected.costCapped),
+    finalText: finalTextOf(armOut, { resumedAfterSettle, transcript, reply }),
+    ...armOut?.record,
+    stderr: reply.stderr.slice(-4000),
+    durationMs: resumedAfterSettle
+      ? (collected.stoppedAt ?? collected.settledAt ?? done) - started
+      : durationMs,
+    ...spendDelta(before, after),
+    transcript,
+    transcriptExport: collected.transcriptExport,
+    resumedAfterSettle,
+    tabs: openTabs,
+    screenshots: images,
+    screenshotsTaken: taken,
+    phases: {
+      setupMs: started - t0,
+      promptMs: durationMs,
+      collectMs: done - started - durationMs,
+    },
+    health,
+  };
+}
+
 export async function runTask({
   leader,
   task,
@@ -1646,6 +1866,8 @@ export async function runTask({
   condition = null,
   arm = null,
   sessionAction = DEFAULT_NEW_SESSION,
+  /** 0 skips the post-save CLAUDE.md wait; default waits when sessionAction is save. */
+  memorySettleMs = sessionAction === 'save' ? MEMORY_SETTLE_MS : 0,
 }) {
   if (!RUN_ID_PATTERN.test(runId)) throw new Error(`bad run id ${runId}`);
   if (!NEW_SESSION_ACTIONS.includes(sessionAction)) {
@@ -1653,7 +1875,6 @@ export async function runTask({
       `sessionAction must be one of ${NEW_SESSION_ACTIONS.join(', ')}; got ${sessionAction}`
     );
   }
-  const sessionFlag = `--${sessionAction}`;
   const dir = `/tmp/bench/${runId}`;
   const timeout = task.slicc?.timeoutSeconds ?? timeoutSeconds;
   const t0 = now();
@@ -1674,7 +1895,13 @@ export async function runTask({
       staged.push(leaves[i]);
     }
     await closeTabs(leader);
-    await mustCli(leader, ['new-session', sessionFlag]);
+    // Setup: prior chat may be empty — do not require a CLAUDE.md change.
+    await runNewSession(leader, sessionAction, {
+      requireMemoryChange: false,
+      memorySettleMs,
+      sleep,
+      now,
+    });
     if (condition) await assertStagedSkills(leader, condition);
     const prepared = await prepareModel(leader, model);
     const pinned = await pinScoopModels(leader, prepared.modelId);
@@ -1744,57 +1971,48 @@ export async function runTask({
       stopProbeBudgetMs,
     });
     after = collected.after;
-    const { transcript, transcriptExport, resumedAfterSettle } = collected;
+    const { transcript, resumedAfterSettle } = collected;
     await closeTabs(leader).catch(() => {});
     const { taken, images } = await readShots(leader, shots);
     const armOut = await collectArmRun(leader, arm, reply, transcript, started);
     health.after = await leaderHealth(leader, now);
     const done = now();
-    return {
+    const undo = restorePolicy;
+    restorePolicy = null;
+    await teardownSuccessfulRun(leader, sessionAction, {
+      memorySettleMs,
+      sleep,
+      now,
+      staged,
+      dir,
+      restore: undo,
+      pin,
+    });
+    return taskResultBody({
       runId,
-      model: prepared.spec.spec,
-      modelId: prepared.modelId,
-      thinking: prepared.spec.thinking,
-      thinkingEffective: prepared.thinkingEffective,
-      modelPin: pin,
-      exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
-      // An arm that ran out its own --time-limit exits before the exec deadline: only its result says so.
-      timedOut: Boolean(
-        reply.timedOut || collected.timedOut || armOut?.record?.arm?.result?.timedOut
-      ),
-      costCapped: Boolean(reply.aborted || collected.costCapped),
-      finalText: finalTextOf(armOut, { resumedAfterSettle, transcript, reply }),
-      ...armOut?.record,
-      stderr: reply.stderr.slice(-4000),
-      durationMs: resumedAfterSettle
-        ? (collected.stoppedAt ?? collected.settledAt ?? done) - started
-        : durationMs,
-      ...spendDelta(before, after),
-      transcript,
-      transcriptExport,
+      prepared,
+      collected,
+      reply,
+      armOut,
       resumedAfterSettle,
-      tabs: openTabs,
-      screenshots: images,
-      screenshotsTaken: taken,
-      phases: {
-        setupMs: started - t0,
-        promptMs: durationMs,
-        collectMs: done - started - durationMs,
-      },
+      transcript,
+      durationMs,
+      done,
+      started,
+      t0,
+      before,
+      after,
+      openTabs,
+      images,
+      taken,
       health,
-    };
+      modelPin: pin,
+    });
   } catch (err) {
     const undo = restorePolicy;
     restorePolicy = null;
     await restoreAfterFailedRun(undo, err);
+    await cleanupFailedRun(leader, sessionAction, staged, dir);
     throw err;
-  } finally {
-    await closeTabs(leader).catch(() => {});
-    await leader.cli(['new-session', sessionFlag]).catch(() => {});
-    await restoreAfterRun(restorePolicy, pin);
-    const leftovers = stagedCleanupPaths(staged);
-    if (leftovers.length)
-      await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});
-    await leader.exec(`rm -rf ${dir}`).catch(() => {});
   }
 }
