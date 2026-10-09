@@ -21,6 +21,7 @@ import {
 import { getModels, getProviders } from '../src/core/model-catalog.js';
 import { getPanelRpcClient } from '../src/kernel/panel-rpc.js';
 import { withAdaptiveThinkingShim } from '../src/providers/adaptive-thinking.js';
+import { adobeAnthropicModel } from '../src/providers/adobe-anthropic-model.js';
 import {
   type AdobeModelMetadata,
   type EnrichedAdobeModel,
@@ -802,14 +803,10 @@ async function pumpAdobeStream(
       );
       for await (const event of inner) stream.push(event);
     } else {
-      const proxyModel = {
-        ...model,
-        baseUrl: getProxyEndpoint(),
-        api: 'anthropic-messages' as Api,
-      };
+      const proxyModel = adobeAnthropicModel(model, getProxyEndpoint());
 
       const inner = streamAnthropic(
-        proxyModel as unknown as Model<'anthropic-messages'>,
+        proxyModel,
         toPiTranscriptContext(context),
         withSliccVersionHeader(
           ensureSessionIdHeader(
@@ -871,14 +868,10 @@ async function pumpSimpleAdobeStream(
       );
       for await (const event of inner) stream.push(event);
     } else {
-      const proxyModel = {
-        ...model,
-        baseUrl: getProxyEndpoint(),
-        api: 'anthropic-messages' as Api,
-      };
+      const proxyModel = adobeAnthropicModel(model, getProxyEndpoint());
 
       const inner = streamSimpleAnthropic(
-        proxyModel as unknown as Model<'anthropic-messages'>,
+        proxyModel,
         toPiTranscriptContext(context),
         withSliccVersionHeader(
           ensureSessionIdHeader(
