@@ -35,9 +35,11 @@ import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
 import {
   type BedrockCampEffortMap,
+  bedrockCampGrokEffortMap,
   bedrockCampOpenAIEffortMap,
   getModelMatchCandidates,
   isBedrockCampGpt6Model,
+  isBedrockCampGrokModel,
 } from './bedrock-camp-compat.js';
 
 export const config: ProviderConfig = {
@@ -57,7 +59,7 @@ const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac|au|jp)\./;
 const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?:[4-9]|\d\d)/;
 
 const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
-  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3)$/;
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3|xai\.grok-4\.7)$/;
 
 const BEDROCK_RUNTIME_HOST_RE =
   /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/i;
@@ -200,6 +202,10 @@ type BedrockCampOpenAIReasoningFields = {
   reasoning: { effort: string };
 };
 
+type BedrockCampGrokReasoningFields = {
+  reasoning_effort: string;
+};
+
 type BedrockCampDisabledThinkingFields = {
   thinking: { type: 'disabled' };
 };
@@ -208,6 +214,7 @@ type BedrockCampAdditionalModelRequestFields =
   | BedrockCampAdaptiveFields
   | BedrockCampLegacyThinkingFields
   | BedrockCampOpenAIReasoningFields
+  | BedrockCampGrokReasoningFields
   | BedrockCampDisabledThinkingFields;
 
 type BedrockCampInferenceConfig = {
@@ -463,7 +470,7 @@ function coalesceToolResults(
   message: BedrockCampUserMessage;
   nextIndex: number;
 } {
-  const liftImages = isBedrockCampGpt6Model(model);
+  const liftImages = isBedrockCampGpt6Model(model) || isBedrockCampGrokModel(model);
   const toolResults: BedrockCampToolResultBlock[] = [];
   const images: BedrockCampImageBlock[] = [];
   let j = startIndex;
@@ -632,10 +639,22 @@ function openAIReasoningEffort(
   return undefined;
 }
 
+function grokReasoningEffort(map: BedrockCampEffortMap, options: BedrockCampOptions): string {
+  const supported = OPENAI_EFFORT_ORDER.map((level) => map[level]).filter(
+    (v): v is string => typeof v === 'string'
+  );
+  if (options.effort === 'max' || options.reasoning === 'xhigh' || options.reasoning === 'max')
+    return supported[supported.length - 1];
+  const mapped = options.reasoning ? map[options.reasoning as keyof BedrockCampEffortMap] : null;
+  return mapped ?? supported[0];
+}
+
 function buildAdditionalModelRequestFields(
   model: Model<Api>,
   options: BedrockCampOptions
 ): BedrockCampAdditionalModelRequestFields | undefined {
+  const grokMap = bedrockCampGrokEffortMap(model);
+  if (grokMap) return { reasoning_effort: grokReasoningEffort(grokMap, options) };
   const effortMap = bedrockCampOpenAIEffortMap(model);
   if (effortMap) {
     const effort = openAIReasoningEffort(effortMap, options);

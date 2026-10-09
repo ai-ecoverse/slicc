@@ -2,7 +2,7 @@ const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac|au|jp)\./;
 const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?:[4-9]|\d\d)/;
 
 const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
-  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3)$/;
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra)|gpt-6\.1-sol)|moonshotai\.kimi-k3|xai\.grok-4\.7)$/;
 
 const BEDROCK_RUNTIME_HOST_RE =
   /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/i;
@@ -56,6 +56,29 @@ export const BEDROCK_CAMP_GPT61_EFFORT_MAP: BedrockCampEffortMap = Object.freeze
   ...BEDROCK_CAMP_GPT6_EFFORT_MAP,
   off: null,
 });
+
+export const BEDROCK_CAMP_GROK_EFFORT_MAP: BedrockCampEffortMap = Object.freeze({
+  off: null,
+  minimal: null,
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: null,
+  max: null,
+});
+
+const BEDROCK_CAMP_GROK_RE = /(?:^|[.-]xai[.-])grok-4[.-]7(?:-\([^)]+\))?$/;
+
+export function isBedrockCampGrokModel(model: { id: string; name?: string }): boolean {
+  return getModelMatchCandidates(model.id, model.name).some((c) => BEDROCK_CAMP_GROK_RE.test(c));
+}
+
+export function bedrockCampGrokEffortMap(model: {
+  id: string;
+  name?: string;
+}): BedrockCampEffortMap | null {
+  return isBedrockCampGrokModel(model) ? BEDROCK_CAMP_GROK_EFFORT_MAP : null;
+}
 
 export function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
   const values = modelName ? [modelId, modelName] : [modelId];

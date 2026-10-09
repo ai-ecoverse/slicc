@@ -13,6 +13,7 @@ import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 
 import {
+  bedrockCampGrokEffortMap,
   bedrockCampOpenAIEffortMap,
   bedrockCampRegionFromBaseUrl,
   isBedrockCampClaudeModel,
@@ -297,7 +298,7 @@ function applyModelMetadata(
 }
 
 function toBedrockCampPickerModel(m: Model<Api>): Model<Api> {
-  const effortMap = bedrockCampOpenAIEffortMap(m);
+  const effortMap = bedrockCampOpenAIEffortMap(m) ?? bedrockCampGrokEffortMap(m);
   return {
     ...m,
     api: 'bedrock-camp-converse' as Api,

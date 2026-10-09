@@ -233,9 +233,32 @@ describe('bedrock-camp picker contents', () => {
     ]);
   });
 
+  it('admits Grok 4.7 only, with low, medium and high', async () => {
+    const { getSupportedThinkingLevels } = await import('@earendil-works/pi-ai/compat');
+    const models = await pickerModels();
+    expect(
+      models
+        .filter((m) => m.id.includes('grok'))
+        .map((m) => m.id)
+        .sort()
+    ).toEqual(['global.xai.grok-4.7', 'us.xai.grok-4.7']);
+    const grok = models.find((m) => m.id === 'global.xai.grok-4.7');
+    expect(grok?.reasoning).toBe(true);
+    expect(getSupportedThinkingLevels(grok as never)).toEqual(['low', 'medium', 'high']);
+  });
+
   it('keeps unverified non-Claude models out entirely', async () => {
     const ids = (await pickerModels()).map((m) => m.id);
-    for (const needle of ['grok', 'glm', 'minimax', 'nova', 'llama', 'deepseek', 'palmyra']) {
+    for (const needle of [
+      'grok-4.6',
+      'grok-4.3',
+      'glm',
+      'minimax',
+      'nova',
+      'llama',
+      'deepseek',
+      'palmyra',
+    ]) {
       expect(
         ids.filter((id) => id.includes(needle)),
         needle
