@@ -291,6 +291,83 @@ export async function prepareModel(leader, model) {
   return { spec, modelId, thinkingEffective };
 }
 
+export const MODELS_POLICY_PATH = '/etc/models';
+
+const PROVIDER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+export function modelPinPolicy(modelId, catalogue) {
+  const sep = String(modelId).indexOf(':');
+  if (sep <= 0)
+    throw new Error(`model pin needs a provider:model id, not ${JSON.stringify(modelId)}`);
+  const provider = modelId.slice(0, sep);
+  const id = modelId.slice(sep + 1);
+  if (!PROVIDER_ID_PATTERN.test(provider))
+    throw new Error(`bad provider id ${JSON.stringify(provider)}`);
+  const others = [...new Set(catalogue.map((m) => m?.id).filter((x) => typeof x === 'string' && x))]
+    .filter((x) => x !== id)
+    .sort();
+  return [
+    `# Written by the bench for one run: scoops may use ${modelId} only.`,
+    `[${provider}]`,
+    ...others.map((other) => `-${provider}:${other}`),
+    '',
+  ].join('\n');
+}
+
+export async function pinScoopModels(leader, modelId) {
+  const provider = String(modelId).slice(0, Math.max(0, String(modelId).indexOf(':')));
+  if (!PROVIDER_ID_PATTERN.test(provider))
+    throw new Error(`model pin needs a provider:model id, not ${JSON.stringify(modelId)}`);
+  const listed = await must(
+    leader,
+    `models --provider ${provider} --all-versions --no-benchmarks --json`
+  );
+  let catalogue;
+  try {
+    catalogue = JSON.parse(listed.stdout);
+  } catch {
+    catalogue = null;
+  }
+  if (!Array.isArray(catalogue) || catalogue.length === 0)
+    throw new Error(`model pin: \`models --json\` printed no catalogue for ${provider}`);
+  const policy = modelPinPolicy(modelId, catalogue);
+  const original = await readPolicy(leader);
+  const write = (text) =>
+    must(leader, `base64 -d > ${MODELS_POLICY_PATH}`, {
+      stdin: Buffer.from(text).toString('base64'),
+    });
+  const restore = () =>
+    original === null ? must(leader, `rm -f ${MODELS_POLICY_PATH}`) : write(original);
+  try {
+    await write(policy);
+    const back = await must(leader, `cat ${MODELS_POLICY_PATH}`);
+    if (back.stdout.trim() !== policy.trim())
+      throw new Error(`model pin: ${MODELS_POLICY_PATH} did not take the policy`);
+  } catch (err) {
+    await restore().catch((undo) => {
+      err.message += `; and restoring ${MODELS_POLICY_PATH} failed: ${undo.message}`;
+      err.leaderDown = true;
+    });
+    throw err;
+  }
+  return {
+    pin: {
+      provider,
+      model: modelId,
+      denied: policy.split('\n').filter((l) => l.startsWith('-')).length,
+    },
+    restore,
+  };
+}
+
+async function readPolicy(leader) {
+  const exists = await leader.exec(`test -e ${MODELS_POLICY_PATH}`);
+  if (exists.leaderDown || (exists.status !== 0 && exists.status !== 1))
+    throw failure(`leader: \`test -e ${MODELS_POLICY_PATH}\``, exists);
+  if (exists.status === 1) return null;
+  return (await must(leader, `cat ${MODELS_POLICY_PATH}`)).stdout;
+}
+
 export function parseSkillsCondition(text) {
   const parts = String(text)
     .split('+')
@@ -867,6 +944,7 @@ export function traceFromResult(result) {
       tabs: result.tabs ?? [],
       model: result.modelId ?? null,
       modelsUsed: t.models,
+      ...(result.modelPin ? { model_pin: result.modelPin } : {}),
       ...toolMetrics(result.transcript),
       ...(result.phases ? { phases: result.phases } : {}),
       ...(ex ? { transcript: transcriptSummary(ex) } : {}),
@@ -1219,6 +1297,21 @@ function finalTextOf(armOut, { resumedAfterSettle, transcript, reply }) {
   return resumedAfterSettle ? lastConeAssistantText(transcript) : reply.stdout;
 }
 
+async function restoreAfterFailedRun(undo, err) {
+  if (!undo) return;
+  await undo().catch((e) => {
+    err.message += `; and restoring ${MODELS_POLICY_PATH} failed: ${e.message}`;
+    err.leaderDown = true;
+  });
+}
+
+async function restoreAfterRun(undo, pin) {
+  if (!undo) return;
+  await undo().catch((e) => {
+    if (pin) pin.restore_error = e.message.slice(0, 300);
+  });
+}
+
 export async function runTask({
   leader,
   task,
@@ -1243,6 +1336,8 @@ export async function runTask({
   const t0 = now();
   const health = { before: await leaderHealth(leader, now) };
   const staged = [];
+  let restorePolicy = null;
+  let pin = null;
   try {
     await must(leader, `rm -rf ${dir} && mkdir -p ${dir}`);
     const goalFile = await prepareArmRun(leader, arm, dir, task);
@@ -1259,6 +1354,9 @@ export async function runTask({
     await mustCli(leader, ['new-session', '--erase']);
     if (condition) await assertStagedSkills(leader, condition);
     const prepared = await prepareModel(leader, model);
+    const pinned = await pinScoopModels(leader, prepared.modelId);
+    restorePolicy = pinned.restore;
+    pin = pinned.pin;
     const before = await spend(leader);
 
     const started = now();
@@ -1332,6 +1430,7 @@ export async function runTask({
       modelId: prepared.modelId,
       thinking: prepared.spec.thinking,
       thinkingEffective: prepared.thinkingEffective,
+      modelPin: pin,
       exitCode: collected.timedOut || collected.costCapped ? 130 : reply.status,
 
       timedOut: Boolean(
@@ -1358,9 +1457,15 @@ export async function runTask({
       },
       health,
     };
+  } catch (err) {
+    const undo = restorePolicy;
+    restorePolicy = null;
+    await restoreAfterFailedRun(undo, err);
+    throw err;
   } finally {
     await closeTabs(leader).catch(() => {});
     await leader.cli(['new-session', '--erase']).catch(() => {});
+    await restoreAfterRun(restorePolicy, pin);
     const leftovers = stagedCleanupPaths(staged);
     if (leftovers.length)
       await leader.exec(`rm -rf ${leftovers.map(quote).join(' ')}`).catch(() => {});

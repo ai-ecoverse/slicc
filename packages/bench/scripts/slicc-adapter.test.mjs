@@ -25,6 +25,7 @@ import {
   lastScoopAssistantText,
   lastTurnProviderError,
   leaderHealth,
+  modelPinPolicy,
   NO_DEFAULT_SKILLS_MISSING,
   PROMPT_ALL_SETTLED,
   parseArmResult,
@@ -33,6 +34,7 @@ import {
   parseSkillNames,
   parseSkillsCondition,
   parseTabList,
+  pinScoopModels,
   planStagedCleanup,
   quote,
   readShots,
@@ -65,8 +67,55 @@ import {
 const ok = (stdout = '') => ({ stdout, stderr: '', status: 0, timedOut: false });
 const fail = (stderr, status = 1) => ({ stdout: '', stderr, status, timedOut: false });
 
-function fakeLeader({ verbs = {}, commands = [] } = {}) {
+function fakeLeader({
+  verbs = {},
+  commands = [],
+  catalogue = DEFAULT_CATALOGUE,
+  policyWritable = true,
+  policyReadable = true,
+  readback = null,
+  removable = true,
+  probe = null,
+  catalogueRaw = null,
+} = {}) {
   const calls = [];
+
+  const files = new Map();
+  const pinRoutes = [
+    [/^models --provider /, () => ok(catalogueRaw ?? JSON.stringify(catalogue))],
+    [
+      /^test -e \/etc\/models$/,
+      () =>
+        probe ??
+        (files.has('/etc/models') ? ok() : { stdout: '', stderr: '', status: 1, timedOut: false }),
+    ],
+    [
+      /^cat \/etc\/models$/,
+      () => {
+        if (!policyReadable) return fail('cat: /etc/models: input/output error');
+
+        if (readback !== null && files.get('/etc/models')?.startsWith('# Written by the bench'))
+          return ok(readback);
+        return files.has('/etc/models') ? ok(files.get('/etc/models')) : fail('no such file');
+      },
+    ],
+    [
+      /^base64 -d > \/etc\/models$/,
+      (_c, opts) => {
+        if (policyWritable)
+          files.set('/etc/models', Buffer.from(opts.stdin ?? '', 'base64').toString());
+        return ok();
+      },
+    ],
+    [
+      /^rm -f \/etc\/models$/,
+      () => {
+        if (!removable) return fail('rm: /etc/models: permission denied');
+        files.delete('/etc/models');
+        return ok();
+      },
+    ],
+  ];
   const leader = {
     cli: vi.fn(async (args, opts = {}) => {
       calls.push({ kind: 'cli', args, opts });
@@ -75,15 +124,22 @@ function fakeLeader({ verbs = {}, commands = [] } = {}) {
     }),
     exec: vi.fn(async (command, opts = {}) => {
       calls.push({ kind: 'exec', command, opts });
-      for (const [pattern, reply] of commands) {
+      for (const [pattern, reply] of [...pinRoutes, ...commands]) {
         if (pattern.test(command))
           return typeof reply === 'function' ? reply(command, opts) : reply;
       }
       return ok();
     }),
   };
-  return { leader, calls };
+  return { leader, calls, files };
 }
+
+const DEFAULT_CATALOGUE = [
+  { id: 'global.anthropic.claude-opus-5-5', provider: 'bedrock-camp' },
+  { id: 'global.anthropic.claude-sonnet-4-6', provider: 'bedrock-camp' },
+  { id: 'global.anthropic.claude-haiku-5-5', provider: 'bedrock-camp' },
+  { id: 'm', provider: 'bedrock-camp' },
+];
 
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 
@@ -930,9 +986,11 @@ describe('runTask', () => {
     prompt = ok('FINAL ANSWER: done\n'),
     model = ok('bedrock-camp:global.anthropic.claude-sonnet-5\n'),
     commands: extra = [],
+    ...pinOptions
   } = {}) {
     let costCalls = 0;
     return fakeLeader({
+      ...pinOptions,
       verbs: { 'new-session': ok('new session (erase)'), model, prompt },
       commands: [
         ...extra,
@@ -946,11 +1004,43 @@ describe('runTask', () => {
   const label = (c) =>
     c.kind === 'cli' ? `slicc ${c.args.join(' ')}` : c.command.split(' ').slice(0, 2).join(' ');
 
+  it('adds a failed policy restore to a failed run and marks the leader down', async () => {
+    const down = {
+      stdout: '',
+      stderr: 'tray connect timed out',
+      status: 1,
+      timedOut: false,
+      leaderDown: true,
+    };
+    const { leader } = leaderFor({ prompt: down, removable: false });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r9',
+      model: 'm',
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err.message).toMatch(/and restoring \/etc\/models failed: .*permission denied/);
+    expect(err.leaderDown).toBe(true);
+  });
+
+  it('records a failed policy restore on a finished run instead of dropping it', async () => {
+    const { leader } = leaderFor({ removable: false });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r10',
+      model: 'm',
+      capture: { pollMs: 5 },
+    });
+    expect(result.modelPin.restore_error).toMatch(/permission denied/);
+  });
+
   it('drives setup, the prompt, capture and teardown through the slicc CLI', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'bench-task-'));
     const file = join(dir, 'a.txt');
     writeFileSync(file, 'hello');
-    const { leader, calls } = leaderFor({ commands: [[/^d=/, ok('new\n')]] });
+    const { leader, calls, files } = leaderFor({ commands: [[/^d=/, ok('new\n')]] });
     const task = {
       id: 't',
       task: 'Read it.',
@@ -964,7 +1054,7 @@ describe('runTask', () => {
       capture: { pollMs: 5 },
     });
 
-    expect(calls.slice(0, 10).map(label)).toEqual([
+    expect(calls.slice(0, 14).map(label)).toEqual([
       'uptime; meminfo',
       'rm -rf',
       "d='/workspace/in'; t=;",
@@ -974,6 +1064,10 @@ describe('runTask', () => {
       'slicc new-session --erase',
       'slicc model claude-sonnet-5',
       'slicc thinking',
+      'models --provider',
+      'test -e',
+      'base64 -d',
+      'cat /etc/models',
       'cost --json',
     ]);
     expect(calls[3].opts.stdin).toBe(Buffer.from('hello').toString('base64'));
@@ -985,13 +1079,21 @@ describe('runTask', () => {
       interrupt: true,
     });
     expect(prompt.opts.signal).toBeInstanceOf(AbortSignal);
-    expect(calls.slice(-5).map(label)).toEqual([
+    expect(calls.slice(-6).map(label)).toEqual([
       'playwright-cli tab-list',
       'playwright-cli tab-close',
       'slicc new-session --erase',
+      'rm -f',
       'rm -rf',
       'rm -rf',
     ]);
+
+    expect(files.has('/etc/models')).toBe(false);
+    expect(result.modelPin).toEqual({
+      provider: 'bedrock-camp',
+      model: 'bedrock-camp:global.anthropic.claude-sonnet-5',
+      denied: 4,
+    });
 
     expect(calls.at(-2).command).toBe("rm -rf '/workspace/in/a.txt'");
     expect(result).toMatchObject({
@@ -1209,7 +1311,7 @@ describe('runTask', () => {
 
   it('records spend as unknown when a reading fails, never as a negative delta', async () => {
     const { leader } = fakeLeader({
-      verbs: { model: ok('m\n'), prompt: ok('FINAL ANSWER: x') },
+      verbs: { model: ok('bedrock-camp:m\n'), prompt: ok('FINAL ANSWER: x') },
       commands: [[/^cost --json --all$/, fail('cost: busy')]],
     });
     const result = await runTask({
@@ -1427,7 +1529,7 @@ describe('cost cap', () => {
     let spent = 0.1;
     const { leader } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: (_args, opts) =>
           new Promise((resolve) => {
             const t = setInterval(() => (spent += 1), 5);
@@ -1500,7 +1602,7 @@ describe('a prompt that returns while the agent still works', () => {
   it('does not collect when an early prompt return never settles again', async () => {
     let spent = 0.1;
     const { leader, calls } = fakeLeader({
-      verbs: { model: ok('m\n'), prompt: ok(''), wait: fail('did not settle') },
+      verbs: { model: ok('bedrock-camp:m\n'), prompt: ok(''), wait: fail('did not settle') },
       commands: [[/^cost --json --all$/, () => costOf((spent += 0.5), Math.round(spent * 100))]],
     });
     const sleep = vi.fn(async () => {});
@@ -1525,7 +1627,7 @@ describe('a prompt that returns while the agent still works', () => {
     const readings = [costOf(1, 10, 1), costOf(10, 100, 4), costOf(14, 140, 8), costOf(14, 140, 8)];
     const { leader, calls } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: { stdout: '', stderr: '', status: 130, timedOut: true },
       },
       commands: [[/^cost --json --all$/, () => readings.shift() ?? costOf(14, 140, 8)]],
@@ -1556,7 +1658,7 @@ describe('a prompt that returns while the agent still works', () => {
     let total = 1;
     const { leader, calls } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: { stdout: '', stderr: '', status: 130, timedOut: false, aborted: true },
       },
       commands: [[/^cost --json --all$/, () => costOf((total += 1), total, total)]],
@@ -1583,7 +1685,7 @@ describe('a prompt that returns while the agent still works', () => {
     const timeouts = [];
     const { leader, calls } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: { stdout: '', stderr: '', status: 130, timedOut: true },
       },
       commands: [
@@ -1619,7 +1721,7 @@ describe('a prompt that returns while the agent still works', () => {
   it('does not score a transcript lost while the agent is still busy', async () => {
     let n = 0;
     const { leader } = fakeLeader({
-      verbs: { model: ok('m\n'), prompt: ok('FINAL ANSWER: done') },
+      verbs: { model: ok('bedrock-camp:m\n'), prompt: ok('FINAL ANSWER: done') },
       commands: [
         [
           /^cost --json --all$/,
@@ -1652,7 +1754,7 @@ describe('a prompt that returns while the agent still works', () => {
     const totals = [1, 1, 2, 2];
     const { leader, calls } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: ok('The scoops are working.'),
         wait: ok('settled\n'),
       },
@@ -1696,7 +1798,7 @@ describe('a prompt that returns while the agent still works', () => {
     let exports = 0;
     const { leader, calls } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: ok('INITIAL ANSWER'),
         wait: () => {
           clock = 900_000;
@@ -1745,7 +1847,7 @@ describe('a prompt that returns while the agent still works', () => {
     let clock = 0;
     const { leader, calls } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: ok('INITIAL ANSWER'),
         wait: () => {
           clock = 900_000;
@@ -1778,7 +1880,7 @@ describe('a prompt that returns while the agent still works', () => {
     let reads = 0;
     const { leader } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: ok('INITIAL ANSWER'),
         wait: () => {
           clock = 900_000;
@@ -1811,7 +1913,7 @@ describe('a prompt that returns while the agent still works', () => {
     let clock = 0;
     const { leader } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: ok('INITIAL ANSWER'),
         wait: () => {
           clock = 900_000;
@@ -1848,7 +1950,7 @@ describe('a prompt that returns while the agent still works', () => {
     let exports = 0;
     const { leader, calls } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: ok('INITIAL ANSWER'),
         wait: (_args, opts) => {
           if (!opts.signal) return fail('wait has no cost-cap signal');
@@ -1906,7 +2008,7 @@ describe('a prompt that returns while the agent still works', () => {
     let exports = 0;
     const { leader, calls } = fakeLeader({
       verbs: {
-        model: ok('m\n'),
+        model: ok('bedrock-camp:m\n'),
         prompt: { ...fail('not confirmed', 130), aborted: true, stdout: 'INITIAL ANSWER' },
         abort: ok('stopped\n'),
       },
@@ -1953,7 +2055,7 @@ describe('a prompt that returns while the agent still works', () => {
     let exports = 0;
     const totals = [1, 1, 2, 2, 2];
     const { leader, calls } = fakeLeader({
-      verbs: { model: ok('m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
+      verbs: { model: ok('bedrock-camp:m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
       commands: [
         [/^cost --json --all$/, () => costOf(totals.shift() ?? 2, 10, 1)],
         [
@@ -1989,7 +2091,7 @@ describe('a prompt that returns while the agent still works', () => {
     const totals = [0, 1, 1, 2, 2, 2];
     let exports = 0;
     const { leader, calls } = fakeLeader({
-      verbs: { model: ok('m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
+      verbs: { model: ok('bedrock-camp:m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
       commands: [
         [/^cost --json --all$/, () => costOf(totals.shift() ?? 2, 10, 1)],
         [
@@ -2023,7 +2125,7 @@ describe('a prompt that returns while the agent still works', () => {
     );
     let exports = 0;
     const { leader, calls } = fakeLeader({
-      verbs: { model: ok('m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
+      verbs: { model: ok('bedrock-camp:m\n'), prompt: ok('INITIAL ANSWER'), wait: ok('settled\n') },
       commands: [
         [/^cost --json --all$/, () => costOf(1, 10, 1)],
         [
@@ -2058,7 +2160,7 @@ describe('a prompt that returns while the agent still works', () => {
     );
     const stdout = 'PREAMBLE\nFINAL ANSWER: done\n';
     const { leader, calls } = fakeLeader({
-      verbs: { model: ok('m\n'), prompt: ok(stdout), wait: ok('settled\n') },
+      verbs: { model: ok('bedrock-camp:m\n'), prompt: ok(stdout), wait: ok('settled\n') },
       commands: [[/^cost --json --all$/, () => costOf(1, 10, 1)], ...files.commands],
     });
     const result = await runTask({
@@ -2075,7 +2177,7 @@ describe('a prompt that returns while the agent still works', () => {
 
   it('collects as usual when spend has stopped', async () => {
     const { leader } = fakeLeader({
-      verbs: { model: ok('m\n'), prompt: ok('') },
+      verbs: { model: ok('bedrock-camp:m\n'), prompt: ok('') },
       commands: [[/^cost --json --all$/, () => costOf(0.2, 5)]],
     });
     const result = await runTask({
@@ -2534,5 +2636,105 @@ describe('arm runs on a reused leader', () => {
     expect(t.steps.join('\n')).not.toContain('FINAL ANSWER: one');
     expect(t.metrics.steps).toBe(1);
     expect(armAnswer(result.arm.files)).toBe('Done.\n\nFINAL ANSWER: two');
+  });
+});
+
+describe('scoop model pin', () => {
+  const HAIKU = 'bedrock-camp:global.anthropic.claude-haiku-5-5';
+
+  it('denies every other model in the catalogue and never the configured one', () => {
+    const text = modelPinPolicy(HAIKU, [...DEFAULT_CATALOGUE, DEFAULT_CATALOGUE[1]]);
+    expect(text.split('\n').filter((l) => l && !l.startsWith('#'))).toEqual([
+      '[bedrock-camp]',
+      '-bedrock-camp:global.anthropic.claude-opus-5-5',
+      '-bedrock-camp:global.anthropic.claude-sonnet-4-6',
+      '-bedrock-camp:m',
+    ]);
+  });
+
+  it("makes the leader's own policy refuse another model and keep the configured one", async () => {
+    globalThis.__DEV__ ??= false;
+    const { isModelAllowedByPolicy, parseModelPolicy } = await import(
+      '../../webapp/src/providers/model-policy.ts'
+    );
+    const policy = parseModelPolicy(modelPinPolicy(HAIKU, DEFAULT_CATALOGUE));
+    const allowed = (provider, model) =>
+      isModelAllowedByPolicy(policy, 'bedrock-camp', provider, model);
+    expect(allowed('bedrock-camp', 'global.anthropic.claude-haiku-5-5')).toBe(true);
+    expect(allowed('bedrock-camp', 'global.anthropic.claude-sonnet-4-6')).toBe(false);
+    expect(allowed('bedrock-camp', 'global.anthropic.claude-opus-5-5')).toBe(false);
+    expect(allowed('anthropic', 'claude-sonnet-4-6')).toBe(false);
+  });
+
+  it('refuses an id without a provider, or a provider that is not plain characters', () => {
+    expect(() => modelPinPolicy('m', DEFAULT_CATALOGUE)).toThrow(/provider:model/);
+    expect(() => modelPinPolicy('bad provider:m', DEFAULT_CATALOGUE)).toThrow(/bad provider/);
+  });
+
+  it('puts the previous /etc/models back on restore', async () => {
+    const { leader, files } = fakeLeader();
+    files.set('/etc/models', '[bedrock-camp]\nopenrouter:*\n');
+    const pinned = await pinScoopModels(leader, HAIKU);
+    expect(pinned.pin).toEqual({ provider: 'bedrock-camp', model: HAIKU, denied: 3 });
+    expect(files.get('/etc/models')).toContain('-bedrock-camp:global.anthropic.claude-sonnet-4-6');
+    await pinned.restore();
+    expect(files.get('/etc/models')).toBe('[bedrock-camp]\nopenrouter:*\n');
+  });
+
+  it('does not start a run whose catalogue cannot be read', async () => {
+    const { leader } = fakeLeader({ catalogue: 'not a catalogue' });
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toThrow(/printed no catalogue/);
+  });
+
+  it('does not start a run whose policy did not take', async () => {
+    const { leader, files } = fakeLeader({ policyWritable: false });
+    files.set('/etc/models', '[bedrock-camp]\n');
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toThrow(/did not take the policy/);
+  });
+
+  it('aborts, and keeps the policy, when an existing /etc/models cannot be read', async () => {
+    const { leader, files } = fakeLeader({ policyReadable: false });
+    files.set('/etc/models', '[bedrock-camp]\nopenrouter:*\n');
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toThrow(/input\/output error/);
+    expect(files.get('/etc/models')).toBe('[bedrock-camp]\nopenrouter:*\n');
+  });
+
+  it('treats an unreachable leader as leader-down, not as a missing policy', async () => {
+    const down = {
+      stdout: '',
+      stderr: 'tray connect timed out',
+      status: 1,
+      timedOut: false,
+      leaderDown: true,
+    };
+    const { leader } = fakeLeader({ probe: down });
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toMatchObject({ leaderDown: true });
+  });
+
+  it('puts the previous policy back when the pin does not read back', async () => {
+    const { leader, files } = fakeLeader({ readback: '[bedrock-camp]\n-bedrock-camp:x\n' });
+    files.set('/etc/models', '[bedrock-camp]\nopenrouter:*\n');
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toThrow(/did not take the policy/);
+    expect(files.get('/etc/models')).toBe('[bedrock-camp]\nopenrouter:*\n');
+  });
+
+  it('lets a failed restore surface instead of passing silently', async () => {
+    const { leader } = fakeLeader({ removable: false });
+    const pinned = await pinScoopModels(leader, HAIKU);
+    await expect(pinned.restore()).rejects.toThrow(/permission denied/);
+  });
+
+  it('needs a provider in the model id and a catalogue that parses', async () => {
+    await expect(pinScoopModels(fakeLeader().leader, 'm')).rejects.toThrow(/provider:model/);
+    const { leader } = fakeLeader({ catalogueRaw: '<html>login</html>' });
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toThrow(/printed no catalogue/);
+  });
+
+  it('marks the leader down when a failed pin cannot be undone either', async () => {
+    const { leader } = fakeLeader({ readback: 'other', removable: false });
+    await expect(pinScoopModels(leader, HAIKU)).rejects.toMatchObject({
+      message: expect.stringMatching(/did not take the policy; and restoring \/etc\/models failed/),
+      leaderDown: true,
+    });
   });
 });
