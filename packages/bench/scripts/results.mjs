@@ -224,6 +224,8 @@ function configStats(c, cs) {
   return {
     model: c.model,
     skills: c.skills,
+    // erase (or missing) is the default; surface save/skip so memory arms label distinctly.
+    new_session: c.new_session && c.new_session !== 'erase' ? c.new_session : 'erase',
     harness: c.harness ?? null,
     slicc_versions: versionCounts(cs),
     runs: cs.length,
@@ -352,8 +354,12 @@ export function versionLine(counts) {
   return `SLICC version: ${list || 'not recorded'}${known.length ? tail : ''}.`;
 }
 
+function sessionLabel(c) {
+  return c.new_session && c.new_session !== 'erase' ? c.new_session : 'erase';
+}
+
 function configRow(c) {
-  return `| ${c.model} | ${c.skills} | ${c.runs} | ${c.pass} | ${c.partial} | ${c.fail} | ${c.not_judged} | ${c.errors} | ${fmt(c.mean_score)} | ${fmt(c.mean_duration, 0)} | ${fmt(c.mean_cost, 3)} |`;
+  return `| ${c.model} | ${c.skills} | ${sessionLabel(c)} | ${c.runs} | ${c.pass} | ${c.partial} | ${c.fail} | ${c.not_judged} | ${c.errors} | ${fmt(c.mean_score)} | ${fmt(c.mean_duration, 0)} | ${fmt(c.mean_cost, 3)} |`;
 }
 
 /** Markdown for the job summary: one row per configuration, then skill and model deltas. */
@@ -375,8 +381,8 @@ export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
           ]
         : []),
       '',
-      '| model | skills | runs | pass | partial | fail | not judged | errors | mean score | mean s | mean $ |',
-      '|---|---|---|---|---|---|---|---|---|---|---|',
+      '| model | skills | new_session | runs | pass | partial | fail | not judged | errors | mean score | mean s | mean $ |',
+      '|---|---|---|---|---|---|---|---|---|---|---|---|',
       ...b.configs.map(configRow),
       '',
       versionLine(b.slicc_versions)
@@ -389,7 +395,7 @@ export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
         '',
         ...toolKnown.map(
           (c) =>
-            `- ${c.model}, \`${c.skills}\`: ${c.no_tool_runs}/${c.tool_known} (${(c.no_tool_rate * 100).toFixed(0)}%), mean score ${fmt(c.no_tool_mean_score)} without tools vs ${fmt(c.tool_mean_score)} with`
+            `- ${c.model}, \`${c.skills}\`, \`${sessionLabel(c)}\`: ${c.no_tool_runs}/${c.tool_known} (${(c.no_tool_rate * 100).toFixed(0)}%), mean score ${fmt(c.no_tool_mean_score)} without tools vs ${fmt(c.tool_mean_score)} with`
         )
       );
     }

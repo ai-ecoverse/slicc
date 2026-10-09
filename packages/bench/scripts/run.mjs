@@ -634,11 +634,24 @@ export function defaultSkillsMatch(recorded, expected) {
  *   skipped, another judge model is asked for, or the rubric or weights changed;
  * - `done`: nothing changed.
  * A rejudge needs the saved trace; without it the run starts over.
+ *
+ * Save/skip accumulate memories in the Chrome profile. Resume restores only `bench-out`, so
+ * without `memoryRestored` (or `BENCH_MEMORY_RESTORED=1`) a `done` skip would continue later
+ * tasks on an empty memory store. Those actions therefore replay (`run`) until a profile
+ * checkpoint is restored.
  */
 export function resumeAction(
   record,
   task,
-  { judge, judgeModel, traceExists, defaultSkills, arm = null, newSession = DEFAULT_NEW_SESSION }
+  {
+    judge,
+    judgeModel,
+    traceExists,
+    defaultSkills,
+    arm = null,
+    newSession = DEFAULT_NEW_SESSION,
+    memoryRestored = false,
+  }
 ) {
   if (!record) return 'run';
   const d = taskDigests(task);
@@ -649,7 +662,9 @@ export function resumeAction(
   // Pre-flag records omit new_session; that matches planned erase only.
   if ((record.config?.new_session ?? DEFAULT_NEW_SESSION) !== newSession) return 'run';
   if (record.error && record.error_stage !== 'judge') return 'run';
-  if (!judge) return 'done';
+  if (!judge) {
+    return memoryChainAllowsSkip(newSession, memoryRestored) ? 'done' : 'run';
+  }
   const stale =
     record.error_stage === 'judge' ||
     typeof record.score !== 'number' ||
@@ -657,8 +672,21 @@ export function resumeAction(
     (record.judge?.model !== judgeModel && record.judge?.fallback_from !== judgeModel) ||
     record.digests.rubric_sha !== d.rubric_sha ||
     record.digests.weights_sha !== d.weights_sha;
-  if (!stale) return 'done';
+  if (!stale) {
+    return memoryChainAllowsSkip(newSession, memoryRestored) ? 'done' : 'run';
+  }
   return traceExists ? 'rejudge' : 'run';
+}
+
+/** Save/skip may skip done only when the Chrome profile (memory chain) was restored. */
+export function memoryChainAllowsSkip(newSession, memoryRestored) {
+  if (newSession !== 'save' && newSession !== 'skip') return true;
+  return Boolean(memoryRestored);
+}
+
+/** Keep the Chrome profile across a recovery restart so save/skip memories survive. */
+export function keepProfileOnRecovery(newSession) {
+  return newSession === 'save' || newSession === 'skip';
 }
 
 /** Re-judge a saved trace without running the agent again. */
@@ -724,7 +752,7 @@ function leaderStamp(lane, id = 0) {
 }
 
 /** Stop the leader and boot a fresh one; skills must be staged again on it. */
-async function restartLeader(ctx, reason, log) {
+async function restartLeader(ctx, reason, log, { keepProfile = false } = {}) {
   const { lane, journal } = ctx;
   const t0 = Date.now();
   journal.event('leader-restart', {
@@ -732,9 +760,10 @@ async function restartLeader(ctx, reason, log) {
     reason,
     generation: lane.generation,
     tasks: lane.tasks,
+    keep_profile: keepProfile,
   });
-  log(`restarting the leader (${reason})`);
-  const next = await bootTwice(() => ctx.recycle(), journal, ctx.id, log);
+  log(`restarting the leader (${reason}${keepProfile ? ', keeping profile' : ''})`);
+  const next = await bootTwice(() => ctx.recycle({ keepProfile }), journal, ctx.id, log);
   ctx.leader.setUrl(next.url);
   Object.assign(lane, {
     generation: lane.generation + 1,
@@ -748,6 +777,7 @@ async function restartLeader(ctx, reason, log) {
     generation: lane.generation,
     slicc_version: next.sliccVersion,
     boot_ms: Date.now() - t0,
+    keep_profile: keepProfile,
   });
 }
 
@@ -828,7 +858,9 @@ async function prepareOrRestart(r, ctx, log) {
       task_id: r.task.id,
       leader: leaderStamp(ctx.lane, ctx.id),
     });
-    await restartLeader(ctx, 'leader unreachable while preparing', log);
+    await restartLeader(ctx, 'leader unreachable while preparing', log, {
+      keepProfile: keepProfileOnRecovery(ctx.opts.newSession),
+    });
     await prepareLeader(r, ctx, log);
   }
 }
@@ -842,7 +874,9 @@ async function runFresh(r, ctx, log) {
   let outcome = await runOne(r, ctx);
   if (outcome.record.leader_down && ctx.recycle) {
     ctx.journal.event('leader-down', { task_id: r.task.id, leader: outcome.record.leader });
-    await restartLeader(ctx, 'leader unreachable', log);
+    await restartLeader(ctx, 'leader unreachable', log, {
+      keepProfile: keepProfileOnRecovery(ctx.opts.newSession),
+    });
     await prepareLeader(r, ctx, log);
     outcome = await runOne(r, ctx);
   }
@@ -964,6 +998,9 @@ async function processRun(i, r, runs, ctx, say) {
     defaultSkills: Boolean(r.condition.builtin),
     arm: opts.arm?.name ?? null,
     newSession: opts.newSession,
+    // Profile restore is not wired yet; set BENCH_MEMORY_RESTORED=1 once a save/skip
+    // resume has restored the Chrome profile that holds accumulated memories.
+    memoryRestored: process.env.BENCH_MEMORY_RESTORED === '1',
   });
   if (action === 'done') {
     say(

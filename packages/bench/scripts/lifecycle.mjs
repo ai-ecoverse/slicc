@@ -60,18 +60,23 @@ export function currentLeader(read = readState) {
  * webapp keeps its VFS, sessions and scoops there. A restart that keeps the profile boots the old
  * leader's scoops with it: in the first full BU V1 run they carried over from task to task and
  * across restarts, kept working, and billed later tasks. So the old profile is wiped between
- * stop and start.
+ * stop and start by default.
+ *
+ * Pass `{ keepProfile: true }` (constructor default or per call) to preserve the profile —
+ * required for `--new-session save|skip` recovery so accumulated memories survive a leader
+ * restart. `--fresh-leader-every` still wipes (intentional isolation).
  */
 export function createRecycler({
   scriptsDir,
   env = process.env,
   run = runNode,
   read = readState,
+  keepProfile = false,
   mask = (url) => {
     if (env.GITHUB_ACTIONS) console.log(`::add-mask::${url}`);
   },
 }) {
-  return async function recycle() {
+  return async function recycle({ keepProfile: keep = keepProfile } = {}) {
     const profileDir = read()?.profileDir ?? null;
     const scratch = mkdtempSync(join(tmpdir(), 'bench-leader-'));
     // The scripts append outputs for their action; keep a restart's out of this step's.
@@ -80,7 +85,7 @@ export function createRecycler({
       const stop = await run(join(scriptsDir, 'stop-leader.mjs'), { env: scriptEnv });
       if (stop.status !== 0)
         throw new Error(`stop-leader exited ${stop.status}: ${stop.output.slice(-400)}`);
-      if (profileDir) rmSync(profileDir, { recursive: true, force: true });
+      if (profileDir && !keep) rmSync(profileDir, { recursive: true, force: true });
       const start = await run(join(scriptsDir, 'start-leader.mjs'), { env: scriptEnv });
       if (start.status !== 0) {
         const err = new Error(`start-leader exited ${start.status}: ${start.output.slice(-400)}`);

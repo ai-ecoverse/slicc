@@ -68,15 +68,18 @@ Each task starts a fresh chat (`new-session`, default `--erase` so memories do n
 For BU Bench V2.1 Stage 2, dispatch `bench.yml` **after this fix reaches `main`**
 with `resume-run: 36397375699` and the same task set, models, skills, repeats,
 and shard count. The workflow downloads each source shard artifact into its
-`bench-out`; `resumeAction()` retains scored records (`done`) and selects error
-records (`run`). A local replay of the first 14 shard artifacts found 38 error
-records selected as `run` and 480 scored records selected as `done`, with no
-misclassifications. Those shards also had 42 planned runs with no record yet;
-they are selected as `run` too. Leave the source run and its active shards alone.
+`bench-out`; `resumeAction()` retains scored erase records (`done`) and selects
+error records (`run`). Save/skip resumes replay done tasks unless
+`BENCH_MEMORY_RESTORED=1` (the Chrome profile holding accumulated memories is
+not in the artifact yet). A local replay of the first 14 shard artifacts found
+38 error records selected as `run` and 480 scored records selected as `done`,
+with no misclassifications. Those shards also had 42 planned runs with no
+record yet; they are selected as `run` too. Leave the source run and its active
+shards alone.
 The [sanitized live frame timeline and resume audit](../../docs/bench-opus-max-recovery.md)
 records the evidence behind this change.
 
-**When the leader stops answering.** A run that cannot reach the leader is recorded with `leader_down`, never judged as a fail. In CI the runner then restarts the leader and retries the run once. After `--leader-down-limit` (default 2) such runs in a row it stops, so a resume can pick up the rest. Every record notes which leader ran it (`leader.generation`, `leader.age_s`). A cost the leader could not report is recorded as unknown (null), never as a difference from zero. The out dir keeps a journal for diagnosing the leader:
+**When the leader stops answering.** A run that cannot reach the leader is recorded with `leader_down`, never judged as a fail. In CI the runner then restarts the leader and retries the run once — with the Chrome profile kept when `--new-session` is `save` or `skip`, so the memory chain is not wiped. After `--leader-down-limit` (default 2) such runs in a row it stops, so a resume can pick up the rest. Every record notes which leader ran it (`leader.generation`, `leader.age_s`). A cost the leader could not report is recorded as unknown (null), never as a difference from zero. The out dir keeps a journal for diagnosing the leader:
 
 - `events.jsonl`: each task with its phases and the leader's `uptime`, memory and process count before and after, plus restarts and stops.
 - `calls.jsonl`: every leader call, with how long it took and how it ended.

@@ -56,13 +56,19 @@ function outcomeBar(c) {
   return `<div class="bar" role="img" aria-label="${c.pass} pass, ${c.partial} partial, ${c.fail} fail, ${c.not_judged} not judged, ${c.errors} errors of ${total}">${seg(c.pass, 'pass', 'pass')}${seg(c.partial, 'partial', 'partial')}${seg(c.fail, 'fail', 'fail')}${seg(c.not_judged, 'unjudged', 'not judged')}${seg(c.errors, 'error', 'errors')}</div>`;
 }
 
+function sessionLabel(c) {
+  return c.new_session && c.new_session !== 'erase' ? c.new_session : 'erase';
+}
+
 function card(c) {
+  const session = sessionLabel(c);
   return `<article class="card">
-  <h3>${esc(c.model)} <span class="chip">${esc(c.skills)}</span></h3>
+  <h3>${esc(c.model)} <span class="chip">${esc(c.skills)}</span>${session !== 'erase' ? ` <span class="chip">${esc(session)}</span>` : ''}</h3>
   <p class="big">${num(c.mean_score)}<small> mean score</small></p>
   ${outcomeBar(c)}
   <dl>
     <dt>runs</dt><dd>${c.runs}</dd>
+    <dt>new_session</dt><dd>${esc(session)}</dd>
     <dt>pass / partial / fail</dt><dd>${c.pass} / ${c.partial} / ${c.fail}</dd>
     <dt>not judged / errors</dt><dd>${c.not_judged} / ${c.errors}</dd>
     <dt>mean time</dt><dd>${num(c.mean_duration, 0)} s</dd>
@@ -75,10 +81,10 @@ function configTable(b) {
   const rows = b.configs
     .map(
       (c) =>
-        `<tr><td>${esc(c.model)}</td><td>${esc(c.skills)}</td><td>${c.runs}</td><td>${c.pass}</td><td>${c.partial}</td><td>${c.fail}</td><td>${c.not_judged}</td><td>${c.errors}</td><td>${num(c.mean_score)}</td><td>${num(c.mean_duration, 0)}</td><td>${num(c.mean_cost, 3)}</td></tr>`
+        `<tr><td>${esc(c.model)}</td><td>${esc(c.skills)}</td><td>${esc(sessionLabel(c))}</td><td>${c.runs}</td><td>${c.pass}</td><td>${c.partial}</td><td>${c.fail}</td><td>${c.not_judged}</td><td>${c.errors}</td><td>${num(c.mean_score)}</td><td>${num(c.mean_duration, 0)}</td><td>${num(c.mean_cost, 3)}</td></tr>`
     )
     .join('\n');
-  return `<div class="scroll"><table class="configs"><thead><tr><th>model</th><th>skills</th><th>runs</th><th>pass</th><th>partial</th><th>fail</th><th>not judged</th><th>errors</th><th>mean score</th><th>mean s</th><th>mean $</th></tr></thead><tbody>
+  return `<div class="scroll"><table class="configs"><thead><tr><th>model</th><th>skills</th><th>new_session</th><th>runs</th><th>pass</th><th>partial</th><th>fail</th><th>not judged</th><th>errors</th><th>mean score</th><th>mean s</th><th>mean $</th></tr></thead><tbody>
 ${rows}
 </tbody></table></div>`;
 }

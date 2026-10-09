@@ -13,9 +13,11 @@ import {
   DEFAULT_MODELS,
   defaultSkillsMatch,
   guardrails,
+  keepProfileOnRecovery,
   loadArm,
   loadSet,
   main,
+  memoryChainAllowsSkip,
   parseCli,
   parseShard,
   planRuns,
@@ -783,12 +785,29 @@ describe('resumeAction', () => {
         newSession: 'save',
       })
     ).toBe('run');
-    expect(
-      resumeAction(done({ config: { default_skills: true, new_session: 'save' } }), TASK, {
-        ...ctx,
-        newSession: 'save',
-      })
-    ).toBe('done');
+  });
+
+  it('replays save/skip done unless the memory profile was restored', () => {
+    const saveDone = done({ config: { default_skills: true, new_session: 'save' } });
+    const skipDone = done({ config: { default_skills: true, new_session: 'skip' } });
+    expect(memoryChainAllowsSkip('erase', false)).toBe(true);
+    expect(memoryChainAllowsSkip('save', false)).toBe(false);
+    expect(memoryChainAllowsSkip('save', true)).toBe(true);
+    expect(keepProfileOnRecovery('erase')).toBe(false);
+    expect(keepProfileOnRecovery('save')).toBe(true);
+    expect(keepProfileOnRecovery('skip')).toBe(true);
+    expect(resumeAction(saveDone, TASK, { ...ctx, newSession: 'save' })).toBe('run');
+    expect(resumeAction(skipDone, TASK, { ...ctx, newSession: 'skip' })).toBe('run');
+    expect(resumeAction(saveDone, TASK, { ...ctx, newSession: 'save', memoryRestored: true })).toBe(
+      'done'
+    );
+    expect(resumeAction(skipDone, TASK, { ...ctx, newSession: 'skip', memoryRestored: true })).toBe(
+      'done'
+    );
+    // Rejudge still works without a restored profile — it does not need the memory chain.
+    expect(resumeAction(saveDone, TASK, { ...ctx, newSession: 'save', judgeModel: 'j2' })).toBe(
+      'rejudge'
+    );
   });
 
   it('keeps a run the fallback judge scored for this judge', () => {
@@ -913,7 +932,7 @@ describe('re-judging on resume', () => {
       metrics: { duration: 5 },
     });
     expect(readFileSync(join(outDir, 'report.md'), 'utf8')).toContain(
-      '| m | builtin | 1 | 0 | 0 | 0 | 1 | 0 | – | 5 | 0.010 |'
+      '| m | builtin | erase | 1 | 0 | 0 | 0 | 1 | 0 | – | 5 | 0.010 |'
     );
 
     const again = leader();
