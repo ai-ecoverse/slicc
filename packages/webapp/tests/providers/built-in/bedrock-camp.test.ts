@@ -509,52 +509,49 @@ describe('bedrock-camp built-in provider', () => {
   });
 
   it.each([
-    ['Luna', 'global.openai.gpt-6-luna', 'GPT-6 Luna (Global)'],
-    ['Sol', 'global.openai.gpt-6-sol', 'GPT-6 Sol (Global)'],
-    ['Astra', 'global.openai.gpt-6-astra', 'GPT-6 Astra (Global)'],
-    ['6.1 Sol', 'global.openai.gpt-6.1-sol', 'GPT-6.1 Sol (Global)'],
+    ['GPT-6 Luna', 'global.openai.gpt-6-luna', 'GPT-6 Luna (Global)'],
+    ['GPT-6 Sol', 'global.openai.gpt-6-sol', 'GPT-6 Sol (Global)'],
+    ['GPT-6 Astra', 'global.openai.gpt-6-astra', 'GPT-6 Astra (Global)'],
+    ['GPT-6.1 Sol', 'global.openai.gpt-6.1-sol', 'GPT-6.1 Sol (Global)'],
     [
-      'opaque Luna profile',
+      'an opaque GPT-6 Luna profile',
       'arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/opaque',
       'GPT-6 Luna',
     ],
-  ])(
-    'sends GPT-6 %s tool images beside the tool result as user images',
-    async (_label, id, name) => {
-      const fetchMock = mockOkResponse();
-      vi.stubGlobal('fetch', fetchMock);
-      const stream = streamBedrockCamp(
-        baseModel({ id, name, input: ['text', 'image'] }),
-        {
-          messages: [
-            { role: 'user', content: 'Look at the tool image.' },
-            {
-              role: 'assistant',
-              content: [{ type: 'toolCall', id: 'view-1', name: 'view_image', arguments: {} }],
-            },
-            {
-              role: 'toolResult',
-              toolCallId: 'view-1',
-              toolName: 'view_image',
-              content: [{ type: 'image', mimeType: 'image/png', data: 'AAAA' }],
-              isError: false,
-            },
-          ],
-          tools: [
-            { name: 'view_image', description: 'View image', parameters: { type: 'object' } },
-          ],
-        } as any,
-        { apiKey: 'ABSK-test' }
-      );
-      await stream.result();
-      const payload = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-      const content = payload.messages.at(-1).content;
-      expect(content[0].toolResult.content).toEqual([
-        { text: '[Image from tool result attached to this message.]' },
-      ]);
-      expect(content[1]).toEqual({ image: { format: 'png', source: { bytes: 'AAAA' } } });
-    }
-  );
+    ['Grok 4.7', 'global.xai.grok-4.7', 'Grok 4.7 (Global)'],
+    ['Grok 4.7 US', 'us.xai.grok-4.7', 'Grok 4.7 (US)'],
+  ])('sends %s tool images beside the tool result as user images', async (_label, id, name) => {
+    const fetchMock = mockOkResponse();
+    vi.stubGlobal('fetch', fetchMock);
+    const stream = streamBedrockCamp(
+      baseModel({ id, name, input: ['text', 'image'] }),
+      {
+        messages: [
+          { role: 'user', content: 'Look at the tool image.' },
+          {
+            role: 'assistant',
+            content: [{ type: 'toolCall', id: 'view-1', name: 'view_image', arguments: {} }],
+          },
+          {
+            role: 'toolResult',
+            toolCallId: 'view-1',
+            toolName: 'view_image',
+            content: [{ type: 'image', mimeType: 'image/png', data: 'AAAA' }],
+            isError: false,
+          },
+        ],
+        tools: [{ name: 'view_image', description: 'View image', parameters: { type: 'object' } }],
+      } as any,
+      { apiKey: 'ABSK-test' }
+    );
+    await stream.result();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const content = payload.messages.at(-1).content;
+    expect(content[0].toolResult.content).toEqual([
+      { text: '[Image from tool result attached to this message.]' },
+    ]);
+    expect(content[1]).toEqual({ image: { format: 'png', source: { bytes: 'AAAA' } } });
+  });
 
   it('keeps Claude tool images inside the tool result', async () => {
     const fetchMock = mockOkResponse();

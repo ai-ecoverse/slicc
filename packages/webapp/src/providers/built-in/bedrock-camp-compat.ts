@@ -173,14 +173,17 @@ export const BEDROCK_CAMP_GROK_EFFORT_MAP: BedrockCampEffortMap = Object.freeze(
 
 const BEDROCK_CAMP_GROK_RE = /(?:^|[.-]xai[.-])grok-4[.-]7(?:-\([^)]+\))?$/;
 
+/** Grok 4.7, by id or by the name of an opaque application inference profile. */
+export function isBedrockCampGrokModel(model: { id: string; name?: string }): boolean {
+  return getModelMatchCandidates(model.id, model.name).some((c) => BEDROCK_CAMP_GROK_RE.test(c));
+}
+
 /** The effort map for Grok 4.7, which takes a flat `reasoning_effort`, or null. */
 export function bedrockCampGrokEffortMap(model: {
   id: string;
   name?: string;
 }): BedrockCampEffortMap | null {
-  return getModelMatchCandidates(model.id, model.name).some((c) => BEDROCK_CAMP_GROK_RE.test(c))
-    ? BEDROCK_CAMP_GROK_EFFORT_MAP
-    : null;
+  return isBedrockCampGrokModel(model) ? BEDROCK_CAMP_GROK_EFFORT_MAP : null;
 }
 
 /** Opaque application inference profiles identify the underlying model by name. */

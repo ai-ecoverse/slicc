@@ -56,6 +56,7 @@ import {
   bedrockCampOpenAIEffortMap,
   getModelMatchCandidates,
   isBedrockCampGpt6Model,
+  isBedrockCampGrokModel,
 } from './bedrock-camp-compat.js';
 
 export const config: ProviderConfig = {
@@ -565,10 +566,10 @@ function coalesceToolResults(
   message: BedrockCampUserMessage;
   nextIndex: number;
 } {
-  // Bedrock's GPT-6 Converse adapter accepts a user image, but rejects an
-  // image nested inside toolResult.content. Keep the tool result and attach
-  // its images as sibling user content in the same message.
-  const liftImages = isBedrockCampGpt6Model(model);
+  // Bedrock's GPT-6 and Grok 4.7 Converse adapters accept a user image, but
+  // reject an image nested inside toolResult.content. Keep the tool result and
+  // attach its images as sibling user content in the same message.
+  const liftImages = isBedrockCampGpt6Model(model) || isBedrockCampGrokModel(model);
   const toolResults: BedrockCampToolResultBlock[] = [];
   const images: BedrockCampImageBlock[] = [];
   let j = startIndex;

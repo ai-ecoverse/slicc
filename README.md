@@ -292,6 +292,8 @@ The bundled pi 0.99.1 catalogue includes GPT-6.1 Sol for OpenAI, Azure OpenAI Re
 
 On Bedrock CAMP, select **GPT-6.1 Sol (Global)** (`global.openai.gpt-6.1-sol`). Its Converse profile was verified in US, EU, and APAC regions. It accepts tool use, user images, and reasoning effort low through max; SLICC omits unsupported temperature and moves tool-result images into adjacent user content. Global rates are $2 input / $10 output per million tokens, with higher rates above 272,000 input tokens.
 
+Bedrock CAMP also offers **Grok 4.7 (Global)** (`global.xai.grok-4.7`) and **Grok 4.7 (US)** (`us.xai.grok-4.7`). They accept tool use and user images, with reasoning effort low, medium or high; SLICC omits unsupported temperature and moves tool-result images into adjacent user content. Global rates are $2 input / $6 output / $0.50 cache read per million tokens (US +10%), with no long-context tier.
+
 - Adobe (for AEM customers. Talk to the team to get enabled)
 - AWS Bedrock (because enterprise)
 - AWS Bedrock CAMP (this is Adobe-internal. Did I say "because enterprise" already?)
