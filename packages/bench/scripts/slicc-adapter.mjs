@@ -131,16 +131,17 @@ export function memoryFingerprintChanged(before, after) {
 
 /**
  * True when CLAUDE.md holds durable (non-seed) content worth keeping across a
- * short follow-up `--save` that skips freeze.
+ * short follow-up `--save` that skips freeze, or a freeze whose extract returns
+ * NONE while the prior store stays intact.
  *
- * Seed templates keep `(Add preferences here)` placeholders; a plant that only
- * grew Auto-extracted, or cleared those placeholders, counts. Raw byte size
- * alone does not — the seed is ~280–320 bytes and a wipe back to seed must fail.
+ * A fingerprint change (including wipe-to-seed) is never "retained". Unchanged
+ * stores count when Auto-extracted sections exist or bytes are past the seed
+ * size (~280–320). Leftover `(Add preferences here)` lines alone do not veto —
+ * appends often leave those seed lines while durable content accumulates.
  */
 export function memoryStoreRetained(before, after) {
   if (!before || !after) return false;
   if (memoryFingerprintChanged(before, after)) return false;
-  if ((before.placeholders ?? 0) > 0) return false;
   if ((before.autoExtracted ?? 0) > 0) return true;
   return (before.bytes ?? 0) >= MIN_RETAINED_MEMORY_BYTES;
 }
