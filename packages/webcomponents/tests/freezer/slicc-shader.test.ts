@@ -389,10 +389,11 @@ describe('slicc-shader', () => {
     it('an attribute change re-renders a static field', async () => {
       const el = mount({ speed: '0' });
       if (el.noWebgl) return;
-      await wait(150);
+      await settle(); // connect frame + RO wake done, loop stopped
       const spy = spyDraws();
       el.setAttribute('scroll', '120');
-      await wait(120);
+      // Poll: under CI throttling the wake rAF can land well after a fixed 120ms.
+      await waitForDraws(spy);
       expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
     });
 
@@ -509,7 +510,9 @@ describe('slicc-shader', () => {
       await wait(150); // connected but hidden
       const spy = spyDraws();
       wrapper.style.display = 'block';
-      await wait(300);
+      // Poll: the "became visible" ResizeObserver wake rAF can land well after
+      // a fixed 300ms under CI throttling (the flake that failed this test).
+      await waitForDraws(spy);
       const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
       expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(canvas.width).toBeGreaterThan(1); // real size, not the hidden 1×1 stretch
