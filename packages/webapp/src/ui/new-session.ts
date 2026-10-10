@@ -60,7 +60,7 @@ const ENRICHMENT_PROGRESS_TICK_MS = 250;
 
 export interface PendingSessionCatchupOptions {
   openVfs: () => Promise<WritableVfsClient>;
-  /** Receives the pass result; `completed > 0` means cone memory may have changed on disk. */
+  /** Receives the pass result; `attempted > 0` means cone memory may have changed on disk. */
   onComplete?: (result: Awaited<ReturnType<typeof processPendingSessions>>) => void;
   schedule?: (callback: () => void) => void;
 }
