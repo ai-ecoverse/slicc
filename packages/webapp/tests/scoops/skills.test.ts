@@ -385,5 +385,22 @@ describe('no-default-skills', () => {
         'my durable memory'
       );
     });
+
+    it('does not clobber when a structured non-ENOENT error mentions ENOENT in its message', async () => {
+      await vfs.mkdir('/shared', { recursive: true });
+      await vfs.writeFile('/shared/CLAUDE.md', 'my durable memory');
+      const realStat = vfs.stat.bind(vfs);
+      const spy = vi.spyOn(vfs, 'stat').mockImplementation(async (path: string) => {
+        if (path === '/shared/CLAUDE.md') {
+          throw Object.assign(new Error('EIO while resolving (not ENOENT)'), { code: 'EIO' });
+        }
+        return realStat(path);
+      });
+      await createDefaultSharedFiles(vfs);
+      spy.mockRestore();
+      expect(await vfs.readFile('/shared/CLAUDE.md', { encoding: 'utf-8' })).toBe(
+        'my durable memory'
+      );
+    });
   });
 });

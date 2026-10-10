@@ -421,12 +421,14 @@ const ALWAYS_OVERWRITE_SHARED = new Set<string>([
   '/shared/sprinkles/suggestions/suggestions.shtml',
 ]);
 
-/** Node/`FsError` `.code`, or message-only mocks like `Error('ENOENT')`. */
+/**
+ * ENOENT check: a structured `.code` is authoritative; the message fallback
+ * applies only to errors without one (message-only mocks like `Error('ENOENT')`).
+ */
 function isEnoent(err: unknown): boolean {
-  return (
-    (err as { code?: string } | null)?.code === 'ENOENT' ||
-    (err instanceof Error && err.message.includes('ENOENT'))
-  );
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && code !== '') return code === 'ENOENT';
+  return err instanceof Error && err.message.includes('ENOENT');
 }
 
 /**
