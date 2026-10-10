@@ -422,6 +422,16 @@ const ALWAYS_OVERWRITE_SHARED = new Set<string>([
 ]);
 
 /**
+ * ENOENT check: a structured `.code` is authoritative; the message fallback
+ * applies only to errors without one (message-only mocks like `Error('ENOENT')`).
+ */
+function isEnoent(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && code !== '') return code === 'ENOENT';
+  return err instanceof Error && err.message.includes('ENOENT');
+}
+
+/**
  * Create default shared files (like /shared/CLAUDE.md) from bundled defaults.
  */
 export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
@@ -442,8 +452,17 @@ export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
         await fs.stat(vfsPath);
         // File exists, skip
         continue;
-      } catch {
-        // File doesn't exist — fall through to fetch the chunk + create it.
+      } catch (err) {
+        // Only a confirmed absence seeds. Any other fault (transient store
+        // error, EACCES) must not overwrite durable user content such as the
+        // global memory in /shared/CLAUDE.md with the bundled template.
+        if (!isEnoent(err)) {
+          log.warn('Skipping default shared file seed (stat failed, not ENOENT)', {
+            path: vfsPath,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
       }
     }
 
