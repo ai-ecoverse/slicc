@@ -1630,7 +1630,10 @@ export function attachWcWorkbench(
             refreshFreezer();
             // Recovered memory landed in the cone's CLAUDE.md after the unit
             // snapshotted its boot prompt; rebuild it (#3921, sibling of #3910).
-            if (result.completed > 0) client.reloadSkills();
+            // Keyed on `attempted`, not `completed`: the memory append runs
+            // before the archive commit, so a failed commit still leaves the
+            // bullets on disk while `enrichPendingSession` returns null.
+            if (result.attempted > 0) client.reloadSkills();
           },
         })
       )
