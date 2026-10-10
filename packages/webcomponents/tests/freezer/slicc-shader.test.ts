@@ -510,7 +510,9 @@ describe('slicc-shader', () => {
       await wait(150); // connected but hidden
       const spy = spyDraws();
       wrapper.style.display = 'block';
-      await wait(300);
+      // Poll: the "became visible" ResizeObserver wake rAF can land well after
+      // a fixed 300ms under CI throttling (the flake that failed this test).
+      await waitForDraws(spy);
       const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
       expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(canvas.width).toBeGreaterThan(1); // real size, not the hidden 1×1 stretch
