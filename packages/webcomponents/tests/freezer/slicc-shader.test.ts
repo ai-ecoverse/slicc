@@ -356,10 +356,11 @@ describe('slicc-shader', () => {
     it('an attribute change re-renders a static field', async () => {
       const el = mount({ speed: '0' });
       if (el.noWebgl) return;
-      await wait(150);
+      await settle();
       const spy = spyDraws();
       el.setAttribute('scroll', '120');
-      await wait(120);
+
+      await waitForDraws(spy);
       expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
     });
 
@@ -464,7 +465,8 @@ describe('slicc-shader', () => {
       await wait(150);
       const spy = spyDraws();
       wrapper.style.display = 'block';
-      await wait(300);
+
+      await waitForDraws(spy);
       const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
       expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(canvas.width).toBeGreaterThan(1);
