@@ -1626,7 +1626,15 @@ export function attachWcWorkbench(
       .then(({ schedulePendingSessionCatchup }) =>
         schedulePendingSessionCatchup({
           openVfs: async () => (await openVfs()).writer,
-          onComplete: refreshFreezer,
+          onComplete: (result) => {
+            refreshFreezer();
+            // Recovered memory landed in the cone's CLAUDE.md after the unit
+            // snapshotted its boot prompt; rebuild it (#3921, sibling of #3910).
+            // Keyed on `attempted`, not `completed`: the memory append runs
+            // before the archive commit, so a failed commit still leaves the
+            // bullets on disk while `enrichPendingSession` returns null.
+            if (result.attempted > 0) client.reloadSkills();
+          },
         })
       )
       .catch((err) => log.warn('Pending session catch-up scheduling failed', err));
