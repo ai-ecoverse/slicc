@@ -68,6 +68,11 @@
       "allowedVersions": "<7"
     },
     {
+      "description": "Hold @wterm/dom at 0.5.0. Every release from 0.5.1 on hangs slicc-sidecar.test.ts (the workbench terminal mount freezes the page main thread for seconds; CI shows ~19 e2e tests passing, then the job is cancelled), while 0.5.0 passes on the same harness; explicit cols/rows and a matching @wterm/ghostty 0.5.4 do not help. Bisect + evidence: PR #3876. Lift this rule when someone picks up a 0.5.1+ patch intentionally.",
+      "matchDepNames": ["@wterm/dom"],
+      "allowedVersions": "<=0.5.0"
+    },
+    {
       "description": "Apply a longer 14-day cooldown for major version bumps, which carry higher risk of breaking changes and are more attractive targets for malicious actors.",
       "matchUpdateTypes": ["major"],
       "minimumReleaseAge": "14 days"
