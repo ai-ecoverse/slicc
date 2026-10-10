@@ -12,7 +12,11 @@
  * the server's current token, so it is terminal.
  */
 
-import { BRIDGE_SUBPROTOCOL_PREFIX, BRIDGE_TOKEN_HEADER } from '@slicc/shared-ts';
+import {
+  BRIDGE_SUBPROTOCOL_PREFIX,
+  BRIDGE_TOKEN_HEADER,
+  nextBackoffDelayMs,
+} from '@slicc/shared-ts';
 
 export const CDP_RECONNECT_BASE_MS = 250;
 export const CDP_RECONNECT_CAP_MS = 30_000;
@@ -56,10 +60,14 @@ export function nextCdpReconnectDelayMs(
   attempt: number,
   random: () => number = Math.random
 ): number {
-  const shift = Math.min(Math.max(0, attempt), 16);
-  const exp = Math.min(CDP_RECONNECT_CAP_MS, CDP_RECONNECT_BASE_MS * 2 ** shift);
-  const jitter = Math.round(exp * CDP_RECONNECT_JITTER * random());
-  return Math.min(CDP_RECONNECT_CAP_MS, exp + jitter);
+  return nextBackoffDelayMs({
+    attempt,
+    baseMs: CDP_RECONNECT_BASE_MS,
+    capMs: CDP_RECONNECT_CAP_MS,
+    jitter: CDP_RECONNECT_JITTER,
+    maxShift: 16,
+    random,
+  });
 }
 
 export function bridgeHttpOriginFromWsUrl(wsUrl: string): string | null {

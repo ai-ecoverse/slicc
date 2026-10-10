@@ -15,6 +15,7 @@ import {
   type FollowerToLeaderMessage,
   isTrayChunkFrame,
   type LeaderToFollowerMessage,
+  nextBackoffDelayMs,
   successorVersionFromLinkHeader,
   TRAY_MAX_PENDING_REASSEMBLIES,
   TRAY_SYNC_PROTOCOL_VERSION,
@@ -387,7 +388,11 @@ export class ElectronTrayFollower {
       this.stop();
       return;
     }
-    const delayMs = Math.min(1000 * 2 ** this.reconnectAttempts, 15000);
+    const delayMs = nextBackoffDelayMs({
+      attempt: this.reconnectAttempts,
+      baseMs: 1000,
+      capMs: 15000,
+    });
     this.reconnectAttempts++;
     this.log(
       `[electron-follower] tray-control channel lost — reconnecting in ${delayMs}ms ` +
