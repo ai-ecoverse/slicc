@@ -164,6 +164,84 @@ describe('stripSource go', () => {
   });
 });
 
+describe('go.mod // indirect', () => {
+  const goMod = [
+    'module github.com/ai-ecoverse/slicc-cli',
+    '',
+    'go 1.24',
+    '',
+    'require github.com/pkg/sftp v1.13.9 // indirect',
+    '',
+    'require (',
+    '\tgithub.com/pion/webrtc/v4 v4.1.2',
+    '\tgithub.com/pion/dtls/v3 v3.0.6 // indirect',
+    '\tgithub.com/kr/fs v0.1.0 // indirect',
+    ')',
+    '',
+  ].join('\n');
+
+  it('allows the marker on require lines, standalone and in a block', () => {
+    expect(findComments(goMod, 'go', 'go.mod')).toEqual([]);
+    expect(findComments(goMod, 'go', 'packages/slicc-cli/go.mod')).toEqual([]);
+    expect(stripSource(goMod, 'go', 'go.mod')).toBe(goMod);
+  });
+
+  it('allows CRLF line endings', () => {
+    const crlf = goMod.replace(/\n/g, '\r\n');
+    expect(findComments(crlf, 'go', 'go.mod')).toEqual([]);
+    expect(stripSource(crlf, 'go', 'go.mod')).toBe(crlf);
+  });
+
+  it('still flags other go.mod comments', () => {
+    const src = [
+      '// Deprecated: use v2',
+      'module example.com/m',
+      'require example.com/a v1.0.0 // pinned for a bug',
+      'require (',
+      '\t// grouped deps',
+      '\texample.com/b v1.0.0 //indirect',
+      '\texample.com/c v1.0.0 // indirect; more',
+      '\texample.com/d v1.0.0 // Indirect',
+      ')',
+      '',
+    ].join('\n');
+    expect(findComments(src, 'go', 'go.mod').map((hit) => hit.line)).toEqual([1, 3, 5, 6, 7, 8]);
+  });
+
+  it('only allows the marker on require lines', () => {
+    const src = [
+      'module example.com/m // indirect',
+      'go 1.24 // indirect',
+      'replace example.com/a v1.0.0 => example.com/b v1.0.0 // indirect',
+      'exclude example.com/c v1.0.0 // indirect',
+      'replace (',
+      '\texample.com/d v1.0.0 // indirect',
+      ')',
+      'require (',
+      ')',
+      'example.com/e v1.0.0 // indirect',
+      '// indirect',
+      '',
+    ].join('\n');
+    expect(findComments(src, 'go', 'go.mod').map((hit) => hit.line)).toEqual([
+      1, 2, 3, 4, 6, 10, 11,
+    ]);
+  });
+
+  it('only applies to go.mod', () => {
+    const src = 'package p\n\nvar x = 1 // indirect\n';
+    expect(findComments(src, 'go', 'main.go')).toEqual([{ line: 3, text: '// indirect' }]);
+    expect(stripSource(src, 'go', 'main.go')).not.toContain('indirect');
+  });
+
+  it('strips a disallowed go.mod comment but keeps the marker', () => {
+    const src = 'require (\n\texample.com/a v1.0.0 // indirect\n\t// drop me\n)\n';
+    const out = stripSource(src, 'go', 'go.mod');
+    expect(out).toContain('example.com/a v1.0.0 // indirect');
+    expect(out).not.toContain('drop me');
+  });
+});
+
 describe('stripSource swift', () => {
   it('strips nested block comments', () => {
     const src = 'let x = 1 /* outer /* inner */ still */\nlet y = 2\n';

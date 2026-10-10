@@ -422,12 +422,50 @@ function findCLike(source, opts) {
   return collectFromWalk(source, (src, visit) => walkCLike(src, visit, opts)).hits;
 }
 
-function stripGo(source) {
-  return stripCLike(source, { rawTicks: true });
+const GO_MOD_INDIRECT = '// indirect';
+const GO_MOD_REQUIRE_LINE_RE = /^\s*require\s+(?!\/\/)\S+\s+(?!\/\/)\S+\s+\/\/ indirect\s*$/;
+const GO_MOD_BLOCK_LINE_RE = /^\s*(?!\/\/)\S+\s+(?!\/\/)\S+\s+\/\/ indirect\s*$/;
+const GO_MOD_BLOCK_OPEN_RE = /^\s*require\s*\(\s*(?:\/\/.*)?$/;
+
+function goModIndirectOffsets(source) {
+  const offsets = new Set();
+  let inRequire = false;
+  let lineStart = 0;
+  for (const line of source.split('\n')) {
+    if (inRequire && /^\s*\)/.test(line)) {
+      inRequire = false;
+    } else if (!inRequire && GO_MOD_BLOCK_OPEN_RE.test(line)) {
+      inRequire = true;
+    } else if ((inRequire ? GO_MOD_BLOCK_LINE_RE : GO_MOD_REQUIRE_LINE_RE).test(line)) {
+      offsets.add(lineStart + line.lastIndexOf(GO_MOD_INDIRECT));
+    }
+    lineStart += line.length + 1;
+  }
+  return offsets;
 }
 
-function findGo(source) {
-  return findCLike(source, { rawTicks: true });
+function walkGo(source, fileName, visit) {
+  if (basename(fileName) !== 'go.mod') {
+    walkCLike(source, visit, { rawTicks: true });
+    return;
+  }
+  const allowed = goModIndirectOffsets(source);
+  walkCLike(
+    source,
+    (kind, text, start) => {
+      const indirect = text.trimEnd() === GO_MOD_INDIRECT && allowed.has(start);
+      visit(indirect ? 'keep' : kind, text, start);
+    },
+    { rawTicks: true }
+  );
+}
+
+function stripGo(source, fileName) {
+  return collectFromWalk(source, (src, visit) => walkGo(src, fileName, visit)).out;
+}
+
+function findGo(source, fileName) {
+  return collectFromWalk(source, (src, visit) => walkGo(src, fileName, visit)).hits;
 }
 
 function stripHash(source) {
@@ -570,7 +608,7 @@ export function stripSource(source, language, fileName = 'file') {
     case 'swift':
       return stripSwift(source);
     case 'go':
-      return stripGo(source);
+      return stripGo(source, fileName);
     case 'hash':
       return stripHash(source);
     case 'html':
@@ -591,7 +629,7 @@ export function findComments(source, language, fileName = 'file') {
     case 'swift':
       return findSwift(source);
     case 'go':
-      return findGo(source);
+      return findGo(source, fileName);
     case 'hash':
       return findHash(source);
     case 'html':
