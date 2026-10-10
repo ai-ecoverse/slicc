@@ -1,3 +1,4 @@
+import { nextBackoffDelayMs } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
 import { createLogger } from '../../../base/logger.js';
 import { kernelJobTable } from '../../../kernel/job-table.js';
@@ -260,8 +261,12 @@ export class JshdSupervisor {
   }
 
   private async backoff(unit: LiveUnit): Promise<void> {
-    const exp = Math.min(unit.restarts, 8);
-    const ms = Math.min(BACKOFF_MAX_MS, BACKOFF_INITIAL_MS * 2 ** exp);
+    const ms = nextBackoffDelayMs({
+      attempt: unit.restarts,
+      baseMs: BACKOFF_INITIAL_MS,
+      capMs: BACKOFF_MAX_MS,
+      maxShift: 8,
+    });
     const sleep = this.deps.sleep ?? defaultSleep;
     const controller = new AbortController();
     unit.backoffAbort = controller;

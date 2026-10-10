@@ -1,6 +1,6 @@
 /// <reference path="./chrome.d.ts" />
 import { type CherryFeatures, mountSlicc, type SliccHandle } from '@ai-ecoverse/cherry/embed-ui';
-import { nudgeIframeRepaint, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+import { nextBackoffDelayMs, nudgeIframeRepaint, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import {
   CHERRY_PANEL_PORT_NAME,
   SIDE_PANEL_FEATURES,
@@ -73,7 +73,7 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
   let currentJoinUrl: string | null = null;
   let disposed = false;
   let port: ChromeRuntimePort | null = null;
-  let reconnectDelay = 250;
+  let reconnectAttempt = 0;
   const bootTimer = oneShotTimer();
   const iframeLoadTimer = oneShotTimer();
 
@@ -139,7 +139,7 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
       return;
     }
 
-    reconnectDelay = 250;
+    reconnectAttempt = 0;
     bootTimer.clear();
     bootSlow = false;
     if (msg.joinUrl === currentJoinUrl && handle) {
@@ -182,10 +182,13 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
     port.onDisconnect.addListener(() => {
       port = null;
       if (disposed) return;
-      setTimeout(() => {
-        if (!disposed) wire();
-      }, reconnectDelay);
-      reconnectDelay = Math.min(reconnectDelay * 2, 5000);
+      setTimeout(
+        () => {
+          if (!disposed) wire();
+        },
+        nextBackoffDelayMs({ attempt: reconnectAttempt, baseMs: 250, capMs: 5000 })
+      );
+      reconnectAttempt += 1;
     });
     try {
       port.postMessage({ kind: 'hello' });
@@ -201,7 +204,7 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
 
       disconnectQuietly(port);
       port = null;
-      reconnectDelay = 250;
+      reconnectAttempt = 0;
       wire();
     },
     dispose() {

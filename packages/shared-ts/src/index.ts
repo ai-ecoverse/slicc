@@ -1,4 +1,5 @@
 export * from './agent-wire-types.js';
+export * from './backoff.js';
 export * from './base64.js';
 export * from './bridge-protocol.js';
 export * from './byte-range.js';

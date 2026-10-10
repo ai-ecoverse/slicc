@@ -1,3 +1,4 @@
+import { nextBackoffDelayMs } from '@slicc/shared-ts';
 import type { Agent, ImageContent } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
 import { broadcastStaleAssetReload, isDynamicImportError } from '../../core/stale-asset-channel.js';
@@ -173,7 +174,7 @@ export class TurnRunner {
 }
 
 function backoffFor(attempt: number): number {
-  return BASE_DELAY_MS * 2 ** (attempt - 1);
+  return nextBackoffDelayMs({ attempt: attempt - 1, baseMs: BASE_DELAY_MS });
 }
 
 export function queuePromptIfBusy(

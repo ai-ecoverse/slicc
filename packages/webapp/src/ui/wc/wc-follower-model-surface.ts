@@ -1,3 +1,4 @@
+import { nextBackoffDelayMs } from '@slicc/shared-ts';
 import type { FollowerSyncManager } from '../../scoops/tray-follower-sync.js';
 import type {
   TrayModelCatalogEntry,
@@ -87,8 +88,8 @@ export function createFollowerModelSurface(opts: {
 
   const lastKnownModel = new Map<string, WorkUnitModel>();
   const enabled = opts.modelPickerEnabled !== false;
-  const retryDelayMs = opts.catalogRetryDelayMs ?? CATALOG_RETRY_DELAY_MS;
-  const retryMaxDelayMs = opts.catalogRetryMaxDelayMs ?? CATALOG_RETRY_MAX_DELAY_MS;
+  const baseMs = opts.catalogRetryDelayMs ?? CATALOG_RETRY_DELAY_MS;
+  const capMs = opts.catalogRetryMaxDelayMs ?? CATALOG_RETRY_MAX_DELAY_MS;
   const retryWindowMs = opts.catalogRetryWindowMs ?? CATALOG_RETRY_WINDOW_MS;
   let retryAttempt = 0;
 
@@ -100,7 +101,7 @@ export function createFollowerModelSurface(opts: {
     const now = Date.now();
     if (retryDeadline === null) retryDeadline = now + retryWindowMs;
     if (now >= retryDeadline) return;
-    const delay = Math.min(retryDelayMs * 2 ** retryAttempt, retryMaxDelayMs);
+    const delay = nextBackoffDelayMs({ attempt: retryAttempt, baseMs, capMs });
     retryTimer = setTimeout(() => {
       retryTimer = null;
       const sync = opts.getSync();
