@@ -389,10 +389,11 @@ describe('slicc-shader', () => {
     it('an attribute change re-renders a static field', async () => {
       const el = mount({ speed: '0' });
       if (el.noWebgl) return;
-      await wait(150);
+      await settle(); // connect frame + RO wake done, loop stopped
       const spy = spyDraws();
       el.setAttribute('scroll', '120');
-      await wait(120);
+      // Poll: under CI throttling the wake rAF can land well after a fixed 120ms.
+      await waitForDraws(spy);
       expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
     });
 
