@@ -1,6 +1,7 @@
 // Re-exports added in Task 1.2 (secret-masking) and Task 1.3 (secrets-pipeline).
 
 export * from './agent-wire-types.js';
+export * from './backoff.js';
 export * from './base64.js';
 export * from './bridge-protocol.js';
 export * from './byte-range.js';

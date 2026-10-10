@@ -30,6 +30,8 @@
  *    write could have occurred.
  */
 
+import { nextBackoffDelayMs } from '@slicc/shared-ts';
+
 /** Scalar serialized into a query string via `encodeURIComponent(String(v))`. */
 export type HttpQueryScalar = string | number | boolean;
 
@@ -288,7 +290,7 @@ async function throwForResponse(resp: Response, url: string): Promise<never> {
 function retryWaitMs(resp: Response, attempt: number): number {
   const retryAfter = parseRetryAfter(resp.headers.get('retry-after'));
   if (retryAfter !== null) return retryAfter;
-  return DEFAULT_BACKOFF_BASE_MS * 2 ** attempt;
+  return nextBackoffDelayMs({ attempt, baseMs: DEFAULT_BACKOFF_BASE_MS });
 }
 
 /**

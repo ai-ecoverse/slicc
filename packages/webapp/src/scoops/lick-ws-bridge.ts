@@ -32,6 +32,7 @@
  * the cone after sustained failure so the user sees that lick delivery
  * is down rather than wondering why their webhook never fires.
  */
+import { nextBackoffDelayMs } from '@slicc/shared-ts';
 import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../base/lick-urls.js';
 import { createLogger } from '../core/logger.js';
 import type { LickEvent, LickManager, WebhookDeliveryDisposition } from './lick-manager.js';
@@ -286,7 +287,11 @@ function onBridgeFailure(rt: BridgeRuntime, cause: string): void {
     return;
   }
   rt.consecutiveFailures++;
-  const delay = Math.min(rt.baseDelay * 2 ** (rt.consecutiveFailures - 1), MAX_RECONNECT_DELAY_MS);
+  const delay = nextBackoffDelayMs({
+    attempt: rt.consecutiveFailures - 1,
+    baseMs: rt.baseDelay,
+    capMs: MAX_RECONNECT_DELAY_MS,
+  });
   const fields = { url: rt.wsUrl, attempt: rt.consecutiveFailures, cause, retryInMs: delay };
   if (rt.consecutiveFailures >= RECONNECT_LOG_ESCALATE_AT) {
     log.error('Lick WebSocket still down', fields);
