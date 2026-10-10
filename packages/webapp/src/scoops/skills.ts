@@ -325,6 +325,12 @@ const ALWAYS_OVERWRITE_SHARED = new Set<string>([
   '/shared/sprinkles/suggestions/suggestions.shtml',
 ]);
 
+function isEnoent(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && code !== '') return code === 'ENOENT';
+  return err instanceof Error && err.message.includes('ENOENT');
+}
+
 export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
   const prefix = '/packages/vfs-root';
   const defaultFiles = getDefaultFileLoaders();
@@ -341,7 +347,15 @@ export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
         await fs.stat(vfsPath);
 
         continue;
-      } catch {}
+      } catch (err) {
+        if (!isEnoent(err)) {
+          log.warn('Skipping default shared file seed (stat failed, not ENOENT)', {
+            path: vfsPath,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
+      }
     }
 
     const parentDir = vfsPath.substring(0, vfsPath.lastIndexOf('/'));

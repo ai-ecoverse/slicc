@@ -1167,7 +1167,11 @@ export function attachWcWorkbench(
       .then(({ schedulePendingSessionCatchup }) =>
         schedulePendingSessionCatchup({
           openVfs: async () => (await openVfs()).writer,
-          onComplete: refreshFreezer,
+          onComplete: (result) => {
+            refreshFreezer();
+
+            if (result.attempted > 0) client.reloadSkills();
+          },
         })
       )
       .catch((err) => log.warn('Pending session catch-up scheduling failed', err));

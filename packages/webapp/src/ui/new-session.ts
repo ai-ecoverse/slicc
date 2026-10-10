@@ -37,7 +37,8 @@ const ENRICHMENT_PROGRESS_TICK_MS = 250;
 
 export interface PendingSessionCatchupOptions {
   openVfs: () => Promise<WritableVfsClient>;
-  onComplete?: () => void;
+
+  onComplete?: (result: Awaited<ReturnType<typeof processPendingSessions>>) => void;
   schedule?: (callback: () => void) => void;
 }
 
@@ -56,8 +57,8 @@ export async function runPendingSessionCatchup(opts: PendingSessionCatchupOption
       model.provider === 'adobe'
         ? { 'X-Session-Id': getDailyAdobeUuid(FREEZER_SESSION_ANCHOR) }
         : undefined;
-    await processPendingSessions({ vfs, model, apiKey, headers });
-    opts.onComplete?.();
+    const result = await processPendingSessions({ vfs, model, apiKey, headers });
+    opts.onComplete?.(result);
   } catch (err) {
     log.warn('Pending session catch-up failed (boot continues)', {
       error: err instanceof Error ? err.message : String(err),

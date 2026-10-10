@@ -154,6 +154,17 @@ describe('pending session boot catch-up', () => {
     expect(onComplete).toHaveBeenCalledOnce();
   });
 
+  it('hands the pass result to onComplete so callers can reload the prompt', async () => {
+    mockGetApiKey.mockReturnValue('k');
+    mockResolveCurrentModel.mockReturnValue(fakeModel);
+    mockProcessPendingSessions.mockResolvedValue({ attempted: 2, completed: 1 });
+    const onComplete = vi.fn();
+
+    await runPendingSessionCatchup({ openVfs: async () => ({}) as never, onComplete });
+
+    expect(onComplete).toHaveBeenCalledWith({ attempted: 2, completed: 1 });
+  });
+
   it('runs only after the idle callback and never surfaces catch-up failures', async () => {
     mockIsFeatureEnabled.mockReturnValue(true);
     mockProcessPendingSessions.mockRejectedValue(new Error('index write failed'));
