@@ -77,7 +77,6 @@ export function memoryFingerprintChanged(before, after) {
 export function memoryStoreRetained(before, after) {
   if (!before || !after) return false;
   if (memoryFingerprintChanged(before, after)) return false;
-  if ((before.placeholders ?? 0) > 0) return false;
   if ((before.autoExtracted ?? 0) > 0) return true;
   return (before.bytes ?? 0) >= MIN_RETAINED_MEMORY_BYTES;
 }

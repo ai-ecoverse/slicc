@@ -1090,7 +1090,13 @@ describe('memory settle fingerprints', () => {
         { bytes: 999, sha: 'a', autoExtracted: 0, placeholders: 1 },
         { bytes: 999, sha: 'a', autoExtracted: 0, placeholders: 1 }
       )
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      memoryStoreRetained(
+        { bytes: 10, sha: 'a', autoExtracted: 2, placeholders: 1 },
+        { bytes: 10, sha: 'a', autoExtracted: 2, placeholders: 1 }
+      )
+    ).toBe(true);
     expect(
       memoryStoreRetained(
         { bytes: 10, sha: 'a', autoExtracted: 2, placeholders: 0 },
@@ -1373,6 +1379,39 @@ describe('memory settle fingerprints', () => {
       memoryReason: 'extract_empty',
       message: expect.stringMatching(/no durable memories/),
     });
+  });
+
+  it('treats extract NONE as settled when a large prior store is unchanged', async () => {
+    let t = 0;
+
+    const populated = 'bytes=2055\nsha=abc\nauto_extracted=0\nplaceholders=1\n';
+    const settled = [
+      {
+        filename: '2026-10-10T13-20-47-399Z-follow-up.md',
+        frozenAt: '2026-10-10T13:20:47.399Z',
+      },
+    ];
+    const { leader } = fakeLeader({
+      commands: [
+        [/auto_extracted=/, ok(populated)],
+        [/sessions\/index\.json/, ok(JSON.stringify(settled))],
+      ],
+    });
+    const out = await awaitMemorySettle(leader, {
+      before: parseMemoryFingerprint(populated),
+      archivesBefore: 0,
+      requireChange: true,
+      timeoutMs: 60_000,
+      freezeDetectMs: 10,
+      pollMs: 1,
+      sleep: async () => {},
+      now: () => {
+        t += 5;
+        return t;
+      },
+    });
+    expect(out).toMatchObject({ settled: true, changed: false });
+    expect(memoryStoreRetained(out.before, out.after)).toBe(true);
   });
 
   it('parses the sessions ledger and knows when an archive has settled', () => {
