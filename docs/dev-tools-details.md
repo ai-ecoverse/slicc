@@ -46,8 +46,9 @@ The stripper removes source comments (TS/JS, CSS, Swift, Go, shell, YAML, HTML,
 JSONC) and deletes developer docs (`CLAUDE.md`, `AGENTS.md`, `docs/*.md`,
 `.agents/skills`, Copilot instruction files, package READMEs). It keeps
 compiler/linter directives (`@ts-expect-error`, `biome-ignore`, `//go:build`,
-`swiftlint:`, shebangs, `/*#__PURE__*/`, …), `LICENSE`, and product markdown
-under `packages/vfs-root/`.
+`swiftlint:`, shebangs, `/*#__PURE__*/`, …), the `// indirect` marker at the
+end of `go.mod` `require` lines (`go mod tidy -diff` requires it), `LICENSE`,
+and product markdown under `packages/vfs-root/`.
 
 It writes a `.no-comment` marker. `npm run lint:no-comments` (chained into
 `lint` / `lint:ci` / the pre-push gate) is a no-op without that marker and a

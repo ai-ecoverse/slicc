@@ -15,6 +15,9 @@ can measure whether those actually help agents write code.
 
 - Compiler/linter directives (`@ts-expect-error`, `biome-ignore`,
   `//go:build`, `swiftlint:`, `shellcheck`, `/*#__PURE__*/`, shebangs, …)
+- The `// indirect` marker at the end of `require` lines in `go.mod`
+  (`go mod tidy` writes it and `go mod tidy -diff` requires it); any other
+  `go.mod` comment is still stripped
 - `LICENSE`
 - Product markdown under `packages/vfs-root/` (runtime agent skills and
   `shared/CLAUDE.md`)

@@ -87,6 +87,16 @@ describe('checkTree', () => {
     expect(result.hits).toEqual([]);
     expect(result.forbidden).toEqual([]);
   });
+
+  it('accepts go mod tidy output in a nested go.mod', () => {
+    const { root, files } = createTree({
+      'packages/slicc-cli/go.mod':
+        'module m\n\ngo 1.24\n\nrequire (\n\texample.com/a v1.0.0\n\texample.com/b v1.0.0 // indirect\n)\n',
+      'go.mod': 'module n\n\nrequire example.com/c v1.0.0 // why\n',
+    });
+    const result = checkTree(root, { requireMarker: false, files });
+    expect(result.hits).toEqual([{ file: 'go.mod', line: 3, text: '// why' }]);
+  });
 });
 
 describe('formatReport', () => {
