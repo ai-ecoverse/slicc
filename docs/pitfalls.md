@@ -1422,7 +1422,12 @@ feature names churn, both launchers also seed version-stable prefs into
 (`seedChromeProfilePreferences` in node, `seedProfilePreferences` in swift):
 `tab_freezing_enabled: false`,
 `performance_tuning.high_efficiency_mode.state: 0`, and
-`performance_tuning.tab_discarding.exceptions` for the leader origins. The
+the leader origins as discard exceptions, written in both forms:
+`performance_tuning.tab_discarding.exceptions` (list, Chrome before 154) and
+`performance_tuning.tab_discarding.exceptions_with_time` (site → time map,
+microseconds since 1601-01-01 as a string; Chrome 154+ reads only this and
+does not migrate the list, #3930). Existing map entries are never
+overwritten. The
 read is fail-closed: only a missing Preferences file (`ENOENT`) is treated
 as empty and rewritten; EIO/EACCES/EBUSY, a partial read, or a JSON parse
 error leave the existing file untouched so a transient fault cannot wipe
