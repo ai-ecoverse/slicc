@@ -59,6 +59,28 @@ export function deadlineShards(jobs, annotations) {
   return shardsMatching(jobs, annotations, DEADLINE_PATTERNS);
 }
 
+/** A shard must have only the known interruption/deadline signals before it is retried. */
+export function ownFailureShards(jobs, annotations) {
+  return jobs
+    .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
+    .filter((j) => {
+      const messages = annotations.get(j.id) ?? [];
+      const hasResumeSignal = messages.some((m) =>
+        [...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(m))
+      );
+      const hasOtherError = messages.some(
+        (m) => ![...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(m))
+      );
+      // The benchmark step itself fails when it stops on the deadline. A failed post-step (for
+      // example the leak check) is independent evidence that this shard needs human attention.
+      const failedPostStep = (j.steps ?? []).some(
+        (step) => step.conclusion === 'failure' && step.name !== 'Run and judge'
+      );
+      return !hasResumeSignal || hasOtherError || failedPostStep;
+    })
+    .map((j) => j.name);
+}
+
 /**
  * The dispatch inputs for the resume: the run's own inputs as strings (a dispatch takes strings,
  * `toJSON(inputs)` has booleans), `resume-run` set to this run, and `auto-resumed-from` marking it.
@@ -122,11 +144,16 @@ export async function autoResume({ repo, runId, ref, inputs, token, fetchImpl = 
   const annotations = new Map();
   for (const j of jobs) {
     if (!/^Shard \d+$/.test(j.name ?? '') || j.conclusion !== 'failure') continue;
-    const list = await api('GET', `/repos/${repo}/check-runs/${j.id}/annotations?per_page=50`);
-    annotations.set(
-      j.id,
-      list.map((a) => a.message ?? '')
-    );
+    const messages = [];
+    for (let page = 1; ; page += 1) {
+      const list = await api(
+        'GET',
+        `/repos/${repo}/check-runs/${j.id}/annotations?per_page=100&page=${page}`
+      );
+      messages.push(...list.map((a) => a.message ?? ''));
+      if (list.length < 100) break;
+    }
+    annotations.set(j.id, messages);
   }
   const killed = killedShards(jobs, annotations);
   const deadline = deadlineShards(jobs, annotations);
@@ -145,10 +172,7 @@ export async function autoResume({ repo, runId, ref, inputs, token, fetchImpl = 
       deadline,
       reason: `this run is already an auto-resume of ${inputs?.['auto-resumed-from'] || 'nothing'} (kill resumes once; deadline leftovers may chain)`,
     };
-  const failed = jobs
-    .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
-    .map((j) => j.name);
-  const own = failed.filter((n) => !resumable.includes(n));
+  const own = ownFailureShards(jobs, annotations);
   if (own.length)
     return {
       action: 'none',

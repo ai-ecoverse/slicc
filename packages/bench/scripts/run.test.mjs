@@ -31,6 +31,7 @@ import {
   selectTasks,
   shardRuns,
   tracePath,
+  validateDeadlineRuns,
   withArm,
 } from './run.mjs';
 import { PROMPT_ALL_SETTLED, parseSkillsCondition, RUN_ID_PATTERN } from './slicc-adapter.mjs';
@@ -1571,6 +1572,21 @@ describe('lanes and guardrails', () => {
       runs_left: 1,
       spent: 0,
     });
+  });
+
+  it('rejects a task-level timeout that cannot fit within the deadline', () => {
+    expect(() =>
+      validateDeadlineRuns([{ task: { id: 'too-long', slicc: { timeoutSeconds: 3600 } } }], {
+        deadlineMinutes: 40,
+        timeout: 900,
+      })
+    ).toThrow(/--deadline-minutes 40 leaves no time for task id\(s\) too-long/);
+    expect(() =>
+      validateDeadlineRuns([{ task: { id: 'unbounded', slicc: { timeoutSeconds: 3600 } } }], {
+        deadlineMinutes: 0,
+        timeout: 900,
+      })
+    ).not.toThrow();
   });
 
   it('stops at the spend budget, counting only runs paid for here', async () => {

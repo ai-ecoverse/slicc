@@ -462,6 +462,7 @@ async function loadAndPlan(opts, deps, log) {
       );
   }
   const runs = shardRuns(planRuns(sets, opts), opts.shard);
+  validateDeadlineRuns(runs, opts);
   const shard = opts.shard ? ` (shard ${opts.shard.index}/${opts.shard.count})` : '';
   log(
     `${runs.length} runs${shard}: ${opts.models.join(', ')} × skills ${opts.skills.map((s) => s.name).join(', ')} × ${opts.repeats} repeat(s)`
@@ -1076,6 +1077,26 @@ async function laneLoop(runs, lc, queue, state, shared, log) {
 /** Prompt time limit for a planned run: the task's `slicc.timeoutSeconds`, else the CLI default. */
 export function runTimeoutSeconds(run, timeout) {
   return run?.task?.slicc?.timeoutSeconds ?? timeout;
+}
+
+/** Reject task-level timeouts that could never start within this shard's deadline window. */
+export function validateDeadlineRuns(runs, opts) {
+  if (!opts.deadlineMinutes) return;
+  const deadlineMs = opts.deadlineMinutes * 60_000;
+  const impossible = [
+    ...new Set(
+      runs
+        .filter(
+          (run) => runTimeoutSeconds(run, opts.timeout) * 1000 + RUN_OVERHEAD_MS >= deadlineMs
+        )
+        .map((run) => run.task.id)
+    ),
+  ];
+  if (impossible.length)
+    throw new Error(
+      `--deadline-minutes ${opts.deadlineMinutes} leaves no time for task id(s) ${impossible.join(', ')}: ` +
+        `their timeout plus ${RUN_OVERHEAD_MS / 60_000} minutes of restart, collection and judging does not fit`
+    );
 }
 
 /**

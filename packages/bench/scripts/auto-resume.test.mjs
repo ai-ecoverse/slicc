@@ -4,6 +4,7 @@ import {
   deadlineShards,
   eligible,
   killedShards,
+  ownFailureShards,
   resumeInputs,
   summaryLines,
 } from './auto-resume.mjs';
@@ -113,8 +114,11 @@ function fakeGithub(annotations, jobList = jobs) {
     }
     if (path.endsWith('/jobs')) return Response.json({ jobs: jobList });
     const m = /\/check-runs\/(\d+)\/annotations$/.exec(path);
-    if (m)
-      return Response.json((annotations.get(Number(m[1])) ?? []).map((message) => ({ message })));
+    if (m) {
+      const page = Number(new URL(url).searchParams.get('page') ?? 1);
+      const list = annotations.get(Number(m[1])) ?? [];
+      return Response.json(page === 1 ? list.map((message) => ({ message })) : []);
+    }
     return new Response('not found', { status: 404 });
   });
   return { fetchImpl, dispatched };
@@ -231,6 +235,34 @@ describe('autoResume', () => {
     );
     const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
     expect(result).toMatchObject({ action: 'none', deadline: ['Shard 2'] });
+    expect(dispatched).toEqual([]);
+  });
+
+  it('leaves a deadline-marked shard alone when its benchmark run also errored', async () => {
+    const { fetchImpl, dispatched } = fakeGithub(
+      new Map([[3, [DEADLINE, 'Process completed with exit code 1.']]]),
+      oneFailedShard
+    );
+    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
+    expect(result.action).toBe('none');
+    expect(result.reason).toMatch(/Shard 1 failed on their own/);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('leaves a deadline-marked shard alone when a post-step fails', async () => {
+    const shard = [
+      {
+        ...oneFailedShard[1],
+        steps: [
+          { name: 'Run and judge', conclusion: 'failure' },
+          { name: 'Check the out dir for plaintext task text', conclusion: 'failure' },
+        ],
+      },
+    ];
+    const { fetchImpl, dispatched } = fakeGithub(new Map([[3, [DEADLINE]]]), shard);
+    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
+    expect(ownFailureShards(shard, new Map([[3, [DEADLINE]]]))).toEqual(['Shard 1']);
+    expect(result.action).toBe('none');
     expect(dispatched).toEqual([]);
   });
 });
