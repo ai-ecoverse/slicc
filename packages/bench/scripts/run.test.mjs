@@ -31,6 +31,7 @@ import {
   selectTasks,
   shardRuns,
   tracePath,
+  validateDeadlineRuns,
   withArm,
 } from './run.mjs';
 import { PROMPT_ALL_SETTLED, parseSkillsCondition, RUN_ID_PATTERN } from './slicc-adapter.mjs';
@@ -1523,6 +1524,27 @@ describe('lanes and guardrails', () => {
     expect(log.mock.calls[0][0]).toMatch(/past the deadline for another run; 7 run\(s\) left/);
   });
 
+  it('emits a GitHub Actions error annotation on deadline stop so auto-resume can see it', () => {
+    const prev = process.env.GITHUB_ACTIONS;
+    process.env.GITHUB_ACTIONS = 'true';
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const journal = { event: vi.fn() };
+      const stop = guardrails(
+        { deadlineMinutes: 40, timeout: 900, maxCost: 0 },
+        { startedMs: 0, now: () => 6 * 60_000, journal, log: () => {} }
+      );
+      stop({ spent: 0, reasons: [], stopped: false }, { next: 3, total: 10 });
+      expect(err).toHaveBeenCalledWith(
+        '::error::past the deadline for another run; 7 run(s) left for a resume'
+      );
+    } finally {
+      err.mockRestore();
+      if (prev === undefined) delete process.env.GITHUB_ACTIONS;
+      else process.env.GITHUB_ACTIONS = prev;
+    }
+  });
+
   it("uses the next task's slicc.timeoutSeconds for the deadline", () => {
     const journal = { event: vi.fn() };
     const log = vi.fn();
@@ -1545,6 +1567,21 @@ describe('lanes and guardrails', () => {
       runs_left: 1,
       spent: 0,
     });
+  });
+
+  it('rejects a task-level timeout that cannot fit within the deadline', () => {
+    expect(() =>
+      validateDeadlineRuns([{ task: { id: 'too-long', slicc: { timeoutSeconds: 3600 } } }], {
+        deadlineMinutes: 40,
+        timeout: 900,
+      })
+    ).toThrow(/--deadline-minutes 40 leaves no time for task id\(s\) too-long/);
+    expect(() =>
+      validateDeadlineRuns([{ task: { id: 'unbounded', slicc: { timeoutSeconds: 3600 } } }], {
+        deadlineMinutes: 0,
+        timeout: 900,
+      })
+    ).not.toThrow();
   });
 
   it('stops at the spend budget, counting only runs paid for here', async () => {

@@ -6,12 +6,42 @@ export const KILLED_PATTERNS = [
   /Termination requested/,
 ];
 
-export function killedShards(jobs, annotations) {
+export const DEADLINE_PATTERNS = [
+  /past the deadline for another run; \d+ run\(s\) left for a resume/,
+];
+
+export function shardsMatching(jobs, annotations, patterns) {
   return jobs
     .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
-    .filter((j) =>
-      (annotations.get(j.id) ?? []).some((m) => KILLED_PATTERNS.some((p) => p.test(m)))
-    )
+    .filter((j) => (annotations.get(j.id) ?? []).some((m) => patterns.some((p) => p.test(m))))
+    .map((j) => j.name);
+}
+
+export function killedShards(jobs, annotations) {
+  return shardsMatching(jobs, annotations, KILLED_PATTERNS);
+}
+
+export function deadlineShards(jobs, annotations) {
+  return shardsMatching(jobs, annotations, DEADLINE_PATTERNS);
+}
+
+export function ownFailureShards(jobs, annotations) {
+  return jobs
+    .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
+    .filter((j) => {
+      const messages = annotations.get(j.id) ?? [];
+      const hasResumeSignal = messages.some((m) =>
+        [...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(m))
+      );
+      const hasOtherError = messages.some(
+        (m) => ![...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(m))
+      );
+
+      const failedPostStep = (j.steps ?? []).some(
+        (step) => step.conclusion === 'failure' && step.name !== 'Run and judge'
+      );
+      return !hasResumeSignal || hasOtherError || failedPostStep;
+    })
     .map((j) => j.name);
 }
 
@@ -26,8 +56,10 @@ export function resumeInputs(inputs, runId) {
   return out;
 }
 
-export function eligible(inputs) {
-  return Boolean(inputs) && !String(inputs['auto-resumed-from'] ?? '').trim();
+export function eligible(inputs, { allowDeadlineChain = false } = {}) {
+  if (!inputs) return false;
+  if (!String(inputs['auto-resumed-from'] ?? '').trim()) return true;
+  return allowDeadlineChain;
 }
 
 function github(token, fetchImpl = fetch) {
@@ -49,12 +81,6 @@ function github(token, fetchImpl = fetch) {
 }
 
 export async function autoResume({ repo, runId, ref, inputs, token, fetchImpl = fetch }) {
-  if (!eligible(inputs))
-    return {
-      action: 'skipped',
-      killed: [],
-      reason: `this run is already an auto-resume of ${inputs?.['auto-resumed-from'] || 'nothing'}`,
-    };
   const api = github(token, fetchImpl);
   const jobs = [];
   for (let page = 1; ; page += 1) {
@@ -68,38 +94,65 @@ export async function autoResume({ repo, runId, ref, inputs, token, fetchImpl = 
   const annotations = new Map();
   for (const j of jobs) {
     if (!/^Shard \d+$/.test(j.name ?? '') || j.conclusion !== 'failure') continue;
-    const list = await api('GET', `/repos/${repo}/check-runs/${j.id}/annotations?per_page=50`);
-    annotations.set(
-      j.id,
-      list.map((a) => a.message ?? '')
-    );
+    const messages = [];
+    for (let page = 1; ; page += 1) {
+      const list = await api(
+        'GET',
+        `/repos/${repo}/check-runs/${j.id}/annotations?per_page=100&page=${page}`
+      );
+      messages.push(...list.map((a) => a.message ?? ''));
+      if (list.length < 100) break;
+    }
+    annotations.set(j.id, messages);
   }
   const killed = killedShards(jobs, annotations);
-  if (!killed.length)
-    return { action: 'none', killed, reason: 'no shard was killed; failures were the bench’s own' };
-  const failed = jobs
-    .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
-    .map((j) => j.name);
-  const own = failed.filter((n) => !killed.includes(n));
+  const deadline = deadlineShards(jobs, annotations);
+  const resumable = [...new Set([...killed, ...deadline])];
+  if (!resumable.length)
+    return {
+      action: 'none',
+      killed,
+      deadline,
+      reason: 'no shard was killed or stopped on the deadline; failures were the bench’s own',
+    };
+  if (!eligible(inputs, { allowDeadlineChain: deadline.length > 0 }))
+    return {
+      action: 'skipped',
+      killed,
+      deadline,
+      reason: `this run is already an auto-resume of ${inputs?.['auto-resumed-from'] || 'nothing'} (kill resumes once; deadline leftovers may chain)`,
+    };
+  const own = ownFailureShards(jobs, annotations);
   if (own.length)
     return {
       action: 'none',
       killed,
-      reason: `${killed.join(', ')} lost their runner, but ${own.join(', ')} failed on their own, and a resume would retry those runs too; resume by hand with resume-run=${runId}`,
+      deadline,
+      reason:
+        `${resumable.join(', ')} can resume, but ${own.join(', ')} failed on their own, ` +
+        `and a resume would retry those runs too; resume by hand with resume-run=${runId}`,
     };
   await api('POST', `/repos/${repo}/actions/workflows/bench.yml/dispatches`, {
     ref,
     inputs: resumeInputs(inputs, runId),
   });
-  return { action: 'resumed', killed, reason: `${killed.join(', ')} lost their runner` };
+  const parts = [];
+  if (killed.length) parts.push(`${killed.join(', ')} lost their runner`);
+  if (deadline.length) parts.push(`${deadline.join(', ')} stopped on the deadline with runs left`);
+  return { action: 'resumed', killed, deadline, reason: parts.join('; ') };
 }
 
 export function summaryLines(result, runId) {
-  if (result.action === 'resumed')
+  if (result.action === 'resumed') {
+    const chain =
+      (result.deadline?.length ?? 0) > 0
+        ? 'deadline leftovers may chain on later windows'
+        : 'once; kill resumes do not chain';
     return [
       '### Auto-resume',
-      `${result.reason}: dispatched this run again with \`resume-run=${runId}\` and its own inputs (once; the new run is marked \`auto-resumed-from=${runId}\`).`,
+      `${result.reason}: dispatched this run again with \`resume-run=${runId}\` and its own inputs (${chain}; marked \`auto-resumed-from=${runId}\`).`,
     ];
+  }
   return ['### Auto-resume', `Not resumed: ${result.reason}.`];
 }
 

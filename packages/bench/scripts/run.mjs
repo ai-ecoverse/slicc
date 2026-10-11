@@ -395,6 +395,7 @@ async function loadAndPlan(opts, deps, log) {
       );
   }
   const runs = shardRuns(planRuns(sets, opts), opts.shard);
+  validateDeadlineRuns(runs, opts);
   const shard = opts.shard ? ` (shard ${opts.shard.index}/${opts.shard.count})` : '';
   log(
     `${runs.length} runs${shard}: ${opts.models.join(', ')} × skills ${opts.skills.map((s) => s.name).join(', ')} × ${opts.repeats} repeat(s)`
@@ -928,6 +929,25 @@ export function runTimeoutSeconds(run, timeout) {
   return run?.task?.slicc?.timeoutSeconds ?? timeout;
 }
 
+export function validateDeadlineRuns(runs, opts) {
+  if (!opts.deadlineMinutes) return;
+  const deadlineMs = opts.deadlineMinutes * 60_000;
+  const impossible = [
+    ...new Set(
+      runs
+        .filter(
+          (run) => runTimeoutSeconds(run, opts.timeout) * 1000 + RUN_OVERHEAD_MS >= deadlineMs
+        )
+        .map((run) => run.task.id)
+    ),
+  ];
+  if (impossible.length)
+    throw new Error(
+      `--deadline-minutes ${opts.deadlineMinutes} leaves no time for task id(s) ${impossible.join(', ')}: ` +
+        `their timeout plus ${RUN_OVERHEAD_MS / 60_000} minutes of restart, collection and judging does not fit`
+    );
+}
+
 export function guardrails(opts, { startedMs, now = Date.now, journal, log, runs = [] }) {
   const deadline = opts.deadlineMinutes ? startedMs + opts.deadlineMinutes * 60_000 : null;
   return (state, queue) => {
@@ -942,11 +962,15 @@ export function guardrails(opts, { startedMs, now = Date.now, journal, log, runs
       state.stopped = true;
       const left = queue.total - queue.next;
       journal.event('stopped', { reason: why, runs_left: left, spent: state.spent });
+      const deadlineMsg = `past the deadline for another run; ${left} run(s) left for a resume`;
       log(
         why === 'deadline'
-          ? `stopping: past the deadline for another run; ${left} run(s) left for a resume`
+          ? `stopping: ${deadlineMsg}`
           : `stopping: spent $${state.spent.toFixed(2)} of the $${opts.maxCost} budget; ${left} run(s) left for a resume`
       );
+
+      if (why === 'deadline' && left > 0 && process.env.GITHUB_ACTIONS)
+        console.error(`::error::${deadlineMsg}`);
     }
     return why;
   };

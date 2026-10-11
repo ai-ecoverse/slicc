@@ -466,7 +466,7 @@ jobs:
   auto-resume:
     name: Auto-resume
     needs: [plan, bench]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.plan.result == 'success' && needs.bench.result == 'failure' && inputs.auto-resumed-from == '' }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.plan.result == 'success' && needs.bench.result == 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -482,7 +482,7 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Resume shards Cloud Run took away
+      - name: Resume killed or deadline-stopped shards
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
