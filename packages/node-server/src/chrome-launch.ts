@@ -673,8 +673,16 @@ export const TAB_LIFECYCLE_EXEMPT_SITES = [
   'localhost',
 ];
 
+const WINDOWS_EPOCH_OFFSET_MICROS = 11_644_473_600_000_000n;
+
+export function chromePrefTimestamp(unixMs: number): string {
+  return (BigInt(Math.trunc(unixMs)) * 1000n + WINDOWS_EPOCH_OFFSET_MICROS).toString();
+}
+
 export interface SeedChromeProfilePreferencesDeps {
   readFileImpl?: (path: string) => Promise<string>;
+
+  nowImpl?: () => number;
 }
 
 export async function seedChromeProfilePreferences(
@@ -696,6 +704,12 @@ export async function seedChromeProfilePreferences(
       if (!exceptions.includes(site)) exceptions.push(site);
     }
     tabDiscarding['exceptions'] = exceptions;
+
+    const exceptionsWithTime = ensureObject(tabDiscarding, 'exceptions_with_time');
+    const stamp = chromePrefTimestamp((deps.nowImpl ?? Date.now)());
+    for (const site of TAB_LIFECYCLE_EXEMPT_SITES) {
+      if (!Object.hasOwn(exceptionsWithTime, site)) exceptionsWithTime[site] = stamp;
+    }
     await writeJsonFile(prefsPath, prefs);
   } catch {}
 }

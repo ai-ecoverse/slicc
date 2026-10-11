@@ -214,6 +214,77 @@ final class ChromeLauncherTests: XCTestCase {
         )
     }
 
+    func testSeedProfilePreferencesSeedsExceptionsWithTimeOnFreshProfile() throws {
+        
+        let launcher = makeLauncher()
+        let dir = NSTemporaryDirectory() + "slicc-seed-prefs-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let now = Date(timeIntervalSince1970: 1_791_720_000)
+
+        launcher.seedProfilePreferences(userDataDir: dir, now: now)
+
+        let data = try Data(contentsOf: URL(fileURLWithPath: dir + "/Default/Preferences"))
+        let prefs = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let tuning = try XCTUnwrap(prefs["performance_tuning"] as? [String: Any])
+        let discarding = try XCTUnwrap(tuning["tab_discarding"] as? [String: Any])
+        let withTime = try XCTUnwrap(discarding["exceptions_with_time"] as? [String: String])
+        let stamp = ChromeLauncher.chromePrefTimestamp(now)
+        XCTAssertEqual(
+            withTime,
+            Dictionary(uniqueKeysWithValues: ChromeLauncher.tabLifecycleExemptSites.map { ($0, stamp) })
+        )
+    }
+
+    func testSeedProfilePreferencesPreservesExistingExceptionsWithTime() throws {
+        let launcher = makeLauncher()
+        let dir = NSTemporaryDirectory() + "slicc-seed-prefs-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let defaultDir = dir + "/Default"
+        try FileManager.default.createDirectory(
+            atPath: defaultDir, withIntermediateDirectories: true)
+        let existing: [String: Any] = [
+            "performance_tuning": [
+                "tab_discarding": [
+                    "exceptions_with_time": [
+                        "mine.example": "13400000000000000",
+                        "www.sliccy.ai": "13300000000000000",
+                    ]
+                ]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: existing)
+            .write(to: URL(fileURLWithPath: defaultDir + "/Preferences"))
+        let now = Date(timeIntervalSince1970: 1_791_720_000)
+
+        launcher.seedProfilePreferences(userDataDir: dir, now: now)
+
+        let data = try Data(contentsOf: URL(fileURLWithPath: defaultDir + "/Preferences"))
+        let prefs = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let tuning = try XCTUnwrap(prefs["performance_tuning"] as? [String: Any])
+        let discarding = try XCTUnwrap(tuning["tab_discarding"] as? [String: Any])
+        let stamp = ChromeLauncher.chromePrefTimestamp(now)
+        XCTAssertEqual(
+            discarding["exceptions_with_time"] as? [String: String],
+            [
+                "mine.example": "13400000000000000",
+                "www.sliccy.ai": "13300000000000000",
+                "sliccy.ai": stamp,
+                "localhost": stamp,
+            ]
+        )
+        
+        XCTAssertEqual(
+            discarding["exceptions"] as? [String], ChromeLauncher.tabLifecycleExemptSites)
+    }
+
+    func testChromePrefTimestampIsMicrosecondsSinceWindowsEpoch() {
+        XCTAssertEqual(
+            ChromeLauncher.chromePrefTimestamp(Date(timeIntervalSince1970: 0)), "11644473600000000")
+        XCTAssertEqual(
+            ChromeLauncher.chromePrefTimestamp(Date(timeIntervalSince1970: 1_791_720_000)),
+            "13436193600000000")
+    }
+
     func testSeedProfilePreferencesLeavesCorruptFileUntouched() throws {
         
         

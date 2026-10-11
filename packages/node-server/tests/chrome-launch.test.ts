@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   buildChromeLaunchArgs,
+  chromePrefTimestamp,
   clearChromeRestoreState,
   clearChromeSessionRestore,
   clearStaleDevToolsActivePort,
@@ -996,6 +997,70 @@ describe('seedChromeProfilePreferences', () => {
       'sliccy.ai',
       'localhost',
     ]);
+  });
+
+  it('seeds exceptions_with_time for Chrome 154+ on a fresh profile', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+    const now = Date.UTC(2026, 9, 11, 12, 0, 0);
+
+    await seedChromeProfilePreferences(dir, { nowImpl: () => now });
+
+    const after = JSON.parse(await readFile(join(dir, 'Default', 'Preferences'), 'utf8')) as {
+      performance_tuning: { tab_discarding: { exceptions_with_time: Record<string, string> } };
+    };
+    const stamp = chromePrefTimestamp(now);
+    expect(after.performance_tuning.tab_discarding.exceptions_with_time).toEqual(
+      Object.fromEntries(TAB_LIFECYCLE_EXEMPT_SITES.map((site) => [site, stamp]))
+    );
+  });
+
+  it('preserves existing exceptions_with_time entries and their timestamps', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    await writeFile(
+      prefsPath,
+      JSON.stringify({
+        performance_tuning: {
+          tab_discarding: {
+            exceptions_with_time: {
+              'mine.example': '13400000000000000',
+              'www.sliccy.ai': '13300000000000000',
+            },
+          },
+        },
+      })
+    );
+    const now = Date.UTC(2026, 9, 11);
+
+    await seedChromeProfilePreferences(dir, { nowImpl: () => now });
+
+    const after = JSON.parse(await readFile(prefsPath, 'utf8')) as {
+      performance_tuning: {
+        tab_discarding: { exceptions: string[]; exceptions_with_time: Record<string, string> };
+      };
+    };
+    const stamp = chromePrefTimestamp(now);
+    expect(after.performance_tuning.tab_discarding.exceptions_with_time).toEqual({
+      'mine.example': '13400000000000000',
+      'www.sliccy.ai': '13300000000000000',
+      'sliccy.ai': stamp,
+      localhost: stamp,
+    });
+
+    expect(after.performance_tuning.tab_discarding.exceptions).toEqual(TAB_LIFECYCLE_EXEMPT_SITES);
+  });
+
+  it('formats Chrome pref times as microseconds since 1601-01-01', () => {
+    expect(chromePrefTimestamp(0)).toBe('11644473600000000');
+
+    const ms = Date.UTC(2026, 9, 11, 12, 0, 0, 123);
+    expect(chromePrefTimestamp(ms)).toBe((BigInt(ms) * 1000n + 11644473600000000n).toString());
+    expect(chromePrefTimestamp(ms)).toMatch(/^\d{17}$/);
+
+    expect(chromePrefTimestamp(1.9)).toBe('11644473600001000');
   });
 
   it('is idempotent — a second run does not duplicate exceptions', async () => {

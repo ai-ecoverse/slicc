@@ -414,6 +414,16 @@ struct ChromeLauncher: Sendable {
     static let tabLifecycleExemptSites = ["www.sliccy.ai", "sliccy.ai", "localhost"]
 
     
+    static let windowsEpochOffsetMicros: Int64 = 11_644_473_600_000_000
+
+    
+    
+    
+    static func chromePrefTimestamp(_ date: Date) -> String {
+        let unixMicros = Int64((date.timeIntervalSince1970 * 1_000_000).rounded(.down))
+        return String(unixMicros + windowsEpochOffsetMicros)
+    }
+
     
     
     
@@ -427,7 +437,12 @@ struct ChromeLauncher: Sendable {
     
     
     
-    func seedProfilePreferences(userDataDir: String) {
+    
+    
+    
+    
+    
+    func seedProfilePreferences(userDataDir: String, now: Date = Date()) {
         let defaultDir = URL(fileURLWithPath: userDataDir, isDirectory: true)
             .appendingPathComponent("Default", isDirectory: true)
         let prefsPath = defaultDir.appendingPathComponent("Preferences")
@@ -463,6 +478,12 @@ struct ChromeLauncher: Sendable {
             exceptions.append(site)
         }
         tabDiscarding["exceptions"] = exceptions
+        var exceptionsWithTime = tabDiscarding["exceptions_with_time"] as? [String: Any] ?? [:]
+        let stamp = Self.chromePrefTimestamp(now)
+        for site in Self.tabLifecycleExemptSites where exceptionsWithTime[site] == nil {
+            exceptionsWithTime[site] = stamp
+        }
+        tabDiscarding["exceptions_with_time"] = exceptionsWithTime
         performanceTuning["tab_discarding"] = tabDiscarding
         mutablePrefs["performance_tuning"] = performanceTuning
         guard let out = try? JSONSerialization.data(withJSONObject: mutablePrefs) else { return }
