@@ -903,16 +903,34 @@ export const TAB_LIFECYCLE_EXEMPT_SITES = [
  * - `performance_tuning.high_efficiency_mode.state: 0` — Memory Saver off;
  * - `performance_tuning.tab_discarding.exceptions` — per-site exemption list
  *   covering the leader origins, honored by both discard and (via Chrome's
- *   FreezingFollowsDiscardOptOut) freeze policy.
+ *   FreezingFollowsDiscardOptOut) freeze policy. Read by Chrome before 154.
+ * - `performance_tuning.tab_discarding.exceptions_with_time` — the same sites
+ *   as a site → last-modified-time map (Chrome 154+ reads only this and does
+ *   not migrate the old list). Our sites are added with the current time
+ *   ({@link chromePrefTimestamp}); entries already present are left as-is.
  *
  * Merges into existing prefs (the profile persists logins across runs) and
  * never throws — a failure here must not block a launch. Read faults other
  * than a missing file fail closed: the existing Preferences are left
  * untouched rather than rewritten from an empty default (#3625).
  */
+/** Microseconds between the Windows epoch (1601-01-01) and the Unix epoch. */
+const WINDOWS_EPOCH_OFFSET_MICROS = 11_644_473_600_000_000n;
+
+/**
+ * Format a Unix-epoch millisecond time the way Chrome stores times in prefs:
+ * a decimal string of microseconds since 1601-01-01 (base::Time internal
+ * value). BigInt because the value exceeds Number.MAX_SAFE_INTEGER.
+ */
+export function chromePrefTimestamp(unixMs: number): string {
+  return (BigInt(Math.trunc(unixMs)) * 1000n + WINDOWS_EPOCH_OFFSET_MICROS).toString();
+}
+
 /** Injectable seams for {@link seedChromeProfilePreferences} (tests). */
 export interface SeedChromeProfilePreferencesDeps {
   readFileImpl?: (path: string) => Promise<string>;
+  /** Current time in Unix-epoch ms; stamps new `exceptions_with_time` entries. */
+  nowImpl?: () => number;
 }
 
 export async function seedChromeProfilePreferences(
@@ -934,6 +952,13 @@ export async function seedChromeProfilePreferences(
       if (!exceptions.includes(site)) exceptions.push(site);
     }
     tabDiscarding['exceptions'] = exceptions;
+    // Chrome 154+ reads only the timed map; add our sites without touching
+    // entries (and their timestamps) the user or Chrome already has.
+    const exceptionsWithTime = ensureObject(tabDiscarding, 'exceptions_with_time');
+    const stamp = chromePrefTimestamp((deps.nowImpl ?? Date.now)());
+    for (const site of TAB_LIFECYCLE_EXEMPT_SITES) {
+      if (!Object.hasOwn(exceptionsWithTime, site)) exceptionsWithTime[site] = stamp;
+    }
     await writeJsonFile(prefsPath, prefs);
   } catch {
     // Best-effort — without the seed the --disable-features flags still apply.

@@ -413,6 +413,17 @@ struct ChromeLauncher: Sendable {
     /// `TAB_LIFECYCLE_EXEMPT_SITES`.
     static let tabLifecycleExemptSites = ["www.sliccy.ai", "sliccy.ai", "localhost"]
 
+    /// Microseconds between the Windows epoch (1601-01-01) and the Unix epoch.
+    static let windowsEpochOffsetMicros: Int64 = 11_644_473_600_000_000
+
+    /// Formats a time the way Chrome stores times in prefs: a decimal string
+    /// of microseconds since 1601-01-01 (base::Time internal value). Mirrors
+    /// node-server's `chromePrefTimestamp`.
+    static func chromePrefTimestamp(_ date: Date) -> String {
+        let unixMicros = Int64((date.timeIntervalSince1970 * 1_000_000).rounded(.down))
+        return String(unixMicros + windowsEpochOffsetMicros)
+    }
+
     /// Seed `Default/Preferences` with tab-lifecycle opt-outs before every
     /// launch. The `--disable-features` list in `buildLaunchArgs` is the
     /// primary defense against Chrome freezing/discarding the backgrounded
@@ -421,13 +432,17 @@ struct ChromeLauncher: Sendable {
     /// are the version-stable belt: `tab_freezing_enabled: false`,
     /// Memory Saver off, and per-site discard exceptions for the leader
     /// origins (honored by freeze policy via FreezingFollowsDiscardOptOut).
-    /// Mirrors node-server's `seedChromeProfilePreferences`. Merges into
+    /// The exceptions are written twice: the legacy `exceptions` list (Chrome
+    /// before 154) and the `exceptions_with_time` site → time map (Chrome
+    /// 154+ reads only this and does not migrate the list). New map entries
+    /// are stamped with `now` via `chromePrefTimestamp`; existing entries are
+    /// left untouched. Mirrors node-server's `seedChromeProfilePreferences`. Merges into
     /// existing prefs and never throws.
     ///
     /// Read faults other than a missing file fail closed: the existing
     /// Preferences are left untouched rather than rewritten from an empty
     /// default (#3625).
-    func seedProfilePreferences(userDataDir: String) {
+    func seedProfilePreferences(userDataDir: String, now: Date = Date()) {
         let defaultDir = URL(fileURLWithPath: userDataDir, isDirectory: true)
             .appendingPathComponent("Default", isDirectory: true)
         let prefsPath = defaultDir.appendingPathComponent("Preferences")
@@ -463,6 +478,12 @@ struct ChromeLauncher: Sendable {
             exceptions.append(site)
         }
         tabDiscarding["exceptions"] = exceptions
+        var exceptionsWithTime = tabDiscarding["exceptions_with_time"] as? [String: Any] ?? [:]
+        let stamp = Self.chromePrefTimestamp(now)
+        for site in Self.tabLifecycleExemptSites where exceptionsWithTime[site] == nil {
+            exceptionsWithTime[site] = stamp
+        }
+        tabDiscarding["exceptions_with_time"] = exceptionsWithTime
         performanceTuning["tab_discarding"] = tabDiscarding
         mutablePrefs["performance_tuning"] = performanceTuning
         guard let out = try? JSONSerialization.data(withJSONObject: mutablePrefs) else { return }
