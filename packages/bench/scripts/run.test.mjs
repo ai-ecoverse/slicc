@@ -1528,6 +1528,27 @@ describe('lanes and guardrails', () => {
     expect(log.mock.calls[0][0]).toMatch(/past the deadline for another run; 7 run\(s\) left/);
   });
 
+  it('emits a GitHub Actions error annotation on deadline stop so auto-resume can see it', () => {
+    const prev = process.env.GITHUB_ACTIONS;
+    process.env.GITHUB_ACTIONS = 'true';
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const journal = { event: vi.fn() };
+      const stop = guardrails(
+        { deadlineMinutes: 40, timeout: 900, maxCost: 0 },
+        { startedMs: 0, now: () => 6 * 60_000, journal, log: () => {} }
+      );
+      stop({ spent: 0, reasons: [], stopped: false }, { next: 3, total: 10 });
+      expect(err).toHaveBeenCalledWith(
+        '::error::past the deadline for another run; 7 run(s) left for a resume'
+      );
+    } finally {
+      err.mockRestore();
+      if (prev === undefined) delete process.env.GITHUB_ACTIONS;
+      else process.env.GITHUB_ACTIONS = prev;
+    }
+  });
+
   it("uses the next task's slicc.timeoutSeconds for the deadline", () => {
     const journal = { event: vi.fn() };
     const log = vi.fn();

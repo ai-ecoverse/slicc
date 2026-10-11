@@ -1098,11 +1098,15 @@ export function guardrails(opts, { startedMs, now = Date.now, journal, log, runs
       state.stopped = true;
       const left = queue.total - queue.next;
       journal.event('stopped', { reason: why, runs_left: left, spent: state.spent });
+      const deadlineMsg = `past the deadline for another run; ${left} run(s) left for a resume`;
       log(
         why === 'deadline'
-          ? `stopping: past the deadline for another run; ${left} run(s) left for a resume`
+          ? `stopping: ${deadlineMsg}`
           : `stopping: spent $${state.spent.toFixed(2)} of the $${opts.maxCost} budget; ${left} run(s) left for a resume`
       );
+      // Annotation for auto-resume.mjs (deadline leftovers only — not budget).
+      if (why === 'deadline' && left > 0 && process.env.GITHUB_ACTIONS)
+        console.error(`::error::${deadlineMsg}`);
     }
     return why;
   };

@@ -29,7 +29,9 @@
 # - the run step has its own time limit below the job's, so the diagnostics and uploads after it
 #   always run; `report` runs whenever any shard left an artifact, and "Re-run failed jobs"
 #   resumes a shard from its artifact. `resume-run` continues an earlier run in a new one (for
-#   other settings, such as another runner template).
+#   other settings, such as another runner template). Auto-resume (auto-resume.mjs) re-dispatches
+#   when every failed shard was Cloud Run-killed or hit the wall-clock deadline with runs left;
+#   kill resumes once per lineage, deadline leftovers may chain. Bench-own failures stay manual.
 # - bench-reaper.yml cancels runs whose shards wait for a runner that never comes, or outlive
 #   the job limit.
 #
@@ -545,15 +547,14 @@ jobs:
           echo "::error::at least one shard failed or stopped early (${{ needs.bench.result }}); use \"Re-run failed jobs\" to resume them from their artifacts"
           exit 1
 
-  # Cloud Run replaces worker-pool instances under running jobs (host maintenance): the shard's
-  # step exits 130 and GitHub records "The self-hosted runner lost communication with the server".
-  # Those tasks belong to an approved run, so dispatch it once more with resume-run and its own
-  # inputs; finished runs are skipped. Never for a run that is itself an auto-resume, and never
-  # for the bench's own failures. See packages/bench/scripts/auto-resume.mjs.
+  # Resume when shards were cut short for infra (Cloud Run kill → exit 130 / lost runner) or
+  # wall-clock (`past the deadline for another run; N left`). Finished runs are skipped. The
+  # script decides: kill resumes once per lineage (`auto-resumed-from`); deadline leftovers may
+  # chain. Bench-own failures are left alone. See packages/bench/scripts/auto-resume.mjs.
   auto-resume:
     name: Auto-resume
     needs: [plan, bench]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.plan.result == 'success' && needs.bench.result == 'failure' && inputs.auto-resumed-from == '' }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.plan.result == 'success' && needs.bench.result == 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -569,7 +570,7 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Resume shards Cloud Run took away
+      - name: Resume killed or deadline-stopped shards
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}

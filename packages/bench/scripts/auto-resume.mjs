@@ -1,17 +1,21 @@
 /**
- * Auto-resume a bench run once when Cloud Run took shards away mid-run.
+ * Auto-resume a bench run when shards were cut short for infrastructure or wall-clock reasons.
  *
- * Cloud Run replaces worker-pool instances under running jobs (host maintenance): the runner
- * container gets SIGTERM ("Termination requested, stopping runner"), the bench step exits 130,
- * the post-steps still upload the shard's out dir, and GitHub marks the job failed about ten
- * minutes later with "The self-hosted runner lost communication with the server"
- * (2026-10-08 19:23 and 2026-10-09 00:46, three and five shards). The tasks those shards had
- * not finished are part of an approved run, so the `auto-resume` job in bench.yml dispatches
- * the run again with `resume-run` and the run's own inputs: finished runs are skipped, only the
- * lost ones are paid for. It happens once per run: the new run carries `auto-resumed-from`,
- * and a run that has it is never auto-resumed again. Any other failure (a bench error exits 1)
- * is left for a person, and so is a run where one shard was killed and another failed on its
- * own: a resume re-runs every errored run in every shard, so it would retry those too.
+ * Two cases belong to an already-approved run and should continue via `resume-run` (finished
+ * runs are skipped; only the leftover ones are paid for):
+ *
+ * 1. **Cloud Run took the runner away** — SIGTERM ("Termination requested"), exit 130, then
+ *    "The self-hosted runner lost communication with the server" (2026-10-08 / 2026-10-09).
+ *    Kill-auto-resume happens once per lineage: the new run carries `auto-resumed-from`, and a
+ *    run that has it is not kill-resumed again (avoids a kill storm).
+ * 2. **Shard hit `--deadline-minutes` with runs left** — `run.mjs` emits an `::error::` annotation
+ *    (`past the deadline for another run; N run(s) left for a resume`). Deadline leftovers may
+ *    chain across dispatches (explore-40 needs several 380-minute windows); each new run can
+ *    deadline-resume again.
+ *
+ * Any other failure (bench error exit 1 without those annotations) is left for a person, and so
+ * is a run where one shard is resumable and another failed on its own: a resume re-runs every
+ * errored run in every shard, so it would retry those too.
  *
  * CLI (bench.yml): GH_TOKEN, GITHUB_REPOSITORY, RUN_ID, REF, INPUTS_JSON (toJSON(inputs)).
  */
@@ -26,17 +30,33 @@ export const KILLED_PATTERNS = [
 ];
 
 /**
+ * Annotation from `run.mjs` when the shard stops taking runs past `--deadline-minutes` with
+ * work still queued (see `guardrails`). Budget stops are intentionally excluded.
+ */
+export const DEADLINE_PATTERNS = [
+  /past the deadline for another run; \d+ run\(s\) left for a resume/,
+];
+
+/** Failed `Shard N` jobs whose annotations match any of `patterns`. */
+export function shardsMatching(jobs, annotations, patterns) {
+  return jobs
+    .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
+    .filter((j) => (annotations.get(j.id) ?? []).some((m) => patterns.some((p) => p.test(m))))
+    .map((j) => j.name);
+}
+
+/**
  * The shard jobs that were killed: failed, with an annotation matching {@link KILLED_PATTERNS}.
  * `jobs` are the run's jobs (`name`, `conclusion`, `id`); `annotations` maps a job id to its
  * annotation messages.
  */
 export function killedShards(jobs, annotations) {
-  return jobs
-    .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
-    .filter((j) =>
-      (annotations.get(j.id) ?? []).some((m) => KILLED_PATTERNS.some((p) => p.test(m)))
-    )
-    .map((j) => j.name);
+  return shardsMatching(jobs, annotations, KILLED_PATTERNS);
+}
+
+/** Failed shards that stopped early for the wall-clock deadline with runs still left. */
+export function deadlineShards(jobs, annotations) {
+  return shardsMatching(jobs, annotations, DEADLINE_PATTERNS);
 }
 
 /**
@@ -54,9 +74,15 @@ export function resumeInputs(inputs, runId) {
   return out;
 }
 
-/** Whether this run may be auto-resumed at all: dispatched, and not itself an auto-resume. */
-export function eligible(inputs) {
-  return Boolean(inputs) && !String(inputs['auto-resumed-from'] ?? '').trim();
+/**
+ * Whether this run may be auto-resumed.
+ * Kill resumes require a blank `auto-resumed-from` (once per lineage). Deadline leftovers may
+ * chain: pass `{ allowDeadlineChain: true }` when a shard hit the wall-clock stop with work left.
+ */
+export function eligible(inputs, { allowDeadlineChain = false } = {}) {
+  if (!inputs) return false;
+  if (!String(inputs['auto-resumed-from'] ?? '').trim()) return true;
+  return allowDeadlineChain;
 }
 
 /** GitHub REST with the job's token. */
@@ -79,16 +105,10 @@ function github(token, fetchImpl = fetch) {
 }
 
 /**
- * Decide and, when shards were killed, dispatch the resume. Returns what it did, for the summary:
- * `{ action: 'skipped' | 'none' | 'resumed', killed, reason }`.
+ * Decide and, when shards are resumable (killed or deadline leftovers), dispatch the resume.
+ * Returns `{ action: 'skipped' | 'none' | 'resumed', killed, deadline, reason }`.
  */
 export async function autoResume({ repo, runId, ref, inputs, token, fetchImpl = fetch }) {
-  if (!eligible(inputs))
-    return {
-      action: 'skipped',
-      killed: [],
-      reason: `this run is already an auto-resume of ${inputs?.['auto-resumed-from'] || 'nothing'}`,
-    };
   const api = github(token, fetchImpl);
   const jobs = [];
   for (let page = 1; ; page += 1) {
@@ -109,32 +129,57 @@ export async function autoResume({ repo, runId, ref, inputs, token, fetchImpl = 
     );
   }
   const killed = killedShards(jobs, annotations);
-  if (!killed.length)
-    return { action: 'none', killed, reason: 'no shard was killed; failures were the bench’s own' };
+  const deadline = deadlineShards(jobs, annotations);
+  const resumable = [...new Set([...killed, ...deadline])];
+  if (!resumable.length)
+    return {
+      action: 'none',
+      killed,
+      deadline,
+      reason: 'no shard was killed or stopped on the deadline; failures were the bench’s own',
+    };
+  if (!eligible(inputs, { allowDeadlineChain: deadline.length > 0 }))
+    return {
+      action: 'skipped',
+      killed,
+      deadline,
+      reason: `this run is already an auto-resume of ${inputs?.['auto-resumed-from'] || 'nothing'} (kill resumes once; deadline leftovers may chain)`,
+    };
   const failed = jobs
     .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
     .map((j) => j.name);
-  const own = failed.filter((n) => !killed.includes(n));
+  const own = failed.filter((n) => !resumable.includes(n));
   if (own.length)
     return {
       action: 'none',
       killed,
-      reason: `${killed.join(', ')} lost their runner, but ${own.join(', ')} failed on their own, and a resume would retry those runs too; resume by hand with resume-run=${runId}`,
+      deadline,
+      reason:
+        `${resumable.join(', ')} can resume, but ${own.join(', ')} failed on their own, ` +
+        `and a resume would retry those runs too; resume by hand with resume-run=${runId}`,
     };
   await api('POST', `/repos/${repo}/actions/workflows/bench.yml/dispatches`, {
     ref,
     inputs: resumeInputs(inputs, runId),
   });
-  return { action: 'resumed', killed, reason: `${killed.join(', ')} lost their runner` };
+  const parts = [];
+  if (killed.length) parts.push(`${killed.join(', ')} lost their runner`);
+  if (deadline.length) parts.push(`${deadline.join(', ')} stopped on the deadline with runs left`);
+  return { action: 'resumed', killed, deadline, reason: parts.join('; ') };
 }
 
 /** The run-summary lines for what happened. */
 export function summaryLines(result, runId) {
-  if (result.action === 'resumed')
+  if (result.action === 'resumed') {
+    const chain =
+      (result.deadline?.length ?? 0) > 0
+        ? 'deadline leftovers may chain on later windows'
+        : 'once; kill resumes do not chain';
     return [
       '### Auto-resume',
-      `${result.reason}: dispatched this run again with \`resume-run=${runId}\` and its own inputs (once; the new run is marked \`auto-resumed-from=${runId}\`).`,
+      `${result.reason}: dispatched this run again with \`resume-run=${runId}\` and its own inputs (${chain}; marked \`auto-resumed-from=${runId}\`).`,
     ];
+  }
   return ['### Auto-resume', `Not resumed: ${result.reason}.`];
 }
 

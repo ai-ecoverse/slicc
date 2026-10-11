@@ -1,8 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import { autoResume, eligible, killedShards, resumeInputs, summaryLines } from './auto-resume.mjs';
+import {
+  autoResume,
+  deadlineShards,
+  eligible,
+  killedShards,
+  resumeInputs,
+  summaryLines,
+} from './auto-resume.mjs';
 
 const LOST =
   'The self-hosted runner lost communication with the server. Verify the machine is running and has a healthy network connection.';
+const DEADLINE = 'past the deadline for another run; 19 run(s) left for a resume';
 
 const jobs = [
   { id: 1, name: 'Plan', conclusion: 'success' },
@@ -34,6 +42,24 @@ describe('killedShards', () => {
   });
 });
 
+describe('deadlineShards', () => {
+  it('picks failed shards that stopped on the wall-clock deadline with runs left', () => {
+    const annotations = new Map([
+      [3, [DEADLINE]],
+      [4, ['Process completed with exit code 1.']],
+    ]);
+    expect(deadlineShards(jobs, annotations)).toEqual(['Shard 2']);
+  });
+
+  it('ignores budget stops and Report-job noise', () => {
+    const annotations = new Map([
+      [3, ['spent $80.00 of the $80 budget; 3 run(s) left for a resume']],
+      [7, [DEADLINE]],
+    ]);
+    expect(deadlineShards(jobs, annotations)).toEqual([]);
+  });
+});
+
 describe('resumeInputs', () => {
   it("carries the run's inputs as strings and marks the resume", () => {
     const inputs = {
@@ -60,15 +86,24 @@ describe('resumeInputs', () => {
 });
 
 describe('eligible', () => {
-  it('never resumes a run that is itself an auto-resume', () => {
+  it('never kill-resumes a run that is itself an auto-resume', () => {
     expect(eligible({ 'auto-resumed-from': '' })).toBe(true);
     expect(eligible({ 'auto-resumed-from': '37828059342' })).toBe(false);
     expect(eligible(null)).toBe(false);
   });
+
+  it('allows deadline leftovers to chain across auto-resumes', () => {
+    expect(eligible({ 'auto-resumed-from': '37828059342' }, { allowDeadlineChain: true })).toBe(
+      true
+    );
+    expect(eligible({ 'auto-resumed-from': '37828059342' }, { allowDeadlineChain: false })).toBe(
+      false
+    );
+  });
 });
 
 /** A GitHub API double: the run's jobs, annotations per job id, and the dispatches it received. */
-function fakeGithub(annotations) {
+function fakeGithub(annotations, jobList = jobs) {
   const dispatched = [];
   const fetchImpl = vi.fn(async (url, init = {}) => {
     const path = new URL(url).pathname;
@@ -76,7 +111,7 @@ function fakeGithub(annotations) {
       dispatched.push(JSON.parse(init.body));
       return new Response(null, { status: 204 });
     }
-    if (path.endsWith('/jobs')) return Response.json({ jobs });
+    if (path.endsWith('/jobs')) return Response.json({ jobs: jobList });
     const m = /\/check-runs\/(\d+)\/annotations$/.exec(path);
     if (m)
       return Response.json((annotations.get(Number(m[1])) ?? []).map((message) => ({ message })));
@@ -84,6 +119,13 @@ function fakeGithub(annotations) {
   });
   return { fetchImpl, dispatched };
 }
+
+/** Single failed shard (explore-40 shape: one shard, one leader). */
+const oneFailedShard = [
+  { id: 1, name: 'Plan', conclusion: 'success' },
+  { id: 3, name: 'Shard 1', conclusion: 'failure' },
+  { id: 7, name: 'Report', conclusion: 'failure' },
+];
 
 describe('autoResume', () => {
   const base = { repo: 'o/r', runId: '42', ref: 'main', token: 't' };
@@ -108,20 +150,49 @@ describe('autoResume', () => {
     expect(summaryLines(result, '42').join('\n')).toContain('resume-run=42');
   });
 
+  it('dispatches when every failed shard stopped on the deadline with runs left', async () => {
+    const { fetchImpl, dispatched } = fakeGithub(new Map([[3, [DEADLINE]]]), oneFailedShard);
+    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
+    expect(result).toMatchObject({
+      action: 'resumed',
+      killed: [],
+      deadline: ['Shard 1'],
+    });
+    expect(result.reason).toMatch(/stopped on the deadline/);
+    expect(dispatched).toHaveLength(1);
+    expect(summaryLines(result, '42').join('\n')).toMatch(/deadline leftovers may chain/);
+  });
+
+  it('chains a deadline resume even when the run is already an auto-resume', async () => {
+    const { fetchImpl, dispatched } = fakeGithub(new Map([[3, [DEADLINE]]]), oneFailedShard);
+    const result = await autoResume({
+      ...base,
+      inputs: { 'auto-resumed-from': '7', sets: 'bu-v2' },
+      fetchImpl,
+    });
+    expect(result.action).toBe('resumed');
+    expect(dispatched).toEqual([
+      {
+        ref: 'main',
+        inputs: { 'auto-resumed-from': '42', sets: 'bu-v2', 'resume-run': '42' },
+      },
+    ]);
+  });
+
+  it('does not kill-resume when the run is already an auto-resume', async () => {
+    const { fetchImpl, dispatched } = fakeGithub(new Map([[3, [LOST]]]), oneFailedShard);
+    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '7' }, fetchImpl });
+    expect(result.action).toBe('skipped');
+    expect(result.reason).toMatch(/kill resumes once/);
+    expect(dispatched).toEqual([]);
+  });
+
   it('dispatches nothing when every failure was the bench’s own', async () => {
     const { fetchImpl, dispatched } = fakeGithub(
       new Map([[3, ['Process completed with exit code 1.']]])
     );
     const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
     expect(result.action).toBe('none');
-    expect(dispatched).toEqual([]);
-  });
-
-  it('does not even look when the run is already an auto-resume', async () => {
-    const { fetchImpl, dispatched } = fakeGithub(new Map([[3, [LOST]]]));
-    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '7' }, fetchImpl });
-    expect(result.action).toBe('skipped');
-    expect(fetchImpl).not.toHaveBeenCalled();
     expect(dispatched).toEqual([]);
   });
 
@@ -148,6 +219,18 @@ describe('autoResume', () => {
     expect(result.reason).toMatch(
       /Shard 3, Shard 4 failed on their own.*resume by hand with resume-run=42/
     );
+    expect(dispatched).toEqual([]);
+  });
+
+  it('leaves a run alone when one shard hit the deadline and another failed on its own', async () => {
+    const { fetchImpl, dispatched } = fakeGithub(
+      new Map([
+        [3, [DEADLINE]],
+        [4, ['Process completed with exit code 1.']],
+      ])
+    );
+    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
+    expect(result).toMatchObject({ action: 'none', deadline: ['Shard 2'] });
     expect(dispatched).toEqual([]);
   });
 });
