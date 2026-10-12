@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -22,6 +29,12 @@ import {
   createRecycler,
   currentLeader,
 } from './lifecycle.mjs';
+import {
+  exportMemoryCheckpoint,
+  hasMemoryCheckpoint,
+  importMemoryCheckpoint,
+  memoryCheckpointPath,
+} from './memory-checkpoint.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
   ARM_SKILL_SET,
@@ -377,7 +390,7 @@ export function readTrace(path, benchmark) {
   return path.endsWith('.enc') ? decryptSetFile(text, benchmark) : JSON.parse(text);
 }
 
-async function loadAndPlan(opts, deps, log) {
+export async function loadAndPlan(opts, deps, log) {
   const sets = [];
   const known = new Set();
   for (const spec of opts.sets) {
@@ -620,13 +633,61 @@ function writeRun(opts, r, { record, result }) {
   writeFileSync(tp, r.set.encrypted ? encryptJson(trace, r.set.benchmark) : JSON.stringify(trace));
 }
 
-function previous(opts, r) {
+export function previous(opts, r) {
   const where = [opts.out, r.set.benchmark, r.condition.name, r.model, r.task.id, r.repeat];
   const rp = recordPath(...where);
   return {
     record: existsSync(rp) ? JSON.parse(readFileSync(rp, 'utf8')) : null,
     traceExists: existsSync(tracePath(...where, r.set.encrypted)),
   };
+}
+
+export async function restoreMemoryCheckpoints(lanes, opts, log) {
+  if (opts.newSession !== 'save' && opts.newSession !== 'skip') {
+    opts.memoryRestored = false;
+    return false;
+  }
+  if (process.env.BENCH_MEMORY_RESTORED === '1') {
+    opts.memoryRestored = true;
+    log('memory chain: BENCH_MEMORY_RESTORED=1 (skipping CLAUDE.md import)');
+    return true;
+  }
+  if (!hasMemoryCheckpoint(opts.out)) {
+    opts.memoryRestored = false;
+    return false;
+  }
+  for (const lc of lanes) {
+    const r = await importMemoryCheckpoint(lc.leader, opts.out);
+    if (r.restored) log(`memory chain: restored ${r.bytes} bytes of CLAUDE.md on lane ${lc.id}`);
+  }
+  opts.memoryRestored = true;
+  return true;
+}
+
+export async function stashMemoryCheckpoint(leader, opts, log) {
+  if (opts.newSession !== 'save' && opts.newSession !== 'skip') return null;
+  try {
+    const r = await exportMemoryCheckpoint(leader, opts.out);
+    if (r.exported) {
+      opts.memoryRestored = true;
+      log(`memory chain: stashed ${r.bytes} bytes → memory/CLAUDE.md`);
+    }
+    return r;
+  } catch (err) {
+    log(`memory chain: stash failed: ${err.message}`);
+    const path = memoryCheckpointPath(opts.out);
+    try {
+      if (existsSync(path)) unlinkSync(path);
+    } catch {}
+    opts.memoryRestored = false;
+    throw err;
+  }
+}
+
+export function shouldStashMemoryCheckpoint(record) {
+  if (!record) return false;
+  if (!record.error) return true;
+  return record.error_stage === 'judge';
 }
 
 export function ageSeconds(startedAt, now = Date.now()) {
@@ -860,7 +921,7 @@ async function processRun(i, r, runs, ctx, say) {
     arm: opts.arm?.name ?? null,
     newSession: opts.newSession,
 
-    memoryRestored: process.env.BENCH_MEMORY_RESTORED === '1',
+    memoryRestored: Boolean(opts.memoryRestored) || process.env.BENCH_MEMORY_RESTORED === '1',
   });
   if (action === 'done') {
     say(
@@ -878,6 +939,8 @@ async function processRun(i, r, runs, ctx, say) {
   say(describeRun(i, runs.length, r, outcome.record));
   writeRun(opts, r, outcome);
   journal.event('task', taskEvent(r, outcome, ctx.id));
+  if (shouldStashMemoryCheckpoint(outcome.record))
+    await stashMemoryCheckpoint(ctx.leader, opts, say);
   return outcome;
 }
 
@@ -1028,11 +1091,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   let outcome;
   try {
     lanes.push(...(await setupLanes(opts, deps, journal, log, runStart)));
+    await restoreMemoryCheckpoints(lanes, opts, log);
     journal.event('start', {
       runs: runs.length,
       lanes: lanes.length,
       fresh_leader_every: opts.freshLeaderEvery,
       new_session: opts.newSession,
+      memory_restored: Boolean(opts.memoryRestored),
       deadline_minutes: opts.deadlineMinutes || null,
       max_task_cost: opts.maxTaskCost || null,
       max_cost: opts.maxCost || null,
