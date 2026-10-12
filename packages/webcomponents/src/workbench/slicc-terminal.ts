@@ -251,14 +251,32 @@ export class SliccTerminal extends HTMLElement {
     }
     this.#core = core;
     this.#applyTheme();
+    // Pin an initial grid and skip auto-measure. wterm 0.5.1+ can spend
+    // multiple seconds on the main thread during first mount (selection /
+    // search / measure path); an unbounded host measure makes that worse in
+    // CI when the terminal opens while tray heartbeats are live. `fit()`
+    // below still resizes to the real host once init finishes.
     const term = new WTerm(this.#hostEl, {
       core,
+      cols: 80,
+      rows: 24,
+      autoResize: false,
       cursorBlink: !prefersReducedMotion(),
       onData: (data) =>
         this.dispatchEvent(
           new CustomEvent('terminal-data', { detail: data, bubbles: true, composed: true })
         ),
     });
+    // Yield once so concurrent boot/tray work can run before the synchronous
+    // Ghostty/renderer setup inside `init()` occupies the main thread.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    if (this.#disposed || generation !== this.#loadGeneration || !this.#hostEl) {
+      core.dispose();
+      if (this.#core === core) this.#core = null;
+      return;
+    }
     try {
       await term.init();
     } catch (error) {
