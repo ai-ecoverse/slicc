@@ -238,9 +238,30 @@ describe('autoResume', () => {
     expect(dispatched).toEqual([]);
   });
 
-  it('leaves a deadline-marked shard alone when its benchmark run also errored', async () => {
+  it('still deadline-resumes when Actions adds the generic exit-code-1 annotation', async () => {
+    // Real explore-40 shape (run 38173105528): deadline ::error:: plus GitHub's
+    // "Process completed with exit code 1." — the latter must not veto the resume.
     const { fetchImpl, dispatched } = fakeGithub(
       new Map([[3, [DEADLINE, 'Process completed with exit code 1.']]]),
+      oneFailedShard
+    );
+    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
+    expect(result).toMatchObject({ action: 'resumed', deadline: ['Shard 1'] });
+    expect(dispatched).toHaveLength(1);
+  });
+
+  it('leaves a deadline-marked shard alone when a real bench error annotation is also present', async () => {
+    const { fetchImpl, dispatched } = fakeGithub(
+      new Map([
+        [
+          3,
+          [
+            DEADLINE,
+            'Process completed with exit code 1.',
+            'memory extraction finished with no durable memories',
+          ],
+        ],
+      ]),
       oneFailedShard
     );
     const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
