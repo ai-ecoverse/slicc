@@ -1,0 +1,397 @@
+# One-task-per-job memory chain for `--new-session save`.
+#
+# Each job runs a single task, stashes `/workspace/CLAUDE.md` into the out-dir artifact
+# (`memory/CLAUDE.md`), then dispatches the next job with `chain-from` pointing at this run.
+# That chains past Actions / Cloud Run deadlines without replaying done tasks on an empty store.
+#
+# Dispatch with the full task list (e.g. `@bu-v2-explore-40`); leave `chain-from` empty to start.
+# After a failure, re-dispatch with `chain-from` set to the last successful run id.
+#
+# See packages/bench/scripts/memory-checkpoint.mjs and packages/bench/README.md.
+name: Bench memory chain
+
+on:
+  workflow_dispatch:
+    inputs:
+      sets:
+        description: 'Task sets, space-separated: bu-v1, bu-v2, or task-set JSON paths'
+        default: 'bu-v2'
+      models:
+        description: 'Exactly one model (comma-separated lists are rejected: one checkpoint cannot mix arms)'
+        default: 'claude-sonnet-5'
+      skills:
+        description: 'Exactly one skills condition (comma-separated lists are rejected)'
+        default: 'builtin'
+      tasks:
+        description: 'Task ids or @subset (e.g. @bu-v2-explore-40); required for a bounded chain'
+        default: '@bu-v2-explore-40'
+      timeout:
+        description: 'Seconds one agent run may take (BU Bench V2.1: 3600)'
+        default: '3600'
+      judge-model:
+        description: 'Bedrock model that judges the runs'
+        default: 'global.openai.gpt-5.6-luna'
+      judge-fallback-model:
+        description: 'Fallback judge (none: no fallback)'
+        default: 'global.openai.gpt-5.6-sol'
+      deadline-minutes:
+        description: 'Minutes this job takes new runs for (one task + overhead); at most 420'
+        default: '90'
+      max-task-cost:
+        description: 'Dollars one run may spend before it is stopped (0: no cap)'
+        default: '5'
+      runner:
+        description: 'Runner label: cloud-run-bench or cloud-run-gpu'
+        default: 'cloud-run-bench'
+      chain-from:
+        description: 'Prior memory-chain run id whose artifact (records + memory/CLAUDE.md) to continue from'
+        default: ''
+      continue:
+        description: 'After a successful task, dispatch the next job with chain-from=this run'
+        type: boolean
+        default: true
+      pin-webapp:
+        description: 'Empty: production UI. true: pinned sliccy package. A commit/tag/branch: build that revision'
+        type: string
+        default: ''
+
+concurrency:
+  # One chain lineage at a time per ref + task list fingerprint would be nicer; run_id keeps
+  # parallel chains possible while chain-from links them.
+  group: bench-memory-chain-${{ github.event.inputs.chain-from || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan next task
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      complete: ${{ steps.pick.outputs.complete }}
+      next_task: ${{ steps.pick.outputs.next_task }}
+      action: ${{ steps.pick.outputs.action }}
+      done: ${{ steps.pick.outputs.done }}
+      left: ${{ steps.pick.outputs.left }}
+      total: ${{ steps.pick.outputs.total }}
+      memory_restored: ${{ steps.pick.outputs.memory_restored }}
+      slicc-version: ${{ steps.pin.outputs.slicc-version }}
+      run-minutes: ${{ steps.pin.outputs.run-minutes }}
+      job-minutes: ${{ steps.pin.outputs.job-minutes }}
+    env:
+      DEADLINE: ${{ inputs.deadline-minutes }}
+      PIN_WEBAPP: ${{ inputs.pin-webapp }}
+      CHAIN_FROM: ${{ inputs.chain-from }}
+      BENCH_SETS: ${{ inputs.sets }}
+      BENCH_MODELS: ${{ inputs.models }}
+      BENCH_SKILLS: ${{ inputs.skills }}
+      BENCH_TASKS: ${{ inputs.tasks }}
+      BENCH_TIMEOUT: ${{ inputs.timeout }}
+      BENCH_JUDGE_MODEL: ${{ inputs.judge-model }}
+      BENCH_JUDGE_FALLBACK_MODEL: ${{ inputs.judge-fallback-model }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Pin sliccy and job budgets
+        id: pin
+        run: |
+          set -euo pipefail
+          case "$PIN_WEBAPP" in ''|true|false) PIN_MINUTES=0 ;; *) PIN_MINUTES=40 ;; esac
+          MAX_DEADLINE=$((420 - PIN_MINUTES))
+          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt "$MAX_DEADLINE" ]; then
+            echo "::error::deadline-minutes must be 10 to $MAX_DEADLINE, not '$DEADLINE'"; exit 1
+          fi
+          echo "run-minutes=$((DEADLINE + 20))" >> "$GITHUB_OUTPUT"
+          echo "job-minutes=$((DEADLINE + 45 + PIN_MINUTES))" >> "$GITHUB_OUTPUT"
+          version="$(npm view sliccy@latest version)"
+          echo "slicc-version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Restore prior chain artifact
+        if: env.CHAIN_FROM != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bench-memory-chain-${{ inputs.chain-from }}
+          path: ${{ runner.temp }}/bench-out
+          run-id: ${{ inputs.chain-from }}
+          github-token: ${{ github.token }}
+
+      - name: Pick the next task
+        id: pick
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bench-out"
+          fallback="$BENCH_JUDGE_FALLBACK_MODEL"
+          if [ "$fallback" = none ]; then fallback=""; fi
+          args=()
+          for set in $BENCH_SETS; do args+=(--set "$set"); done
+          args+=(--models "$BENCH_MODELS" --skills "$BENCH_SKILLS" --repeats 1
+                 --timeout "$BENCH_TIMEOUT" --judge-model "$BENCH_JUDGE_MODEL"
+                 --judge-fallback-model "$fallback"
+                 --new-session save --out "$RUNNER_TEMP/bench-out")
+          if [ -n "$BENCH_TASKS" ]; then args+=(--tasks "$BENCH_TASKS"); fi
+          node packages/bench/scripts/chain-plan.mjs "${args[@]}"
+
+  task:
+    name: Task ${{ needs.plan.outputs.next_task }}
+    needs: plan
+    if: needs.plan.outputs.complete != 'true'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
+    env:
+      BENCH_SETS: ${{ inputs.sets }}
+      # One arm only: plan rejects multi-model/skills; use the picked run's model/skills, not the full lists.
+      BENCH_MODELS: ${{ needs.plan.outputs.model }}
+      BENCH_SKILLS: ${{ needs.plan.outputs.skills }}
+      BENCH_TASKS: ${{ needs.plan.outputs.next_task }}
+      BENCH_TIMEOUT: ${{ inputs.timeout }}
+      BENCH_JUDGE_MODEL: ${{ inputs.judge-model }}
+      BENCH_JUDGE_FALLBACK_MODEL: ${{ inputs.judge-fallback-model }}
+      BENCH_DEADLINE_MINUTES: ${{ inputs.deadline-minutes }}
+      BENCH_MAX_TASK_COST: ${{ inputs.max-task-cost }}
+      BENCH_MAX_COST: '0'
+      BENCH_FRESH_LEADER_EVERY: '0'
+      BENCH_NEW_SESSION: 'save'
+      BENCH_LEADERS: '1'
+      SLICC_VERSION: ${{ needs.plan.outputs.slicc-version }}
+      CHAIN_FROM: ${{ inputs.chain-from }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Install Chrome
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then google-chrome --version; exit 0; fi
+          curl -fsSL -o "$RUNNER_TEMP/chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          apt=(sudo apt-get -o DPkg::Lock::Timeout=600)
+          "${apt[@]}" update -qq
+          "${apt[@]}" install -y -qq --no-install-recommends "$RUNNER_TEMP/chrome.deb" fonts-liberation
+          google-chrome --version
+
+      - name: Prepare /slicc
+        run: |
+          if [ -w /slicc ] 2>/dev/null; then exit 0; fi
+          sudo mkdir -p /slicc && sudo chown "$(id -u)" /slicc
+
+      - name: Restore prior chain artifact
+        if: env.CHAIN_FROM != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bench-memory-chain-${{ inputs.chain-from }}
+          path: ${{ runner.temp }}/bench-out
+          run-id: ${{ inputs.chain-from }}
+          github-token: ${{ github.token }}
+
+      - name: Resume from this run's previous attempt
+        if: github.run_attempt != '1'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bench-memory-chain-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-out
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: packages/slicc-cli/go.mod
+          cache-dependency-path: packages/slicc-cli/go.sum
+
+      - name: Build a pinned commit
+        id: pin-commit
+        timeout-minutes: 40
+        if: inputs.pin-webapp != '' && inputs.pin-webapp != 'false' && inputs.pin-webapp != 'true'
+        env:
+          INPUT_PIN_WEBAPP: ${{ inputs.pin-webapp }}
+          PIN_DEST: ${{ runner.temp }}/slicc-pin
+        run: node packages/github-workflow/scripts/materialize-pinned-commit.mjs
+
+      - name: Install the slicc CLI (built from this checkout)
+        uses: ./packages/github-workflow/actions/install-cli
+        with:
+          source: build
+
+      - name: Run one task
+        timeout-minutes: ${{ fromJSON(needs.plan.outputs.run-minutes) }}
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          BEDROCK_REGION: ${{ vars.RUM_AWS_REGION || 'us-west-2' }}
+          BENCH_LEADER_SCRIPTS: packages/github-workflow/scripts
+          INPUT_SLICC_VERSION: ${{ needs.plan.outputs.slicc-version }}
+          INPUT_NODE_SERVER: ${{ steps.pin-commit.outputs.node-server }}
+          INPUT_PIN_WEBAPP: ${{ inputs.pin-webapp != '' && inputs.pin-webapp != 'false' && 'true' || 'false' }}
+          INPUT_DURATION: 350m
+          INPUT_MOUNTS: ''
+          INPUT_PROVIDER: bedrock-camp
+          INPUT_PROVIDER_API_KEY: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          INPUT_PROVIDER_BASE_URL: https://bedrock-runtime.${{ vars.RUM_AWS_REGION || 'us-west-2' }}.amazonaws.com
+          INPUT_MODEL: bedrock-camp:global.anthropic.claude-sonnet-5
+          INPUT_MASK_JOIN_URL: 'true'
+          SLICC_CHROME_GPU: ${{ inputs.runner == 'cloud-run-gpu' && '1' || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bench-out"
+          fallback="$BENCH_JUDGE_FALLBACK_MODEL"
+          if [ "$fallback" = none ]; then fallback=""; fi
+          args=(--models "$BENCH_MODELS" --skills "$BENCH_SKILLS" --repeats 1
+                --timeout "$BENCH_TIMEOUT" --judge-model "$BENCH_JUDGE_MODEL"
+                --judge-fallback-model "$fallback"
+                --leaders 1 --boot-leaders --shard 1/1
+                --fresh-leader-every 0
+                --new-session save
+                --deadline-minutes "$BENCH_DEADLINE_MINUTES"
+                --max-task-cost "$BENCH_MAX_TASK_COST" --max-cost "$BENCH_MAX_COST"
+                --harness "$SLICC_VERSION" --out "$RUNNER_TEMP/bench-out"
+                --tasks "$BENCH_TASKS")
+          for set in $BENCH_SETS; do args+=(--set "$set"); done
+          node packages/bench/scripts/run.mjs "${args[@]}"
+
+      - name: Collect leader diagnostics
+        if: always()
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/bench-out"
+          mkdir -p "$out"
+          found=0
+          for log in "$RUNNER_TEMP"/slicc-gw-lane*/leader.log; do
+            [ -f "$log" ] || continue
+            found=1
+            lane="$(basename "$(dirname "$log")")"
+            grep -v '\[cdp-proxy\]' "$log" \
+              | grep -iE 'bench-event|tray|signal|follower|controller|bootstrap|webrtc|ice|turn|dtls|sctp|data ?channel|peer|reconnect|disconnect|websocket|heartbeat|start-leader|stop-leader' \
+              | sed -E 's#/(join|controller|webhook)/[^ /"?]+#/\1/<token>#g' \
+              | cut -c1-400 > "$out/leader-infra-$lane.log" || true
+          done
+          [ "$found" = 1 ] || echo "no leader logs"
+
+      - name: Stop leaders
+        if: always()
+        timeout-minutes: 5
+        run: |
+          for home in "$RUNNER_TEMP"/slicc-gw-lane*; do
+            [ -f "$home/state.json" ] || continue
+            SLICC_GW_HOME="$home" node packages/github-workflow/scripts/stop-leader.mjs || true
+          done
+
+      - name: Check the out dir for plaintext task text
+        id: leak-check
+        if: always()
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/bench-out"
+          [ -d "$out" ] || exit 0
+          args=(--out "$out")
+          for set in $BENCH_SETS; do args+=(--set "$set"); done
+          node packages/bench/scripts/leak-check.mjs "${args[@]}"
+
+      - name: Upload chain artifact
+        if: always() && steps.leak-check.outcome != 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-memory-chain-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-out
+          if-no-files-found: ignore
+
+  continue:
+    name: Continue chain
+    needs: [plan, task]
+    if: ${{ always() && inputs.continue && needs.plan.outputs.complete != 'true' && needs.task.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: packages/bench/scripts
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Dispatch the next task job
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REF: ${{ github.ref_name }}
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+        run: node packages/bench/scripts/chain-continue.mjs
+
+  report:
+    name: Report
+    needs: [plan, task]
+    if: ${{ always() && (needs.plan.outputs.complete == 'true' || needs.task.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BENCH_SETS: ${{ inputs.sets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Download this run's artifact
+        if: needs.plan.outputs.complete != 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bench-memory-chain-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-out
+
+      - name: Download chain-from when already complete
+        if: needs.plan.outputs.complete == 'true' && inputs.chain-from != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bench-memory-chain-${{ inputs.chain-from }}
+          path: ${{ runner.temp }}/bench-out
+          run-id: ${{ inputs.chain-from }}
+          github-token: ${{ github.token }}
+
+      - name: Write report summary
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/bench-out"
+          if [ ! -d "$out/records" ]; then
+            echo "No records yet (plan complete=${{ needs.plan.outputs.complete }}, done=${{ needs.plan.outputs.done }}/${{ needs.plan.outputs.total }})." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node -e "
+            const { writeOutputs } = await import('./packages/bench/scripts/run.mjs');
+            const report = writeOutputs({ out: process.env.OUT }, new Date().toISOString());
+            console.log(report);
+          "
+          echo "### Memory chain progress" >> "$GITHUB_STEP_SUMMARY"
+          echo "done=${{ needs.plan.outputs.done }} left=${{ needs.plan.outputs.left }} total=${{ needs.plan.outputs.total }} next=${{ needs.plan.outputs.next_task }} complete=${{ needs.plan.outputs.complete }}" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          OUT: ${{ runner.temp }}/bench-out
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-memory-chain-report-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/bench-out/report.md
+            ${{ runner.temp }}/bench-out/report.json
+            ${{ runner.temp }}/bench-out/report.html
+            ${{ runner.temp }}/bench-out/results
+          if-no-files-found: ignore
