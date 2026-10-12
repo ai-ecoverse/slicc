@@ -198,14 +198,27 @@ export class SliccTerminal extends HTMLElement {
     }
     this.#core = core;
     this.#applyTheme();
+
     const term = new WTerm(this.#hostEl, {
       core,
+      cols: 80,
+      rows: 24,
+      autoResize: false,
       cursorBlink: !prefersReducedMotion(),
       onData: (data) =>
         this.dispatchEvent(
           new CustomEvent('terminal-data', { detail: data, bubbles: true, composed: true })
         ),
     });
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    if (this.#disposed || generation !== this.#loadGeneration || !this.#hostEl) {
+      core.dispose();
+      if (this.#core === core) this.#core = null;
+      return;
+    }
     try {
       await term.init();
     } catch (error) {

@@ -884,6 +884,14 @@ export function attachWcWorkbench(
   });
   boot.setActivateSurface(workbenchActivator);
 
+  boot.onClientReady(() => {
+    window.setTimeout(() => {
+      void import('@slicc/webcomponents/workbench/warm-wterm')
+        .then(({ warmWterm }) => warmWterm())
+        .catch((err) => log.warn('wterm WASM warm-up failed', err));
+    }, 2500);
+  });
+
   if (panelsRequested) {
     void import('./panelize-shell.js')
       .then(({ panelizeShell }) =>
