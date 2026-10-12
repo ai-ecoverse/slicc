@@ -70,7 +70,7 @@
       "lines": 86,
       "statements": 84,
       "functions": 85,
-      "branches": 75,
+      "branches": 76,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -86,10 +86,10 @@
       ]
     },
     "cherry": {
-      "lines": 92,
-      "statements": 90,
+      "lines": 93,
+      "statements": 91,
       "functions": 98,
-      "branches": 79
+      "branches": 83
     },
     "cloud-core": {
       "lines": 86,
@@ -113,7 +113,7 @@
       "lines": 97,
       "statements": 95,
       "functions": 96,
-      "branches": 90
+      "branches": 91
     },
     "webcomponents": {
       "lines": 95,
@@ -167,7 +167,7 @@
     "swift-launcher": {
       "lines": 80,
       "functions": 72,
-      "regions": 73
+      "regions": 74
     },
     "swift-optel": {
       "lines": 97,
