@@ -73,6 +73,38 @@ describe('exportMemoryCheckpoint', () => {
     expect(r).toEqual({ exported: false, bytes: 0 });
     expect(readFileSync(memoryCheckpointPath(out), 'utf8')).toBe('keep\n');
   });
+
+  it('throws when the leader cat fails or goes down', async () => {
+    const out = tmp();
+    await expect(
+      exportMemoryCheckpoint(
+        {
+          async exec() {
+            return { status: 2, stdout: '', stderr: 'boom', leaderDown: false };
+          },
+        },
+        out
+      )
+    ).rejects.toThrow(/export memory checkpoint: cat exited 2/);
+    await expect(
+      exportMemoryCheckpoint(
+        {
+          async exec() {
+            return { status: 0, stdout: '', stderr: '', leaderDown: true };
+          },
+        },
+        out
+      )
+    ).rejects.toThrow(/export memory checkpoint/);
+  });
+});
+
+describe('hasMemoryCheckpoint edge cases', () => {
+  it('returns false when the path exists but cannot be read as text', () => {
+    const out = tmp();
+    mkdirSync(join(out, 'memory', 'CLAUDE.md'), { recursive: true });
+    expect(hasMemoryCheckpoint(out)).toBe(false);
+  });
 });
 
 describe('importMemoryCheckpoint', () => {
@@ -92,6 +124,16 @@ describe('importMemoryCheckpoint', () => {
     expect(r).toEqual({ restored: false, bytes: 0 });
   });
 
+  it('returns restored:false for a whitespace-only checkpoint file', async () => {
+    const out = tmp();
+    mkdirSync(join(out, 'memory'), { recursive: true });
+    writeFileSync(memoryCheckpointPath(out), '  \n');
+    expect(await importMemoryCheckpoint(fakeLeader(), out)).toEqual({
+      restored: false,
+      bytes: 0,
+    });
+  });
+
   it('throws when the leader write fails', async () => {
     const out = tmp();
     mkdirSync(join(out, 'memory'), { recursive: true });
@@ -99,5 +141,18 @@ describe('importMemoryCheckpoint', () => {
     await expect(importMemoryCheckpoint(fakeLeader({ failWrite: true }), out)).rejects.toThrow(
       /write exited 1/
     );
+  });
+
+  it('exports when stdout is null by treating it as empty', async () => {
+    const out = tmp();
+    const r = await exportMemoryCheckpoint(
+      {
+        async exec() {
+          return { status: 0, stdout: null, stderr: '' };
+        },
+      },
+      out
+    );
+    expect(r).toEqual({ exported: false, bytes: 0 });
   });
 });

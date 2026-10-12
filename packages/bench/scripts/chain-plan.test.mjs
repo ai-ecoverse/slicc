@@ -1,15 +1,18 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  assertSingleChainConfig,
   chainProgress,
   githubOutputLines,
+  main,
   memoryRestoredForOut,
   pickNextChainRun,
 } from './chain-plan.mjs';
 import { taskDigests } from './format.mjs';
 import { memoryCheckpointPath } from './memory-checkpoint.mjs';
+import { parseSkillsCondition } from './slicc-adapter.mjs';
 
 const dirs = [];
 afterEach(() => {
@@ -133,5 +136,171 @@ describe('githubOutputLines', () => {
     expect(lines).toContain('next_task=t-b');
     expect(lines).toContain('memory_restored=true');
     expect(lines).toContain('complete=false');
+  });
+});
+
+describe('assertSingleChainConfig', () => {
+  it('allows a single model and skills condition', () => {
+    expect(() =>
+      assertSingleChainConfig({
+        models: ['claude-sonnet-5'],
+        skills: [parseSkillsCondition('builtin')],
+      })
+    ).not.toThrow();
+    expect(() => assertSingleChainConfig({})).not.toThrow();
+  });
+
+  it('rejects multiple models or skills', () => {
+    expect(() =>
+      assertSingleChainConfig({
+        models: ['a', 'b'],
+        skills: [parseSkillsCondition('builtin')],
+      })
+    ).toThrow(/one --models entry/);
+    expect(() =>
+      assertSingleChainConfig({
+        models: ['a'],
+        skills: [parseSkillsCondition('builtin'), parseSkillsCondition('none')],
+      })
+    ).toThrow(/one --skills entry/);
+  });
+});
+
+describe('main', () => {
+  const prevOut = process.env.GITHUB_OUTPUT;
+  const prevSummary = process.env.GITHUB_STEP_SUMMARY;
+  afterEach(() => {
+    if (prevOut === undefined) delete process.env.GITHUB_OUTPUT;
+    else process.env.GITHUB_OUTPUT = prevOut;
+    if (prevSummary === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = prevSummary;
+  });
+
+  it('logs to stderr and stdout when GitHub env files are absent', async () => {
+    delete process.env.GITHUB_OUTPUT;
+    delete process.env.GITHUB_STEP_SUMMARY;
+    const out = tmp();
+    const printed = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const code = await main(
+      [
+        '--set',
+        'packages/bench/tasks/smoke.json',
+        '--models',
+        'm',
+        '--skills',
+        'builtin',
+        '--new-session',
+        'save',
+        '--out',
+        out,
+        '--no-judge',
+        '--tasks',
+        'smoke-001',
+      ]
+      // default deps.log → console.error
+    );
+    expect(code).toBe(0);
+    expect(printed.mock.calls.some((c) => /next_task=smoke-001/.test(String(c[0])))).toBe(true);
+    printed.mockRestore();
+  });
+
+  it('writes Actions outputs for the next unfinished smoke task', async () => {
+    const out = tmp();
+    const ghOut = join(out, 'gh-out');
+    const summary = join(out, 'summary.md');
+    writeFileSync(ghOut, '');
+    writeFileSync(summary, '');
+    process.env.GITHUB_OUTPUT = ghOut;
+    process.env.GITHUB_STEP_SUMMARY = summary;
+    const log = vi.fn();
+    const code = await main(
+      [
+        '--set',
+        'packages/bench/tasks/smoke.json',
+        '--models',
+        'm',
+        '--skills',
+        'builtin',
+        '--new-session',
+        'save',
+        '--out',
+        out,
+        '--no-judge',
+        '--tasks',
+        'smoke-001',
+      ],
+      { log }
+    );
+    expect(code).toBe(0);
+    const lines = readFileSync(ghOut, 'utf8');
+    expect(lines).toMatch(/next_task=smoke-001/);
+    expect(lines).toMatch(/complete=false/);
+    expect(readFileSync(summary, 'utf8')).toMatch(/Next: `smoke-001`/);
+    expect(log.mock.calls.some((c) => /next smoke-001/.test(c[0]))).toBe(true);
+  });
+
+  it('reports complete when every planned run is done with a restored checkpoint', async () => {
+    const out = tmp();
+    mkdirSync(join(out, 'memory'), { recursive: true });
+    writeFileSync(memoryCheckpointPath(out), '# mem\n');
+    const { loadAndPlan, parseCli, recordPath } = await import('./run.mjs');
+    const opts = parseCli([
+      '--set',
+      'packages/bench/tasks/smoke.json',
+      '--models',
+      'm',
+      '--skills',
+      'builtin',
+      '--new-session',
+      'save',
+      '--out',
+      out,
+      '--no-judge',
+      '--tasks',
+      'smoke-001',
+    ]);
+    const runs = await loadAndPlan(opts, {}, () => {});
+    const r = runs[0];
+    const rp = recordPath(out, r.set.benchmark, r.condition.name, r.model, r.task.id, r.repeat);
+    mkdirSync(dirname(rp), { recursive: true });
+    writeFileSync(
+      rp,
+      JSON.stringify({
+        task_id: r.task.id,
+        digests: taskDigests(r.task),
+        score: 1,
+        outcome: 'pass',
+        config: { default_skills: true, new_session: 'save' },
+      })
+    );
+
+    const ghOut = join(out, 'gh-out-2');
+    const summary = join(out, 'summary-2.md');
+    writeFileSync(ghOut, '');
+    writeFileSync(summary, '');
+    process.env.GITHUB_OUTPUT = ghOut;
+    process.env.GITHUB_STEP_SUMMARY = summary;
+    const log = vi.fn();
+    await main(
+      [
+        '--set',
+        'packages/bench/tasks/smoke.json',
+        '--models',
+        'm',
+        '--skills',
+        'builtin',
+        '--new-session',
+        'save',
+        '--out',
+        out,
+        '--no-judge',
+        '--tasks',
+        'smoke-001',
+      ],
+      { log }
+    );
+    expect(readFileSync(ghOut, 'utf8')).toMatch(/complete=true/);
+    expect(readFileSync(summary, 'utf8')).toMatch(/Complete:/);
+    expect(log.mock.calls.some((c) => /chain complete/.test(c[0]))).toBe(true);
   });
 });

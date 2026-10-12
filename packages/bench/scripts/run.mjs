@@ -24,7 +24,14 @@
  * Judge: Bedrock Converse with AWS_BEARER_TOKEN_BEDROCK (or BEDROCK_API_KEY) and BEDROCK_REGION.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -50,6 +57,7 @@ import {
   exportMemoryCheckpoint,
   hasMemoryCheckpoint,
   importMemoryCheckpoint,
+  memoryCheckpointPath,
 } from './memory-checkpoint.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
@@ -764,7 +772,11 @@ export async function restoreMemoryCheckpoints(lanes, opts, log) {
   return true;
 }
 
-/** After a successful save/skip run, stash CLAUDE.md for the next job or lane task. */
+/**
+ * After a successful save/skip agent turn (including judge-only failures), stash CLAUDE.md.
+ * Export failures invalidate any prior checkpoint and rethrow so a chain job cannot continue
+ * with a stale `memory/CLAUDE.md` while treating this task as done.
+ */
 export async function stashMemoryCheckpoint(leader, opts, log) {
   if (opts.newSession !== 'save' && opts.newSession !== 'skip') return null;
   try {
@@ -776,8 +788,22 @@ export async function stashMemoryCheckpoint(leader, opts, log) {
     return r;
   } catch (err) {
     log(`memory chain: stash failed: ${err.message}`);
-    return null;
+    const path = memoryCheckpointPath(opts.out);
+    try {
+      if (existsSync(path)) unlinkSync(path);
+    } catch {
+      /* best-effort invalidate */
+    }
+    opts.memoryRestored = false;
+    throw err;
   }
+}
+
+/** True when the agent/save phase finished; judge-only errors still have durable memory. */
+export function shouldStashMemoryCheckpoint(record) {
+  if (!record) return false;
+  if (!record.error) return true;
+  return record.error_stage === 'judge';
 }
 
 /** Seconds since a start given as ISO text or epoch ms; null when it cannot be read. */
@@ -1068,7 +1094,8 @@ async function processRun(i, r, runs, ctx, say) {
   say(describeRun(i, runs.length, r, outcome.record));
   writeRun(opts, r, outcome);
   journal.event('task', taskEvent(r, outcome, ctx.id));
-  if (!outcome.record.error) await stashMemoryCheckpoint(ctx.leader, opts, say);
+  if (shouldStashMemoryCheckpoint(outcome.record))
+    await stashMemoryCheckpoint(ctx.leader, opts, say);
   return outcome;
 }
 

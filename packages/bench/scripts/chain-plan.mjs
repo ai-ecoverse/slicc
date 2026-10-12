@@ -100,11 +100,27 @@ export function githubOutputLines(pick, progress, memoryRestored) {
   ];
 }
 
+/**
+ * One-task-per-job memory chains share one CLAUDE.md checkpoint: multiple models or skills
+ * conditions would mix arms on that store. Reject upfront.
+ */
+export function assertSingleChainConfig(opts) {
+  if ((opts.models?.length ?? 0) > 1)
+    throw new Error(
+      `memory chain allows one --models entry (got ${opts.models.length}: ${opts.models.join(',')})`
+    );
+  if ((opts.skills?.length ?? 0) > 1)
+    throw new Error(
+      `memory chain allows one --skills entry (got ${opts.skills.length}: ${opts.skills.map((s) => s.name).join(',')})`
+    );
+}
+
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const opts = parseCli(argv);
   const log =
     deps.log ??
     ((line) => console.error(`[chain-plan ${new Date().toISOString().slice(11, 19)}] ${line}`));
+  assertSingleChainConfig(opts);
   const runs = await loadAndPlan(opts, deps, log);
   const memoryRestored = memoryRestoredForOut(opts.out);
   const pick = pickNextChainRun(runs, opts, { memoryRestored });

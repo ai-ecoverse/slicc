@@ -17,10 +17,10 @@ on:
         description: 'Task sets, space-separated: bu-v1, bu-v2, or task-set JSON paths'
         default: 'bu-v2'
       models:
-        description: 'Models, comma-separated (one model recommended for a memory chain)'
+        description: 'Exactly one model (comma-separated lists are rejected: one checkpoint cannot mix arms)'
         default: 'claude-sonnet-5'
       skills:
-        description: 'Skills conditions, comma-separated (one recommended)'
+        description: 'Exactly one skills condition (comma-separated lists are rejected)'
         default: 'builtin'
       tasks:
         description: 'Task ids or @subset (e.g. @bu-v2-explore-40); required for a bounded chain'
@@ -151,8 +151,9 @@ jobs:
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
     env:
       BENCH_SETS: ${{ inputs.sets }}
-      BENCH_MODELS: ${{ inputs.models }}
-      BENCH_SKILLS: ${{ inputs.skills }}
+      # One arm only: plan rejects multi-model/skills; use the picked run's model/skills, not the full lists.
+      BENCH_MODELS: ${{ needs.plan.outputs.model }}
+      BENCH_SKILLS: ${{ needs.plan.outputs.skills }}
       BENCH_TASKS: ${{ needs.plan.outputs.next_task }}
       BENCH_TIMEOUT: ${{ inputs.timeout }}
       BENCH_JUDGE_MODEL: ${{ inputs.judge-model }}

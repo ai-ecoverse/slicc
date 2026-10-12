@@ -1,9 +1,18 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { taskDigests, withDigests } from './format.mjs';
+import { memoryCheckpointPath, WORKSPACE_CLAUDE_MD } from './memory-checkpoint.mjs';
 import {
   ARM_SETUP_ATTEMPTS,
   ARMS_FILE,
@@ -24,12 +33,15 @@ import {
   readTrace,
   recordPath,
   resolveTaskIds,
+  restoreMemoryCheckpoints,
   resumeAction,
   runConfig,
   runIdFor,
   SUBSETS_DIR,
   selectTasks,
   shardRuns,
+  shouldStashMemoryCheckpoint,
+  stashMemoryCheckpoint,
   tracePath,
   validateDeadlineRuns,
   withArm,
@@ -816,6 +828,111 @@ describe('resumeAction', () => {
       'rejudge'
     );
   });
+});
+
+describe('shouldStashMemoryCheckpoint', () => {
+  it('stashes on success and judge-only errors, not agent failures', () => {
+    expect(shouldStashMemoryCheckpoint(null)).toBe(false);
+    expect(shouldStashMemoryCheckpoint({})).toBe(true);
+    expect(shouldStashMemoryCheckpoint({ error: 'judge down', error_stage: 'judge' })).toBe(true);
+    expect(shouldStashMemoryCheckpoint({ error: 'boom', error_stage: 'run' })).toBe(false);
+  });
+});
+
+describe('restoreMemoryCheckpoints / stashMemoryCheckpoint', () => {
+  const outs = [];
+  afterEach(() => {
+    delete process.env.BENCH_MEMORY_RESTORED;
+    while (outs.length) rmSync(outs.pop(), { recursive: true, force: true });
+  });
+  function tmpOut() {
+    const d = mkdtempSync(join(tmpdir(), 'bench-restore-'));
+    outs.push(d);
+    return d;
+  }
+
+  it('restore honors env, missing checkpoint, and a real import', async () => {
+    const log = vi.fn();
+    const eraseOpts = { newSession: 'erase', out: tmpOut() };
+    expect(await restoreMemoryCheckpoints([], eraseOpts, log)).toBe(false);
+    expect(eraseOpts.memoryRestored).toBe(false);
+
+    process.env.BENCH_MEMORY_RESTORED = '1';
+    const envOpts = { newSession: 'save', out: tmpOut() };
+    expect(await restoreMemoryCheckpoints([], envOpts, log)).toBe(true);
+    expect(envOpts.memoryRestored).toBe(true);
+    delete process.env.BENCH_MEMORY_RESTORED;
+
+    const emptyOpts = { newSession: 'save', out: tmpOut() };
+    expect(await restoreMemoryCheckpoints([], emptyOpts, log)).toBe(false);
+
+    const out = tmpOut();
+    mkdirSync(join(out, 'memory'), { recursive: true });
+    writeFileSync(memoryCheckpointPath(out), '# mem\n');
+    const files = {};
+    const leader = {
+      async exec(cmd, options) {
+        if (cmd.includes('base64 -d')) {
+          files[WORKSPACE_CLAUDE_MD] = Buffer.from(options.stdin, 'base64').toString('utf8');
+          return { status: 0, stdout: '', stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: cmd };
+      },
+    };
+    const opts = { newSession: 'save', out };
+    expect(await restoreMemoryCheckpoints([{ id: 0, leader }], opts, log)).toBe(true);
+    expect(files[WORKSPACE_CLAUDE_MD]).toBe('# mem\n');
+    expect(opts.memoryRestored).toBe(true);
+  });
+
+  it('stash writes the checkpoint and invalidates+rethrows on export failure', async () => {
+    const log = vi.fn();
+    expect(await stashMemoryCheckpoint({}, { newSession: 'erase', out: tmpOut() }, log)).toBe(null);
+
+    const out = tmpOut();
+    const leader = {
+      async exec() {
+        return { status: 0, stdout: '# planted\n', stderr: '' };
+      },
+    };
+    const opts = { newSession: 'save', out };
+    const r = await stashMemoryCheckpoint(leader, opts, log);
+    expect(r.exported).toBe(true);
+    expect(opts.memoryRestored).toBe(true);
+    expect(readFileSync(memoryCheckpointPath(out), 'utf8')).toBe('# planted\n');
+
+    writeFileSync(memoryCheckpointPath(out), '# prior\n');
+    const failing = {
+      async exec() {
+        return { status: 2, stdout: '', stderr: 'down', leaderDown: true };
+      },
+    };
+    const bad = { newSession: 'save', out, memoryRestored: true };
+    await expect(stashMemoryCheckpoint(failing, bad, log)).rejects.toThrow(/export memory/);
+    expect(existsSync(memoryCheckpointPath(out))).toBe(false);
+    expect(bad.memoryRestored).toBe(false);
+
+    const blocked = tmpOut();
+    mkdirSync(memoryCheckpointPath(blocked), { recursive: true }); // unlinkSync fails on a dir
+    await expect(
+      stashMemoryCheckpoint(
+        failing,
+        { newSession: 'save', out: blocked, memoryRestored: true },
+        log
+      )
+    ).rejects.toThrow(/export memory/);
+  });
+});
+
+describe('resumeAction (continued)', () => {
+  const done = (over = {}) => ({
+    digests: taskDigests(TASK),
+    score: 1,
+    judge: { model: 'j1' },
+    config: { default_skills: true },
+    ...over,
+  });
+  const ctx = { judge: true, judgeModel: 'j1', traceExists: true, defaultSkills: true };
 
   it('keeps a run the fallback judge scored for this judge', () => {
     const byFallback = done({ judge: { model: 'fb', fallback_from: 'j1' } });

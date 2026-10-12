@@ -15,6 +15,13 @@ describe('nextChainInputs', () => {
       'chain-from': '99',
     });
   });
+
+  it('skips nullish values and stringifies numbers', () => {
+    expect(nextChainInputs({ a: null, b: undefined, n: 3 }, '7')).toEqual({
+      n: '3',
+      'chain-from': '7',
+    });
+  });
 });
 
 describe('chainContinue', () => {
@@ -48,6 +55,42 @@ describe('chainContinue', () => {
       ref: 'feat/x',
       inputs: { sets: 'bu-v2', continue: 'true', 'chain-from': '42' },
     });
+  });
+
+  it('surfaces GitHub API errors from the dispatch', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      text: async () => 'forbidden',
+    }));
+    await expect(
+      chainContinue({
+        repo: 'o/r',
+        runId: '1',
+        ref: 'main',
+        inputs: { continue: true },
+        token: 't',
+        fetchImpl,
+      })
+    ).rejects.toThrow(/HTTP 403/);
+  });
+
+  it('parses JSON bodies when the dispatch returns 201', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 201,
+      json: async () => ({ id: 1 }),
+    }));
+    await expect(
+      chainContinue({
+        repo: 'o/r',
+        runId: '9',
+        ref: 'main',
+        inputs: { continue: true },
+        token: 't',
+        fetchImpl,
+      })
+    ).resolves.toMatchObject({ action: 'continued' });
   });
 });
 
