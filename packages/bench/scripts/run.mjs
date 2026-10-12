@@ -46,6 +46,11 @@ import {
   createRecycler,
   currentLeader,
 } from './lifecycle.mjs';
+import {
+  exportMemoryCheckpoint,
+  hasMemoryCheckpoint,
+  importMemoryCheckpoint,
+} from './memory-checkpoint.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
   ARM_SKILL_SET,
@@ -444,7 +449,7 @@ export function readTrace(path, benchmark) {
   return path.endsWith('.enc') ? decryptSetFile(text, benchmark) : JSON.parse(text);
 }
 
-async function loadAndPlan(opts, deps, log) {
+export async function loadAndPlan(opts, deps, log) {
   const sets = [];
   const known = new Set();
   for (const spec of opts.sets) {
@@ -638,10 +643,11 @@ export function defaultSkillsMatch(recorded, expected) {
  * - `done`: nothing changed.
  * A rejudge needs the saved trace; without it the run starts over.
  *
- * Save/skip accumulate memories in the Chrome profile. Resume restores only `bench-out`, so
- * without `memoryRestored` (or `BENCH_MEMORY_RESTORED=1`) a `done` skip would continue later
- * tasks on an empty memory store. Those actions therefore replay (`run`) until a profile
- * checkpoint is restored.
+ * Save/skip accumulate memories in `/workspace/CLAUDE.md` (and the Chrome profile). Resume
+ * restores only `bench-out`, so without `memoryRestored` — a non-empty
+ * `<out>/memory/CLAUDE.md` restored onto the leader, or `BENCH_MEMORY_RESTORED=1` — a `done`
+ * skip would continue later tasks on an empty memory store. Those actions therefore replay
+ * (`run`) until a CLAUDE.md checkpoint is restored.
  */
 export function resumeAction(
   record,
@@ -681,7 +687,7 @@ export function resumeAction(
   return traceExists ? 'rejudge' : 'run';
 }
 
-/** Save/skip may skip done only when the Chrome profile (memory chain) was restored. */
+/** Save/skip may skip done only when the memory chain (CLAUDE.md checkpoint) was restored. */
 export function memoryChainAllowsSkip(newSession, memoryRestored) {
   if (newSession !== 'save' && newSession !== 'skip') return true;
   return Boolean(memoryRestored);
@@ -723,13 +729,55 @@ function writeRun(opts, r, { record, result }) {
   writeFileSync(tp, r.set.encrypted ? encryptJson(trace, r.set.benchmark) : JSON.stringify(trace));
 }
 
-function previous(opts, r) {
+export function previous(opts, r) {
   const where = [opts.out, r.set.benchmark, r.condition.name, r.model, r.task.id, r.repeat];
   const rp = recordPath(...where);
   return {
     record: existsSync(rp) ? JSON.parse(readFileSync(rp, 'utf8')) : null,
     traceExists: existsSync(tracePath(...where, r.set.encrypted)),
   };
+}
+
+/**
+ * Restore `<out>/memory/CLAUDE.md` onto every lane for save/skip. Sets `opts.memoryRestored`
+ * when the env flag is set or a checkpoint was applied.
+ */
+export async function restoreMemoryCheckpoints(lanes, opts, log) {
+  if (opts.newSession !== 'save' && opts.newSession !== 'skip') {
+    opts.memoryRestored = false;
+    return false;
+  }
+  if (process.env.BENCH_MEMORY_RESTORED === '1') {
+    opts.memoryRestored = true;
+    log('memory chain: BENCH_MEMORY_RESTORED=1 (skipping CLAUDE.md import)');
+    return true;
+  }
+  if (!hasMemoryCheckpoint(opts.out)) {
+    opts.memoryRestored = false;
+    return false;
+  }
+  for (const lc of lanes) {
+    const r = await importMemoryCheckpoint(lc.leader, opts.out);
+    if (r.restored) log(`memory chain: restored ${r.bytes} bytes of CLAUDE.md on lane ${lc.id}`);
+  }
+  opts.memoryRestored = true;
+  return true;
+}
+
+/** After a successful save/skip run, stash CLAUDE.md for the next job or lane task. */
+export async function stashMemoryCheckpoint(leader, opts, log) {
+  if (opts.newSession !== 'save' && opts.newSession !== 'skip') return null;
+  try {
+    const r = await exportMemoryCheckpoint(leader, opts.out);
+    if (r.exported) {
+      opts.memoryRestored = true;
+      log(`memory chain: stashed ${r.bytes} bytes → memory/CLAUDE.md`);
+    }
+    return r;
+  } catch (err) {
+    log(`memory chain: stash failed: ${err.message}`);
+    return null;
+  }
 }
 
 /** Seconds since a start given as ISO text or epoch ms; null when it cannot be read. */
@@ -1001,9 +1049,8 @@ async function processRun(i, r, runs, ctx, say) {
     defaultSkills: Boolean(r.condition.builtin),
     arm: opts.arm?.name ?? null,
     newSession: opts.newSession,
-    // Profile restore is not wired yet; set BENCH_MEMORY_RESTORED=1 once a save/skip
-    // resume has restored the Chrome profile that holds accumulated memories.
-    memoryRestored: process.env.BENCH_MEMORY_RESTORED === '1',
+    // CLAUDE.md checkpoint under out/memory/ (or BENCH_MEMORY_RESTORED=1).
+    memoryRestored: Boolean(opts.memoryRestored) || process.env.BENCH_MEMORY_RESTORED === '1',
   });
   if (action === 'done') {
     say(
@@ -1021,6 +1068,7 @@ async function processRun(i, r, runs, ctx, say) {
   say(describeRun(i, runs.length, r, outcome.record));
   writeRun(opts, r, outcome);
   journal.event('task', taskEvent(r, outcome, ctx.id));
+  if (!outcome.record.error) await stashMemoryCheckpoint(ctx.leader, opts, say);
   return outcome;
 }
 
@@ -1191,11 +1239,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   let outcome;
   try {
     lanes.push(...(await setupLanes(opts, deps, journal, log, runStart)));
+    await restoreMemoryCheckpoints(lanes, opts, log);
     journal.event('start', {
       runs: runs.length,
       lanes: lanes.length,
       fresh_leader_every: opts.freshLeaderEvery,
       new_session: opts.newSession,
+      memory_restored: Boolean(opts.memoryRestored),
       deadline_minutes: opts.deadlineMinutes || null,
       max_task_cost: opts.maxTaskCost || null,
       max_cost: opts.maxCost || null,

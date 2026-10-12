@@ -794,7 +794,7 @@ describe('resumeAction', () => {
     ).toBe('run');
   });
 
-  it('replays save/skip done unless the memory profile was restored', () => {
+  it('replays save/skip done unless the memory checkpoint was restored', () => {
     const saveDone = done({ config: { default_skills: true, new_session: 'save' } });
     const skipDone = done({ config: { default_skills: true, new_session: 'skip' } });
     expect(memoryChainAllowsSkip('erase', false)).toBe(true);
