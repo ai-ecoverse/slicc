@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/hummingbird-project/hummingbird", from: "2.27.0"),
-        .package(url: "https://github.com/hummingbird-project/hummingbird-websocket", from: "2.7.0"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird-websocket", from: "2.8.0"),
         .package(url: "https://github.com/swift-server/async-http-client", from: "1.36.2"),
         .package(url: "https://github.com/vapor/websocket-kit", from: "2.16.2"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.2"),
