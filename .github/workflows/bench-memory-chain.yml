@@ -76,6 +76,9 @@ jobs:
       complete: ${{ steps.pick.outputs.complete }}
       next_task: ${{ steps.pick.outputs.next_task }}
       action: ${{ steps.pick.outputs.action }}
+      model: ${{ steps.pick.outputs.model }}
+      skills: ${{ steps.pick.outputs.skills }}
+      repeat: ${{ steps.pick.outputs.repeat }}
       done: ${{ steps.pick.outputs.done }}
       left: ${{ steps.pick.outputs.left }}
       total: ${{ steps.pick.outputs.total }}
@@ -151,9 +154,9 @@ jobs:
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
     env:
       BENCH_SETS: ${{ inputs.sets }}
-      # One arm only: plan rejects multi-model/skills; use the picked run's model/skills, not the full lists.
-      BENCH_MODELS: ${{ needs.plan.outputs.model }}
-      BENCH_SKILLS: ${{ needs.plan.outputs.skills }}
+      # One arm only: plan rejects multi-model/skills. Prefer pick outputs; fall back to inputs.
+      BENCH_MODELS: ${{ needs.plan.outputs.model || inputs.models }}
+      BENCH_SKILLS: ${{ needs.plan.outputs.skills || inputs.skills }}
       BENCH_TASKS: ${{ needs.plan.outputs.next_task }}
       BENCH_TIMEOUT: ${{ inputs.timeout }}
       BENCH_JUDGE_MODEL: ${{ inputs.judge-model }}
@@ -244,6 +247,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/bench-out"
+          if [ -z "$BENCH_MODELS" ] || [ -z "$BENCH_SKILLS" ] || [ -z "$BENCH_TASKS" ]; then
+            echo "::error::missing model/skills/task (models='$BENCH_MODELS' skills='$BENCH_SKILLS' tasks='$BENCH_TASKS'); refusing a 0-run continue loop"
+            exit 1
+          fi
           fallback="$BENCH_JUDGE_FALLBACK_MODEL"
           if [ "$fallback" = none ]; then fallback=""; fi
           args=(--models "$BENCH_MODELS" --skills "$BENCH_SKILLS" --repeats 1
