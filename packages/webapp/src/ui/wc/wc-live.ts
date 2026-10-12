@@ -1275,6 +1275,18 @@ export function attachWcWorkbench(
   });
   boot.setActivateSurface(workbenchActivator);
 
+  // wterm 0.5.1+: first Ghostty WASM compile freezes the main thread for
+  // seconds. Warm it after kernel-ready so the first Term mount (often via
+  // e2e `execInTerminal`) reuses the compiled module instead of racing tray
+  // heartbeats. Delay past tray creation; failure is non-fatal.
+  boot.onClientReady(() => {
+    window.setTimeout(() => {
+      void import('@slicc/webcomponents/workbench/warm-wterm')
+        .then(({ warmWterm }) => warmWterm())
+        .catch((err) => log.warn('wterm WASM warm-up failed', err));
+    }, 2500);
+  });
+
   // Panelize when `panel-layouts` is on (see the flag read above).
   //
   // Placed after `workbenchActivator` exists because panelization takes over the

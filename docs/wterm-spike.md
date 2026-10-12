@@ -1,12 +1,16 @@
 # wterm terminal migration
 
-The reusable `<slicc-terminal>` component now uses `@wterm/dom@0.5.0` with
-`@wterm/ghostty@0.5.0`. Ghostty is required for the [Kitty graphics support
+The reusable `<slicc-terminal>` component now uses `@wterm/dom@0.5.4` with
+`@wterm/ghostty@0.5.4`. Ghostty is required for the [Kitty graphics support
 merged in wterm PR #123](https://github.com/vercel-labs/wterm/pull/123); wterm's
 default core does not expose images. The component retains its `write`,
 `writeln`, `clear`, `focus`, `fit`, and `terminal-data` API. It adopts wterm's
 stylesheet in the shadow root and maps the existing terminal palette to wterm's
 CSS color variables.
+
+First mount pins an 80×24 grid (`autoResize: false`) then `fit()`s, and the WC
+shell warm-loads Ghostty WASM after kernel-ready (`workbench/warm-wterm`) so the
+compile cost does not land on the first Term open during tray traffic.
 
 ## Visual comparison
 

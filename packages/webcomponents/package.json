@@ -66,6 +66,10 @@
       "types": "./src/workbench/terminal-theme.ts",
       "default": "./src/workbench/terminal-theme.ts"
     },
+    "./workbench/warm-wterm": {
+      "types": "./src/workbench/warm-wterm.ts",
+      "default": "./src/workbench/warm-wterm.ts"
+    },
     "./src/*": "./src/*"
   },
   "files": [
@@ -85,8 +89,8 @@
     "@pierre/diffs": "1.3.6",
     "@pierre/trees": "1.0.0-beta.6",
     "@slicc/shared-ts": "*",
-    "@wterm/dom": "0.5.0",
-    "@wterm/ghostty": "0.5.0",
+    "@wterm/dom": "0.5.4",
+    "@wterm/ghostty": "0.5.4",
     "lucide": "1.52.0"
   },
   "devDependencies": {
