@@ -280,7 +280,8 @@ skipped for the combined report and logged — same rule as `merge.mjs` — so o
 corrupt corpus entry does not abort publishing an otherwise-good run. Skipped
 Hub records are still copied into the staged `records/` tree so
 `hf upload --delete 'records/**'` does not permanently remove a remote file
-that only failed to parse in this download.
+that only failed to parse in this download. The same skip-not-abort rule applies
+to `backfill-tools.mjs` when walking traces/records under a downloaded out dir.
 
 - The encryption is browser-use's: a `.enc` file is the base64 of a Fernet token
   whose key is `sha256(<benchmark>)`.

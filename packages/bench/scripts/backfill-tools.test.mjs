@@ -47,7 +47,7 @@ describe('backfillTools', () => {
       JSON.stringify({ record: lone, result: { transcript: bareTranscript } })
     );
 
-    expect(backfillTools(out)).toEqual({ updated: 3, unknown: 1 });
+    expect(backfillTools(out)).toEqual({ updated: 3, unknown: 1, skipped: 0 });
     const ownRecord = JSON.parse(readFileSync(recordPath(out, 'Own', 'none', 'm', 'a', 1), 'utf8'));
     expect(ownRecord.metrics).toMatchObject({
       duration: 3,
@@ -72,12 +72,40 @@ describe('backfillTools', () => {
     const log = vi.fn();
     expect(main(['--out', out], { log })).toBe(0);
     expect(log).toHaveBeenCalledWith(
-      'backfilled 0 run(s); 0 without a transcript to count (left unknown)'
+      'backfilled 0 run(s); 0 without a transcript to count (left unknown); skipped 0 unreadable'
     );
     expect(log).toHaveBeenCalledWith(
-      'stamped the SLICC version on 0 record(s); 0 left unknown (0 ambiguous: runs sharing a task, model and skills in an older journal)'
+      'stamped the SLICC version on 0 record(s); 0 left unknown (0 ambiguous: runs sharing a task, model and skills in an older journal); skipped 0 unreadable'
     );
     expect(() => main([])).toThrow(/--out/);
+  });
+
+  it('skips corrupt traces and records instead of aborting the batch', () => {
+    const out = mkdtempSync(join(tmpdir(), 'bench-backfill-corrupt-'));
+    const good = record('Own', 'a');
+    write(recordPath(out, 'Own', 'none', 'm', 'a', 1), JSON.stringify(good));
+    write(
+      tracePath(out, 'Own', 'none', 'm', 'a', 1, false),
+      JSON.stringify({ record: good, result: { transcript: bareTranscript } })
+    );
+    write(tracePath(out, 'Own', 'none', 'm', 'bad', 1, false), '{truncated');
+    write(recordPath(out, 'Own', 'none', 'm', 'bad-rec', 1), '{truncated');
+    write(
+      tracePath(out, 'Own', 'none', 'm', 'bad-rec', 1, false),
+      JSON.stringify({
+        record: record('Own', 'bad-rec'),
+        result: { transcript: bareTranscript },
+      })
+    );
+    const log = vi.fn();
+    expect(backfillTools(out, { log })).toEqual({ updated: 2, unknown: 0, skipped: 2 });
+    expect(log.mock.calls.some((c) => /skipping unreadable trace/.test(c[0]))).toBe(true);
+    expect(log.mock.calls.some((c) => /skipping unreadable record/.test(c[0]))).toBe(true);
+    const ownRecord = JSON.parse(readFileSync(recordPath(out, 'Own', 'none', 'm', 'a', 1), 'utf8'));
+    expect(ownRecord.metrics).toMatchObject({ tool_calls: 0, answered_without_tools: true });
+    expect(readFileSync(recordPath(out, 'Own', 'none', 'm', 'bad-rec', 1), 'utf8')).toBe(
+      '{truncated'
+    );
   });
 });
 
@@ -142,18 +170,36 @@ describe('backfillVersions', () => {
 
   it('stamps records that lack a version, leaves the rest, and needs a journal', () => {
     const out = mkdtempSync(join(tmpdir(), 'bench-versions-'));
-    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0, ambiguous: 0 });
+    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0, ambiguous: 0, skipped: 0 });
     write(join(out, 'events.jsonl'), LEGACY);
-    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0, ambiguous: 0 });
+    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0, ambiguous: 0, skipped: 0 });
     write(recordPath(out, 'Own', 'none', 'm', 'b', 1), JSON.stringify(record('Own', 'b')));
     const kept = { ...record('Own', 'a'), leader: { lane: 0, slicc_version: '9.9' } };
     write(recordPath(out, 'Own', 'none', 'm', 'a', 1), JSON.stringify(kept));
     write(recordPath(out, 'Own', 'none', 'm', 'z', 1), JSON.stringify(record('Own', 'z')));
-    expect(backfillVersions(out)).toEqual({ stamped: 1, unknown: 1, ambiguous: 0 });
+    expect(backfillVersions(out)).toEqual({ stamped: 1, unknown: 1, ambiguous: 0, skipped: 0 });
     const read = (t) => JSON.parse(readFileSync(recordPath(out, 'Own', 'none', 'm', t, 1), 'utf8'));
     expect(read('b').leader).toEqual({ slicc_version: '1.0.1' });
     expect(read('a').leader.slicc_version).toBe('9.9');
     expect(read('z').leader).toBeUndefined();
+  });
+
+  it('skips corrupt records when stamping versions', () => {
+    const out = mkdtempSync(join(tmpdir(), 'bench-versions-corrupt-'));
+    write(join(out, 'events.jsonl'), LEGACY);
+    write(recordPath(out, 'Own', 'none', 'm', 'b', 1), JSON.stringify(record('Own', 'b')));
+    write(recordPath(out, 'Own', 'none', 'm', 'bad', 1), '{truncated');
+    const log = vi.fn();
+    expect(backfillVersions(out, { log })).toEqual({
+      stamped: 1,
+      unknown: 0,
+      ambiguous: 0,
+      skipped: 1,
+    });
+    expect(log.mock.calls.some((c) => /skipping unreadable record/.test(c[0]))).toBe(true);
+    expect(
+      JSON.parse(readFileSync(recordPath(out, 'Own', 'none', 'm', 'b', 1), 'utf8')).leader
+    ).toEqual({ slicc_version: '1.0.1' });
   });
 
   it('leaves runs that share a task, model and skills unknown unless their versions agree', () => {
@@ -186,7 +232,7 @@ describe('backfillVersions', () => {
         recordPath(out, 'Own', 'none', 'm', task, repeat),
         JSON.stringify({ ...record('Own', task), repeat })
       );
-    expect(backfillVersions(out)).toEqual({ stamped: 3, unknown: 2, ambiguous: 2 });
+    expect(backfillVersions(out)).toEqual({ stamped: 3, unknown: 2, ambiguous: 2, skipped: 0 });
     const read = (t, n) =>
       JSON.parse(readFileSync(recordPath(out, 'Own', 'none', 'm', t, n), 'utf8'));
     expect(read('r', 1).leader).toBeUndefined();

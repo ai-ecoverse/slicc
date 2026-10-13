@@ -23,7 +23,7 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges each r
 | `scripts/executors.mjs`      | Go `slicc` CLI vs join URL, dial retries, prompt interrupt                                                                                |
 | `scripts/results.mjs`        | Records → result files, paired skill/model deltas, md report                                                                              |
 | `scripts/charts.mjs`         | report.html: ranking, score vs. cost (quadrant, Pareto), tool use                                                                         |
-| `scripts/backfill-tools.mjs` | Add tool-use metrics to records from traces                                                                                               |
+| `scripts/backfill-tools.mjs` | Add tool-use metrics to records from traces; corrupt traces/records are skipped (logged)                                                  |
 | `scripts/html.mjs`           | Records → `report.html`: cards, table, deltas, matrix, time×cost                                                                          |
 | `scripts/merge.mjs`          | Merge shards' out dirs: records (judged wins), traces, journals                                                                           |
 | `scripts/publish.mjs`        | Stage run for HF `ai-ecoverse/slicc-bench`: enc traces/sets, report; skips unreadable Hub/local records (merge.mjs parity, #3961)         |
