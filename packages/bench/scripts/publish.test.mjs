@@ -199,6 +199,7 @@ describe('stage', () => {
       traces: 1,
       combined: 3,
       dropped: 0,
+      skipped: 0,
       taskSets: ['SLICC_Smoke'],
     });
 
@@ -331,6 +332,7 @@ describe('stage', () => {
       traces: 0,
       combined: 1,
       dropped: 0,
+      skipped: 0,
       taskSets: [],
     });
     expect(listFiles(target).filter((f) => !f.startsWith('results/'))).toEqual([
@@ -339,6 +341,26 @@ describe('stage', () => {
       'report.md',
     ]);
     expect(listFiles(join(tmp(), 'missing'))).toEqual([]);
+  });
+
+  it('skips corrupt dataset records and local traces instead of aborting', () => {
+    const out = outDir();
+    write(join(out, 'traces/SLICC_Smoke/builtin/claude-opus-5-5/own-1-r1.json'), '{"record":');
+    const dataset = tmp();
+    write(
+      join(dataset, 'records/SLICC_Smoke/builtin/claude-sonnet-5/own-1-r1.json'),
+      record('SLICC_Smoke', 'claude-sonnet-5', 'own-1', { score: 0 })
+    );
+    write(join(dataset, 'records/SLICC_Smoke/builtin/m/bad-r1.json'), '{"benchmark":');
+    const target = join(tmp(), 'stage');
+    const log = vi.fn();
+    const s = stage({ out, stage: target, run: 'r1', dataset, sets: [] }, { log });
+    expect(s).toMatchObject({ records: 2, traces: 0, combined: 3, skipped: 2 });
+    expect(
+      existsSync(join(target, 'records/SLICC_Smoke/builtin/claude-sonnet-5/own-1-r1.json'))
+    ).toBe(true);
+    expect(existsSync(join(target, 'records/SLICC_Smoke/builtin/m/bad-r1.json'))).toBe(false);
+    expect(log.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/skipping unreadable/);
   });
 
   it('logs what it staged', () => {
