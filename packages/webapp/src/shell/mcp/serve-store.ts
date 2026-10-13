@@ -3,6 +3,7 @@
  * which is the list of MCP servers this cone connects to as a client.
  */
 
+import { FsError } from '../../fs/types.js';
 import type { CliCommand, CliFlag } from './serve-catalog.js';
 
 export const MCP_SERVE_PATH = '/workspace/.mcp/served.json';
@@ -28,20 +29,22 @@ export interface TextFs {
   mkdir(path: string): Promise<void>;
 }
 
+/**
+ * Load the durable MCP publication. Missing / empty / literal `null` means
+ * nothing is published. Any other read fault or corrupt JSON propagates —
+ * treating EIO as "nothing published" would let `mcp --serve` mint a
+ * generation-1 publication over the live OAuth token, grants, and CLI set.
+ */
 export async function loadPublication(fs: TextFs): Promise<McpPublication | null> {
-  if (!(await fs.exists(MCP_SERVE_PATH))) return null;
-  let raw = '';
+  let raw: string;
   try {
     raw = await fs.readFile(MCP_SERVE_PATH);
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return null;
+    throw err;
   }
   if (!raw.trim() || raw.trim() === 'null') return null;
-  try {
-    return parsePublication(JSON.parse(raw));
-  } catch {
-    return null;
-  }
+  return parsePublication(JSON.parse(raw));
 }
 
 export async function savePublication(
