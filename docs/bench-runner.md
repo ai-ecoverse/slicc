@@ -255,7 +255,10 @@ enforces it: before each shard's upload and before the report job uploads or
 publishes, it scans every plaintext file in the out dir for windows of every
 encrypted set's task text (URLs excluded; repo sets such as `smoke.json` are
 public) and fails the step on a match, reporting only the
-file and task id. A shard that fails it is not uploaded.
+file and task id. A shard that fails it is not uploaded. The memory-chain
+workflow passes `--scrub memory/` so a curator note that quotes the task is
+rewritten (leaking paragraphs dropped) instead of failing the hop and
+stopping the chain; leaks outside `memory/` still fail hard.
 
 ## Publishing pipeline
 

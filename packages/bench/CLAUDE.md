@@ -13,26 +13,26 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges each r
 
 ## Layout
 
-| Path                         | Purpose                                                             |
-| ---------------------------- | ------------------------------------------------------------------- |
-| `scripts/format.mjs`         | Validation, `outcome()` (pass/partial/fail), BU V1 + skill convert  |
-| `scripts/upstream.mjs`       | Pinned upstream: Fernet decrypt/encrypt, set load, judge-spec       |
-| `scripts/judge.mjs`          | Findings judge over Converse: request, validate, `score()`, retry   |
-| `scripts/slicc-adapter.mjs`  | Prompt, skills staging, `runTask` (setup→…→teardown), trace         |
-| `scripts/lifecycle.mjs`      | Restart CI leader via start/stop scripts; journal; redaction        |
-| `scripts/executors.mjs`      | Go `slicc` CLI vs join URL, dial retries, prompt interrupt          |
-| `scripts/results.mjs`        | Records → result files, paired skill/model deltas, md report        |
-| `scripts/charts.mjs`         | report.html: ranking, score vs. cost (quadrant, Pareto), tool use   |
-| `scripts/backfill-tools.mjs` | Add tool-use metrics to records from traces                         |
-| `scripts/html.mjs`           | Records → `report.html`: cards, table, deltas, matrix, time×cost    |
-| `scripts/merge.mjs`          | Merge shards' out dirs: records (judged wins), traces, journals     |
-| `scripts/publish.mjs`        | Stage run for HF `ai-ecoverse/slicc-bench`: enc traces/sets, report |
-| `dataset/README.md`          | Dataset card template; `publish.mjs` fills `<!-- report -->`        |
-| `scripts/run.mjs`            | CLI: plan, run, judge, resume; writes records/traces/results/report |
-| `scripts/leak-check.mjs`     | Fail when a plaintext out-dir file quotes task text (pre-upload)    |
-| `arms/arms.json`             | Arms: a skill's driver runs each task instead of the cone prompt    |
-| `tasks/smoke.json`           | Two short live tasks; PR smoke run uses the first                   |
-| `tasks/subsets/*.json`       | Frozen task-id lists for `--tasks @name` (explore-20 ⊂ -40; ids)    |
+| Path                         | Purpose                                                                                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/format.mjs`         | Validation, `outcome()` (pass/partial/fail), BU V1 + skill convert                                                                        |
+| `scripts/upstream.mjs`       | Pinned upstream: Fernet decrypt/encrypt, set load, judge-spec                                                                             |
+| `scripts/judge.mjs`          | Findings judge over Converse: request, validate, `score()`, retry                                                                         |
+| `scripts/slicc-adapter.mjs`  | Prompt, skills staging, `runTask` (setup→…→teardown), trace                                                                               |
+| `scripts/lifecycle.mjs`      | Restart CI leader via start/stop scripts; journal; redaction                                                                              |
+| `scripts/executors.mjs`      | Go `slicc` CLI vs join URL, dial retries, prompt interrupt                                                                                |
+| `scripts/results.mjs`        | Records → result files, paired skill/model deltas, md report                                                                              |
+| `scripts/charts.mjs`         | report.html: ranking, score vs. cost (quadrant, Pareto), tool use                                                                         |
+| `scripts/backfill-tools.mjs` | Add tool-use metrics to records from traces                                                                                               |
+| `scripts/html.mjs`           | Records → `report.html`: cards, table, deltas, matrix, time×cost                                                                          |
+| `scripts/merge.mjs`          | Merge shards' out dirs: records (judged wins), traces, journals                                                                           |
+| `scripts/publish.mjs`        | Stage run for HF `ai-ecoverse/slicc-bench`: enc traces/sets, report                                                                       |
+| `dataset/README.md`          | Dataset card template; `publish.mjs` fills `<!-- report -->`                                                                              |
+| `scripts/run.mjs`            | CLI: plan, run, judge, resume; writes records/traces/results/report                                                                       |
+| `scripts/leak-check.mjs`     | Fail when a plaintext out-dir file quotes task text (pre-upload); `--scrub memory/` rewrites chain checkpoints instead of killing the hop |
+| `arms/arms.json`             | Arms: a skill's driver runs each task instead of the cone prompt                                                                          |
+| `tasks/smoke.json`           | Two short live tasks; PR smoke run uses the first                                                                                         |
+| `tasks/subsets/*.json`       | Frozen task-id lists for `--tasks @name` (explore-20 ⊂ -40; ids)                                                                          |
 
 ## How a run works
 
