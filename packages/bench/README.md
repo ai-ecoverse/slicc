@@ -159,3 +159,5 @@ Color follows the model. The skills condition is the fill: `none` is outlined, a
 hf download ai-ecoverse/slicc-bench --repo-type dataset --include 'records/**' --local-dir slicc-bench
 node packages/bench/scripts/html.mjs --records slicc-bench --out report.html
 ```
+
+Unreadable/truncated records in that download are skipped (logged) so one corrupt file does not prevent writing the page.

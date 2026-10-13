@@ -7,8 +7,10 @@
  *
  * `run.mjs` writes it as `report.html` beside report.md and report.json. `--records` also takes
  * a download of the dataset, or several runs' out dirs merged, to see configurations side by
- * side. Pure apart from the CLI: `reportHtml(records)` returns the page. It shows ids, scores and
- * metrics only, never task text, so it is safe for upstream sets.
+ * side. Unreadable/truncated records under `--records` are skipped (logged) rather than aborting
+ * the page — same rule as `merge.mjs` / `publish.mjs` (#3969). Pure apart from the CLI:
+ * `reportHtml(records)` returns the page. It shows ids, scores and metrics only, never task text,
+ * so it is safe for upstream sets.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -409,12 +411,22 @@ ${sections || '<p class="muted">No runs yet.</p>'}
 `;
 }
 
-/** Every record under `<dir>/records/`; none when it is missing. */
-export function readRecordsDir(dir) {
+/**
+ * Every readable record under `<dir>/records/`; none when it is missing.
+ * Unreadable/truncated files are skipped (logged) rather than failing the whole page (#3969).
+ */
+export function readRecordsDir(dir, { log = console.error } = {}) {
   const root = join(dir, 'records');
-  return listFiles(root)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => JSON.parse(readFileSync(join(root, f), 'utf8')));
+  const records = [];
+  for (const f of listFiles(root).filter((name) => name.endsWith('.json'))) {
+    const path = join(root, f);
+    try {
+      records.push(JSON.parse(readFileSync(path, 'utf8')));
+    } catch (err) {
+      log(`html: skipping unreadable record ${path}: ${err.message}`);
+    }
+  }
+  return records;
 }
 
 export function main(argv = process.argv.slice(2), { log = console.error } = {}) {
@@ -423,7 +435,7 @@ export function main(argv = process.argv.slice(2), { log = console.error } = {})
     options: { records: { type: 'string' }, out: { type: 'string' }, title: { type: 'string' } },
   });
   if (!values.records || !values.out) throw new Error('give --records <dir> and --out <file.html>');
-  const records = readRecordsDir(resolve(values.records));
+  const records = readRecordsDir(resolve(values.records), { log });
   writeFileSync(
     resolve(values.out),
     reportHtml(records, values.title ? { title: values.title } : {})
