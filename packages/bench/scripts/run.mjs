@@ -370,6 +370,15 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+export function readRecordFile(path, { log = console.error } = {}) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    log(`bench: skipping unreadable record ${path}: ${err.message}`);
+    return null;
+  }
+}
+
 export function readRecords(out) {
   const root = join(out, 'records');
   if (!existsSync(root)) return [];
@@ -378,7 +387,10 @@ export function readRecords(out) {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name);
       if (e.isDirectory()) walk(p);
-      else if (e.name.endsWith('.json')) records.push(JSON.parse(readFileSync(p, 'utf8')));
+      else if (e.name.endsWith('.json')) {
+        const rec = readRecordFile(p);
+        if (rec) records.push(rec);
+      }
     }
   };
   walk(root);
@@ -636,8 +648,9 @@ function writeRun(opts, r, { record, result }) {
 export function previous(opts, r) {
   const where = [opts.out, r.set.benchmark, r.condition.name, r.model, r.task.id, r.repeat];
   const rp = recordPath(...where);
+
   return {
-    record: existsSync(rp) ? JSON.parse(readFileSync(rp, 'utf8')) : null,
+    record: existsSync(rp) ? readRecordFile(rp) : null,
     traceExists: existsSync(tracePath(...where, r.set.encrypted)),
   };
 }

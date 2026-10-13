@@ -124,6 +124,31 @@ describe('pickNextChainRun', () => {
     const opts = { out, judge: true, judgeModel: 'j', newSession: 'save', arm: null };
     expect(pickNextChainRun(runs, opts, { memoryRestored: true }).complete).toBe(true);
   });
+
+  it('treats a truncated prior record as unfinished (replay) instead of dying', () => {
+    const out = tmp();
+    mkdirSync(join(out, 'memory'), { recursive: true });
+    writeFileSync(memoryCheckpointPath(out), '# mem\n');
+    const runs = [run(TASK_A), run(TASK_B)];
+
+    const bad = join(out, 'records', 'Test', 'builtin', 'm', `${TASK_A.id}-r1.json`);
+    mkdirSync(dirname(bad), { recursive: true });
+    writeFileSync(bad, '{"task_id":"t-a","score":1');
+    writeRecord(out, runs[1]);
+    const opts = { out, judge: true, judgeModel: 'j', newSession: 'save', arm: null };
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pick = pickNextChainRun(runs, opts, { memoryRestored: true });
+    expect(pick).toMatchObject({ complete: false, taskId: 't-a', action: 'run' });
+    expect(chainProgress(runs, opts, { memoryRestored: true })).toEqual({
+      done: 1,
+      left: 1,
+      total: 2,
+    });
+    expect(err.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
+      /skipping unreadable record/
+    );
+    err.mockRestore();
+  });
 });
 
 describe('githubOutputLines', () => {

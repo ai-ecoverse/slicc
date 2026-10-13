@@ -1,3 +1,4 @@
+import { FsError } from '../../fs/types.js';
 import type { CliCommand, CliFlag } from './serve-catalog.js';
 
 export const MCP_SERVE_PATH = '/workspace/.mcp/served.json';
@@ -24,19 +25,15 @@ export interface TextFs {
 }
 
 export async function loadPublication(fs: TextFs): Promise<McpPublication | null> {
-  if (!(await fs.exists(MCP_SERVE_PATH))) return null;
-  let raw = '';
+  let raw: string;
   try {
     raw = await fs.readFile(MCP_SERVE_PATH);
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return null;
+    throw err;
   }
   if (!raw.trim() || raw.trim() === 'null') return null;
-  try {
-    return parsePublication(JSON.parse(raw));
-  } catch {
-    return null;
-  }
+  return parsePublication(JSON.parse(raw));
 }
 
 export async function savePublication(
