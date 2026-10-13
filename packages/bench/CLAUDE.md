@@ -26,7 +26,7 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges each r
 | `scripts/backfill-tools.mjs` | Add tool-use metrics to records from traces                                                                                               |
 | `scripts/html.mjs`           | Records → `report.html`: cards, table, deltas, matrix, time×cost                                                                          |
 | `scripts/merge.mjs`          | Merge shards' out dirs: records (judged wins), traces, journals                                                                           |
-| `scripts/publish.mjs`        | Stage run for HF `ai-ecoverse/slicc-bench`: enc traces/sets, report                                                                       |
+| `scripts/publish.mjs`        | Stage run for HF `ai-ecoverse/slicc-bench`: enc traces/sets, report; skips unreadable Hub/local records (merge.mjs parity, #3961)         |
 | `dataset/README.md`          | Dataset card template; `publish.mjs` fills `<!-- report -->`                                                                              |
 | `scripts/run.mjs`            | CLI: plan, run, judge, resume; writes records/traces/results/report; corrupt prior records are skipped (chain-plan replays)               |
 | `scripts/leak-check.mjs`     | Fail when a plaintext out-dir file quotes task text (pre-upload); `--scrub memory/` rewrites chain checkpoints instead of killing the hop |

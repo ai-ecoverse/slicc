@@ -275,6 +275,12 @@ the report with `results/` as `bench-report-<run>` and everything as
 [ai-ecoverse/slicc-bench](https://huggingface.co/datasets/ai-ecoverse/slicc-bench)
 with the repo's `HF_TOKEN` secret. It downloads the dataset's `records/`, stages
 this run over them with `publish.mjs`, and sends one `hf upload` commit.
+Unreadable/truncated files in that Hub download (or a plain local trace) are
+skipped for the combined report and logged — same rule as `merge.mjs` — so one
+corrupt corpus entry does not abort publishing an otherwise-good run. Skipped
+Hub records are still copied into the staged `records/` tree so
+`hf upload --delete 'records/**'` does not permanently remove a remote file
+that only failed to parse in this download.
 
 - The encryption is browser-use's: a `.enc` file is the base64 of a Fernet token
   whose key is `sha256(<benchmark>)`.

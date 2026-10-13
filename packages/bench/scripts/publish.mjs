@@ -23,7 +23,7 @@
  * that repo has no licence and asks for the text never to be published.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fromSkillCreatorEvals, pathSegment, validateEnvelope } from './format.mjs';
@@ -118,26 +118,54 @@ export function redactCriteria(value) {
   return value;
 }
 
-/** Records by their path under `records/`. */
-function recordsIn(root) {
+/**
+ * Parse one JSON file; return null on corrupt/truncated input.
+ * Mirrors `merge.mjs` `readRecord` — one Hub glitch must not abort publish (#3961).
+ */
+export function readJsonFile(path, { log = console.error } = {}) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    log(`publish: skipping unreadable ${path}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Records by their path under `records/`. Unreadable files are skipped (logged) rather than
+ * failing the whole stage — Hub downloads are unfiltered (#3961).
+ */
+export function recordsIn(root, { log = console.error, skipped = null } = {}) {
   const dir = join(root, 'records');
-  return new Map(
-    listFiles(dir)
-      .filter((f) => f.endsWith('.json'))
-      .map((f) => [f, publicRecord(JSON.parse(readFileSync(join(dir, f), 'utf8')))])
-  );
+  const entries = [];
+  for (const f of listFiles(dir).filter((name) => name.endsWith('.json'))) {
+    const path = join(dir, f);
+    const raw = readJsonFile(path, { log });
+    if (!raw) {
+      skipped?.push(f);
+      continue;
+    }
+    entries.push([f, publicRecord(raw)]);
+  }
+  return new Map(entries);
 }
 
 /**
  * This run's traces, ready to publish: encrypted with their own set's key, upstream sets left
- * out. A trace written encrypted (`.enc`) is always an upstream set's.
+ * out. A trace written encrypted (`.enc`) is always an upstream set's. Unreadable plain traces
+ * are skipped (logged) rather than aborting publish (#3961).
  */
-export function publishableTraces(out) {
+export function publishableTraces(out, { log = console.error, skipped = null } = {}) {
   const dir = join(out, 'traces');
   const traces = [];
   for (const f of listFiles(dir)) {
     if (f.endsWith('.enc') || UPSTREAM_SEGMENTS.has(f.split(/[\\/]/)[0])) continue;
-    const trace = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+    const path = join(dir, f);
+    const trace = readJsonFile(path, { log });
+    if (!trace) {
+      skipped?.push(f);
+      continue;
+    }
     traces.push({ path: `${f}.enc`, text: encryptJson(trace, trace.record.benchmark) });
   }
   return traces;
@@ -170,9 +198,10 @@ function writeCombined(stage, records, template) {
   put(join(stage, 'README.md'), datasetCard(template, records));
 }
 
-function stageRun(opts, stage) {
+function stageRun(opts, stage, { log = console.error } = {}) {
   const base = join(stage, 'runs', opts.run);
-  const own = recordsIn(opts.out);
+  const skippedRecords = [];
+  const own = recordsIn(opts.out, { log, skipped: skippedRecords });
   for (const [f, r] of own) put(join(base, 'records', f), json(r));
   // The run's own result files and report are copied, not rebuilt: redact rubric item ids in
   // the ones that cover an upstream set (a failed judge's error can name a finding).
@@ -187,9 +216,15 @@ function stageRun(opts, stage) {
   for (const f of ['report.md', 'report.json']) {
     if (existsSync(join(opts.out, f))) copy(join(opts.out, f), join(base, f), hasUpstream);
   }
-  const traces = publishableTraces(opts.out);
+  const skippedTraces = [];
+  const traces = publishableTraces(opts.out, { log, skipped: skippedTraces });
   for (const t of traces) put(join(base, 'traces', t.path), t.text);
-  return { records: own, traces: traces.length };
+  return {
+    records: own,
+    traces: traces.length,
+    skippedRecords: skippedRecords.length,
+    skippedTraces: skippedTraces.length,
+  };
 }
 
 /**
@@ -215,23 +250,60 @@ export function dropStaleUpstreamRecords(merged, incoming) {
 }
 
 /**
+ * Copy Hub dataset files that failed to parse into the stage tree so
+ * `hf upload --delete 'records/**'` does not permanently remove a remote record that was only
+ * unreadable in this download (truncated local copy / transient glitch). Paths this run already
+ * replaced are left alone.
+ */
+export function preserveSkippedDatasetRecords(
+  dataset,
+  stage,
+  skipped,
+  { overwritten = new Set() } = {}
+) {
+  let preserved = 0;
+  for (const f of skipped) {
+    if (overwritten.has(f)) continue;
+    const src = join(dataset, 'records', f);
+    if (!existsSync(src)) continue;
+    const dest = join(stage, 'records', f);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(src, dest);
+    preserved++;
+  }
+  return preserved;
+}
+
+/**
  * Stage everything for one upload. Returns what was staged, for the log. The combined files
  * come from the dataset's records with this run's laid over them: a rerun of a configuration
  * replaces its earlier records. Advancing an upstream pin drops the previous pin's records for
  * that benchmark so a partial shard does not mix task versions in the report.
  */
-export function stage(opts, { readFile = readFileSync } = {}) {
+export function stage(opts, { readFile = readFileSync, log = console.error } = {}) {
   const template = readFile(CARD_TEMPLATE, 'utf8');
-  const merged = opts.dataset ? recordsIn(opts.dataset) : new Map();
-  let run = { records: new Map(), traces: 0 };
+  const skippedDataset = [];
+  const merged = opts.dataset
+    ? recordsIn(opts.dataset, { log, skipped: skippedDataset })
+    : new Map();
+  let run = { records: new Map(), traces: 0, skippedRecords: 0, skippedTraces: 0 };
   let dropped = [];
+  let preserved = 0;
   if (opts.out) {
-    run = stageRun(opts, opts.stage);
+    run = stageRun(opts, opts.stage, { log });
     dropped = dropStaleUpstreamRecords(merged, run.records);
     for (const [f, r] of run.records) merged.set(f, r);
     // Write the full cleaned set so `hf upload --delete 'records/**'` replaces the Hub's
     // records tree (a pin advance must not leave the previous pin's unfinished tasks).
     for (const [f, r] of merged) put(join(opts.stage, 'records', f), json(r));
+    // Unreadable Hub downloads stay out of the combined report but must remain in the staged
+    // tree — otherwise --delete wipes a healthy remote record that only failed locally (#3961).
+    if (opts.dataset && skippedDataset.length) {
+      preserved = preserveSkippedDatasetRecords(opts.dataset, opts.stage, skippedDataset, {
+        overwritten: new Set(run.records.keys()),
+      });
+      if (preserved) log(`publish: preserved ${preserved} unreadable Hub record(s) for upload`);
+    }
   }
   const taskSets = [];
   for (const spec of opts.sets) {
@@ -247,16 +319,20 @@ export function stage(opts, { readFile = readFileSync } = {}) {
     traces: run.traces,
     combined: merged.size,
     dropped: dropped.length,
+    skipped: skippedDataset.length + (run.skippedRecords ?? 0) + (run.skippedTraces ?? 0),
+    preserved,
     taskSets,
   };
 }
 
 export function main(argv = process.argv.slice(2), { log = console.error } = {}) {
   const opts = parsePublishCli(argv);
-  const s = stage(opts);
+  const s = stage(opts, { log });
   log(
     `staged ${s.records} run record(s), ${s.traces} encrypted trace(s), ${s.combined} record(s) in the combined report` +
       (s.dropped ? `, dropped ${s.dropped} from an earlier upstream pin` : '') +
+      (s.skipped ? `, skipped ${s.skipped} unreadable` : '') +
+      (s.preserved ? `, preserved ${s.preserved} for Hub replace` : '') +
       (s.taskSets.length ? `, task sets ${s.taskSets.join(', ')}` : '')
   );
   return 0;
