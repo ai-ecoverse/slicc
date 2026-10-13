@@ -125,7 +125,11 @@ describe('scrub helpers', () => {
   it('matches memory/ prefixes and drops leaking paragraphs', () => {
     expect(matchesScrub('memory/CLAUDE.md', ['memory/'])).toBe(true);
     expect(matchesScrub('memory/CLAUDE.md', ['memory/**'])).toBe(true);
+    expect(matchesScrub('memory/CLAUDE.md', ['memory'])).toBe(true);
+    expect(matchesScrub('memory', ['memory/'])).toBe(true);
     expect(matchesScrub('results/x.json', ['memory/'])).toBe(false);
+    expect(matchesScrub('memory/CLAUDE.md', ['', null])).toBe(false);
+    expect(matchesScrub('memory/CLAUDE.md', [])).toBe(false);
     const needles = needlesFor('t1', TASK);
     const { text, removed } = scrubText(`Safe.\n\nQuoted: ${TASK}\n\nSafe again.`, needles);
     expect(removed).toBe(1);
@@ -133,6 +137,36 @@ describe('scrub helpers', () => {
     expect(text).toContain('Safe again.');
     expect(text).toContain(SCRUB_PLACEHOLDER);
     expect(findLeaks([{ path: 'm', text }], needles)).toEqual([]);
+    expect(scrubText('unchanged', []).removed).toBe(0);
+    expect(scrubText(null, needles).text).toBe('');
+  });
+
+  it('skips a scrubbable path that no longer contains a needle', () => {
+    const out = mkdtempSync(join(tmpdir(), 'leak-skip-'));
+    mkdirSync(join(out, 'memory'), { recursive: true });
+    writeFileSync(join(out, 'memory/CLAUDE.md'), '# Memory\n\nClean notes only.\n');
+    const needles = needlesFor('t1', TASK);
+    const r = scrubLeaks(out, [{ path: 'memory/CLAUDE.md', id: 't1' }], needles, ['memory/']);
+    expect(r).toEqual({ files: 0, removed: 0 });
+    expect(readFileSync(join(out, 'memory/CLAUDE.md'), 'utf8')).toContain('Clean notes only.');
+  });
+
+  it('does not scrub memory when a non-memory leak is also present', async () => {
+    const out = mkdtempSync(join(tmpdir(), 'leak-hard-'));
+    mkdirSync(join(out, 'memory'), { recursive: true });
+    writeFileSync(join(out, 'memory/CLAUDE.md'), `# Memory\n\n- ${TASK}\n`);
+    writeFileSync(join(out, 'oops.log'), `goal: ${TASK}`);
+    const set = { encrypted: true, tasks: [{ id: 'bu2-x', task: TASK }] };
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(
+      await main(['--out', out, '--set', 'bu-v2', '--scrub', 'memory/'], {
+        loadSet: async () => set,
+      })
+    ).toBe(1);
+    // Memory must remain unscrubbed when a hard leak blocks the scrub gate.
+    expect(readFileSync(join(out, 'memory/CLAUDE.md'), 'utf8')).toContain('cheapest direct flight');
+    expect(err.mock.calls.map((c) => c[0]).join('\n')).toContain('oops.log quotes task');
+    err.mockRestore();
   });
 
   it('stubs memory when a needle straddles a blank-line boundary', async () => {
