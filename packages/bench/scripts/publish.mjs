@@ -23,7 +23,7 @@
  * that repo has no licence and asks for the text never to be published.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fromSkillCreatorEvals, pathSegment, validateEnvelope } from './format.mjs';
@@ -250,6 +250,31 @@ export function dropStaleUpstreamRecords(merged, incoming) {
 }
 
 /**
+ * Copy Hub dataset files that failed to parse into the stage tree so
+ * `hf upload --delete 'records/**'` does not permanently remove a remote record that was only
+ * unreadable in this download (truncated local copy / transient glitch). Paths this run already
+ * replaced are left alone.
+ */
+export function preserveSkippedDatasetRecords(
+  dataset,
+  stage,
+  skipped,
+  { overwritten = new Set() } = {}
+) {
+  let preserved = 0;
+  for (const f of skipped) {
+    if (overwritten.has(f)) continue;
+    const src = join(dataset, 'records', f);
+    if (!existsSync(src)) continue;
+    const dest = join(stage, 'records', f);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(src, dest);
+    preserved++;
+  }
+  return preserved;
+}
+
+/**
  * Stage everything for one upload. Returns what was staged, for the log. The combined files
  * come from the dataset's records with this run's laid over them: a rerun of a configuration
  * replaces its earlier records. Advancing an upstream pin drops the previous pin's records for
@@ -263,6 +288,7 @@ export function stage(opts, { readFile = readFileSync, log = console.error } = {
     : new Map();
   let run = { records: new Map(), traces: 0, skippedRecords: 0, skippedTraces: 0 };
   let dropped = [];
+  let preserved = 0;
   if (opts.out) {
     run = stageRun(opts, opts.stage, { log });
     dropped = dropStaleUpstreamRecords(merged, run.records);
@@ -270,6 +296,14 @@ export function stage(opts, { readFile = readFileSync, log = console.error } = {
     // Write the full cleaned set so `hf upload --delete 'records/**'` replaces the Hub's
     // records tree (a pin advance must not leave the previous pin's unfinished tasks).
     for (const [f, r] of merged) put(join(opts.stage, 'records', f), json(r));
+    // Unreadable Hub downloads stay out of the combined report but must remain in the staged
+    // tree — otherwise --delete wipes a healthy remote record that only failed locally (#3961).
+    if (opts.dataset && skippedDataset.length) {
+      preserved = preserveSkippedDatasetRecords(opts.dataset, opts.stage, skippedDataset, {
+        overwritten: new Set(run.records.keys()),
+      });
+      if (preserved) log(`publish: preserved ${preserved} unreadable Hub record(s) for upload`);
+    }
   }
   const taskSets = [];
   for (const spec of opts.sets) {
@@ -286,6 +320,7 @@ export function stage(opts, { readFile = readFileSync, log = console.error } = {
     combined: merged.size,
     dropped: dropped.length,
     skipped: skippedDataset.length + (run.skippedRecords ?? 0) + (run.skippedTraces ?? 0),
+    preserved,
     taskSets,
   };
 }
@@ -297,6 +332,7 @@ export function main(argv = process.argv.slice(2), { log = console.error } = {})
     `staged ${s.records} run record(s), ${s.traces} encrypted trace(s), ${s.combined} record(s) in the combined report` +
       (s.dropped ? `, dropped ${s.dropped} from an earlier upstream pin` : '') +
       (s.skipped ? `, skipped ${s.skipped} unreadable` : '') +
+      (s.preserved ? `, preserved ${s.preserved} for Hub replace` : '') +
       (s.taskSets.length ? `, task sets ${s.taskSets.join(', ')}` : '')
   );
   return 0;
