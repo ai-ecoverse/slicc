@@ -288,7 +288,9 @@ jobs:
           set -euo pipefail
           out="$RUNNER_TEMP/bench-out"
           [ -d "$out" ] || exit 0
-          args=(--out "$out")
+
+
+          args=(--out "$out" --scrub memory/)
           for set in $BENCH_SETS; do args+=(--set "$set"); done
           node packages/bench/scripts/leak-check.mjs "${args[@]}"
 

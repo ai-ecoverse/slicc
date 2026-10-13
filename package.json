@@ -1,6 +1,6 @@
 {
   "name": "sliccy",
-  "version": "6.248.4",
+  "version": "6.248.5",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
@@ -136,7 +136,7 @@
     "husky": "9.1.7",
     "jscpd": "5.4.0",
     "just-bash": "3.4.2",
-    "knip": "6.34.0",
+    "knip": "6.39.0",
     "lint-staged": "17.6.0",
     "patch-package": "8.0.1",
     "playwright": "1.62.1",
