@@ -10,6 +10,7 @@ import {
   matchesScrub,
   needlesFor,
   SCRUB_PLACEHOLDER,
+  scrubLeaks,
   scrubText,
 } from './leak-check.mjs';
 import { encryptJson } from './upstream.mjs';
@@ -132,5 +133,43 @@ describe('scrub helpers', () => {
     expect(text).toContain('Safe again.');
     expect(text).toContain(SCRUB_PLACEHOLDER);
     expect(findLeaks([{ path: 'm', text }], needles)).toEqual([]);
+  });
+
+  it('stubs memory when a needle straddles a blank-line boundary', async () => {
+    // Canary is one full needle (not windowed). Split on an existing space so
+    // collapse() still matches the whole file, but no single paragraph contains
+    // the needle — paragraph scrub leaves the leak; stub must fire.
+    const canary = 'CANARY-span-abcdefghijklmnop and then more marker text here!!';
+    const spaceAt = canary.indexOf(' ');
+    const left = canary.slice(0, spaceAt);
+    const right = canary.slice(spaceAt + 1);
+    const out = mkdtempSync(join(tmpdir(), 'leak-span-'));
+    mkdirSync(join(out, 'memory'), { recursive: true });
+    const spanned = `# Memory\n\nKeep prior notes.\n\n${left}\n\n${right}\n\nAlso keep.\n`;
+    writeFileSync(join(out, 'memory/CLAUDE.md'), spanned);
+    const needles = [{ id: 'canary', text: collapse(canary) }];
+    expect(scrubText(spanned, needles).removed).toBe(0);
+    expect(findLeaks([{ path: 'memory/CLAUDE.md', text: spanned }], needles)).toEqual([
+      { path: 'memory/CLAUDE.md', id: 'canary' },
+    ]);
+
+    const r = scrubLeaks(out, [{ path: 'memory/CLAUDE.md', id: 'canary' }], needles, ['memory/']);
+    expect(r.files).toBe(1);
+    expect(r.removed).toBeGreaterThanOrEqual(1);
+    const mem = readFileSync(join(out, 'memory/CLAUDE.md'), 'utf8');
+    expect(mem.trim()).toBe(SCRUB_PLACEHOLDER);
+    expect(findLeaks([{ path: 'memory/CLAUDE.md', text: mem }], needles)).toEqual([]);
+
+    // End-to-end: main with --scrub + --canary also stubs and exits 0.
+    writeFileSync(join(out, 'memory/CLAUDE.md'), `# Memory\n\n${left}\n\n${right}\n`);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(
+      await main(['--out', out, '--scrub', 'memory/', '--canary', canary], {
+        loadSet: async () => ({ encrypted: false, tasks: [] }),
+      })
+    ).toBe(0);
+    expect(readFileSync(join(out, 'memory/CLAUDE.md'), 'utf8').trim()).toBe(SCRUB_PLACEHOLDER);
+    expect(err.mock.calls.map((c) => c[0]).join('\n')).toMatch(/scrubbed/);
+    err.mockRestore();
   });
 });
