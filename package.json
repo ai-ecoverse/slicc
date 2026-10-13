@@ -1,6 +1,6 @@
 {
   "name": "sliccy",
-  "version": "6.248.5",
+  "version": "6.248.6",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
@@ -147,7 +147,7 @@
     "tsx": "4.23.15",
     "typescript": "7.0.2",
     "typescript-js": "npm:typescript@6.0.3",
-    "vite": "8.2.2",
+    "vite": "8.3.3",
     "vitest": "4.1.11"
   },
   "overrides": {
