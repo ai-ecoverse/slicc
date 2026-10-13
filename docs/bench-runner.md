@@ -258,7 +258,11 @@ public) and fails the step on a match, reporting only the
 file and task id. A shard that fails it is not uploaded. The memory-chain
 workflow passes `--scrub memory/` so a curator note that quotes the task is
 rewritten (leaking paragraphs dropped) instead of failing the hop and
-stopping the chain; leaks outside `memory/` still fail hard.
+stopping the chain; leaks outside `memory/` still fail hard. Restored chain
+artifacts may also contain a truncated record from a prior hop: `previous()` /
+`readRecords()` skip unreadable files (same as `merge.mjs`), so chain-plan
+treats them as missing and replays that task instead of exiting 1 and killing
+the lineage.
 
 ## Publishing pipeline
 

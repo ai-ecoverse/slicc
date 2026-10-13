@@ -30,6 +30,9 @@ import {
   parseCli,
   parseShard,
   planRuns,
+  previous,
+  readRecordFile,
+  readRecords,
   readTrace,
   recordPath,
   resolveTaskIds,
@@ -759,6 +762,35 @@ describe('main defaults', () => {
     out.mockRestore();
     if (key === undefined) delete process.env.AWS_BEARER_TOKEN_BEDROCK;
     else process.env.AWS_BEARER_TOKEN_BEDROCK = key;
+  });
+});
+
+describe('readRecordFile / previous / readRecords', () => {
+  const dirs = [];
+  afterEach(() => {
+    while (dirs.length) rmSync(dirs.pop(), { recursive: true, force: true });
+  });
+
+  it('skips corrupt records instead of throwing', () => {
+    const out = mkdtempSync(join(tmpdir(), 'bench-rec-'));
+    dirs.push(out);
+    const goodPath = join(out, 'records', 'B', 'builtin', 'm', 't1-r1.json');
+    mkdirSync(join(out, 'records', 'B', 'builtin', 'm'), { recursive: true });
+    writeFileSync(goodPath, JSON.stringify({ task_id: 't1', score: 0.5 }));
+    writeFileSync(join(out, 'records', 'B', 'builtin', 'm', 't2-r1.json'), '{"task_id":');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(readRecordFile(join(out, 'records', 'B', 'builtin', 'm', 't2-r1.json'))).toBe(null);
+    expect(readRecords(out)).toEqual([{ task_id: 't1', score: 0.5 }]);
+    const r = {
+      task: { id: 't2' },
+      model: 'm',
+      repeat: 1,
+      condition: { name: 'builtin' },
+      set: { benchmark: 'B', encrypted: false },
+    };
+    expect(previous({ out }, r)).toEqual({ record: null, traceExists: false });
+    expect(err.mock.calls.length).toBeGreaterThan(0);
+    err.mockRestore();
   });
 });
 
