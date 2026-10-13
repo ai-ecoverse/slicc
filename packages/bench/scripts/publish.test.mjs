@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,6 +16,7 @@ import {
   listFiles,
   main,
   parsePublishCli,
+  preserveSkippedDatasetRecords,
   publicRecord,
   REPORT_MARKER,
   redactCriteria,
@@ -198,6 +206,8 @@ describe('stage', () => {
       traces: 1,
       combined: 3,
       dropped: 0,
+      skipped: 0,
+      preserved: 0,
       taskSets: ['SLICC_Smoke'],
     });
 
@@ -329,6 +339,8 @@ describe('stage', () => {
       traces: 0,
       combined: 1,
       dropped: 0,
+      skipped: 0,
+      preserved: 0,
       taskSets: [],
     });
     expect(listFiles(target).filter((f) => !f.startsWith('results/'))).toEqual([
@@ -337,6 +349,71 @@ describe('stage', () => {
       'report.md',
     ]);
     expect(listFiles(join(tmp(), 'missing'))).toEqual([]);
+  });
+
+  it('skips corrupt dataset records and local traces instead of aborting', () => {
+    const out = outDir();
+    write(join(out, 'traces/SLICC_Smoke/builtin/claude-opus-5-5/own-1-r1.json'), '{"record":');
+    const dataset = tmp();
+    write(
+      join(dataset, 'records/SLICC_Smoke/builtin/claude-sonnet-5/own-1-r1.json'),
+      record('SLICC_Smoke', 'claude-sonnet-5', 'own-1', { score: 0 })
+    );
+    const badRaw = '{"benchmark":';
+    write(join(dataset, 'records/SLICC_Smoke/builtin/m/bad-r1.json'), badRaw);
+    const target = join(tmp(), 'stage');
+    const log = vi.fn();
+    const s = stage({ out, stage: target, run: 'r1', dataset, sets: [] }, { log });
+
+    expect(s).toMatchObject({ records: 2, traces: 0, combined: 3, skipped: 2, preserved: 1 });
+    expect(
+      existsSync(join(target, 'records/SLICC_Smoke/builtin/claude-sonnet-5/own-1-r1.json'))
+    ).toBe(true);
+    expect(readFileSync(join(target, 'records/SLICC_Smoke/builtin/m/bad-r1.json'), 'utf8')).toBe(
+      badRaw
+    );
+    const logged = log.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(logged).toMatch(/skipping unreadable/);
+    expect(logged).toMatch(/preserved 1 unreadable Hub record/);
+  });
+
+  it('does not re-stage a skipped Hub path this run already replaced', () => {
+    const out = tmp();
+    const replaced = record('SLICC_Smoke', 'm', 'bad', { score: 1 });
+    write(join(out, 'records/SLICC_Smoke/builtin/m/bad-r1.json'), replaced);
+    const dataset = tmp();
+    write(join(dataset, 'records/SLICC_Smoke/builtin/m/bad-r1.json'), '{"benchmark":');
+    write(join(dataset, 'records/SLICC_Smoke/builtin/m/gone-r1.json'), '{"x":');
+
+    const target = join(tmp(), 'stage');
+    const log = vi.fn();
+
+    expect(
+      preserveSkippedDatasetRecords(dataset, target, ['SLICC_Smoke/builtin/m/bad-r1.json'], {
+        overwritten: new Set(['SLICC_Smoke/builtin/m/bad-r1.json']),
+      })
+    ).toBe(0);
+    const gone = 'SLICC_Smoke/builtin/m/gone-r1.json';
+    unlinkSync(join(dataset, 'records', gone));
+    expect(preserveSkippedDatasetRecords(dataset, target, [gone])).toBe(0);
+    const s = stage({ out, stage: target, run: 'r1', dataset, sets: [] }, { log });
+    expect(s).toMatchObject({ preserved: 0, skipped: 1 });
+    expect(
+      JSON.parse(readFileSync(join(target, 'records/SLICC_Smoke/builtin/m/bad-r1.json'), 'utf8'))
+    ).toMatchObject({ score: 1 });
+  });
+
+  it('mentions preserved Hub records in the stage log', () => {
+    const log = vi.fn();
+    const out = outDir();
+    const dataset = tmp();
+    write(join(dataset, 'records/SLICC_Smoke/builtin/m/bad-r1.json'), '{"benchmark":');
+    expect(
+      main(['--out', out, '--stage', join(tmp(), 's'), '--run', 'r', '--dataset', dataset], { log })
+    ).toBe(0);
+    expect(log.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
+      /preserved 1 for Hub replace/
+    );
   });
 
   it('logs what it staged', () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fromSkillCreatorEvals, pathSegment, validateEnvelope } from './format.mjs';
@@ -86,21 +86,41 @@ export function redactCriteria(value) {
   return value;
 }
 
-function recordsIn(root) {
-  const dir = join(root, 'records');
-  return new Map(
-    listFiles(dir)
-      .filter((f) => f.endsWith('.json'))
-      .map((f) => [f, publicRecord(JSON.parse(readFileSync(join(dir, f), 'utf8')))])
-  );
+export function readJsonFile(path, { log = console.error } = {}) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    log(`publish: skipping unreadable ${path}: ${err.message}`);
+    return null;
+  }
 }
 
-export function publishableTraces(out) {
+export function recordsIn(root, { log = console.error, skipped = null } = {}) {
+  const dir = join(root, 'records');
+  const entries = [];
+  for (const f of listFiles(dir).filter((name) => name.endsWith('.json'))) {
+    const path = join(dir, f);
+    const raw = readJsonFile(path, { log });
+    if (!raw) {
+      skipped?.push(f);
+      continue;
+    }
+    entries.push([f, publicRecord(raw)]);
+  }
+  return new Map(entries);
+}
+
+export function publishableTraces(out, { log = console.error, skipped = null } = {}) {
   const dir = join(out, 'traces');
   const traces = [];
   for (const f of listFiles(dir)) {
     if (f.endsWith('.enc') || UPSTREAM_SEGMENTS.has(f.split(/[\\/]/)[0])) continue;
-    const trace = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+    const path = join(dir, f);
+    const trace = readJsonFile(path, { log });
+    if (!trace) {
+      skipped?.push(f);
+      continue;
+    }
     traces.push({ path: `${f}.enc`, text: encryptJson(trace, trace.record.benchmark) });
   }
   return traces;
@@ -132,9 +152,10 @@ function writeCombined(stage, records, template) {
   put(join(stage, 'README.md'), datasetCard(template, records));
 }
 
-function stageRun(opts, stage) {
+function stageRun(opts, stage, { log = console.error } = {}) {
   const base = join(stage, 'runs', opts.run);
-  const own = recordsIn(opts.out);
+  const skippedRecords = [];
+  const own = recordsIn(opts.out, { log, skipped: skippedRecords });
   for (const [f, r] of own) put(join(base, 'records', f), json(r));
 
   const upstreamFile = (f) => UPSTREAM_SETS.some((b) => f.includes(`_bench_${pathSegment(b)}`));
@@ -148,9 +169,15 @@ function stageRun(opts, stage) {
   for (const f of ['report.md', 'report.json']) {
     if (existsSync(join(opts.out, f))) copy(join(opts.out, f), join(base, f), hasUpstream);
   }
-  const traces = publishableTraces(opts.out);
+  const skippedTraces = [];
+  const traces = publishableTraces(opts.out, { log, skipped: skippedTraces });
   for (const t of traces) put(join(base, 'traces', t.path), t.text);
-  return { records: own, traces: traces.length };
+  return {
+    records: own,
+    traces: traces.length,
+    skippedRecords: skippedRecords.length,
+    skippedTraces: skippedTraces.length,
+  };
 }
 
 export function dropStaleUpstreamRecords(merged, incoming) {
@@ -169,17 +196,47 @@ export function dropStaleUpstreamRecords(merged, incoming) {
   return dropped;
 }
 
-export function stage(opts, { readFile = readFileSync } = {}) {
+export function preserveSkippedDatasetRecords(
+  dataset,
+  stage,
+  skipped,
+  { overwritten = new Set() } = {}
+) {
+  let preserved = 0;
+  for (const f of skipped) {
+    if (overwritten.has(f)) continue;
+    const src = join(dataset, 'records', f);
+    if (!existsSync(src)) continue;
+    const dest = join(stage, 'records', f);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(src, dest);
+    preserved++;
+  }
+  return preserved;
+}
+
+export function stage(opts, { readFile = readFileSync, log = console.error } = {}) {
   const template = readFile(CARD_TEMPLATE, 'utf8');
-  const merged = opts.dataset ? recordsIn(opts.dataset) : new Map();
-  let run = { records: new Map(), traces: 0 };
+  const skippedDataset = [];
+  const merged = opts.dataset
+    ? recordsIn(opts.dataset, { log, skipped: skippedDataset })
+    : new Map();
+  let run = { records: new Map(), traces: 0, skippedRecords: 0, skippedTraces: 0 };
   let dropped = [];
+  let preserved = 0;
   if (opts.out) {
-    run = stageRun(opts, opts.stage);
+    run = stageRun(opts, opts.stage, { log });
     dropped = dropStaleUpstreamRecords(merged, run.records);
     for (const [f, r] of run.records) merged.set(f, r);
 
     for (const [f, r] of merged) put(join(opts.stage, 'records', f), json(r));
+
+    if (opts.dataset && skippedDataset.length) {
+      preserved = preserveSkippedDatasetRecords(opts.dataset, opts.stage, skippedDataset, {
+        overwritten: new Set(run.records.keys()),
+      });
+      if (preserved) log(`publish: preserved ${preserved} unreadable Hub record(s) for upload`);
+    }
   }
   const taskSets = [];
   for (const spec of opts.sets) {
@@ -195,16 +252,20 @@ export function stage(opts, { readFile = readFileSync } = {}) {
     traces: run.traces,
     combined: merged.size,
     dropped: dropped.length,
+    skipped: skippedDataset.length + (run.skippedRecords ?? 0) + (run.skippedTraces ?? 0),
+    preserved,
     taskSets,
   };
 }
 
 export function main(argv = process.argv.slice(2), { log = console.error } = {}) {
   const opts = parsePublishCli(argv);
-  const s = stage(opts);
+  const s = stage(opts, { log });
   log(
     `staged ${s.records} run record(s), ${s.traces} encrypted trace(s), ${s.combined} record(s) in the combined report` +
       (s.dropped ? `, dropped ${s.dropped} from an earlier upstream pin` : '') +
+      (s.skipped ? `, skipped ${s.skipped} unreadable` : '') +
+      (s.preserved ? `, preserved ${s.preserved} for Hub replace` : '') +
       (s.taskSets.length ? `, task sets ${s.taskSets.join(', ')}` : '')
   );
   return 0;
