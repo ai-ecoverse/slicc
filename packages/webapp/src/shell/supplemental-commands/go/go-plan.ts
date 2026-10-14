@@ -1,11 +1,3 @@
-/**
- * `go-plan.ts` — which packages `go build` compiles, in which order
- * (#3530 phase 5e): the main module (its `go.mod`), the packages the
- * command line names, and every package of the module they import,
- * dependencies first. The standard library comes precompiled (the
- * toolchain's archives for the target); anything else is an error that
- * says so — cgo, `//go:embed`, assembly, a module the build would download.
- */
 import {
   type BuildTarget,
   evalConstraint,

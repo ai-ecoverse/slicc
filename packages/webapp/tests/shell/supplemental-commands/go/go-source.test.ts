@@ -1,8 +1,3 @@
-/**
- * What SLICC's `go` driver reads from Go sources (#3530 phase 5e), checked
- * against go/build's own rules: file-name suffixes, `//go:build` lines,
- * the header (package clause, imports, cgo, embed) and go.mod.
- */
 import { describe, expect, it } from 'vitest';
 import {
   evalConstraint,

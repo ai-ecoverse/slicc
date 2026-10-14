@@ -1,13 +1,3 @@
-/**
- * `go-source.ts` — what SLICC's `go` driver reads from Go sources, as
- * `go/build` does (#3530 phase 5e): a module's `go.mod`, a file's header
- * (its `//go:build` line, package clause and imports), and which files of a
- * directory a target builds (file-name suffixes, build constraints, tests).
- *
- * Only the header is parsed: the compiler reads the rest. What the driver
- * does not build — cgo, `//go:embed`, assembly — is reported, not guessed at.
- */
-
 export const KNOWN_OS: ReadonlySet<string> = new Set([
   'aix',
   'android',
@@ -120,11 +110,8 @@ export function goodFileName(name: string, target: BuildTarget): boolean {
   return true;
 }
 
-// ---------------------------------------------------------------- //go:build
-
 type Expr = { tag: string } | { not: Expr } | { and: [Expr, Expr] } | { or: [Expr, Expr] };
 
-/** A `//go:build` expression (go/build/constraint's grammar: `!`, `&&`, `||`, parentheses). */
 export function parseConstraint(text: string): Expr {
   const tokens = text.match(/&&|\|\||[()!]|[^\s()!&|]+/g) ?? [];
   let at = 0;
@@ -183,11 +170,10 @@ export interface GoImport {
 }
 
 export interface GoFileHeader {
-  /** The `//go:build` expression, if any. */
   constraint?: string;
   pkg: string;
   imports: GoImport[];
-  /** A `//go:embed` directive (not supported yet), where it is. */
+
   embed?: { line: number };
 }
 
@@ -203,7 +189,6 @@ function position(text: string, offset: number): { line: number; column: number 
   return { line, column: offset - start + 1 };
 }
 
-/** The `//go:build` line in the leading comments, before any code (go/build's parseFileHeader). */
 function buildLine(text: string): string | undefined {
   let found: string | undefined;
   let inBlock = false;
