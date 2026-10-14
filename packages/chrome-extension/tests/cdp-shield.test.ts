@@ -379,7 +379,7 @@ describe('C5: client Fetch interception', () => {
     });
     expect(sent).toContainEqual({
       method: 'Fetch.continueWithAuth',
-      params: { requestId: 'a2', authChallengeResponse: { response: 'CancelAuth' } },
+      params: { requestId: 'a2', authChallengeResponse: { response: 'Default' } },
     });
   });
 
@@ -757,5 +757,147 @@ describe('pure helpers', () => {
       url: 'about:blank',
       title: 'about:blank',
     });
+  });
+});
+
+/**
+ * slicc-cli's C5 protectVectors (ai-ecoverse/slicc-cli@2d5d981,
+ * test/integration/testdata/link/protect.js): each runs its `control`
+ * (ordinary origin) first, then the protected destination.
+ */
+describe('C5 protectVectors (slicc-cli@2d5d981)', () => {
+  const ORDINARY = 'https://example.com';
+  const PROTECTED = 'https://vault.sliccy.ai';
+  const bothStages = {
+    patterns: [
+      { urlPattern: '*', requestStage: 'Request' },
+      { urlPattern: '*', requestStage: 'Response' },
+    ],
+  };
+
+  async function vector(dest: string, resourceType: string) {
+    const { shield, forward, sent } = makeShield();
+    await shield.command('Fetch.enable', bothStages, forward);
+    const request = paused(`${dest}/x?n=1`, resourceType);
+    const seenRequest = shield.onEvent('Fetch.requestPaused', request).length > 0;
+    const response = { ...paused(`${dest}/x?n=1`, resourceType), responseStatusCode: 200 };
+    const seenResponse = shield.onEvent('Fetch.requestPaused', response).length > 0;
+    const fulfilled = await shield
+      .command(
+        'Fetch.fulfillRequest',
+        { requestId: request.requestId, responseCode: 200, body: '' },
+        forward
+      )
+      .then(
+        () => true,
+        () => false
+      );
+    await flush();
+    const answeredByBackend = sent.some((c) => c.params?.['requestId'] === request.requestId);
+    return { seen: seenRequest || seenResponse, fulfilled, answeredByBackend };
+  }
+
+  it.each([
+    ['C5.document', 'Document'],
+    ['C5.fetch', 'Fetch'],
+    ['C5.xhr', 'XHR'],
+    ['C5.image', 'Image'],
+  ])(
+    '%s: control is paused + fulfillable; protected is never seen and answered by the backend',
+    async (_id, type) => {
+      expect(await vector(ORDINARY, type)).toEqual({
+        seen: true,
+        fulfilled: true,
+        answeredByBackend: false,
+      });
+      expect(await vector(PROTECTED, type)).toEqual({
+        seen: false,
+        fulfilled: false,
+        answeredByBackend: true,
+      });
+    }
+  );
+
+  it('C5.auth: control challenge reaches the client; protected one is answered Default, untouched', async () => {
+    const { shield, forward, sent } = makeShield();
+    await shield.command(
+      'Fetch.enable',
+      { patterns: [{ urlPattern: '*' }], handleAuthRequests: true },
+      forward
+    );
+    const control = { requestId: 'c1', request: { url: `${ORDINARY}/auth` } };
+    expect(shield.onEvent('Fetch.authRequired', control)).toHaveLength(1);
+    await expect(
+      shield.command(
+        'Fetch.continueWithAuth',
+        {
+          requestId: 'c1',
+          authChallengeResponse: { response: 'ProvideCredentials', username: 'u', password: 'p' },
+        },
+        forward
+      )
+    ).resolves.toBeDefined();
+    const vault = { requestId: 'v1', request: { url: `${PROTECTED}/auth` } };
+    expect(shield.onEvent('Fetch.authRequired', vault)).toEqual([]);
+    await expect(
+      shield.command(
+        'Fetch.continueWithAuth',
+        {
+          requestId: 'v1',
+          authChallengeResponse: { response: 'ProvideCredentials', username: 'u', password: 'p' },
+        },
+        forward
+      )
+    ).rejects.toThrow(/not paused toward this client/);
+    await flush();
+    expect(sent).toContainEqual({
+      method: 'Fetch.continueWithAuth',
+      params: { requestId: 'v1', authChallengeResponse: { response: 'Default' } },
+    });
+  });
+
+  it('C5.guessed-id: ids the client was given work; every guessed id in between is refused', async () => {
+    const { shield, forward } = makeShield();
+    await shield.command(
+      'Fetch.enable',
+      { patterns: [{ urlPattern: '*', requestStage: 'Request' }] },
+      forward
+    );
+    const before = {
+      ...paused(`${ORDINARY}/data?n=a`, 'Fetch'),
+      requestId: 'interception-job-10.0',
+    };
+    const probe = {
+      ...paused(`${PROTECTED}/data?n=p`, 'Fetch'),
+      requestId: 'interception-job-11.0',
+    };
+    const after = {
+      ...paused(`${ORDINARY}/data?n=b`, 'Fetch'),
+      requestId: 'interception-job-12.0',
+    };
+    for (const e of [before, probe, after]) shield.onEvent('Fetch.requestPaused', e);
+    for (const method of [
+      'Fetch.fulfillRequest',
+      'Fetch.continueRequest',
+      'Fetch.failRequest',
+      'Fetch.continueResponse',
+      'Fetch.getResponseBody',
+      'Fetch.takeResponseBodyAsStream',
+      'Fetch.continueWithAuth',
+    ]) {
+      await expect(shield.command(method, { requestId: probe.requestId }, forward)).rejects.toThrow(
+        /not paused toward this client/
+      );
+    }
+    await expect(
+      shield.command(
+        'Fetch.fulfillRequest',
+        { requestId: before.requestId, responseCode: 200, body: '' },
+        forward
+      )
+    ).resolves.toBeDefined();
+    await expect(
+      shield.command('Fetch.continueRequest', { requestId: after.requestId }, forward)
+    ).resolves.toBeDefined();
   });
 });
