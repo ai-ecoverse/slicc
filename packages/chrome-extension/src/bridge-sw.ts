@@ -40,6 +40,7 @@ import {
   SLICC_HOSTED_ORIGIN,
   type TargetInfo,
 } from '@slicc/shared-ts';
+import { isProtectedTarget, isProtectedUrl, PROTECTED_REFUSAL } from './protected-origins.js';
 
 /** Result of the bridge's Target.attachToTarget shim. */
 interface BridgeTargetAttachResult extends CDPPayload {
@@ -336,6 +337,44 @@ export function notifyBridgeDebuggerDetached(tabId: number): void {
       }
     }
   }
+}
+
+/**
+ * B24-1: When an attached tab's URL (or pending URL) changes to a protected
+ * origin, detach the debugger and emit `Target.detachedFromTarget` so the
+ * bridge client knows the session is gone. Called from a `chrome.tabs.onUpdated`
+ * listener installed in service-worker.ts.
+ *
+ * Returns the set of tab ids that were force-detached so the caller can also
+ * release the underlying `chrome.debugger` attachment.
+ */
+export function checkBridgeTabProtection(tabId: number, url: string | undefined): Set<number> {
+  const detached = new Set<number>();
+  if (!url || !isProtectedUrl(url)) return detached;
+
+  for (const [port, state] of liveBridgePortStates) {
+    const detachedSessionIds = [...state.sessionToTab]
+      .filter(([, tid]) => tid === tabId)
+      .map(([sid]) => sid);
+    if (detachedSessionIds.length === 0) continue;
+    invalidatePortDebuggerAttachment(state, tabId);
+    detached.add(tabId);
+    if (state.channelId === null) continue;
+    for (const sessionId of detachedSessionIds) {
+      try {
+        port.postMessage({
+          bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+          channelId: state.channelId,
+          kind: 'cdp.event',
+          method: 'Target.detachedFromTarget',
+          params: { sessionId, targetId: String(tabId), reason: PROTECTED_REFUSAL },
+        } satisfies ExtensionBridgeEnvelope);
+      } catch {
+        /* port disconnected */
+      }
+    }
+  }
+  return detached;
 }
 
 /**
@@ -844,6 +883,14 @@ async function dispatchCdpCommand(
       `No tab attached for sessionId: ${sessionId ?? '(none)'}. Attach to a target first.`
     );
   }
+
+  // B24-1: refuse Page.navigate to a protected URL.
+  if (method === 'Page.navigate') {
+    const navUrl = typeof params?.['url'] === 'string' ? params['url'] : undefined;
+    if (navUrl && isProtectedUrl(navUrl as string)) {
+      throw new Error(PROTECTED_REFUSAL);
+    }
+  }
   // chrome.debugger's Page.bringToFront wakes the renderer but does NOT select
   // the tab in the strip or focus its window (real-Chrome CDP does, which is why
   // `open --foreground` / screenshot foregrounding works in standalone but was a
@@ -884,9 +931,27 @@ async function cdpAttachToTarget(
   if (!Number.isFinite(tabId) || tabId <= 0) {
     throw new Error(`Invalid targetId: ${targetId}`);
   }
+  // B24-1: refuse to attach to a tab on a protected origin.
+  // Use isProtectedTarget (not isProtectedUrl) so about:blank/about:srcdoc
+  // tabs that inherited a protected opener are also refused.
+  const tab = await deps.getTab(tabId);
+  if (tab && isProtectedTarget(tab.url ?? '', false, 'unknown')) {
+    throw new Error(PROTECTED_REFUSAL);
+  }
   if (!state.ownedTabs.has(tabId)) {
     const attachedByThisPort = await deps.attachDebugger(tabId);
     if (attachedByThisPort) state.ownedTabs.add(tabId);
+  }
+  // B24-1 TOCTOU: revalidate after attach in case the tab navigated during
+  // the async attach call. If it's now protected, immediately detach.
+  const postTab = await deps.getTab(tabId);
+  if (postTab && isProtectedTarget(postTab.url ?? '', false, 'unknown')) {
+    // Undo the attachment we just made.
+    if (state.ownedTabs.has(tabId)) {
+      state.ownedTabs.delete(tabId);
+      await deps.detachDebugger(tabId);
+    }
+    throw new Error(PROTECTED_REFUSAL);
   }
   // sessionId === targetId so the leader can correlate without an extra
   // round-trip (matches the existing offscreen CDP proxy's convention).
@@ -928,6 +993,13 @@ async function cdpCreateTarget(
   deps: BridgeSwDeps
 ): Promise<BridgeTargetCreateResult> {
   const url = readCreateTargetUrl(params);
+  // B24-1: refuse to create a target on a protected origin.
+  // A created tab has no opener, so isProtectedTarget with no opener/previous
+  // is equivalent to isProtectedUrl for non-inheriting URLs, and
+  // about:blank (no opener) is correctly unprotected.
+  if (isProtectedTarget(url)) {
+    throw new Error(PROTECTED_REFUSAL);
+  }
   // `newWindow: true` → chrome.windows.create so sized+decorated windows match
   // standalone CDP (issue #3271). chrome.debugger cannot run Browser.*.
   if (params['newWindow'] !== true) {

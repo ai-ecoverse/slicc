@@ -26,6 +26,7 @@ import {
   BRIDGE_ALLOWED_ORIGINS,
   BRIDGE_DEV_ORIGINS,
   buildDefaultBridgeSwDeps,
+  checkBridgeTabProtection,
   handleBridgePortConnect,
   postOpenSettingsToWelcomedLeaderPorts,
 } from './bridge-sw.js';
@@ -141,6 +142,22 @@ installHandoffNotifications();
 installDiscoveryObserver();
 
 installCdpProxyListeners();
+
+// B24-1: monitor tab URL changes to detach from protected origins.
+// When an attached tab navigates to a protected origin (vault.sliccy.ai, etc.),
+// the debugger must be detached and Target.detachedFromTarget emitted.
+chrome.tabs.onUpdated.addListener(
+  (tabId: number, changeInfo: ChromeTabChangeInfo, tab: ChromeTab) => {
+    // Check committed URL from changeInfo, or the tab's pending URL.
+    const url = changeInfo.url ?? tab.pendingUrl;
+    if (!url) return;
+    const bridgeDetached = checkBridgeTabProtection(tabId, url);
+    // If the bridge path force-detached, also release the underlying attachment.
+    for (const detachedTabId of bridgeDetached) {
+      releaseDebuggerAttachment(detachedTabId, 'bridge').catch(() => {});
+    }
+  }
+);
 
 // Raw-mode fetch-proxy (#3571) reads upstream heads from `webRequest`.
 const rawFetchDeps = { capture: createRawFetchCapture() };

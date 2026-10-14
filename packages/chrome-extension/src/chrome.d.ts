@@ -59,6 +59,8 @@ interface ChromeTab {
   discarded?: boolean;
   /** 'unloaded' = restored-but-never-loaded (lazy session restore); runs no JS either. */
   status?: 'unloaded' | 'loading' | 'complete';
+  /** URL the tab is navigating to but has not yet committed. */
+  pendingUrl?: string;
 }
 
 interface ChromeTabChangeInfo {
