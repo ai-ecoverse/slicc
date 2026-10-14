@@ -48,7 +48,7 @@ Each published GitHub Release includes semantic-release generated release notes 
 - `release-artifacts.json` — stable manifest describing the generated artifact paths
 - `sliccstart-v<version>.dmg` — **conditional**: the macOS Sliccstart DMG (plus the `Sliccstart-<version>.zip` update archive) is only built and attached when macOS-relevant sources changed since the previous release tag (`packages/swift-launcher/`, `packages/swift-server/`, `packages/swift-optel/`, `packages/spoon/`, `packages/assets/`); the iOS TestFlight upload is likewise gated on `packages/ios-app/`. A first release (no previous tag) builds both. Gating is driven by `packages/dev-tools/tools/release-native.mjs`, invoked from the semantic-release `prepareCmd`; `npm run build` and `npm run package:release` always run.
 
-The **Chrome Web Store publish** (`npm run publish:chrome`) is gated the same way, but in the semantic-release `publishCmd` via `packages/dev-tools/tools/release-native.mjs --gate=chrome`: it only runs when extension-relevant sources changed since the previous tag (`packages/chrome-extension/`, `packages/webapp/`, `packages/webcomponents/`, `packages/shared-ts/`, `packages/cherry/`, `packages/spoon/`, `packages/cloud-core/`, `packages/assets/`), or on a first release. `npm run publish:worker` runs first, but its internal worker/UI gate skips template builds, secret writes, deploys, and smoke tests for unrelated releases while retaining the required R2 asset refresh.
+The **Chrome Web Store publish** has moved to [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension), which builds the extension from slicc release tags and publishes to the same CWS listing. `npm run publish:worker` runs first, but its internal worker/UI gate skips template builds, secret writes, deploys, and smoke tests for unrelated releases while retaining the required R2 asset refresh.
 
 ### What gets published to npm
 
@@ -84,22 +84,7 @@ npm run package:release
 
 For a local semantic-release config check, run `npx semantic-release --dry-run --no-ci` from a clone of `main` with full git history. This validates branch/configuration and GitHub release wiring, but local runs do not receive the GitHub Actions OIDC token that npm trusted publishing uses in CI.
 
-To validate the Chrome Web Store publisher locally after `npm run package:release`, export the Chrome Web Store env vars above and run:
-
-```bash
-npm run publish:chrome
-```
-
-For a side-effect-free local verification, set `CHROME_WEB_STORE_DRY_RUN=true`:
-
-```bash
-CHROME_WEB_STORE_DRY_RUN=true npm run publish:chrome
-```
-
-That dry run checks release packaging, exchanges the service-account token, and fetches the current item status, but it does not cancel pending reviews, upload a ZIP, or publish a new revision.
-
-If the Chrome Web Store env vars are all unset, `npm run publish:chrome` exits without publishing. If the configuration is partial, it fails fast with the missing variable names.
-If a Chrome Web Store revision is already pending review, `npm run publish:chrome` warns and skips the Chrome publish step by default so the rest of the release can continue. Set `CHROME_WEB_STORE_FORCE_CANCEL_PENDING=true` to cancel the pending review and re-submit automatically instead.
+The Chrome Web Store publisher has been removed from this repo. See [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension) for CWS publishing.
 
 When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. In standalone/Electron startup, if there is no query override, stored join/base URL, server runtime config, or `VITE_WORKER_BASE_URL`, the browser falls back to the staging worker in dev builds and the production worker in normal builds. Extension/offscreen builds can still use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 
