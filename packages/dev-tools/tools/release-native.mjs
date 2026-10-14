@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Gate the native macOS (Sliccstart DMG + update ZIP) and iOS (TestFlight)
 // packaging steps of the semantic-release prepareCmd — and the Chrome Web Store
-// publish steps of the publishCmd (`--gate=chrome` / `--gate=worker`) — plus the
+// publish steps of the publishCmd (`--gate=worker`) — plus the
 // `@ai-ecoverse/biome-jsh` npm release (`--gate=biome-jsh-version` in prepare,
 // `--gate=biome-jsh` in publish) — on whether their relevant source changed since
 // the previous release tag. The always-run build/package steps stay in
@@ -58,23 +58,6 @@ export const IOS_PATH_PREFIXES = [
 // slicc-cli file next changed.
 export const SLICC_CLI_PATH_PREFIXES = ['packages/slicc-cli/', 'packages/go-optel/'];
 
-// APPROVED extension-relevant path set for the Chrome Web Store publish. Covers
-// the extension entry points plus every web package bundled into the extension
-// artifact (webapp, its UI shell, shared primitives, and the injection/host
-// SDKs), plus packages/assets/ (chrome-extension vite copies its logos + fonts,
-// and webapp copies its favicon and uses it as publicDir). Excludes native
-// (swift/ios), the worker, node-server, and docs.
-export const EXTENSION_PATH_PREFIXES = [
-  'packages/chrome-extension/',
-  'packages/webapp/',
-  'packages/webcomponents/',
-  'packages/shared-ts/',
-  'packages/cherry/',
-  'packages/spoon/',
-  'packages/cloud-core/',
-  'packages/assets/',
-];
-
 // APPROVED worker/UI-relevant path set for the production worker deploy. This
 // includes the worker, everything bundled into its served UI, shared worker
 // dependencies, and the node-server/template inputs published for cloud cones.
@@ -120,8 +103,6 @@ export const IOS_SCRIPT_CMD =
 // applied to the script invocation (not the preceding `chmod`) by the caller —
 // `VAR=v chmod && script` would scope VAR to `chmod` only.
 export const SLICC_CLI_SCRIPT = 'packages/slicc-cli/sign-and-package.sh';
-// A failing publish must fail the release (fail-fast preserved via execSync).
-export const CHROME_PUBLISH_CMD = 'npm run publish:chrome';
 // biome-jsh is published from its own directory (it is not an npm workspace of
 // the root package). `--provenance` / `--access public` mirror the settings the
 // former second @semantic-release/npm target used. npm-publish-retry.mjs rides
@@ -173,18 +154,6 @@ export function decideSliccCliGating({ lastTag, changedFiles = [] } = {}) {
   }
   return {
     sliccCli: changedFiles.some((f) => matchesAnyPrefix(f, SLICC_CLI_PATH_PREFIXES)),
-    firstRelease: false,
-  };
-}
-
-// Core gating decision for the Chrome Web Store publish. Kept separate from
-// decideGating so the native decision shape stays untouched.
-export function decideChromeGating({ lastTag, changedFiles = [] } = {}) {
-  if (isFirstRelease(lastTag)) {
-    return { chrome: true, firstRelease: true };
-  }
-  return {
-    chrome: changedFiles.some((f) => matchesAnyPrefix(f, EXTENSION_PATH_PREFIXES)),
     firstRelease: false,
   };
 }
@@ -323,7 +292,7 @@ function writeBiomeJshVersion(version, targetPath = BIOME_JSH_PKG_JSON_PATH) {
 const HELP = `release-native — gate native packaging, worker deploy, Chrome publish, and the biome-jsh npm release on source changes
 
 Usage:
-  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=chrome|worker|biome-jsh|biome-jsh-version] [--dry-run]
+  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=worker|biome-jsh|biome-jsh-version] [--dry-run]
 
 Options:
   --last=<tag>   Previous release git tag. Empty => first release => run ALL gated steps.
@@ -334,8 +303,6 @@ Options:
                  --gate=biome-jsh-version. Empty => skip the pointer update / version
                  stamp (never fails the release).
                  In .releaserc.json use --next='\${nextRelease.version}'.
-  --gate=chrome  Gate the Chrome Web Store publish (\`${CHROME_PUBLISH_CMD}\`) instead of
-                 the default native macOS/iOS packaging.
   --gate=worker  Print "deploy" when the production worker/UI should deploy, otherwise
                  print "skip". This decision mode never runs the deploy itself.
   --gate=biome-jsh-version
@@ -357,8 +324,6 @@ Behavior:
     ${MACOS_PATH_PREFIXES.join(', ')} changed, iOS only if
     ${IOS_PATH_PREFIXES.join(', ')} changed, and the signed + notarized slicc CLI
     binaries only if ${SLICC_CLI_PATH_PREFIXES.join(', ')} changed.
-  - --gate=chrome: use the same resolved diff ref and publish to the Chrome Web Store if one of
-    ${EXTENSION_PATH_PREFIXES.join(', ')} changed.
   - --gate=worker: use the same resolved diff ref and print deploy only if one of
     ${WORKER_PATH_PREFIXES.join(', ')} changed.
   - --gate=biome-jsh[-version]: use the same resolved diff ref and bump / publish
@@ -568,33 +533,6 @@ export function main(argv = process.argv.slice(2)) {
 
   if (args.gate === 'biome-jsh' || args.gate === 'biome-jsh-version') {
     runBiomeJshGate(args, changedFiles);
-    return 0;
-  }
-
-  if (args.gate === 'chrome') {
-    const decision = decideChromeGating({ lastTag: args.last, changedFiles });
-    if (decision.firstRelease) {
-      console.log(
-        '[release-native] First release (no previous tag) — publishing the extension to the Chrome Web Store.'
-      );
-    } else {
-      console.log(`[release-native] Changed since ${args.last}: ${changedFiles.length} file(s).`);
-    }
-
-    if (decision.chrome) {
-      runStep(
-        'Chrome Web Store extension',
-        CHROME_PUBLISH_CMD,
-        args.dryRun,
-        'Publishing',
-        'publish'
-      );
-    } else {
-      console.log(
-        '[release-native] Skipping Chrome Web Store publish (no extension-relevant changes).'
-      );
-    }
-
     return 0;
   }
 
