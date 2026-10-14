@@ -7,16 +7,18 @@
  *
  * `run.mjs` writes it as `report.html` beside report.md and report.json. `--records` also takes
  * a download of the dataset, or several runs' out dirs merged, to see configurations side by
- * side. Pure apart from the CLI: `reportHtml(records)` returns the page. It shows ids, scores and
- * metrics only, never task text, so it is safe for upstream sets.
+ * side. Unreadable/truncated records under `--records` are skipped (logged) rather than aborting
+ * the page — same rule as `merge.mjs` / `publish.mjs` (#3969). Pure apart from the CLI:
+ * `reportHtml(records)` returns the page. It shows ids, scores and metrics only, never task text,
+ * so it is safe for upstream sets.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chartLegend, modelSlots, rankingChart, toolUseChart, valueChart } from './charts.mjs';
 import { modelColors } from './models.mjs';
-import { listFiles } from './publish.mjs';
+import { listFiles, readJsonFile } from './publish.mjs';
 import {
   COMPARISON_KINDS,
   canonicalRecords,
@@ -409,12 +411,20 @@ ${sections || '<p class="muted">No runs yet.</p>'}
 `;
 }
 
-/** Every record under `<dir>/records/`; none when it is missing. */
-export function readRecordsDir(dir) {
+/**
+ * Every readable record under `<dir>/records/`; none when it is missing.
+ * Unreadable/truncated files are skipped (logged) rather than failing the whole page (#3969).
+ * Uses `publish.mjs` `readJsonFile` (same skip rule as `recordsIn`); log prefix rewritten to `html:`.
+ */
+export function readRecordsDir(dir, { log = console.error } = {}) {
   const root = join(dir, 'records');
-  return listFiles(root)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => JSON.parse(readFileSync(join(root, f), 'utf8')));
+  const records = [];
+  const htmlLog = (msg) => log(String(msg).replace(/^publish:/, 'html:'));
+  for (const f of listFiles(root).filter((name) => name.endsWith('.json'))) {
+    const rec = readJsonFile(join(root, f), { log: htmlLog });
+    if (rec) records.push(rec);
+  }
+  return records;
 }
 
 export function main(argv = process.argv.slice(2), { log = console.error } = {}) {
@@ -423,7 +433,7 @@ export function main(argv = process.argv.slice(2), { log = console.error } = {})
     options: { records: { type: 'string' }, out: { type: 'string' }, title: { type: 'string' } },
   });
   if (!values.records || !values.out) throw new Error('give --records <dir> and --out <file.html>');
-  const records = readRecordsDir(resolve(values.records));
+  const records = readRecordsDir(resolve(values.records), { log });
   writeFileSync(
     resolve(values.out),
     reportHtml(records, values.title ? { title: values.title } : {})
