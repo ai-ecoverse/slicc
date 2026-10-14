@@ -4,7 +4,7 @@ Review webapp/extension/Node/Swift/iOS. Details: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage
 
-Bound external calls and surface errors. Drain failed preload copies. Test OPFS reloads; reject live wipes.
+Bound external calls; surface errors. Drain failed preload copies. Test OPFS reloads; reject live wipes.
 
 ## 2. Cross-runtime parity
 
@@ -54,9 +54,8 @@ boot paths; preserve shared fallbacks; prefer capability checks to float names.
 
 Thin-bridge UI/API origins differ. Flag same-origin `/api/`, hardcoded origins, and
 unnormalized comparisons. Iframe/channel/relay messages and UI activation must retain
-the owner captured at opening, not later focus. Extension internal `onMessage`/`onConnect`
-handlers must verify `sender.origin === 'chrome-extension://' + chrome.runtime.id`;
-content scripts carry the page's origin and are refused.
+the owner captured at opening, not later focus. Extension listeners:
+`sender.origin` must be own `chrome-extension://<id>`.
 
 ## 10. Layer import direction
 
@@ -83,9 +82,8 @@ Bench recovery must abort at timeout/cost cap and confirm flat spend before scor
 
 ## 14. `--help` that does the thing
 
-A verb dispatcher checking only `args[0] === '--help'` sends `cmd <verb> --help` into the
-handler; if it defaults a missing arg, help performs the action. Check help before
-dispatch, scanning all args.
+Dispatchers checking only `args[0] === '--help'` route `cmd <verb> --help` into the
+handler, which may act. Check help first, scanning all args.
 
 ## Severity
 
