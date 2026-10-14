@@ -167,6 +167,16 @@ function cdpOf(leader: Page): Cdp {
     );
 }
 
+/** The client's session still answers, on the page that blocked the load. */
+async function sessionAlive(cdp: Cdp, s: string, expectHref: string): Promise<boolean> {
+  const href = (
+    await cdp('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, s).catch(
+      () => undefined
+    )
+  )?.result?.value;
+  return typeof href === 'string' && href.includes(expectHref);
+}
+
 async function refused(
   cdp: Cdp,
   method: string,
@@ -196,7 +206,7 @@ interface Ctx {
   seven: string;
 }
 
-async function c1InitScript({ go, plain, plain2, vault }: Ctx): Promise<void> {
+async function c1InitScript({ cdp, s, go, plain, plain2, vault }: Ctx): Promise<void> {
   // C1 — init script + self-navigation.
   await go(`${plain2}/page?n=c1`);
   check(
@@ -208,6 +218,11 @@ async function c1InitScript({ go, plain, plain2, vault }: Ctx): Promise<void> {
   await sleep(2000);
   check('C1 protected: vault document never fetched', !served('vault.sliccy.ai', 'n=c1v'));
   check('C1 protected: init script never ran on the vault', !beaconFrom('n=c1v'));
+  const c1Alive = await cdp('Runtime.evaluate', { expression: '1+1', returnByValue: true }, s).then(
+    (r) => r.result?.value === 2,
+    () => false
+  );
+  check('C1 protected: tab and session stay (request failed, no detach)', c1Alive);
 }
 
 async function c2Redirects({ go, plain, plain2, vault }: Ctx): Promise<void> {
@@ -300,7 +315,7 @@ async function c3Popups({ leader, cdp, s, go, plain, plain2, vault }: Ctx): Prom
   );
 }
 
-async function c4Iframes({ go, plain, plain2, vault }: Ctx): Promise<void> {
+async function c4Iframes({ cdp, s, go, plain, plain2, vault }: Ctx): Promise<void> {
   // C4 — iframes.
   await go(`${plain}/frame?src=${encodeURIComponent(`${plain2}/page?n=c4`)}`);
   check('C4 control: plain iframe is served', await until(() => served('plain2.test', 'n=c4')));
@@ -312,6 +327,10 @@ async function c4Iframes({ go, plain, plain2, vault }: Ctx): Promise<void> {
   );
   await sleep(2000);
   check('C4 protected: vault iframe document never fetched', !served('vault.sliccy.ai', 'n=c4v'));
+  check(
+    'C4 protected: only the frame failed; the tab and session stay on the plain page',
+    await sessionAlive(cdp, s, '/frame?src=')
+  );
 }
 
 async function c5Fetch({ leader, cdp, s, go, plain, plain2, vault }: Ctx): Promise<void> {
