@@ -162,7 +162,7 @@ describe('main', () => {
     writeFileSync(join(dir, 'records/B/builtin/opus/bad-r1.json'), '{truncated');
     const log = vi.fn();
     expect(readRecordsDir(dir, { log })).toHaveLength(1);
-    expect(log.mock.calls.some((c) => /skipping unreadable record/.test(c[0]))).toBe(true);
+    expect(log.mock.calls.some((c) => /html: skipping unreadable /.test(c[0]))).toBe(true);
     const out = join(dir, 'r.html');
     expect(main(['--records', dir, '--out', out], { log })).toBe(0);
     expect(readFileSync(out, 'utf8')).toContain('<title>SLICC Bench</title>');

@@ -13,12 +13,12 @@
  * so it is safe for upstream sets.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chartLegend, modelSlots, rankingChart, toolUseChart, valueChart } from './charts.mjs';
 import { modelColors } from './models.mjs';
-import { listFiles } from './publish.mjs';
+import { listFiles, readJsonFile } from './publish.mjs';
 import {
   COMPARISON_KINDS,
   canonicalRecords,
@@ -414,17 +414,15 @@ ${sections || '<p class="muted">No runs yet.</p>'}
 /**
  * Every readable record under `<dir>/records/`; none when it is missing.
  * Unreadable/truncated files are skipped (logged) rather than failing the whole page (#3969).
+ * Uses `publish.mjs` `readJsonFile` (same skip rule as `recordsIn`); log prefix rewritten to `html:`.
  */
 export function readRecordsDir(dir, { log = console.error } = {}) {
   const root = join(dir, 'records');
   const records = [];
+  const htmlLog = (msg) => log(String(msg).replace(/^publish:/, 'html:'));
   for (const f of listFiles(root).filter((name) => name.endsWith('.json'))) {
-    const path = join(root, f);
-    try {
-      records.push(JSON.parse(readFileSync(path, 'utf8')));
-    } catch (err) {
-      log(`html: skipping unreadable record ${path}: ${err.message}`);
-    }
+    const rec = readJsonFile(join(root, f), { log: htmlLog });
+    if (rec) records.push(rec);
   }
   return records;
 }
