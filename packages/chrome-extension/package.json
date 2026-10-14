@@ -17,7 +17,7 @@
       "name": "extension: service worker",
       "path": "../../dist/extension/service-worker.js",
       "brotli": false,
-      "limit": "70 kB"
+      "limit": "90 kB"
     },
     {
       "name": "extension: side panel entry",
@@ -29,11 +29,12 @@
       "name": "extension: total JS payload",
       "path": "../../dist/extension/**/*.js",
       "brotli": false,
-      "limit": "115 kB"
+      "limit": "133 kB"
     }
   ],
   "dependencies": {
     "@ai-ecoverse/cherry": "*",
+    "@ai-ecoverse/slicc-browsers": "1.5.0",
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-coding-agent": "1.1.0",
     "@slicc/shared-ts": "*"
