@@ -31,6 +31,20 @@ describe('isKeptComment', () => {
     expect(isKeptComment('# shellcheck disable=SC1091')).toBe(true);
   });
 
+  it('keeps the Go wasm import and export directives', () => {
+    expect(isKeptComment('//go:wasmimport slicc host_call')).toBe(true);
+    expect(isKeptComment('//go:wasmexport run')).toBe(true);
+  });
+
+  it('drops Go directives written with a space or inside other text', () => {
+    expect(isKeptComment('// go:wasmimport slicc host_call')).toBe(false);
+    expect(isKeptComment('// go:wasmexport run')).toBe(false);
+    expect(isKeptComment('// go:build ignore')).toBe(false);
+    expect(isKeptComment('/*go:wasmimport slicc host_call*/')).toBe(false);
+    expect(isKeptComment('// calls the host through go:wasmimport')).toBe(false);
+    expect(isKeptComment('//go:wasmimported later')).toBe(false);
+  });
+
   it('drops ordinary comments', () => {
     expect(isKeptComment('// TODO later')).toBe(false);
     expect(isKeptComment('/* explain the algorithm */')).toBe(false);
@@ -161,6 +175,22 @@ describe('stripSource go', () => {
   it('keeps //go:build', () => {
     const src = '//go:build ignore\npackage p\n';
     expect(stripSource(src, 'go', 'a.go')).toContain('//go:build ignore');
+  });
+});
+
+describe('Go wasm directives in source', () => {
+  it('keeps //go:wasmimport and //go:wasmexport and drops plain comments', () => {
+    const src =
+      'package p\n\n//go:wasmimport slicc host_call\nfunc hostCall(p uint32) uint32\n\n//go:wasmexport run\nfunc run() {}\n\n// go:wasmimport slicc spaced\n// plain note\n';
+    expect(findComments(src, 'go', 'host_wasip1.go')).toEqual([
+      { line: 9, text: '// go:wasmimport slicc spaced' },
+      { line: 10, text: '// plain note' },
+    ]);
+    const out = stripSource(src, 'go', 'host_wasip1.go');
+    expect(out).toContain('//go:wasmimport slicc host_call');
+    expect(out).toContain('//go:wasmexport run');
+    expect(out).not.toContain('spaced');
+    expect(out).not.toContain('plain note');
   });
 });
 
