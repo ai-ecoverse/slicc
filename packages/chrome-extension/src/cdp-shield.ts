@@ -598,8 +598,11 @@ export class TabShield {
     const id = str(event['requestId']) ?? '';
     const protectedUrl = urlProtected(requestUrl(event) ?? '') || this.requests.get(id) === true;
     if (protectedUrl || this.blockedFlag || this.clientFetch?.handleAuthRequests !== true) {
-      const response = protectedUrl ? 'CancelAuth' : 'Default';
-      this.answer('Fetch.continueWithAuth', { requestId: id, authChallengeResponse: { response } });
+      // Default = exactly what the page would get with no debugger attached.
+      this.answer('Fetch.continueWithAuth', {
+        requestId: id,
+        authChallengeResponse: { response: 'Default' },
+      });
       return [];
     }
     this.forwarded.set(id, true);

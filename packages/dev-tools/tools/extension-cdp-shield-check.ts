@@ -21,6 +21,7 @@
  *   C3 `window.open` popup to the vault: never attached, never instrumented
  *   C4 vault iframe in a plain page
  *   C5 Fetch: client pauses never include the vault; fulfill / redirect into it
+ *   C5 slicc-cli protectVectors (@2d5d981): sub-resource, auth, guessed-id
  *   C6 cookies: getCookies / getAllCookies filtered, setCookie refused
  *
  * Usage:
@@ -109,6 +110,23 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
       break;
     case '/set-cookie':
       html(page('cookie'), { 'set-cookie': `${q('name')}=1; Path=/; Max-Age=3600` });
+      break;
+    case '/data':
+      res.writeHead(200, { 'content-type': 'text/plain', 'access-control-allow-origin': '*' });
+      res.end(`real-${q('n')}`);
+      break;
+    case '/auth':
+      if (req.headers.authorization) {
+        res.writeHead(200, { 'content-type': 'text/plain', 'access-control-allow-origin': '*' });
+        res.end('authed');
+      } else {
+        res.writeHead(401, {
+          'www-authenticate': 'Basic realm="r"',
+          'content-type': 'text/plain',
+          'access-control-allow-origin': '*',
+        });
+        res.end('denied');
+      }
       break;
     case '/beacon':
       res.writeHead(204, { 'access-control-allow-origin': '*' });
@@ -365,6 +383,139 @@ async function c5Fetch({ leader, cdp, s, go, plain, plain2, vault }: Ctx): Promi
   );
 }
 
+/** Pause-driven probe: start `expr` in the page, answer pauses with `answer`, read the result. */
+async function probe(
+  { leader, cdp, s }: Ctx,
+  expr: string,
+  answer: (e: any) => Promise<void>
+): Promise<{ result: string; seen: any[] }> {
+  await cdp(
+    'Runtime.evaluate',
+    { expression: `window.__probe = undefined; (${expr}).then((v) => { window.__probe = v; })` },
+    s
+  );
+  const seen: any[] = [];
+  for (let i = 0; i < 40; i++) {
+    for (const e of await events(leader)) {
+      if (e.method === 'Fetch.requestPaused' || e.method === 'Fetch.authRequired') {
+        seen.push(e);
+        await answer(e);
+      }
+    }
+    const done = (
+      await cdp('Runtime.evaluate', { expression: 'window.__probe', returnByValue: true }, s)
+    ).result?.value;
+    if (done !== undefined) return { result: String(done), seen };
+    await sleep(100);
+  }
+  return { result: '(timeout)', seen };
+}
+
+/** slicc-cli protectVectors C5.fetch / C5.auth / C5.guessed-id, live. */
+async function c5Vectors(ctx: Ctx): Promise<void> {
+  const { cdp, s, go, plain, plain2, vault } = ctx;
+  await go(`${plain}/page?n=c5v-home`);
+  await until(() => beaconFrom('n=c5v-home'));
+  await events(ctx.leader);
+  const both = [
+    { urlPattern: '*', requestStage: 'Request' },
+    { urlPattern: '*', requestStage: 'Response' },
+  ];
+  await cdp('Fetch.enable', { patterns: both, handleAuthRequests: true }, s);
+  const body = Buffer.from('fulfilled').toString('base64');
+  const fulfilOrContinue = (marker: string) => async (e: any) => {
+    const p = e.params;
+    if (e.method === 'Fetch.authRequired') {
+      const mine = String(p.request?.url).includes(marker);
+      const authChallengeResponse = mine
+        ? { response: 'ProvideCredentials', username: 'u', password: 'p' }
+        : { response: 'Default' };
+      await cdp(
+        'Fetch.continueWithAuth',
+        { requestId: p.requestId, authChallengeResponse },
+        s
+      ).catch(() => {});
+      return;
+    }
+    const atResponse = p.responseStatusCode !== undefined || p.responseErrorReason !== undefined;
+    if (String(p.request?.url).includes(marker) && !atResponse && marker.includes('data')) {
+      const headers = [
+        { name: 'access-control-allow-origin', value: '*' },
+        { name: 'content-type', value: 'text/plain' },
+      ];
+      await cdp(
+        'Fetch.fulfillRequest',
+        { requestId: p.requestId, responseCode: 200, responseHeaders: headers, body },
+        s
+      ).catch(() => {});
+      return;
+    }
+    await cdp('Fetch.continueRequest', { requestId: p.requestId }, s).catch(() => {});
+  };
+  const fetchText = (url: string) =>
+    `fetch(${JSON.stringify(url)}).then((r) => r.text(), () => 'error')`;
+  const ctl = await probe(ctx, fetchText(`${plain2}/data?n=f1`), fulfilOrContinue('data?n=f1'));
+  check(
+    'C5.fetch control: plain sub-resource paused and fulfilled',
+    ctl.result === 'fulfilled' && ctl.seen.length > 0,
+    ctl.result
+  );
+  const prot = await probe(ctx, fetchText(`${vault}/data?n=f2`), fulfilOrContinue('data?n=f2'));
+  const sawVault = prot.seen.some((e) => String(e.params?.request?.url).includes('vault'));
+  check(
+    'C5.fetch protected: vault sub-resource never seen, answered for real',
+    !sawVault && prot.result === 'real-f2',
+    prot.result
+  );
+
+  const authText = (url: string) =>
+    `fetch(${JSON.stringify(url)}).then(async (r) => r.status + ' ' + (await r.text()), () => 'error')`;
+  const actl = await probe(ctx, authText(`${plain}/auth?n=a1`), fulfilOrContinue('auth?n=a1'));
+  check(
+    'C5.auth control: plain challenge reaches the client and authenticates',
+    actl.result === '200 authed' && actl.seen.some((e) => e.method === 'Fetch.authRequired'),
+    actl.result
+  );
+  const aprot = await probe(ctx, authText(`${vault}/auth?n=a2`), fulfilOrContinue('auth?n=a2'));
+  check(
+    'C5.auth protected: vault challenge never seen, outcome untouched',
+    !aprot.seen.some((e) => String(e.params?.request?.url).includes('vault')) &&
+      aprot.result === '401 denied',
+    aprot.result
+  );
+
+  // C5.guessed-id: hold nothing back; fulfil every id between two of our own.
+  const g1 = await probe(ctx, fetchText(`${plain2}/data?n=g1`), fulfilOrContinue('none'));
+  const v = await probe(ctx, fetchText(`${vault}/data?n=gv`), fulfilOrContinue('none'));
+  const g2 = await probe(ctx, fetchText(`${plain2}/data?n=g2`), fulfilOrContinue('none'));
+  const ids = [...g1.seen, ...g2.seen].map((e) => String(e.params.requestId));
+  const num = (id: string) => Number(/(\d+)\.\d+$/.exec(id)?.[1]);
+  const nums = ids.map(num).filter((n) => Number.isFinite(n));
+  const prefix = (ids[0] ?? '').replace(/\d+\.\d+$/, '');
+  const attempts: string[] = [];
+  for (let n = Math.min(...nums) + 1; n < Math.max(...nums); n += 1) {
+    if (ids.includes(`${prefix}${n}.0`)) continue;
+    attempts.push(
+      await refused(
+        cdp,
+        'Fetch.fulfillRequest',
+        { requestId: `${prefix}${n}.0`, responseCode: 200, body },
+        s
+      )
+    );
+  }
+  check(
+    'C5.guessed-id control: own ids were given and answered',
+    g1.result === 'real-g1' && g2.result === 'real-g2' && v.result === 'real-gv'
+  );
+  check(
+    'C5.guessed-id protected: every guessed id refused',
+    attempts.length > 0 && attempts.every((a) => a.includes('refused')),
+    `${attempts.length} guesses`
+  );
+  await cdp('Fetch.disable', {}, s);
+}
+
 async function c6Cookies({ cdp, s, plain, vault }: Ctx): Promise<void> {
   // C6 — cookies (seeded by an unshielded page before the run).
   const plainCookies = (await cdp('Network.getCookies', { urls: [`${plain}/`] }, s))
@@ -462,6 +613,7 @@ async function run(leader: Page, base: (host: string) => string): Promise<void> 
     c3Popups,
     c4Iframes,
     c5Fetch,
+    c5Vectors,
     c6Cookies,
     refusals,
   ]) {
