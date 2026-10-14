@@ -154,4 +154,18 @@ describe('main', () => {
     expect(readFileSync(out, 'utf8')).toContain('<title>SLICC Bench</title>');
     expect(() => main(['--records', dir])).toThrow(/--out/);
   });
+
+  it('skips corrupt records instead of aborting the report', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bench-html-corrupt-'));
+    mkdirSync(join(dir, 'records/B/builtin/opus'), { recursive: true });
+    writeFileSync(join(dir, 'records/B/builtin/opus/t1-r1.json'), JSON.stringify(RECORDS[0]));
+    writeFileSync(join(dir, 'records/B/builtin/opus/bad-r1.json'), '{truncated');
+    const log = vi.fn();
+    expect(readRecordsDir(dir, { log })).toHaveLength(1);
+    expect(log.mock.calls.some((c) => /html: skipping unreadable /.test(c[0]))).toBe(true);
+    const out = join(dir, 'r.html');
+    expect(main(['--records', dir, '--out', out], { log })).toBe(0);
+    expect(readFileSync(out, 'utf8')).toContain('<title>SLICC Bench</title>');
+    expect(log).toHaveBeenCalledWith(`wrote ${out} from 1 record(s)`);
+  });
 });
