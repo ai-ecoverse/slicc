@@ -85,6 +85,42 @@ pass-through-proxies CDP to `chrome.debugger`.
   invalidates its cached session before reattaching; target close also
   clears ownership.
 
+## CDP Shield (`cdp-shield.ts`)
+
+Every bridge-attached tab gets one `TabShield`, armed before the client gets
+its session (arming failure refuses the attach and detaches). It mirrors
+slicc-cdp's `crates/cdp-client/src/shield.rs`:
+
+- **Pre-commit block.** A backend-owned `Fetch.enable { urlPattern: '*',
+resourceType: 'Document', requestStage: 'Request' }` plus
+  `Network.setBypassServiceWorker`. A protected document (main frame, iframe,
+  or any redirect hop) is answered `Fetch.failRequest BlockedByClient`, so it
+  never commits and no client init script runs there. The tab keeps its
+  session on Chrome's error page.
+- **Client Fetch.** `Fetch.enable` patterns are merged with the guard's;
+  `Fetch.disable` re-arms the guard alone. Pauses and `authRequired` for
+  protected URLs (or requests initiated by a protected page) never reach the
+  client, and the client can answer only pauses it was shown.
+- **Commands.** Refuses browser-reaching methods (`Security.setIgnoreCertificateErrors`,
+  `Target.exposeDevToolsProtocol`, `Tracing.start`, `Storage.clearCookies`,
+  auto-attach, …), protected `url`/origin/storage-key params, cookie setters
+  on seven, and body reads for protected or unseen requests. It also filters
+  cookie readers and prefixes every `addScriptToEvaluateOnNewDocument` source
+  with a statement that throws on a protected `self.origin`.
+- **Events.** Drops network events for protected requests (holding
+  `*ExtraInfo` until the request is known), drops events that name a
+  protected URL, and redacts protected `Target.*` infos and
+  `Target.getTargets` entries to the origin.
+- **Backstop.** A protected main-frame commit or default execution context
+  cuts the tab (`Target.detachedFromTarget` + detach).
+
+Popups are never auto-attached. `Target.setAutoAttach { autoAttach: true }`
+is refused, and attaching to a blank popup whose opener is protected or gone
+is refused. `npm run test:cdp-shield -w @slicc/chrome-extension` runs the
+real-browser cases C1-C6 (init script + self-navigation, redirect chain,
+`window.open`, vault iframe, Fetch fulfill/redirect, cookies), each with a
+plain-origin positive control first.
+
 ## Device / Directory Picker Popups
 
 Directory results carry an opaque `{ handleInIdb, idbKey, dirName }` — the

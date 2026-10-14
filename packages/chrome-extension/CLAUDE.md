@@ -89,7 +89,13 @@ iframing the hosted `?cherry=1&ui-only=1` follower over the tray.
   externally-connectable Port; awaited INSIDE `onMessage` (attaches listener sync).
 - `src/bridge-sw.ts` - `externally_connectable` Port handler proxying CDP to
   `chrome.debugger`. Synthetic sessions keep `sessionId === targetId`; ref-counts dup
-  tab attachments.
+  tab attachments. Every pass-through command and debugger event runs through the
+  tab's `TabShield` (`src/cdp-shield.ts`, a port of slicc-cdp's `shield.rs`).
+- `src/cdp-shield.ts` - pre-commit guard for seven/the vault: a backend-owned
+  `Fetch.enable` (`*`/Document/Request) FAILS protected documents before commit;
+  client Fetch patterns are merged in. Also refuses browser-wide methods, cookie
+  setters, storage params, and body reads; filters cookie readers; redacts events.
+  Real-browser check: `npm run test:cdp-shield` (control first, then protected).
 - `src/sidepanel-entry.ts` - side-panel host controller.
 - `src/cherry-panel-sw.ts` - SW-side `cherry-panel` Port hub: caches/persists tri-state
   (`chrome.storage.session`); recovers a dead-tray leader.

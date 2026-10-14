@@ -40,6 +40,7 @@ import {
   SLICC_HOSTED_ORIGIN,
   type TargetInfo,
 } from '@slicc/shared-ts';
+import { redacted, TabShield } from './cdp-shield.js';
 import {
   isProtectedTab,
   isProtectedTarget,
@@ -322,6 +323,7 @@ function invalidatePortDebuggerAttachment(state: PortState, tabId: number): void
 
 /** Drop stale per-port state and notify clients after an external debugger detach. */
 export function notifyBridgeDebuggerDetached(tabId: number): void {
+  tabShields.delete(tabId);
   for (const [port, state] of liveBridgePortStates) {
     const detachedSessionIds = [...state.sessionToTab]
       .filter(([, attachedTabId]) => attachedTabId === tabId)
@@ -354,9 +356,17 @@ export function notifyBridgeDebuggerDetached(tabId: number): void {
  * release the underlying `chrome.debugger` attachment.
  */
 export function checkBridgeTabProtection(tabId: number, url: string | undefined): Set<number> {
-  const detached = new Set<number>();
-  if (!url || !isProtectedUrl(url)) return detached;
+  if (!url || !isProtectedUrl(url)) return new Set<number>();
+  // B24-4: the shield already failed this document pre-commit; the tab sits on
+  // Chrome's error page for it, so there is nothing on seven's origin to cut.
+  if (tabShields.get(tabId)?.failedBeforeCommit(url)) return new Set<number>();
+  return cutProtectedTab(tabId);
+}
 
+/** Drop every port's session on `tabId` and tell each client it is gone. */
+function cutProtectedTab(tabId: number): Set<number> {
+  const detached = new Set<number>();
+  tabShields.delete(tabId);
   for (const [port, state] of liveBridgePortStates) {
     const detachedSessionIds = [...state.sessionToTab]
       .filter(([, tid]) => tid === tabId)
@@ -380,6 +390,87 @@ export function checkBridgeTabProtection(tabId: number, url: string | undefined)
     }
   }
   return detached;
+}
+
+// ---------------------------------------------------------------- B24-4 shield
+
+/** One shield per debugger-attached tab; shared by every port on that tab. */
+const tabShields = new Map<number, TabShield>();
+
+/** Test-only: drop all shield state between cases. */
+export function __clearTabShieldsForTest(): void {
+  tabShields.clear();
+  shieldFanouts.clear();
+}
+
+type DebuggerEventSink = (tabId: number, method: string, params?: CDPPayload) => void;
+interface ShieldFanout {
+  sinks: Set<DebuggerEventSink>;
+  unsubscribe: () => void;
+}
+/** One chrome.debugger.onEvent subscription per event source, so every event
+ *  passes through its tab's shield exactly once before fanning out to ports. */
+const shieldFanouts = new Map<BridgeSwDeps['subscribeDebuggerEvents'], ShieldFanout>();
+
+function subscribeShieldedEvents(deps: BridgeSwDeps, sink: DebuggerEventSink): () => void {
+  const source = deps.subscribeDebuggerEvents;
+  let fanout = shieldFanouts.get(source);
+  if (!fanout) {
+    const sinks = new Set<DebuggerEventSink>();
+    const unsubscribe = source((tabId, method, params) => {
+      const shield = tabShields.get(tabId);
+      // Fail closed: a tab with no shield has no guarded session to report on.
+      if (!shield) return;
+      for (const event of shield.onEvent(method, params)) {
+        for (const each of [...sinks]) each(tabId, event.method, event.params);
+      }
+    });
+    fanout = { sinks, unsubscribe };
+    shieldFanouts.set(source, fanout);
+  }
+  fanout.sinks.add(sink);
+  const current = fanout;
+  return () => {
+    current.sinks.delete(sink);
+    if (current.sinks.size === 0 && shieldFanouts.get(source) === current) {
+      shieldFanouts.delete(source);
+      current.unsubscribe();
+    }
+  };
+}
+
+/** Arm the shield for a freshly attached tab (no-op if it is already armed). */
+async function ensureTabShield(tabId: number, deps: BridgeSwDeps): Promise<void> {
+  if (tabShields.has(tabId)) return;
+  const shield = new TabShield(
+    (method, params) => deps.sendDebuggerCommand(tabId, method, params),
+    () => {
+      cutProtectedTab(tabId);
+      deps.detachDebugger(tabId).catch(() => {});
+    }
+  );
+  tabShields.set(tabId, shield);
+  try {
+    await shield.install();
+  } catch {
+    tabShields.delete(tabId);
+    throw new Error(`${PROTECTED_REFUSAL} (the tab could not be guarded)`);
+  }
+}
+
+function tabInUse(tabId: number): boolean {
+  for (const state of liveBridgePortStates.values()) {
+    for (const tid of state.sessionToTab.values()) if (tid === tabId) return true;
+  }
+  return false;
+}
+
+/** Disarm the shield once no port uses the tab, so the Fetch guard can't
+ *  leave pauses unanswered on a debugger session another owner keeps alive. */
+async function releaseTabShield(tabId: number, deps: BridgeSwDeps): Promise<void> {
+  if (!tabShields.has(tabId) || tabInUse(tabId)) return;
+  tabShields.delete(tabId);
+  await deps.sendDebuggerCommand(tabId, 'Fetch.disable').catch(() => {});
 }
 
 /**
@@ -694,12 +785,15 @@ export async function handleBridgePortConnect(
     }
     // Detach only tabs whose underlying debugger attachment this port created.
     // A shared pre-existing attachment is usable by this port but never owned.
+    const usedTabs = new Set(state.sessionToTab.values());
     for (const tabId of state.ownedTabs) {
+      tabShields.delete(tabId);
       deps.detachDebugger(tabId).catch(() => {});
     }
     state.ownedTabs.clear();
     state.sessionToTab.clear();
     state.attachRefCounts.clear();
+    for (const tabId of usedTabs) releaseTabShield(tabId, deps).catch(() => {});
   });
 
   const pin = await validateBridgePin(port.sender, deps);
@@ -788,7 +882,7 @@ async function handleBridgeMessage(
     // Start forwarding chrome.debugger events. Filter by tab id against
     // the per-port sessionToTab so we don't leak events from tabs another
     // port (or the offscreen path) is attached to.
-    state.unsubscribeEvents = deps.subscribeDebuggerEvents((tabId, method, params) => {
+    state.unsubscribeEvents = subscribeShieldedEvents(deps, (tabId, method, params) => {
       let sessionId: string | undefined;
       for (const [sid, tid] of state.sessionToTab) {
         if (tid === tabId) {
@@ -889,13 +983,8 @@ async function dispatchCdpCommand(
     );
   }
 
-  // B24-1: refuse Page.navigate to a protected URL.
-  if (method === 'Page.navigate') {
-    const navUrl = typeof params?.['url'] === 'string' ? params['url'] : undefined;
-    if (navUrl && isProtectedUrl(navUrl as string)) {
-      throw new Error(PROTECTED_REFUSAL);
-    }
-  }
+  // B24-1/B24-4: Page.navigate (and every other `url` param) to a protected
+  // origin is refused by the tab's shield below.
   // chrome.debugger's Page.bringToFront wakes the renderer but does NOT select
   // the tab in the strip or focus its window (real-Chrome CDP does, which is why
   // `open --foreground` / screenshot foregrounding works in standalone but was a
@@ -904,8 +993,11 @@ async function dispatchCdpCommand(
   if (method === 'Page.bringToFront') {
     await deps.activateTab(tabId);
   }
-  const effectiveParams = await deps.maybeUnmaskCdpFrame(tabId, method, params);
-  return deps.sendDebuggerCommand(tabId, method, effectiveParams);
+  const shield = tabShields.get(tabId);
+  if (!shield) throw new Error(`${PROTECTED_REFUSAL} (the tab is not guarded)`);
+  return shield.command(method, params, async (m, p) =>
+    deps.sendDebuggerCommand(tabId, m, await deps.maybeUnmaskCdpFrame(tabId, m, p))
+  );
 }
 
 async function cdpGetTargets(
@@ -915,15 +1007,19 @@ async function cdpGetTargets(
   const [tabs, activeId] = await Promise.all([deps.queryTabs(), deps.queryActiveTabId()]);
   const targetInfos = tabs
     .filter((t): t is ChromeTab & { id: number } => typeof t.id === 'number')
-    .map((t) => ({
-      targetId: String(t.id),
-      type: 'page',
-      title: t.title ?? '',
-      url: t.url ?? '',
-      attached: false,
-      active: t.id === activeId,
-    }));
-  return { targetInfos };
+    .map((t) => {
+      const info = {
+        targetId: String(t.id),
+        type: 'page',
+        title: t.title ?? '',
+        url: t.url ?? '',
+        attached: false,
+        active: t.id === activeId,
+      };
+      // B24-4: a protected tab is listed by origin only (no path, query or title).
+      return isProtectedTarget(info.url, false, 'unknown') ? { ...info, ...redacted(info) } : info;
+    });
+  return { targetInfos } as BridgeTargetGetTargetsResult;
 }
 
 async function cdpAttachToTarget(
@@ -957,6 +1053,15 @@ async function cdpAttachToTarget(
   }
   // sessionId === targetId so the leader can correlate without an extra
   // round-trip (matches the existing offscreen CDP proxy's convention).
+  try {
+    await ensureTabShield(tabId, deps);
+  } catch (err) {
+    if (state.ownedTabs.has(tabId)) {
+      state.ownedTabs.delete(tabId);
+      await deps.detachDebugger(tabId);
+    }
+    throw err;
+  }
   const sessionId = targetId;
   state.sessionToTab.set(sessionId, tabId);
   state.attachRefCounts.set(tabId, (state.attachRefCounts.get(tabId) ?? 0) + 1);
@@ -985,8 +1090,10 @@ async function cdpDetachFromTarget(
   }
   if (state.ownedTabs.has(tabId)) {
     state.ownedTabs.delete(tabId);
+    tabShields.delete(tabId);
     await deps.detachDebugger(tabId);
   }
+  await releaseTabShield(tabId, deps);
   return {};
 }
 
@@ -1146,8 +1253,10 @@ async function cdpCloseTarget(
   state.attachRefCounts.delete(tabId);
   if (state.ownedTabs.has(tabId)) {
     state.ownedTabs.delete(tabId);
+    tabShields.delete(tabId);
     await deps.detachDebugger(tabId);
   }
+  await releaseTabShield(tabId, deps);
   await deps.removeTab(tabId);
   return { success: true };
 }

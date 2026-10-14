@@ -20,6 +20,14 @@ const guard = protectedOrigins(catalog.protectedOrigins) as {
   target: (opts: { url: string; previous?: boolean; opener?: string }) => boolean;
 };
 
+/** The catalog's protected-origin rules (for code that must embed them, e.g. init-script guards). */
+export const PROTECTED_RULES: {
+  domains: readonly string[];
+  hosts: readonly string[];
+  schemes: readonly string[];
+  refusal: string;
+} = catalog.protectedOrigins;
+
 /** Refusal message carried in error responses. */
 export const PROTECTED_REFUSAL: string = catalog.protectedOrigins.refusal;
 
