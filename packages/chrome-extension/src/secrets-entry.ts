@@ -15,9 +15,9 @@ import {
   readOAuthExtras,
   removeOAuthExtraDomain,
 } from '@slicc/shared-ts';
+import { encryptedStorage, listSecretsIncludingUnreadable } from './secrets-encrypted-storage.js';
 import {
   deleteSecret,
-  listSecrets,
   type SecretEntry,
   type StorageArea,
   saveCustomSecret,
@@ -87,7 +87,7 @@ function refreshList(): void {
   renderList().catch(reportAsyncError);
 }
 
-const storage: StorageArea = chrome.storage.local;
+const storage: StorageArea = encryptedStorage;
 
 function createCopyNameButton(entry: SecretEntry): HTMLButtonElement {
   return el('button', {
@@ -127,27 +127,39 @@ function createDeleteSecretButton(entry: SecretEntry): HTMLButtonElement {
   });
 }
 
-function createSecretRow(entry: SecretEntry): HTMLDivElement {
-  return el(
+function createSecretRow(entry: SecretEntry & { unreadable?: boolean }): HTMLDivElement {
+  const row = el(
     'div',
-    { class: 'secret-row', dataset: { name: entry.name } },
+    {
+      class: entry.unreadable ? 'secret-row secret-row-unreadable' : 'secret-row',
+      dataset: { name: entry.name },
+    },
     el(
       'div',
       { class: 'secret-meta' },
       el('div', { class: 'secret-name', text: entry.name }),
-      el('div', { class: 'secret-domains', text: entry.domains.join(', ') })
+      el('div', { class: 'secret-domains', text: entry.domains.join(', ') }),
+      ...(entry.unreadable
+        ? [
+            el('div', {
+              class: 'secret-unreadable',
+              text: '\u26a0\ufe0f Unreadable \u2014 encryption key lost. Please re-enter this secret.',
+            }),
+          ]
+        : [])
     ),
     createCopyNameButton(entry),
     createDeleteSecretButton(entry)
   );
+  return row;
 }
 
 async function renderList(): Promise<void> {
   const container = $('list');
   container.replaceChildren();
-  let entries: SecretEntry[];
+  let entries: Array<SecretEntry & { unreadable?: boolean }>;
   try {
-    entries = await listSecrets(storage);
+    entries = await listSecretsIncludingUnreadable();
   } catch (err) {
     container.appendChild(el('div', { class: 'empty', text: `Failed to read storage: ${err}` }));
     return;

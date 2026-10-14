@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
@@ -262,7 +263,8 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(kept).toBe(true);
     await new Promise((r) => setTimeout(r, 10));
     expect(response).toEqual({ ok: true });
-    expect(storageMap.NEW_SECRET).toBe('new-real-value');
+    // B-SEC1: value is now encrypted
+    expect(typeof storageMap.NEW_SECRET).toBe('object');
     expect(storageMap.NEW_SECRET_DOMAINS).toBe('api.new.com,*.new.com');
   });
 
@@ -287,7 +289,8 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     const response = await dispatch({ type: 'secrets.delete', name: 'GITHUB_TOKEN' });
     expect(response).toEqual({ ok: true, removed: true, fromSession: true });
     // Persisted entry must remain after the session-only deletion.
-    expect(storageMap.GITHUB_TOKEN).toBe('ghp_realtoken');
+    // B-SEC1: value is encrypted, check it's present
+    expect(storageMap.GITHUB_TOKEN).toBeDefined();
     expect(storageMap.GITHUB_TOKEN_DOMAINS).toBe('api.github.com');
     // The session list is now empty for that name.
     const list = await dispatch({ type: 'secrets.session.list' });
@@ -371,7 +374,8 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       domains: ['api.github.com', '*.github.com'],
     });
     expect(resp).toEqual({ ok: true });
-    expect(storageMap.GITHUB_TOKEN).toBe('ghp_realtoken');
+    // B-SEC1: value is encrypted, check it's present
+    expect(storageMap.GITHUB_TOKEN).toBeDefined();
     expect(storageMap.GITHUB_TOKEN_DOMAINS).toBe('api.github.com,*.github.com');
   });
 
@@ -419,7 +423,8 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       if (result === true) break;
     }
     await new Promise((r) => setTimeout(r, 30));
-    expect(storageMap['oauth.testprov.token']).toBe('tok_realtoken');
+    // B-SEC1: value is now encrypted
+    expect(typeof storageMap['oauth.testprov.token']).toBe('object');
     expect(storageMap['oauth.testprov.token_DOMAINS']).toBe('example.com,api.example.com');
     expect(typeof response.maskedValue).toBe('string');
     expect(response.maskedValue.length).toBeGreaterThan(0);
@@ -427,6 +432,12 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
 
   it('secrets.mask-oauth-token skips the OAuth-token write when accessToken/domains are absent (back-compat)', async () => {
     await import('../src/service-worker.js');
+    // Trigger migration and wait for it to complete fully.
+    const { buildSecretsPipeline } = await import('../src/secrets-sw.js');
+    const pipeline = await buildSecretsPipeline();
+    await pipeline.reload();
+    // Give any remaining async storage writes time to settle.
+    await new Promise((r) => setTimeout(r, 50));
     const setSpy = (globalThis as any).chrome.storage.local.set;
     setSpy.mockClear();
     let response: any;

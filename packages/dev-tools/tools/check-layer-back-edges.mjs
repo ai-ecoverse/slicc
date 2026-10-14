@@ -166,6 +166,7 @@ const CHROME_EXT_SHARED = new Set([
   'sidepanel-entry.ts',
   'secrets-entry.ts',
   'secrets-storage.ts',
+  'secrets-encrypted-storage.ts',
   'cherry-panel-protocol.ts',
   'fetch-proxy-shared.ts',
   'oauth-flow-options.ts',
