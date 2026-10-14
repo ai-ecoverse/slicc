@@ -290,6 +290,8 @@ To use SLICC, you need an LLM provider. SLICC is very much a BYOT (bring your ow
 
 The bundled pi 0.99.1 catalogue includes GPT-6.1 Sol for OpenAI, Azure OpenAI Responses, and OpenAI Codex. Those entries currently declare a 272,000-token context window, although OpenAI documents 1,050,000 tokens; output is capped at 128,000 tokens. OpenAI Codex now defaults to GPT-6.1 Sol.
 
+OpenAI Codex (ChatGPT Subscription) hides models that OpenAI has [retired from Codex with ChatGPT sign-in](https://learn.chatgpt.com/docs/models), such as GPT-5.5. If an existing cone still has a retired model selected, choose a current model beneath its composer.
+
 On Bedrock CAMP, select **GPT-6.1 Sol (Global)** (`global.openai.gpt-6.1-sol`). Its Converse profile was verified in US, EU, and APAC regions. It accepts tool use, user images, and reasoning effort low through max; SLICC omits unsupported temperature and moves tool-result images into adjacent user content. Global rates are $2 input / $10 output per million tokens, with higher rates above 272,000 input tokens.
 
 Bedrock CAMP also offers **Grok 4.7 (Global)** (`global.xai.grok-4.7`) and **Grok 4.7 (US)** (`us.xai.grok-4.7`). They accept tool use and user images, with reasoning effort low, medium or high; SLICC omits unsupported temperature and moves tool-result images into adjacent user content. Global rates are $2 input / $6 output / $0.50 cache read per million tokens (US +10%), with no long-context tier.
