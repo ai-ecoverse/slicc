@@ -54,7 +54,9 @@ boot paths; preserve shared fallbacks; prefer capability checks to float names.
 
 Thin-bridge UI/API origins differ. Flag same-origin `/api/`, hardcoded origins, and
 unnormalized comparisons. Iframe/channel/relay messages and UI activation must retain
-the owner captured at opening, not later focus.
+the owner captured at opening, not later focus. Extension internal `onMessage`/`onConnect`
+handlers must verify `sender.origin === 'chrome-extension://' + chrome.runtime.id`;
+content scripts carry the page's origin and are refused.
 
 ## 10. Layer import direction
 

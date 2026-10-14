@@ -332,6 +332,12 @@ Test in both CLI and extension floats. For panel licks, capture the owning cone 
 opening interaction rather than reading later focus; cover shell-open, rail-open and
 attention-promotion paths without rebuilding live panel state.
 
+**Extension internal-sender gate (B-SEC1)**: every `chrome.runtime.onMessage` and internal
+`chrome.runtime.onConnect` handler must verify the sender's origin is
+`chrome-extension://<chrome.runtime.id>`. Content scripts carry the page's origin and
+must be refused. Extension pages opened in a tab (e.g. `secrets.html` with
+`open_in_tab: true`) pass because their origin is still the extension's.
+
 ### 10. Layer-stack import direction (back-edges)
 
 **Trigger patterns**
