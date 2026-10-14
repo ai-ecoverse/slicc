@@ -6,6 +6,7 @@
 // introduced by the boy-scout refactor in PR #1012 that the
 // pre-existing service-worker-secrets suite did not exercise.
 
+import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MsgListener = (msg: any, sender: any, sendResponse: (r: any) => void) => boolean | void;
