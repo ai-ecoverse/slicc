@@ -125,6 +125,22 @@ function legacyVersion(versions, records) {
   return new Set(versions).size === 1 ? { v: versions[0] } : { v: null, ambiguous: true };
 }
 
+/**
+ * Legacy sharing key from a record path `benchmark/skills/model/taskId-rN.json`.
+ * Unreadable files still occupy a slot under that key so a corrupt sibling cannot
+ * collapse an ambiguous multi-run key to a sole-run stamp (#3968 review).
+ */
+function legacyKeyFromRecordPath(relPath) {
+  const parts = String(relPath).split(/[\\/]/);
+  if (parts.length < 4) return null;
+  const skills = parts.at(-3);
+  const model = parts.at(-2);
+  const base = parts.at(-1);
+  const m = /^(.+)-r\d+\.json$/i.exec(base);
+  if (!m) return null;
+  return legacyKey(m[1], model, skills);
+}
+
 /** Stamp `leader.slicc_version` on readable records under `<out>/records/` that lack it. */
 export function backfillVersions(out, { log = console.error } = {}) {
   const file = join(out, 'events.jsonl');
@@ -132,20 +148,18 @@ export function backfillVersions(out, { log = console.error } = {}) {
   const { exact, legacy } = taskVersions(readFileSync(file, 'utf8'));
   const root = join(out, 'records');
   const records = [];
+  const sharing = new Map();
   let skipped = 0;
   for (const f of existsSync(root) ? listFiles(root) : []) {
     const path = join(root, f);
+    const fromPath = legacyKeyFromRecordPath(f);
+    if (fromPath) sharing.set(fromPath, (sharing.get(fromPath) ?? 0) + 1);
     const record = readRecordFile(path, { log });
     if (!record) {
       skipped += 1;
       continue;
     }
     records.push({ path, record });
-  }
-  const sharing = new Map();
-  for (const { record: r } of records) {
-    const k = legacyKey(r.task_id, r.config?.model, r.config?.skills);
-    sharing.set(k, (sharing.get(k) ?? 0) + 1);
   }
   let stamped = 0;
   let unknown = 0;

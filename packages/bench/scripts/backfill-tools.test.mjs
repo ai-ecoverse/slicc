@@ -202,6 +202,34 @@ describe('backfillVersions', () => {
     ).toEqual({ slicc_version: '1.0.1' });
   });
 
+  it('keeps legacy keys ambiguous when a sharing sibling record is corrupt', () => {
+    const out = mkdtempSync(join(tmpdir(), 'bench-versions-corrupt-share-'));
+    write(
+      join(out, 'events.jsonl'),
+      jsonl([
+        { type: 'start', slicc_version: '1.0.0' },
+        { type: 'task', task_id: 'r', model: 'm', skills: 'none' },
+        { type: 'start', slicc_version: '1.0.1' },
+        { type: 'task', task_id: 'r', model: 'm', skills: 'none' },
+      ])
+    );
+    write(
+      recordPath(out, 'Own', 'none', 'm', 'r', 1),
+      JSON.stringify({ ...record('Own', 'r'), repeat: 1 })
+    );
+    write(recordPath(out, 'Own', 'none', 'm', 'r', 2), '{truncated');
+    const log = vi.fn();
+    expect(backfillVersions(out, { log })).toEqual({
+      stamped: 0,
+      unknown: 1,
+      ambiguous: 1,
+      skipped: 1,
+    });
+    expect(
+      JSON.parse(readFileSync(recordPath(out, 'Own', 'none', 'm', 'r', 1), 'utf8')).leader
+    ).toBeUndefined();
+  });
+
   it('leaves runs that share a task, model and skills unknown unless their versions agree', () => {
     const out = mkdtempSync(join(tmpdir(), 'bench-versions-'));
     // Two repeats of one task in an older journal, on different releases: no way to tell apart.
