@@ -8,7 +8,6 @@
   "permissions": [
     "debugger",
     "tabs",
-    "tabGroups",
     "identity",
     "storage",
     "webRequest",

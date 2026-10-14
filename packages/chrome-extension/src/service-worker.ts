@@ -16,7 +16,7 @@
  * | `secrets-sw.ts`              | secrets pipeline + `secrets.*` handlers      |
  * | `mount-backends-sw.ts`       | S3 / DA sign-and-forward                    |
  * | `relay-sw.ts`                | panel/offscreen relay (OAuth, CDP, tray)    |
- * | `tray-socket-sw.ts`          | leader tray WebSocket relay                 |
+ * | `tray-socket-sw.ts`          | (removed — B24-3)                           |
  * | `capture-popup-sw.ts`        | media-capture popup window                  |
  *
  * Chrome extension API types provided by ./chrome.d.ts

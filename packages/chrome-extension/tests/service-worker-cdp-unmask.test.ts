@@ -1,8 +1,4 @@
-import {
-  EXTENSION_BRIDGE_PORT_NAME,
-  EXTENSION_BRIDGE_PROTOCOL_VERSION,
-  mask,
-} from '@slicc/shared-ts';
+import { EXTENSION_BRIDGE_PORT_NAME, EXTENSION_BRIDGE_PROTOCOL_VERSION } from '@slicc/shared-ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MessageListener = (msg: any, sender: any, sendResponse: (r: any) => void) => boolean | void;
@@ -172,197 +168,26 @@ describe('service-worker CDP outgoing unmask', () => {
     vi.resetModules();
   });
 
-  async function dispatchOffscreen(payload: unknown): Promise<void> {
+  // B24-3: the offscreen document was removed from this extension.
+  // The `source === 'offscreen'` relay path has been removed. These tests
+  // verified the legacy offscreen CDP proxy; they are replaced by a single
+  // test that confirms offscreen messages are silently dropped.
+
+  it('drops offscreen CDP commands after B24-3 relay removal', async () => {
+    await import('../src/service-worker.js');
     for (const l of messageListeners) {
-      l({ source: 'offscreen', payload }, {}, () => {});
+      l(
+        {
+          source: 'offscreen',
+          payload: { type: 'cdp-command', id: 1, method: 'Target.getTargets' },
+        },
+        {},
+        () => {}
+      );
     }
-    // Let the async handleCdpCommand chain run.
     await new Promise((r) => setTimeout(r, 30));
-  }
-
-  async function attach(): Promise<void> {
-    await dispatchOffscreen({
-      type: 'cdp-command',
-      id: 1,
-      method: 'Target.attachToTarget',
-      params: { targetId: String(TAB_ID), flatten: true },
-    });
-  }
-
-  it('unmasks Runtime.evaluate expression when tab URL matches secret domain', async () => {
-    await import('../src/service-worker.js');
-    await attach();
-
-    const masked = await mask(SESSION_ID, 'GITHUB_TOKEN', 'ghp_realtoken');
-    await dispatchOffscreen({
-      type: 'cdp-command',
-      id: 2,
-      method: 'Runtime.evaluate',
-      params: { expression: `fetch('/user', { headers: { Authorization: 'token ${masked}' } })` },
-      sessionId: String(TAB_ID),
-    });
-
-    expect(tabsGet).toHaveBeenCalledWith(TAB_ID);
-    const evalCalls = debuggerSendCommand.mock.calls.filter((c) => c[1] === 'Runtime.evaluate');
-    expect(evalCalls).toHaveLength(1);
-    const sentParams = evalCalls[0][2] as { expression: string };
-    expect(sentParams.expression).toContain('ghp_realtoken');
-    expect(sentParams.expression).not.toContain(masked);
-  });
-
-  it('leaves Runtime.evaluate frame untouched when tab URL does not match secret domain', async () => {
-    tabsMap[TAB_ID] = { id: TAB_ID, url: 'https://evil.example.com/' };
-    await import('../src/service-worker.js');
-    await attach();
-
-    const masked = await mask(SESSION_ID, 'GITHUB_TOKEN', 'ghp_realtoken');
-    await dispatchOffscreen({
-      type: 'cdp-command',
-      id: 2,
-      method: 'Runtime.evaluate',
-      params: { expression: `console.log('${masked}')` },
-      sessionId: String(TAB_ID),
-    });
-
-    const evalCalls = debuggerSendCommand.mock.calls.filter((c) => c[1] === 'Runtime.evaluate');
-    expect(evalCalls).toHaveLength(1);
-    const sentParams = evalCalls[0][2] as { expression: string };
-    expect(sentParams.expression).toContain(masked);
-    expect(sentParams.expression).not.toContain('ghp_realtoken');
-  });
-
-  it('fails closed when the target tab cannot be resolved', async () => {
-    tabsGet.mockImplementation(async () => {
-      throw new Error('No tab with that id');
-    });
-    await import('../src/service-worker.js');
-    await attach();
-
-    const masked = await mask(SESSION_ID, 'GITHUB_TOKEN', 'ghp_realtoken');
-    await dispatchOffscreen({
-      type: 'cdp-command',
-      id: 2,
-      method: 'Input.insertText',
-      params: { text: masked },
-      sessionId: String(TAB_ID),
-    });
-
-    const calls = debuggerSendCommand.mock.calls.filter((c) => c[1] === 'Input.insertText');
-    expect(calls).toHaveLength(1);
-    const sentParams = calls[0][2] as { text: string };
-    expect(sentParams.text).toBe(masked);
-  });
-
-  it('does not call chrome.tabs.get for non-unmask CDP methods', async () => {
-    await import('../src/service-worker.js');
-    await attach();
-    tabsGet.mockClear();
-
-    await dispatchOffscreen({
-      type: 'cdp-command',
-      id: 2,
-      method: 'Page.reload',
-      params: { ignoreCache: false },
-      sessionId: String(TAB_ID),
-    });
-
-    expect(tabsGet).not.toHaveBeenCalled();
-    const calls = debuggerSendCommand.mock.calls.filter((c) => c[1] === 'Page.reload');
-    expect(calls).toHaveLength(1);
-  });
-
-  it('does not detach a legacy-owned debugger session when the bridge releases it', async () => {
-    await import('../src/service-worker.js');
-    await attach();
-    expect(debuggerAttached).toBe(true);
-    expect(chrome.debugger.attach).toHaveBeenCalledTimes(1);
-
-    const port = makeBridgePort();
-    for (const listener of connectExternalListeners) listener(port);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'ownership-test',
-      kind: 'handshake.hello',
-    });
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'ownership-test',
-      kind: 'cdp.request',
-      id: 2,
-      method: 'Target.attachToTarget',
-      params: { targetId: String(TAB_ID) },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'ownership-test',
-      kind: 'cdp.request',
-      id: 3,
-      method: 'Target.detachFromTarget',
-      params: { sessionId: String(TAB_ID) },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(chrome.debugger.attach).toHaveBeenCalledTimes(1);
-    expect(chrome.debugger.detach).not.toHaveBeenCalled();
-    expect(debuggerAttached).toBe(true);
-
-    await dispatchOffscreen({
-      type: 'cdp-command',
-      id: 4,
-      method: 'Target.detachFromTarget',
-      params: { sessionId: String(TAB_ID) },
-    });
-    expect(chrome.debugger.detach).toHaveBeenCalledTimes(1);
-    expect(debuggerAttached).toBe(false);
-  });
-
-  it('does not detach a bridge-owned debugger session when the legacy path releases it', async () => {
-    await import('../src/service-worker.js');
-    const port = makeBridgePort();
-    for (const listener of connectExternalListeners) listener(port);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'inverse-ownership-test',
-      kind: 'handshake.hello',
-    });
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'inverse-ownership-test',
-      kind: 'cdp.request',
-      id: 2,
-      method: 'Target.attachToTarget',
-      params: { targetId: String(TAB_ID) },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(debuggerAttached).toBe(true);
-    expect(chrome.debugger.attach).toHaveBeenCalledTimes(1);
-
-    await attach();
-    await dispatchOffscreen({
-      type: 'cdp-command',
-      id: 3,
-      method: 'Target.detachFromTarget',
-      params: { sessionId: String(TAB_ID) },
-    });
-
-    expect(chrome.debugger.attach).toHaveBeenCalledTimes(1);
-    expect(chrome.debugger.detach).not.toHaveBeenCalled();
-    expect(debuggerAttached).toBe(true);
-
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'inverse-ownership-test',
-      kind: 'cdp.request',
-      id: 4,
-      method: 'Target.detachFromTarget',
-      params: { sessionId: String(TAB_ID) },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(chrome.debugger.detach).toHaveBeenCalledTimes(1);
-    expect(debuggerAttached).toBe(false);
+    // No debugger command should have been sent.
+    expect(debuggerSendCommand).not.toHaveBeenCalled();
   });
 
   it('reacquires a bridge debugger attachment after an external detach', async () => {
@@ -431,88 +256,6 @@ describe('service-worker CDP outgoing unmask', () => {
     expect(debuggerAttached).toBe(false);
   });
 
-  // chrome.debugger.onEvent forwarding to the legacy offscreen channel.
-  // The bridge forwards its OWN events per-Port inside bridge-sw.ts, so the
-  // legacy broadcast must be keyed on a legacy `sessionToTab` mapping — not on
-  // "some consumer is attached", which also republished every bridge event with
-  // `sessionId: undefined`.
-
-  const emitDebuggerEvent = (): void => {
-    for (const listener of debuggerEventListeners) {
-      listener({ tabId: TAB_ID }, 'Network.requestWillBeSent', { requestId: 'r1' });
-    }
-  };
-
-  const cdpEvents = (): any[] =>
-    runtimeSentMessages.filter((m) => m?.payload?.type === 'cdp-event');
-
-  it('forwards debugger events for a legacy offscreen session, stamped with its sessionId', async () => {
-    await import('../src/service-worker.js');
-    await attach();
-    runtimeSentMessages.length = 0;
-
-    emitDebuggerEvent();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(cdpEvents()).toEqual([
-      {
-        source: 'service-worker',
-        payload: {
-          type: 'cdp-event',
-          method: 'Network.requestWillBeSent',
-          params: { requestId: 'r1', sessionId: String(TAB_ID) },
-        },
-      },
-    ]);
-  });
-
-  it('does not republish a bridge-owned session\u2019s debugger events onto the offscreen channel', async () => {
-    await import('../src/service-worker.js');
-    const port = makeBridgePort();
-    for (const listener of connectExternalListeners) listener(port);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'event-scoping-test',
-      kind: 'handshake.hello',
-    });
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'event-scoping-test',
-      kind: 'cdp.request',
-      id: 1,
-      method: 'Target.attachToTarget',
-      params: { targetId: String(TAB_ID) },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(debuggerAttached).toBe(true);
-    runtimeSentMessages.length = 0;
-
-    emitDebuggerEvent();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    // The bridge still gets its own copy over the Port…
-    expect(port.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'cdp.event', method: 'Network.requestWillBeSent' })
-    );
-    // …but the offscreen relay sees nothing: it never attached this tab.
-    expect(cdpEvents()).toEqual([]);
-  });
-
-  it('stops forwarding debugger events once the legacy session detaches', async () => {
-    await import('../src/service-worker.js');
-    await attach();
-    await dispatchOffscreen({
-      type: 'cdp-command',
-      id: 9,
-      method: 'Target.detachFromTarget',
-      params: { sessionId: String(TAB_ID) },
-    });
-    runtimeSentMessages.length = 0;
-
-    emitDebuggerEvent();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(cdpEvents()).toEqual([]);
-  });
+  // B24-3: legacy offscreen event forwarding tests removed — the offscreen
+  // document and its relay path no longer exist.
 });

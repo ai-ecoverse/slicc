@@ -81,7 +81,7 @@ iframing the hosted `?cherry=1&ui-only=1` follower over the tray.
   `onHeadersReceived`).
 - `src/discovery-sw.ts` - discovery observer + autodiscover.
 - `src/relay-sw.ts` - panel/offscreen relay (OAuth, CDP, tray socket); backends
-  `oauth-sw.ts`, `tray-socket-sw.ts`, `tab-group-sw.ts`, `capture-popup-sw.ts`.
+  `oauth-sw.ts`, `capture-popup-sw.ts`.
 - `src/sw-message-router.ts` - the SW's ONE `chrome.runtime.onMessage` listener.
   Backends return `'not-handled' | 'handled' | 'handled-async'`; router owns the
   `return true` reply-channel contract — never add a second.

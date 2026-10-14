@@ -20,7 +20,7 @@ per-surface implementation rationale that doesn't fit either page.
   `webRequest` — payload-naming toast with origin attribution, control-character
   sanitization, and per-fingerprint session dedup; see
   `extension-thin-bridge.md` "Handoff Toast"), `discovery-sw.ts`, `relay-sw.ts`
-  (+ `oauth-sw.ts`, `tray-socket-sw.ts`, `tab-group-sw.ts`,
+  (+ `oauth-sw.ts`,
   `capture-popup-sw.ts`).
 
   Two invariants the split encodes:
