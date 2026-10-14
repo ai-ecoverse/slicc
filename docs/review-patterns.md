@@ -134,6 +134,10 @@ state explicitly in the PR why a runtime is excluded; add a cross-runtime test w
   (`Page.bringToFront()` / waking the renderer).
 - CDP operations without validating the target / connection is live.
 - A CDP port read from disk or input and trusted without validation.
+- An extension-bridge CDP path (command or `chrome.debugger` event) that skips
+  the tab's `TabShield` (`packages/chrome-extension/src/cdp-shield.ts`), or a
+  `Fetch.enable` / `Fetch.disable` that replaces the shield's backend-owned
+  Document pattern instead of merging with it.
 
 **Historical precedent** — **PR #361** (`Wake renderer before screenshot to fix background
 tab capture`): screenshots of backgrounded tabs came back blank because the renderer was
@@ -144,7 +148,9 @@ it`): an unvalidated CDP port was trusted directly. **#3768 / #3772**: a bare CD
 `windowsVirtualKeyCode` / `text` and define `keyCode`/`which`.
 
 **Remediation** — foreground the page before visual operations; probe / validate the CDP
-target and port before use; handle disconnects gracefully rather than hanging.
+target and port before use; handle disconnects gracefully rather than hanging. Route
+every bridge command and event through `TabShield`; guard tests need a plain-origin
+positive control before the protected case.
 
 ### 5. macOS / native permissions
 

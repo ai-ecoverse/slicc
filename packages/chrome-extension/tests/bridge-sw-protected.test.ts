@@ -7,6 +7,7 @@
 import { EXTENSION_BRIDGE_PORT_NAME, EXTENSION_BRIDGE_PROTOCOL_VERSION } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  __clearTabShieldsForTest,
   __clearWelcomedLeaderPortsForTest,
   type BridgeSwDeps,
   checkBridgeTabProtection,
@@ -195,6 +196,7 @@ describe('B24-1: bridge CDP protected origin guards', () => {
 
   afterEach(() => {
     __clearWelcomedLeaderPortsForTest();
+    __clearTabShieldsForTest();
     testTabs.clear();
   });
 
@@ -354,6 +356,7 @@ describe('B24-1: bridge CDP protected origin guards', () => {
 describe('B24-1: checkBridgeTabProtection detaches on navigation to protected origin', () => {
   afterEach(() => {
     __clearWelcomedLeaderPortsForTest();
+    __clearTabShieldsForTest();
     testTabs.clear();
   });
 
@@ -390,5 +393,227 @@ describe('B24-1: checkBridgeTabProtection detaches on navigation to protected or
     const detached = checkBridgeTabProtection(100, 'https://example.org/');
     expect(detached.size).toBe(0);
     expect(port.posted).toHaveLength(0);
+  });
+});
+
+describe('B24-4: bridge wiring of the CDP shield', () => {
+  type EventHandler = (tabId: number, method: string, params?: Record<string, unknown>) => void;
+  let handlers: EventHandler[];
+  let sent: Array<[number, string, unknown]>;
+
+  beforeEach(() => {
+    handlers = [];
+    sent = [];
+    testTabs.clear();
+    testTabs.set(100, { id: 100, url: 'https://example.com/', title: 'Normal', windowId: 1 });
+    testTabs.set(101, {
+      id: 101,
+      url: 'https://vault.sliccy.ai/k?x=1',
+      title: 'Vault secret',
+      windowId: 1,
+    });
+  });
+
+  afterEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+    __clearTabShieldsForTest();
+    testTabs.clear();
+  });
+
+  function shieldDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
+    return makeDeps({
+      sendDebuggerCommand: vi.fn(async (tabId: number, method: string, params?: unknown) => {
+        sent.push([tabId, method, params]);
+        return {};
+      }),
+      subscribeDebuggerEvents: (handler) => {
+        handlers.push(handler as EventHandler);
+        return () => {
+          handlers = handlers.filter((h) => h !== handler);
+        };
+      },
+      ...overrides,
+    });
+  }
+
+  const emit = (tabId: number, method: string, params?: Record<string, unknown>) => {
+    for (const h of [...handlers]) h(tabId, method, params);
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 20));
+  const response = (port: FakePort, id: number) =>
+    port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === id) as any;
+  const forwarded = (port: FakePort, method: string) =>
+    port.posted.filter((m: any) => m.kind === 'cdp.event' && m.method === method) as any[];
+
+  async function attached(deps: BridgeSwDeps, id = 1): Promise<FakePort> {
+    const port = await connectAndHandshake(deps);
+    port.receive(makeCdpRequest('ch-1', id, 'Target.attachToTarget', { targetId: '100' }));
+    await tick();
+    expect(response(port, id).result).toEqual({ sessionId: '100' });
+    return port;
+  }
+
+  it('arms the Fetch guard on attach, before the client gets a session', async () => {
+    await attached(shieldDeps());
+    expect(sent[0]).toEqual([
+      100,
+      'Fetch.enable',
+      {
+        patterns: [{ urlPattern: '*', resourceType: 'Document', requestStage: 'Request' }],
+        handleAuthRequests: false,
+      },
+    ]);
+  });
+
+  it('refuses the attach and detaches when the guard cannot be armed', async () => {
+    const deps = shieldDeps({
+      sendDebuggerCommand: vi.fn(async () => {
+        throw new Error('Fetch domain unavailable');
+      }),
+    });
+    const port = await connectAndHandshake(deps);
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '100' }));
+    await tick();
+    expect(response(port, 1).error).toMatch(/could not be guarded/);
+    expect(deps.detachDebugger).toHaveBeenCalledWith(100);
+  });
+
+  it('fails a protected document pause once and forwards plain events to every port on the tab', async () => {
+    const deps = shieldDeps();
+    const port = await attached(deps);
+    const second = await connectAndHandshake(deps);
+    second.receive(makeCdpRequest('ch-1', 7, 'Target.attachToTarget', { targetId: '100' }));
+    await tick();
+    port.posted.length = 0;
+    second.posted.length = 0;
+    // Control: a plain network event reaches both ports.
+    emit(100, 'Network.requestWillBeSent', {
+      requestId: 'n1',
+      request: { url: 'https://example.com/a' },
+    });
+    expect(forwarded(port, 'Network.requestWillBeSent')).toHaveLength(1);
+    expect(forwarded(second, 'Network.requestWillBeSent')).toHaveLength(1);
+    // Protected: the vault pause is failed exactly once and reaches neither.
+    emit(100, 'Fetch.requestPaused', {
+      requestId: 'p1',
+      request: { url: 'https://vault.sliccy.ai/' },
+      resourceType: 'Document',
+    });
+    await tick();
+    expect(sent.filter(([, m]) => m === 'Fetch.failRequest')).toEqual([
+      [100, 'Fetch.failRequest', { requestId: 'p1', errorReason: 'BlockedByClient' }],
+    ]);
+    expect(forwarded(port, 'Fetch.requestPaused')).toHaveLength(0);
+    expect(forwarded(second, 'Fetch.requestPaused')).toHaveLength(0);
+  });
+
+  it('does not forward events from a tab no port attached (e.g. a popup)', async () => {
+    const deps = shieldDeps();
+    const port = await attached(deps);
+    port.posted.length = 0;
+    emit(100, 'Page.loadEventFired', { timestamp: 1 });
+    expect(forwarded(port, 'Page.loadEventFired')).toHaveLength(1);
+    emit(555, 'Page.loadEventFired', { timestamp: 2 });
+    expect(forwarded(port, 'Page.loadEventFired')).toHaveLength(1);
+    expect(deps.attachDebugger).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs commands through the shield: plain ones pass, protected ones are refused', async () => {
+    const port = await attached(shieldDeps());
+    port.receive(makeCdpRequest('ch-1', 2, 'Runtime.evaluate', { expression: '1' }, '100'));
+    port.receive(
+      makeCdpRequest('ch-1', 3, 'Security.setIgnoreCertificateErrors', { ignore: true }, '100')
+    );
+    port.receive(
+      makeCdpRequest(
+        'ch-1',
+        4,
+        'Network.setCookie',
+        { name: 'a', value: '1', url: 'https://vault.sliccy.ai/' },
+        '100'
+      )
+    );
+    await tick();
+    expect(response(port, 2).error).toBeUndefined();
+    expect(response(port, 3).error).toMatch(/refused/);
+    expect(response(port, 4).error).toMatch(/cookie is on seven/);
+    expect(sent.some(([, m]) => m === 'Security.setIgnoreCertificateErrors')).toBe(false);
+  });
+
+  it('cuts the tab when a protected document commits anyway', async () => {
+    const deps = shieldDeps();
+    const port = await attached(deps);
+    port.posted.length = 0;
+    emit(100, 'Page.frameNavigated', {
+      frame: { id: 'F', url: 'https://example.com/b', securityOrigin: 'https://example.com' },
+    });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+    emit(100, 'Page.frameNavigated', {
+      frame: {
+        id: 'F',
+        url: 'https://vault.sliccy.ai/',
+        securityOrigin: 'https://vault.sliccy.ai',
+      },
+    });
+    await tick();
+    expect(deps.detachDebugger).toHaveBeenCalledWith(100);
+    expect(forwarded(port, 'Target.detachedFromTarget')[0]?.params.sessionId).toBe('100');
+    port.receive(makeCdpRequest('ch-1', 9, 'Runtime.evaluate', { expression: '1' }, '100'));
+    await tick();
+    expect(response(port, 9).error).toBeDefined();
+  });
+
+  it('keeps the session when the tab URL is a document the shield already failed', async () => {
+    const port = await attached(shieldDeps());
+    emit(100, 'Fetch.requestPaused', {
+      requestId: 'p2',
+      request: { url: 'https://vault.sliccy.ai/x' },
+      resourceType: 'Document',
+    });
+    // Control: a protected URL the shield did NOT fail still cuts the tab…
+    expect(checkBridgeTabProtection(100, 'https://vault.sliccy.ai/x').size).toBe(0);
+    expect(checkBridgeTabProtection(100, 'https://seven.sliccy.ai/').has(100)).toBe(true);
+    void port;
+  });
+
+  it('lists a protected tab by origin only', async () => {
+    const port = await connectAndHandshake(shieldDeps());
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.getTargets', {}));
+    await tick();
+    const infos = response(port, 1).result.targetInfos as any[];
+    expect(infos.find((t) => t.targetId === '100')).toMatchObject({
+      url: 'https://example.com/',
+      title: 'Normal',
+    });
+    expect(infos.find((t) => t.targetId === '101')).toMatchObject({
+      url: 'https://vault.sliccy.ai',
+      title: 'https://vault.sliccy.ai',
+    });
+  });
+
+  it('disarms the guard on detach so a surviving debugger session is not left paused', async () => {
+    const deps = shieldDeps({ attachDebugger: vi.fn(async () => false) });
+    const port = await attached(deps);
+    port.receive(makeCdpRequest('ch-1', 2, 'Target.detachFromTarget', { sessionId: '100' }));
+    await tick();
+    expect(sent.at(-1)).toEqual([100, 'Fetch.disable', undefined]);
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+  });
+
+  it('disarms the guard of a shared tab when its port disconnects', async () => {
+    const deps = shieldDeps({ attachDebugger: vi.fn(async () => false) });
+    const port = await attached(deps);
+    port.triggerDisconnect();
+    await tick();
+    expect(sent.at(-1)).toEqual([100, 'Fetch.disable', undefined]);
+    expect(handlers).toHaveLength(0);
+  });
+
+  it('refuses a pass-through command on a tab whose shield is gone', async () => {
+    const port = await attached(shieldDeps());
+    __clearTabShieldsForTest();
+    port.receive(makeCdpRequest('ch-1', 2, 'Runtime.evaluate', { expression: '1' }, '100'));
+    await tick();
+    expect(response(port, 2).error).toMatch(/not guarded/);
   });
 });
