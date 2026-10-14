@@ -1,7 +1,10 @@
 import { basename, extname } from 'node:path';
 
 const DIRECTIVE_RE =
-  /(?:^#!)|@ts-(?:expect-error|ignore|nocheck|check)\b|biome-ignore\b|eslint-(?:disable|enable|global)|prettier-ignore|unused-dep-ok:|(?:@vite-ignore|vite-ignore|webpackIgnore)|@vitest-environment|#__PURE__|#__NO_SIDE_EFFECTS__|@__PURE__|@__NO_SIDE_EFFECTS__|<reference\s|source(?:MappingURL|URL)=|go:(?:build|generate|embed|noinline|norace|nosplit)\b|\+build\s|^export\s+[A-Za-z_][A-Za-z0-9_]*$|nolint\b|^line(?:\s+\S*)?:\d+(?::\d+)?$|swift-tools-version:|swiftlint:|swiftformat:|sourcery:|shellcheck\s|yamllint\s|istanbul\s+ignore|c8\s+ignore|v8\s+ignore|deno-lint-|gofmt:|fmt:off|fmt:on/i;
+  /(?:^#!)|@ts-(?:expect-error|ignore|nocheck|check)\b|biome-ignore\b|eslint-(?:disable|enable|global)|prettier-ignore|unused-dep-ok:|(?:@vite-ignore|vite-ignore|webpackIgnore)|@vitest-environment|#__PURE__|#__NO_SIDE_EFFECTS__|@__PURE__|@__NO_SIDE_EFFECTS__|<reference\s|source(?:MappingURL|URL)=|\+build\s|^export\s+[A-Za-z_][A-Za-z0-9_]*$|nolint\b|^line(?:\s+\S*)?:\d+(?::\d+)?$|swift-tools-version:|swiftlint:|swiftformat:|sourcery:|shellcheck\s|yamllint\s|istanbul\s+ignore|c8\s+ignore|v8\s+ignore|deno-lint-|gofmt:|fmt:off|fmt:on/i;
+
+const GO_DIRECTIVE_RE =
+  /^\/\/go:(?:build|generate|embed|noinline|norace|nosplit|wasmimport|wasmexport)\b/;
 
 const JS_EXTS = new Set([
   '.ts',
@@ -69,6 +72,7 @@ export function isKeptComment(raw) {
   const trimmed = String(raw ?? '').trim();
   if (!trimmed) return false;
   if (trimmed.startsWith('#!')) return true;
+  if (GO_DIRECTIVE_RE.test(trimmed)) return true;
   const body = trimmed
     .replace(/^\/\/\/?/, '')
     .replace(/^\/\*/, '')
