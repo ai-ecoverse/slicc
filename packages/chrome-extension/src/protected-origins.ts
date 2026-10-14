@@ -42,3 +42,39 @@ export function isProtectedTarget(
 ): boolean {
   return guard.target({ url, previous, opener });
 }
+
+type OpenerState = 'protected' | 'unprotected' | 'unknown' | undefined;
+
+async function openerStateOf(
+  tab: ChromeTab,
+  getTab: (tabId: number) => Promise<ChromeTab | undefined>
+): Promise<OpenerState> {
+  if (typeof tab.openerTabId !== 'number') return undefined;
+  try {
+    const opener = await getTab(tab.openerTabId);
+    if (!opener) return 'unknown';
+    const openerProtected =
+      isProtectedTarget(opener.url ?? '', false, 'unknown') || isProtectedUrl(opener.pendingUrl);
+    return openerProtected ? 'protected' : 'unprotected';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * True when a Chrome tab must not be debugged: its committed or pending URL is
+ * protected, or it is a blank/srcdoc document that may have inherited a
+ * protected opener's origin. A blank tab with no opener (e.g. a fresh
+ * `Target.createTarget`) is NOT protected; a blank tab whose opener is gone
+ * or unreadable is (fail closed).
+ */
+export async function isProtectedTab(
+  tab: ChromeTab | undefined,
+  getTab: (tabId: number) => Promise<ChromeTab | undefined>
+): Promise<boolean> {
+  if (!tab) return false;
+  if (isProtectedUrl(tab.pendingUrl)) return true;
+  const url = tab.url ?? '';
+  if (isProtectedUrl(url)) return true;
+  return isProtectedTarget(url, false, await openerStateOf(tab, getTab));
+}

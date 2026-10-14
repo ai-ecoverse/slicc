@@ -61,6 +61,8 @@ interface ChromeTab {
   status?: 'unloaded' | 'loading' | 'complete';
   /** URL the tab is navigating to but has not yet committed. */
   pendingUrl?: string;
+  /** Tab that opened this one (window.open / link with target), if any. */
+  openerTabId?: number;
 }
 
 interface ChromeTabChangeInfo {

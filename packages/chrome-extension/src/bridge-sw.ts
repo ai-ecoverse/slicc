@@ -40,7 +40,12 @@ import {
   SLICC_HOSTED_ORIGIN,
   type TargetInfo,
 } from '@slicc/shared-ts';
-import { isProtectedTarget, isProtectedUrl, PROTECTED_REFUSAL } from './protected-origins.js';
+import {
+  isProtectedTab,
+  isProtectedTarget,
+  isProtectedUrl,
+  PROTECTED_REFUSAL,
+} from './protected-origins.js';
 
 /** Result of the bridge's Target.attachToTarget shim. */
 interface BridgeTargetAttachResult extends CDPPayload {
@@ -931,11 +936,9 @@ async function cdpAttachToTarget(
   if (!Number.isFinite(tabId) || tabId <= 0) {
     throw new Error(`Invalid targetId: ${targetId}`);
   }
-  // B24-1: refuse to attach to a tab on a protected origin.
-  // Use isProtectedTarget (not isProtectedUrl) so about:blank/about:srcdoc
-  // tabs that inherited a protected opener are also refused.
-  const tab = await deps.getTab(tabId);
-  if (tab && isProtectedTarget(tab.url ?? '', false, 'unknown')) {
+  // B24-1: refuse to attach to a tab on a protected origin, including an
+  // about:blank/about:srcdoc tab that inherited a protected opener's origin.
+  if (await isProtectedTab(await deps.getTab(tabId), deps.getTab)) {
     throw new Error(PROTECTED_REFUSAL);
   }
   if (!state.ownedTabs.has(tabId)) {
@@ -944,8 +947,7 @@ async function cdpAttachToTarget(
   }
   // B24-1 TOCTOU: revalidate after attach in case the tab navigated during
   // the async attach call. If it's now protected, immediately detach.
-  const postTab = await deps.getTab(tabId);
-  if (postTab && isProtectedTarget(postTab.url ?? '', false, 'unknown')) {
+  if (await isProtectedTab(await deps.getTab(tabId), deps.getTab)) {
     // Undo the attachment we just made.
     if (state.ownedTabs.has(tabId)) {
       state.ownedTabs.delete(tabId);

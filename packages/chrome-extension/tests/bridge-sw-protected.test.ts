@@ -65,7 +65,17 @@ function makePort(name: string, sender?: FakeSender): FakePort {
 const ORIGIN = 'https://www.sliccy.ai';
 
 /** A tab registry for the test, keyed by tab id. */
-const testTabs = new Map<number, { id: number; url: string; title: string; windowId: number }>();
+const testTabs = new Map<
+  number,
+  {
+    id: number;
+    url: string;
+    title: string;
+    windowId: number;
+    openerTabId?: number;
+    pendingUrl?: string;
+  }
+>();
 
 function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
   const base: BridgeSwDeps = {
@@ -223,6 +233,35 @@ describe('B24-1: bridge CDP protected origin guards', () => {
     expect(resp).toBeDefined();
     expect(resp.error).toBeUndefined();
     expect(resp.result).toEqual({ sessionId: '100' });
+  });
+
+  it('attaches to a blank tab with no opener or a plain opener, but not one opened by the vault', async () => {
+    testTabs.set(110, { id: 110, url: 'about:blank', title: '', windowId: 1 });
+    testTabs.set(111, { id: 111, url: 'about:blank', title: '', windowId: 1, openerTabId: 100 });
+    testTabs.set(112, { id: 112, url: 'about:blank', title: '', windowId: 1, openerTabId: 101 });
+    testTabs.set(113, { id: 113, url: 'about:blank', title: '', windowId: 1, openerTabId: 999 });
+    testTabs.set(114, {
+      id: 114,
+      url: 'https://example.com/',
+      title: '',
+      windowId: 1,
+      pendingUrl: 'https://vault.sliccy.ai/',
+    });
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+    const attach = async (id: number, tab: number) => {
+      port.receive(makeCdpRequest('ch-1', id, 'Target.attachToTarget', { targetId: String(tab) }));
+      await new Promise((r) => setTimeout(r, 20));
+      return port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === id) as any;
+    };
+    // Positive controls: a fresh blank tab and a blank popup of a plain page attach.
+    expect((await attach(1, 110)).result).toEqual({ sessionId: '110' });
+    expect((await attach(2, 111)).result).toEqual({ sessionId: '111' });
+    // A blank popup of the vault, a blank tab whose opener is gone, and a tab
+    // still navigating to the vault are refused.
+    expect((await attach(3, 112)).error).toMatch(/refused/i);
+    expect((await attach(4, 113)).error).toMatch(/refused/i);
+    expect((await attach(5, 114)).error).toMatch(/refused/i);
   });
 
   it('refuses Target.createTarget with a protected URL', async () => {
