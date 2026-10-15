@@ -259,6 +259,29 @@ describe('CI critical-path routing', () => {
     }
   });
 
+  it('skips, rather than fails, staging mutation after a long turnstyle wait', () => {
+    const header = worker.slice(0, worker.indexOf('    steps:'));
+    const timeoutMinutes = Number(header.match(/\n {4}timeout-minutes: (\d+)\n/)[1]);
+    const wait = stepBody(worker, 'Wait for staging mutation turn');
+    expect(wait).toContain('id: turn');
+    const continueAfter = Number(wait.match(/continue-after-seconds: (\d+)/)[1]);
+    // Leave at least 15 minutes for setup, the deploy, and both smoke tests.
+    expect(continueAfter / 60).toBeLessThanOrEqual(timeoutMinutes - 15);
+
+    const report = stepBody(worker, 'Report skipped staging mutation');
+    expect(report).toContain("steps.turn.outputs.force_continued == 'true'");
+
+    const gated = cloudflareWorkerSteps(worker).filter(
+      (step) =>
+        step.if.includes("env.RUN_CLOUDFLARE_STAGING == 'true'") &&
+        !['Wait for staging mutation turn', 'Report skipped staging mutation'].includes(step.name)
+    );
+    expect(gated.length).toBeGreaterThan(10);
+    for (const step of gated) {
+      expect(step.if, step.name).toContain("steps.turn.outputs.force_continued != 'true'");
+    }
+  });
+
   it('publishes phase timing summaries for both Cloudflare staging paths', () => {
     const timing = stepBody(worker, 'Publish Cloudflare timing diagnostics');
     expect(timing).toContain('ci-job-timing.mjs');
