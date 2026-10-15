@@ -308,7 +308,7 @@ describe('CI critical-path routing', () => {
 });
 
 const TRUSTED_RUN =
-  "((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'merge_group' || (github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"schedule\",\"workflow_dispatch\"]'), github.event_name)))";
+  "((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.runner.outputs.merge-group == 'same-repo') || (github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"schedule\",\"workflow_dispatch\"]'), github.event_name)))";
 
 function poolRoute(variable) {
   return `\${{ ${TRUSTED_RUN} && vars.${variable} && fromJSON(startsWith(vars.${variable}, '[') && vars.${variable} || toJSON(vars.${variable})) || 'ubuntu-latest' }}`;
@@ -375,7 +375,7 @@ describe('CI runner routing', () => {
   const jobs = jobBlocks();
 
   it('accounts for every job', () => {
-    const known = [...LIGHT, ...HEAVY, ...Object.keys(HOSTED), 'slicc-cli'].sort();
+    const known = [...LIGHT, ...HEAVY, ...Object.keys(HOSTED), 'slicc-cli', 'runner'].sort();
     expect(jobs.map((job) => job.name).sort()).toEqual(known);
   });
 
@@ -405,6 +405,70 @@ describe('CI runner routing', () => {
         "${{ matrix.os != 'ubuntu-latest' && matrix.os || "
       )
     );
+  });
+
+  it('sends a merge group with any fork PR in the queue to hosted runners', () => {
+    const runner = jobs.find((job) => job.name === 'runner').body;
+    // The decider checks out nothing, so any merge group may run it on a pool;
+    // every other event gets the usual trust check.
+    expect(runsOn(runner).folded).toBe(
+      "${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'merge_group' || (github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"schedule\",\"workflow_dispatch\"]'), github.event_name))) && (vars.CI_RUNNER || vars.CI_HEAVY_RUNNER) && fromJSON(startsWith(vars.CI_RUNNER || vars.CI_HEAVY_RUNNER, '[') && (vars.CI_RUNNER || vars.CI_HEAVY_RUNNER) || toJSON(vars.CI_RUNNER || vars.CI_HEAVY_RUNNER)) || 'ubuntu-latest' }}"
+    );
+    expect(runner).not.toContain('actions/checkout');
+    expect(runner).toContain('merge-group: ${{ steps.pick.outputs.merge-group }}');
+    expect(runner).toContain('isCrossRepository !== false');
+    expect(runner).toContain('entries.totalCount !== nodes.length');
+    expect(runner).toContain("await pick('hosted', 'merge queue lookup failed')");
+    expect(runner.match(/pick\('same-repo'/g)).toHaveLength(1);
+    for (const job of jobs.filter((j) => !(j.name in HOSTED) && j.name !== 'runner')) {
+      expect(job.body, job.name).toMatch(
+        /\n {4}needs:\s*(runner\n|\[runner,|\n(?: {6}.*\n)*? {8}runner,)/
+      );
+    }
+  });
+
+  it('decides hosted for a merge group with a fork, unknown, or truncated queue', async () => {
+    const runner = jobs.find((job) => job.name === 'runner').body;
+    const block = runner.match(/\n {8}with:\n {10}script: \|\n((?: {12}.*\n|\n)+)/)[1];
+    const script = block.replace(/^ {12}/gm, '');
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    const entry = (number, isCrossRepository) => ({ pullRequest: { number, isCrossRepository } });
+    async function decide(eventName, queue) {
+      let decision;
+      const core = {
+        setOutput: (_name, value) => {
+          decision = value;
+        },
+        warning: () => {},
+        summary: { addRaw: () => ({ write: async () => {} }) },
+      };
+      const github = {
+        graphql: async () => {
+          if (queue instanceof Error) throw queue;
+          return { repository: { mergeQueue: queue } };
+        },
+      };
+      const context = {
+        eventName,
+        repo: { owner: 'ai-ecoverse', repo: 'slicc' },
+        payload: { merge_group: { base_ref: 'refs/heads/main' } },
+      };
+      await new AsyncFunction('github', 'context', 'core', script)(github, context, core);
+      return decision;
+    }
+    const queue = (nodes, totalCount = nodes.length) => ({ entries: { totalCount, nodes } });
+
+    expect(await decide('pull_request')).toBe('n/a');
+    expect(await decide('merge_group', queue([entry(1, false), entry(2, false)]))).toBe(
+      'same-repo'
+    );
+    expect(await decide('merge_group', queue([entry(1, false), entry(7, true)]))).toBe('hosted');
+    expect(await decide('merge_group', queue([entry(1, false), { pullRequest: null }]))).toBe(
+      'hosted'
+    );
+    expect(await decide('merge_group', queue([entry(1, false)], 101))).toBe('hosted');
+    expect(await decide('merge_group', null)).toBe('hosted');
+    expect(await decide('merge_group', new Error('graphql down'))).toBe('hosted');
   });
 
   it('keeps secrets and write tokens off every pool job', () => {
