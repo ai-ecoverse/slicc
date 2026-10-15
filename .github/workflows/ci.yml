@@ -1474,6 +1474,7 @@ jobs:
           cache: false
       - name: actionlint (composite actions + slicc-*.yml)
         env:
+          # renovate: datasource=github-releases depName=rhysd/actionlint
           ACTIONLINT_VERSION: v1.7.11
         run: |
           go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
@@ -1519,6 +1520,7 @@ jobs:
           cache: false
       - name: actionlint (bench.yml)
         env:
+          # renovate: datasource=github-releases depName=rhysd/actionlint
           ACTIONLINT_VERSION: v1.7.11
         run: |
           go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
@@ -1541,6 +1543,7 @@ jobs:
           cache: false
       - name: Install golangci-lint
         env:
+          # renovate: datasource=github-releases depName=golangci/golangci-lint
           GOLANGCI_LINT_VERSION: v2.12.2
         run: |
           curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_LINT_VERSION}/install.sh" \
@@ -1594,6 +1597,7 @@ jobs:
       - name: Install golangci-lint
         if: matrix.os == 'ubuntu-latest'
         env:
+          # renovate: datasource=github-releases depName=golangci/golangci-lint
           GOLANGCI_LINT_VERSION: v2.12.2
         run: |
           curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_LINT_VERSION}/install.sh" \

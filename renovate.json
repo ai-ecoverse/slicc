@@ -37,24 +37,6 @@
       "matchStrings": ["ipk add -g v86@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
       "datasourceTemplate": "npm",
       "depNameTemplate": "v86"
-    },
-    {
-      "customType": "regex",
-      "description": "golangci-lint, which ci.yml installs from its install script by version. Without this manager Renovate never saw the pin, and it fell behind (v2.12.2 while v2.14.0 was out). Every step names the pin in a `GOLANGCI_LINT_VERSION` env line, so one PR moves every copy.",
-      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
-      "matchStrings": ["GOLANGCI_LINT_VERSION: (?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
-      "depNameTemplate": "golangci/golangci-lint",
-      "datasourceTemplate": "github-releases",
-      "versioningTemplate": "semver"
-    },
-    {
-      "customType": "regex",
-      "description": "actionlint, which ci.yml installs with `go install ...@${ACTIONLINT_VERSION}`. Same reason as the golangci-lint manager above.",
-      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
-      "matchStrings": ["ACTIONLINT_VERSION: (?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
-      "depNameTemplate": "rhysd/actionlint",
-      "datasourceTemplate": "github-releases",
-      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
