@@ -94,8 +94,9 @@ anchors on `runs-on` do the routing:
   `ubuntu-latest`. The job itself runs on `CI_RUNNER`, falling back to
   `CI_HEAVY_RUNNER`. This mirrors slicc-kernel's decider.
 - **Stays hosted:** `cloudflare-worker`, because it reads Cloudflare and
-  OAuth secrets, plus every macOS/iOS job and the slicc-cli macOS and Windows
-  legs. The workflow pins `permissions: contents: read`, so no job can get a
+  OAuth secrets; `webcomponents`, whose layout tests measure system-font
+  metrics that differ on the bench image; every macOS/iOS job; and the
+  slicc-cli macOS and Windows legs. The workflow pins `permissions: contents: read`, so no job can get a
   write token.
 - **Value:** one label (`cloud-run-bench`) or a JSON label array
   (`["self-hosted","cloud-run-bench"]`).

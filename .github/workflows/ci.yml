@@ -615,7 +615,7 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck
-        run: tsc --noEmit -p tsconfig.json
+        run: npx tsc --noEmit -p tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:webapp
         env:
@@ -905,9 +905,9 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck (build config)
-        run: tsc --noEmit -p tsconfig.cli.json
+        run: npx tsc --noEmit -p tsconfig.cli.json
       - name: Typecheck (src + tests)
-        run: tsc --noEmit -p packages/node-server/tsconfig.json
+        run: npx tsc --noEmit -p packages/node-server/tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:node-server
       - name: Upload coverage report
@@ -951,7 +951,7 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck
-        run: tsc --noEmit -p tsconfig.json
+        run: npx tsc --noEmit -p tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:chrome-extension
       - name: Upload coverage report
@@ -1091,7 +1091,7 @@ jobs:
       - name: Validate worker bundle and asset sizes (dry-run)
         run: npm run build -w @slicc/cloudflare-worker
       - name: Typecheck
-        run: tsc --noEmit -p tsconfig.worker.json
+        run: npx tsc --noEmit -p tsconfig.worker.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:cloudflare-worker
       - name: Upload coverage report
@@ -1426,7 +1426,7 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck
-        run: tsc --noEmit -p packages/cloud-core/tsconfig.json
+        run: npx tsc --noEmit -p packages/cloud-core/tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:cloud-core
       - name: Upload coverage report
@@ -1648,12 +1648,15 @@ jobs:
         run: npm run build -w @slicc/shared-ts
 
   webcomponents:
-    needs: [runner, changes]
+    needs: changes
     if: >-
       needs.changes.outputs.webcomponents == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: *ci-heavy-runner
+    # Stays hosted: the layout tests measure real system-font metrics, and the
+    # bench image's fallback font renders wider than ubuntu-latest's (the
+    # sliccy tab measures 79px against a 72px ceiling there).
+    runs-on: ubuntu-latest
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1732,7 +1735,7 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck
-        run: tsc --noEmit -p packages/cherry/tsconfig.json
+        run: npx tsc --noEmit -p packages/cherry/tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:cherry
       - name: Upload coverage report
