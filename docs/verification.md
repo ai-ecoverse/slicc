@@ -28,7 +28,8 @@ Stacked runs never mutate staging. The deploy lives in `ci.yml`'s
 `worker-staging.yml`.
 
 Staging mutations are serialized by turnstyle (`staging-mutation-queue`). If a
-run is still waiting for its turn after 30 minutes, usually behind a
+run is still waiting for its turn when only 15 minutes of the job's 45 are
+left, usually behind a
 merge-queue run stuck on hosted runners, it skips the staging deploy and smoke
 tests with a `STAGING_SKIPPED` warning. It does not run into the job's
 45-minute timeout and turn `ci` red. The local Worker gates still run.

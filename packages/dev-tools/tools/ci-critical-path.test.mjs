@@ -264,9 +264,18 @@ describe('CI critical-path routing', () => {
     const timeoutMinutes = Number(header.match(/\n {4}timeout-minutes: (\d+)\n/)[1]);
     const wait = stepBody(worker, 'Wait for staging mutation turn');
     expect(wait).toContain('id: turn');
-    const continueAfter = Number(wait.match(/continue-after-seconds: (\d+)/)[1]);
-    // Leave at least 15 minutes for setup, the deploy, and both smoke tests.
-    expect(continueAfter / 60).toBeLessThanOrEqual(timeoutMinutes - 15);
+    expect(wait).toContain('continue-after-seconds: ${{ steps.deadline.outputs.seconds }}');
+    // The deadline counts the whole job, not only the wait, and keeps at least
+    // 15 minutes for the deploy retries and both smoke tests.
+    expect(worker.indexOf('- name: Record job start')).toBeLessThan(
+      worker.indexOf('- uses: actions/checkout')
+    );
+    const deadline = stepBody(worker, 'Compute staging wait deadline');
+    expect(Number(deadline.match(/JOB_TIMEOUT_SECONDS: '(\d+)'/)[1])).toBe(timeoutMinutes * 60);
+    expect(Number(deadline.match(/STAGING_RESERVE_SECONDS: '(\d+)'/)[1])).toBeGreaterThanOrEqual(
+      15 * 60
+    );
+    expect(deadline).toContain('JOB_START: ${{ steps.job-start.outputs.epoch }}');
 
     const report = stepBody(worker, 'Report skipped staging mutation');
     expect(report).toContain("steps.turn.outputs.force_continued == 'true'");
@@ -274,7 +283,11 @@ describe('CI critical-path routing', () => {
     const gated = cloudflareWorkerSteps(worker).filter(
       (step) =>
         step.if.includes("env.RUN_CLOUDFLARE_STAGING == 'true'") &&
-        !['Wait for staging mutation turn', 'Report skipped staging mutation'].includes(step.name)
+        ![
+          'Compute staging wait deadline',
+          'Wait for staging mutation turn',
+          'Report skipped staging mutation',
+        ].includes(step.name)
     );
     expect(gated.length).toBeGreaterThan(10);
     for (const step of gated) {

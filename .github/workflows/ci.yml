@@ -944,6 +944,10 @@ jobs:
     # third contender arrives.
     timeout-minutes: 45
     steps:
+      # Start of the job's budget, for the turnstyle deadline below.
+      - name: Record job start
+        id: job-start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -996,18 +1000,32 @@ jobs:
       # concurrency keeps only one pending run and would cancel a required CI
       # job when a third contender arrived.
       #
-      # Give up on the turn after 30 minutes instead of running into the job's
-      # 45-minute timeout. That wait is time spent behind another run's staging
-      # mutation (usually a merge-queue run stuck on hosted runners), not a
-      # problem in this change, so the staging steps below skip and the job
-      # stays green. The local Worker gates above already ran. The 15 minutes
-      # left are enough for the deploy and both smoke tests.
+      # Stop waiting for the turn while 15 minutes of the job's 45 are left
+      # (`STAGING_RESERVE_SECONDS`), enough for the deploy retries and both
+      # smoke tests, instead of running into the timeout. That wait is time
+      # spent behind another run's staging mutation (usually a merge-queue run
+      # stuck on hosted runners), not a problem in this change, so the staging
+      # steps below skip and the job stays green. The local Worker gates above
+      # already ran. The deadline counts the time those gates took.
+      - name: Compute staging wait deadline
+        id: deadline
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
+        env:
+          JOB_START: ${{ steps.job-start.outputs.epoch }}
+          JOB_TIMEOUT_SECONDS: '2700'
+          STAGING_RESERVE_SECONDS: '900'
+        run: |
+          elapsed=$(( $(date +%s) - JOB_START ))
+          seconds=$(( JOB_TIMEOUT_SECONDS - STAGING_RESERVE_SECONDS - elapsed ))
+          [ "$seconds" -lt 0 ] && seconds=0
+          echo "Job has run ${elapsed}s; waiting at most ${seconds}s for the staging turn."
+          echo "seconds=${seconds}" >> "$GITHUB_OUTPUT"
       - name: Wait for staging mutation turn
         id: turn
         if: env.RUN_CLOUDFLARE_STAGING == 'true'
         uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4 # v3.3.3
         with:
-          continue-after-seconds: 1800
+          continue-after-seconds: ${{ steps.deadline.outputs.seconds }}
           queue-name: staging-mutation-queue
           same-branch-only: false
           job-to-wait-for: Cloudflare staging deploy
@@ -1019,7 +1037,7 @@ jobs:
         if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued == 'true'
         env:
           PREVIOUS_RUN_URL: ${{ steps.turn.outputs.previous_run_url }}
-        run: echo "::warning title=STAGING_SKIPPED::Still behind ${PREVIOUS_RUN_URL:-another staging mutation} after 30 minutes; skipping the staging deploy and smoke tests. The local Worker gates passed."
+        run: echo "::warning title=STAGING_SKIPPED::Still behind ${PREVIOUS_RUN_URL:-another staging mutation} at the wait deadline; skipping the staging deploy and smoke tests. The local Worker gates passed."
 
       # The preview-storage lifecycle is a cheap, read-only prerequisite for
       # every deploy. Keep it separate from the expensive asset copy so timing
