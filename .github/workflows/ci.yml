@@ -1652,8 +1652,10 @@ jobs:
           name: test-timings-swift-server
           path: packages/swift-server/.build/coverage/test-timings*
           if-no-files-found: ignore
+      # homebrew-core's formula. The peripheryapp tap's cask uses
+      # `depends_on macos:`, which current Homebrew rejects outright.
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1704,7 +1706,7 @@ jobs:
           path: packages/swift-optel/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1763,7 +1765,7 @@ jobs:
           path: packages/swift-traysession/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1821,7 +1823,7 @@ jobs:
           path: packages/swift-trayfollower/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1880,7 +1882,7 @@ jobs:
           path: packages/swift-widgetkit/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1933,7 +1935,7 @@ jobs:
           path: packages/swift-traykit/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           cd packages/swift-traykit && periphery scan --disable-update-check || true
@@ -2054,7 +2056,7 @@ jobs:
           path: packages/swift-launcher/build/Sliccstart.app
           if-no-files-found: error
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -2138,7 +2140,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
