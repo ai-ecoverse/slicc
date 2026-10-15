@@ -131,6 +131,25 @@ real-browser cases C1-C6 (init script + self-navigation, redirect chain,
 `window.open`, vault iframe, Fetch fulfill/redirect, cookies), each with a
 plain-origin positive control first.
 
+## Real-Chromium integration checks
+
+Two committed scripts test behaviour through the extension's public surfaces
+(no mocks of internals), each case control first:
+
+- `npm run test:cdp-shield -w @slicc/chrome-extension` (after
+  `SLICC_EXT_DEV=1` build): drives the real `slicc.cdp-bridge` Port from a
+  stand-in leader page. Covers the shield (C1-C6, slicc-cli C5 vectors),
+  `Target.createTarget` / `Page.navigate` refusals, blank-popup opener rules,
+  and the B24-5 discovery / handoff guards.
+- `npm run test:secrets-migration -w @slicc/chrome-extension` (after a
+  production build): installs the released 6.248.11, stores secrets through
+  `secrets.html`, updates in place, and checks ciphertext at rest, fetch-proxy
+  injection, SigV4 mount signing, persistence across restarts, and the
+  Re-enter flow.
+
+Content-script sender refusal (B-SEC1) needs a content script, which this
+extension does not ship; the merged slicc-extension build covers it.
+
 ## Device / Directory Picker Popups
 
 Directory results carry an opaque `{ handleInIdb, idbKey, dirName }` — the
