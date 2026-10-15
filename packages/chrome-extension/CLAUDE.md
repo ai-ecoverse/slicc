@@ -95,7 +95,9 @@ iframing the hosted `?cherry=1&ui-only=1` follower over the tray.
   `Fetch.enable` (`*`/Document/Request) FAILS protected documents before commit;
   client Fetch patterns are merged in. Also refuses browser-wide methods, cookie
   setters, storage params, and body reads; filters cookie readers; redacts events.
-  Real-browser check: `npm run test:cdp-shield` (control first, then protected).
+  Real-browser checks (control first, then protected): `npm run test:cdp-shield`
+  (dev build) and `npm run test:secrets-migration` (production build: 6.248.11 →
+  current, encrypted storage, Re-enter).
 - `src/sidepanel-entry.ts` - side-panel host controller.
 - `src/cherry-panel-sw.ts` - SW-side `cherry-panel` Port hub: caches/persists tri-state
   (`chrome.storage.session`); recovers a dead-tray leader.
