@@ -446,7 +446,12 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
           accessToken: 'tok_atRestPlaintext123',
           domains: 'example.com',
         },
-        {},
+        // A trusted internal sender (the extension's own page), so the B-SEC1
+        // sender gate admits it once that lands.
+        {
+          id: (globalThis as any).chrome.runtime.id,
+          origin: `chrome-extension://${(globalThis as any).chrome.runtime.id}`,
+        },
         (r: any) => {
           response = r;
         }
