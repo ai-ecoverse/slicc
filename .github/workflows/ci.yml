@@ -1648,15 +1648,12 @@ jobs:
         run: npm run build -w @slicc/shared-ts
 
   webcomponents:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.webcomponents == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    # Stays hosted: the layout tests measure real system-font metrics, and the
-    # bench image's fallback font renders wider than ubuntu-latest's (the
-    # sliccy tab measures 79px against a 72px ceiling there).
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1672,6 +1669,34 @@ jobs:
       # Functional tests run in real Chromium via the Playwright provider.
       - name: Install Chromium (browser tests)
         run: npx playwright install chromium
+      # The layout tests measure real text. The bench image resolves
+      # sans-serif and system-ui to Liberation Mono, which renders the sliccy
+      # tab 79px wide against a 72px ceiling. Point both at Liberation Sans
+      # through the user's fontconfig (no root needed). ubuntu-latest already
+      # resolves to a proportional font and is left alone.
+      - name: Use a proportional fallback font
+        run: |
+          fallback="$(fc-match -f '%{family}' sans-serif 2>/dev/null || true)"
+          echo "sans-serif resolves to: ${fallback:-unknown}"
+          case "$fallback" in
+            *Mono*)
+              if ! fc-list 'Liberation Sans' family | grep -q .; then
+                echo "::warning::sans-serif is monospace and Liberation Sans is missing; layout tests may fail."
+                exit 0
+              fi
+              mkdir -p "$HOME/.config/fontconfig"
+              cat > "$HOME/.config/fontconfig/fonts.conf" <<'EOF'
+          <?xml version="1.0"?>
+          <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+          <fontconfig>
+            <alias binding="strong"><family>sans-serif</family><prefer><family>Liberation Sans</family></prefer></alias>
+            <alias binding="strong"><family>system-ui</family><prefer><family>Liberation Sans</family></prefer></alias>
+          </fontconfig>
+          EOF
+              echo "sans-serif now resolves to: $(fc-match -f '%{family}' sans-serif)"
+              echo "system-ui now resolves to: $(fc-match -f '%{family}' system-ui)"
+              ;;
+          esac
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:webcomponents
       - name: Upload coverage report

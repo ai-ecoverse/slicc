@@ -94,9 +94,8 @@ anchors on `runs-on` do the routing:
   `ubuntu-latest`. The job itself runs on `CI_RUNNER`, falling back to
   `CI_HEAVY_RUNNER`. This mirrors slicc-kernel's decider.
 - **Stays hosted:** `cloudflare-worker`, because it reads Cloudflare and
-  OAuth secrets; `webcomponents`, whose layout tests measure system-font
-  metrics that differ on the bench image; every macOS/iOS job; and the
-  slicc-cli macOS and Windows legs. The workflow pins `permissions: contents: read`, so no job can get a
+  OAuth secrets, every macOS/iOS job, and the slicc-cli macOS and Windows
+  legs. The workflow pins `permissions: contents: read`, so no job can get a
   write token.
 - **Value:** one label (`cloud-run-bench`) or a JSON label array
   (`["self-hosted","cloud-run-bench"]`).
@@ -105,7 +104,9 @@ anchors on `runs-on` do the routing:
 - **No sudo on the pools.** Root-only steps (`playwright install-deps`,
   `apt-get install xvfb`, the speech leg's disk cleanup) check
   `id -u` / `sudo -n true` first and skip. The bench image already ships
-  Chrome's libraries, `xvfb-run`, `gh`, Go and gcc.
+  Chrome's libraries, `xvfb-run`, `gh`, Go and gcc. Its `sans-serif` resolves
+  to Liberation Mono, so `webcomponents` points `sans-serif` and `system-ui`
+  at Liberation Sans through the user's fontconfig before its layout tests.
 - `packages/dev-tools/tools/ci-critical-path.test.mjs` pins the job-to-pool
   map, the trust check, and the no-secrets/no-write rule for pool jobs.
   Adding a job means adding it to one of its lists.

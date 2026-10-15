@@ -354,6 +354,7 @@ describe('CI runner routing', () => {
     'bench',
     'go-optel',
     'shared',
+    'webcomponents',
     'spoon',
     'cherry',
     'global-install',
@@ -361,7 +362,6 @@ describe('CI runner routing', () => {
   ];
   const HOSTED = {
     'cloudflare-worker': 'ubuntu-latest',
-    webcomponents: 'ubuntu-latest',
     'swift-server': 'macos-latest',
     'swift-optel': 'macos-latest',
     'swift-traysession': 'macos-latest',
