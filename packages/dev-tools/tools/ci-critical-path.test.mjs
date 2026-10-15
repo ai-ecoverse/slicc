@@ -306,3 +306,124 @@ describe('CI critical-path routing', () => {
     expect(workerStagingWorkflow).toContain("steps.changes.outputs.r2 == 'true'");
   });
 });
+
+const TRUSTED_RUN =
+  "((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'merge_group' || (github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"schedule\",\"workflow_dispatch\"]'), github.event_name)))";
+
+function poolRoute(variable) {
+  return `\${{ ${TRUSTED_RUN} && vars.${variable} && fromJSON(startsWith(vars.${variable}, '[') && vars.${variable} || toJSON(vars.${variable})) || 'ubuntu-latest' }}`;
+}
+
+function jobBlocks() {
+  const jobsStart = workflow.indexOf('\njobs:\n');
+  const names = [...workflow.slice(jobsStart).matchAll(/\n {2}([a-z0-9-]+):\n/g)].map((m) => m[1]);
+  return names.map((name, index) => {
+    const start = workflow.indexOf(`\n  ${name}:\n`, jobsStart);
+    const next = names[index + 1];
+    const end = next ? workflow.indexOf(`\n  ${next}:\n`, start + 1) : workflow.length;
+    return { name, body: workflow.slice(start, end) };
+  });
+}
+
+// Folds a `runs-on: >-` block the way YAML does: one space per line break.
+function runsOn(body) {
+  const match = body.match(/\n {4}runs-on: (.*)\n((?: {6}.*\n)*)/);
+  expect(match, 'job should declare runs-on').toBeTruthy();
+  const head = match[1].trim();
+  const folded = match[2]
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\$\{\{ /, '${{ ')
+    .replace(/\( /g, '(');
+  return { head, folded };
+}
+
+describe('CI runner routing', () => {
+  const LIGHT = ['changes', 'lint', 'linear-history', 'dependency-review', 'ci'];
+  const HEAVY = [
+    'typecheck',
+    'node-matrix-tests',
+    'webapp',
+    'e2e',
+    'node-server',
+    'chrome-extension',
+    'cloud-core',
+    'github-workflow',
+    'bench',
+    'go-optel',
+    'shared',
+    'webcomponents',
+    'spoon',
+    'cherry',
+    'global-install',
+    'bundle-size',
+  ];
+  const HOSTED = {
+    'cloudflare-worker': 'ubuntu-latest',
+    'swift-server': 'macos-latest',
+    'swift-optel': 'macos-latest',
+    'swift-traysession': 'macos-latest',
+    'swift-trayfollower': 'macos-latest',
+    'swift-widgetkit': 'macos-latest',
+    'swift-traykit': 'macos-latest',
+    'swift-launcher': 'macos-latest',
+    'ios-app': 'macos-26',
+    'ios-app-tests': "${{ matrix.ios == '27' && 'xcode-27' || 'macos-latest' }}",
+  };
+  const jobs = jobBlocks();
+
+  it('accounts for every job', () => {
+    const known = [...LIGHT, ...HEAVY, ...Object.keys(HOSTED), 'slicc-cli'].sort();
+    expect(jobs.map((job) => job.name).sort()).toEqual(known);
+  });
+
+  it('defines each pool route once, behind the fork-safe trust check', () => {
+    const anchors = jobs.map((job) => runsOn(job.body)).filter((r) => r.head.startsWith('&'));
+    expect(anchors).toEqual([
+      { head: '&ci-runner >-', folded: poolRoute('CI_RUNNER') },
+      { head: '&ci-heavy-runner >-', folded: poolRoute('CI_HEAVY_RUNNER') },
+    ]);
+  });
+
+  it('puts the short jobs on the light pool and the rest on the bench pool', () => {
+    for (const job of jobs) {
+      const { head } = runsOn(job.body);
+      if (LIGHT.includes(job.name)) expect(head, job.name).toMatch(/^[&*]ci-runner\b/);
+      if (HEAVY.includes(job.name)) expect(head, job.name).toMatch(/^[&*]ci-heavy-runner\b/);
+      if (job.name in HOSTED) expect(head, job.name).toBe(HOSTED[job.name]);
+    }
+  });
+
+  it('routes only the Linux slicc-cli leg, through the same trust check', () => {
+    const { head, folded } = runsOn(jobs.find((job) => job.name === 'slicc-cli').body);
+    expect(head).toBe('>-');
+    expect(folded).toBe(
+      poolRoute('CI_HEAVY_RUNNER').replace(
+        '${{ ',
+        "${{ matrix.os != 'ubuntu-latest' && matrix.os || "
+      )
+    );
+  });
+
+  it('keeps secrets and write tokens off every pool job', () => {
+    expect(workflow).toMatch(/\npermissions:\n {2}contents: read\n/);
+    for (const job of jobs.filter((j) => !(j.name in HOSTED))) {
+      expect(job.body, job.name).not.toMatch(/secrets\./);
+      expect(job.body, job.name).not.toMatch(/:\s*write\b/);
+    }
+  });
+
+  it('guards every root-only step, since the pools have no sudo', () => {
+    for (const job of jobs.filter((j) => !(j.name in HOSTED))) {
+      for (const line of job.body.split('\n')) {
+        if (!/\bsudo |install-deps|--with-deps/.test(line) || line.trim().startsWith('#')) continue;
+        expect(job.body, `${job.name}: ${line.trim()}`).toMatch(
+          /if \[ "\$\(id -u\)" = 0 \]( \|\| sudo -n true 2>\/dev\/null)?; then/
+        );
+      }
+    }
+    expect(workflow).not.toContain('install --with-deps');
+  });
+});
