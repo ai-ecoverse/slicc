@@ -243,7 +243,7 @@ jobs:
       - name: Resume from the previous attempt
         if: github.run_attempt != '1'
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bench-${{ github.run_id }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/bench-out
@@ -251,7 +251,7 @@ jobs:
       - name: Resume from an earlier run
         if: github.run_attempt == '1' && inputs.resume-run != ''
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bench-${{ inputs.resume-run }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/bench-out
@@ -383,7 +383,7 @@ jobs:
         with:
           node-version: '24'
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: bench-${{ github.run_id }}-shard-*
           path: ${{ runner.temp }}/shards

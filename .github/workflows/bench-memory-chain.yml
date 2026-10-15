@@ -108,7 +108,7 @@ jobs:
 
       - name: Restore prior chain artifact
         if: env.CHAIN_FROM != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bench-memory-chain-${{ inputs.chain-from }}
           path: ${{ runner.temp }}/bench-out
@@ -181,7 +181,7 @@ jobs:
 
       - name: Restore prior chain artifact
         if: env.CHAIN_FROM != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bench-memory-chain-${{ inputs.chain-from }}
           path: ${{ runner.temp }}/bench-out
@@ -191,7 +191,7 @@ jobs:
       - name: Resume from this run's previous attempt
         if: github.run_attempt != '1'
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bench-memory-chain-${{ github.run_id }}
           path: ${{ runner.temp }}/bench-out
@@ -349,14 +349,14 @@ jobs:
       - name: Download this run's artifact
         if: needs.plan.outputs.complete != 'true'
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bench-memory-chain-${{ github.run_id }}
           path: ${{ runner.temp }}/bench-out
 
       - name: Download chain-from when already complete
         if: needs.plan.outputs.complete == 'true' && inputs.chain-from != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bench-memory-chain-${{ inputs.chain-from }}
           path: ${{ runner.temp }}/bench-out
