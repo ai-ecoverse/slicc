@@ -60,7 +60,7 @@ describe('check-doc-refs: resolveToken', () => {
 
   it('strips content after first whitespace (CLI args, §4 anchors)', () => {
     expect(resolveToken('docs/adding-features.md §4').path).toBe('docs/adding-features.md');
-    expect(resolveToken('packages/dev-tools/tools/release-native.mjs --gate=chrome').path).toBe(
+    expect(resolveToken('packages/dev-tools/tools/release-native.mjs --gate=worker').path).toBe(
       'packages/dev-tools/tools/release-native.mjs'
     );
   });

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Gate the native macOS (Sliccstart DMG + update ZIP) and iOS (TestFlight)
-// packaging steps of the semantic-release prepareCmd — and the Chrome Web Store
-// publish steps of the publishCmd (`--gate=worker`) — plus the
+// packaging steps of the semantic-release prepareCmd — and the production
+// worker/UI deploy decision of the publishCmd (`--gate=worker`) — plus the
 // `@ai-ecoverse/biome-jsh` npm release (`--gate=biome-jsh-version` in prepare,
 // `--gate=biome-jsh` in publish) — on whether their relevant source changed since
 // the previous release tag. The always-run build/package steps stay in
@@ -289,7 +289,7 @@ function writeBiomeJshVersion(version, targetPath = BIOME_JSH_PKG_JSON_PATH) {
   return manifest;
 }
 
-const HELP = `release-native — gate native packaging, worker deploy, Chrome publish, and the biome-jsh npm release on source changes
+const HELP = `release-native — gate native packaging, worker deploy, and the biome-jsh npm release on source changes
 
 Usage:
   node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=worker|biome-jsh|biome-jsh-version] [--dry-run]
