@@ -4,23 +4,6 @@ Rationale, gotchas, and non-obvious behavior for tools listed in
 [`packages/dev-tools/CLAUDE.md`](../packages/dev-tools/CLAUDE.md). The
 guide keeps entry commands; this page keeps the "why".
 
-## ai-comment-detection
-
-`packages/dev-tools/ai-comment-detection/` classifies PR/issue thread
-contributions and applies `ai-generated` or `human-in-the-loop` labels.
-The classifier is a cost-ordered cascade:
-
-1. Account check
-2. AI-attribution signatures (product footers, commit trailers, bot-review banners)
-3. Coding-agent prose markers (SHA-stamped follow-ups, harness-capture notes)
-4. Markdown density, heading+list structure, or house-template headings when a filled template has diluted density
-5. Similarity
-6. Pangram API
-
-The `human-in-the-loop` label is sticky — once applied it is never
-removed. Pure logic lives in `lib.mjs` (vitest `dev-tools` project). See
-its `README.md` for label semantics and workflow behavior.
-
 ## no-comment-mirror
 
 `packages/dev-tools/no-comment/` plus `.github/workflows/no-comment-mirror.yml`
