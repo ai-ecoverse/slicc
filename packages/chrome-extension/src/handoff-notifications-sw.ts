@@ -13,12 +13,14 @@ import {
   extractHandoffFromWebRequest,
   type HandoffMatch,
   handoffFingerprint,
+  SLICC_HOSTED_ORIGIN,
 } from '@slicc/shared-ts';
 // `import type` only — see the import-boundary note in
 // packages/chrome-extension/CLAUDE.md.
 import type { NavigateLickMsg } from '../../webapp/src/kernel/messages.js';
 import { postLickToWelcomedLeaderPorts } from './bridge-sw.js';
 import { focusLeaderTab } from './leader-tab-sw.js';
+import { isProtectedUrl } from './protected-origins.js';
 
 const HANDOFF_NOTIFICATION_ID_PREFIX = 'slicc-handoff-';
 const HANDOFF_INSTRUCTION_SNIPPET_MAX = 150;
@@ -199,11 +201,28 @@ function dispatchHandoffLick(payload: NavigateLickMsg): void {
   });
 }
 
+/**
+ * B24-5: handoff `Link` headers are honoured on protected origins (seven, the
+ * vault, `*.sliccy.ai`) ONLY at the hosted handoff endpoint itself
+ * (`${SLICC_HOSTED_ORIGIN}/handoff`), which is how every handoff/upskill
+ * reaches six. Any other protected page is ignored.
+ */
+export function handoffUrlAllowed(rawUrl: string): boolean {
+  if (!isProtectedUrl(rawUrl)) return true;
+  try {
+    const url = new URL(rawUrl);
+    return url.origin === SLICC_HOSTED_ORIGIN && url.pathname === '/handoff';
+  } catch {
+    return false;
+  }
+}
+
 function onHandoffHeaders(details: {
   url: string;
   tabId: number;
   responseHeaders?: Array<{ name: string; value?: string }>;
 }): void {
+  if (!handoffUrlAllowed(details.url)) return;
   const { match } = extractHandoffFromWebRequest(details.responseHeaders, details.url);
   if (!match) return;
   const fingerprint = handoffFingerprint(match);
