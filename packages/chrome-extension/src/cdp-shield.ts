@@ -256,6 +256,20 @@ export function redacted(info: CDPPayload): CDPPayload {
   return { ...info, url: origin, title: origin };
 }
 
+/** Redact protected `Page.getNavigationHistory` entries to their origin, in place. */
+export function redactHistory(result: CDPPayload): void {
+  const entries = result['entries'];
+  if (!Array.isArray(entries)) return;
+  result['entries'] = entries.map((entry) => {
+    if (!isObj(entry)) return entry;
+    const url = str(entry['url']) ?? '';
+    const typed = str(entry['userTypedURL']) ?? '';
+    if (!urlProtected(url) && !urlProtected(typed)) return entry;
+    const origin = str(redacted({ url: urlProtected(url) ? url : typed })['url']) ?? 'about:blank';
+    return { ...entry, url: origin, userTypedURL: origin, title: origin };
+  });
+}
+
 /** URL a network / fetch event or command is about. */
 export function requestUrl(params: CDPPayload): string | undefined {
   const request = params['request'];
@@ -386,10 +400,43 @@ export class TabShield {
     return this.blockedFlag;
   }
 
-  /** Arm the pre-commit guard. Throws (caller must detach) if it can't. */
-  async install(): Promise<void> {
+  private readyPromise: Promise<void> | null = null;
+
+  /**
+   * Arm the pre-commit guard, once. Concurrent callers (a second port, a
+   * duplicate attach) share the same promise, so nobody gets a session before
+   * arming finished. Throws (caller must detach) if it can't arm.
+   */
+  install(): Promise<void> {
+    if (!this.readyPromise) this.readyPromise = this.arm();
+    return this.readyPromise;
+  }
+
+  private async arm(): Promise<void> {
     await this.send('Fetch.enable', this.fetchParams());
     await this.send('Network.setBypassServiceWorker', { bypass: true });
+    await this.inventoryFrames();
+  }
+
+  /**
+   * The Fetch block only sees FUTURE documents. Inventory the frames already
+   * in the tab: seed `frames` (so frame-scoped commands are judged) and refuse
+   * the session if a protected document is already loaded in any frame.
+   */
+  private async inventoryFrames(): Promise<void> {
+    const tree = await this.send('Page.getFrameTree', {});
+    const pending: unknown[] = [tree['frameTree']];
+    while (pending.length > 0) {
+      const node = pending.pop();
+      if (!isObj(node)) continue;
+      const frame = isObj(node['frame']) ? node['frame'] : {};
+      const url = `${str(frame['url']) ?? ''}${str(frame['urlFragment']) ?? ''}`;
+      const origin = str(frame['securityOrigin']) ?? '';
+      const id = str(frame['id']);
+      if (id) this.frames.set(id, [url, origin]);
+      if (urlProtected(url) || urlProtected(origin)) refuse(PROTECTED_RULES.refusal);
+      if (Array.isArray(node['childFrames'])) pending.push(...node['childFrames']);
+    }
   }
 
   private fetchParams(): CDPPayload {
@@ -537,6 +584,7 @@ export class TabShield {
     const resourceStream = isObj(resource) ? str(resource['stream']) : undefined;
     if (resourceStream) this.streams.set(resourceStream, true);
     if (COOKIE_READERS.has(method)) dropProtectedCookies(result);
+    if (method === 'Page.getNavigationHistory') redactHistory(result);
     if (method === 'Target.getTargetInfo' && isObj(result['targetInfo'])) {
       const info = result['targetInfo'];
       if (isProtectedTarget(str(info['url']) ?? '', false, 'unknown'))

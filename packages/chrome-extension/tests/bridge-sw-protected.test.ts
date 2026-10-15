@@ -465,6 +465,58 @@ describe('B24-4: bridge wiring of the CDP shield', () => {
     ]);
   });
 
+  it('a second attach waits for arming, and both fail if arming fails', async () => {
+    let fail: (e: Error) => void = () => {};
+    const gate = new Promise<never>((_, rej) => {
+      fail = rej;
+    });
+    gate.catch(() => {});
+    const deps = shieldDeps({
+      sendDebuggerCommand: vi.fn(async (_tab: number, method: string) => {
+        if (method === 'Fetch.enable') return gate;
+        return {};
+      }),
+    });
+    const port = await connectAndHandshake(deps);
+    const second = await connectAndHandshake(deps);
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '100' }));
+    await tick();
+    second.receive(makeCdpRequest('ch-1', 2, 'Target.attachToTarget', { targetId: '100' }));
+    await tick();
+    // Neither client has a session while arming is still pending.
+    expect(response(port, 1)).toBeUndefined();
+    expect(response(second, 2)).toBeUndefined();
+    fail(new Error('Fetch domain unavailable'));
+    await tick();
+    expect(response(port, 1).error).toMatch(/could not be guarded/);
+    expect(response(second, 2).error).toMatch(/could not be guarded/);
+  });
+
+  it('refuses the attach when the tab already holds a protected iframe (control: plain iframe)', async () => {
+    const frameTree = (url: string) => ({
+      frameTree: {
+        frame: { id: 'T', url: 'https://example.com/' },
+        childFrames: [{ frame: { id: 'K', url } }],
+      },
+    });
+    let childUrl = 'https://example.org/embed';
+    const deps = shieldDeps({
+      sendDebuggerCommand: vi.fn(async (_tab: number, method: string) =>
+        method === 'Page.getFrameTree' ? frameTree(childUrl) : {}
+      ),
+    });
+    const port = await connectAndHandshake(deps);
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '100' }));
+    await tick();
+    expect(response(port, 1).result).toEqual({ sessionId: '100' });
+    port.receive(makeCdpRequest('ch-1', 2, 'Target.detachFromTarget', { sessionId: '100' }));
+    await tick();
+    childUrl = 'https://vault.sliccy.ai/embed';
+    port.receive(makeCdpRequest('ch-1', 3, 'Target.attachToTarget', { targetId: '100' }));
+    await tick();
+    expect(response(port, 3).error).toMatch(/refused/);
+  });
+
   it('refuses the attach and detaches when the guard cannot be armed', async () => {
     const deps = shieldDeps({
       sendDebuggerCommand: vi.fn(async () => {
@@ -615,5 +667,40 @@ describe('B24-4: bridge wiring of the CDP shield', () => {
     port.receive(makeCdpRequest('ch-1', 2, 'Runtime.evaluate', { expression: '1' }, '100'));
     await tick();
     expect(response(port, 2).error).toMatch(/not guarded/);
+  });
+});
+
+describe('B24-4: tabs holding a protected out-of-process iframe', () => {
+  afterEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+    __clearTabShieldsForTest();
+    testTabs.clear();
+  });
+
+  it('attaches a tab with no protected frame, refuses one the tracker marked, and disarms it', async () => {
+    testTabs.set(100, { id: 100, url: 'https://example.com/', title: 'a', windowId: 1 });
+    testTabs.set(103, { id: 103, url: 'https://example.com/framer', title: 'b', windowId: 1 });
+    const sent: Array<[number, string]> = [];
+    const deps = makeDeps({
+      tabHasProtectedFrame: async (tabId) => tabId === 103,
+      sendDebuggerCommand: vi.fn(async (tabId: number, method: string) => {
+        sent.push([tabId, method]);
+        return {};
+      }),
+    });
+    const port = await connectAndHandshake(deps);
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '100' }));
+    port.receive(makeCdpRequest('ch-1', 2, 'Target.attachToTarget', { targetId: '103' }));
+    await new Promise((r) => setTimeout(r, 30));
+    const resp = (id: number) =>
+      port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === id) as any;
+    expect(resp(1).result).toEqual({ sessionId: '100' });
+    expect(resp(2).error).toMatch(/refused/);
+    expect(deps.detachDebugger).toHaveBeenCalledWith(103);
+    // The refused tab's session cannot be used.
+    port.receive(makeCdpRequest('ch-1', 3, 'Runtime.evaluate', { expression: '1' }, '103'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(resp(3).error).toBeDefined();
+    expect(sent.some(([tab, m]) => tab === 103 && m === 'Runtime.evaluate')).toBe(false);
   });
 });

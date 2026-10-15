@@ -56,6 +56,7 @@ import {
   writeStoredLeaderTabId,
 } from './leader-tab-sw.js';
 import { handleMountMessage, handleMountSignAndForwardPort } from './mount-backends-sw.js';
+import { installProtectedFrameTracker } from './protected-frames-sw.js';
 import { createRawFetchCapture, installRawFetchCapture } from './raw-fetch-capture.js';
 import { handleRelayMessage } from './relay-sw.js';
 import {
@@ -140,6 +141,8 @@ setCherryPanelRecoveryDeps({ reloadLeaderTabIfExists });
 // handoff notification/forward path is the one that must stay first.
 installHandoffNotifications();
 installDiscoveryObserver();
+// B24-4: after handoff + discovery so their onHeadersReceived order is unchanged.
+installProtectedFrameTracker();
 
 installCdpProxyListeners();
 
