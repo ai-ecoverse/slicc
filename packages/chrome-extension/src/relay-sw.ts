@@ -14,19 +14,13 @@
 // `import type` only — see the import-boundary note in
 // packages/chrome-extension/CLAUDE.md.
 import type {
-  CdpCommandMsg,
-  CdpResponseMsg,
   ExtensionMessage,
   OAuthRequestMsg,
   OAuthResultMsg,
-  TraySocketCommandMessage,
-  TraySocketErrorMsg,
 } from '../../webapp/src/kernel/messages.js';
-import { handleCdpCommand } from './cdp-proxy-sw.js';
 import { handleOAuthRequest } from './oauth-sw.js';
-import { postServiceWorkerMessage, sendServiceWorkerMessage } from './sw-broadcast.js';
+import { sendServiceWorkerMessage } from './sw-broadcast.js';
 import type { SwMessageOutcome } from './sw-message-router.js';
-import { handleTraySocketCommand, isTraySocketCommand } from './tray-socket-sw.js';
 
 function isExtMsg(msg: unknown): msg is ExtensionMessage {
   return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
@@ -54,28 +48,14 @@ function relayOAuthRequest(oauthMsg: OAuthRequestMsg): void {
 /**
  * Run a CDP command and broadcast the response. The offscreen CDP proxy listens
  * for `cdp-response` via `onMessage`, not via the `sendMessage` return value.
+ *
+ * B24-3: REMOVED — the offscreen document no longer exists in this extension
+ * (no `offscreen` permission in manifest.json). The legacy
+ * `{source:'offscreen', payload:{type:'cdp-command'}}` relay had no sender
+ * check and no protected-origin check, and ran secret unmasking on
+ * Runtime.evaluate. It was dead code and has been removed along with its
+ * tray-socket relay.
  */
-function relayCdpCommand(command: CdpCommandMsg): void {
-  handleCdpCommand(command)
-    .then((response) => postServiceWorkerMessage(response))
-    .catch((err) => {
-      postServiceWorkerMessage({
-        type: 'cdp-response',
-        id: command.id,
-        error: err instanceof Error ? err.message : String(err),
-      } satisfies CdpResponseMsg);
-    });
-}
-
-function relayTraySocketCommand(command: TraySocketCommandMessage): void {
-  handleTraySocketCommand(command).catch((err) => {
-    postServiceWorkerMessage({
-      type: 'tray-socket-error',
-      id: command.id,
-      error: err instanceof Error ? err.message : String(err),
-    } satisfies TraySocketErrorMsg);
-  });
-}
 
 /**
  * `chrome.runtime.onMessage` branch for panel/offscreen envelopes. Every path
@@ -97,11 +77,10 @@ export function handleRelayMessage(message: unknown): SwMessageOutcome {
   }
 
   if (message.source === 'offscreen') {
-    const payload = message.payload;
-    if (payload.type === 'cdp-command') relayCdpCommand(payload as CdpCommandMsg);
-    else if (isTraySocketCommand(payload)) relayTraySocketCommand(payload);
-    // Other offscreen messages reach the side panel directly via the
-    // chrome.runtime.sendMessage broadcast — no relay needed.
+    // B24-3: The offscreen document was removed from this extension. Log and
+    // drop any stale messages — they have no sender check and no protected
+    // check, and they ran secret unmasking on Runtime.evaluate.
+    console.warn('[slicc-sw] dropping offscreen message — offscreen document no longer exists');
     return 'handled';
   }
 
