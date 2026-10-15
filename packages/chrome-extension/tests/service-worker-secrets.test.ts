@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
@@ -262,7 +263,8 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(kept).toBe(true);
     await new Promise((r) => setTimeout(r, 10));
     expect(response).toEqual({ ok: true });
-    expect(storageMap.NEW_SECRET).toBe('new-real-value');
+    // B-SEC1: value is now encrypted
+    expect(typeof storageMap.NEW_SECRET).toBe('object');
     expect(storageMap.NEW_SECRET_DOMAINS).toBe('api.new.com,*.new.com');
   });
 
@@ -287,7 +289,8 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     const response = await dispatch({ type: 'secrets.delete', name: 'GITHUB_TOKEN' });
     expect(response).toEqual({ ok: true, removed: true, fromSession: true });
     // Persisted entry must remain after the session-only deletion.
-    expect(storageMap.GITHUB_TOKEN).toBe('ghp_realtoken');
+    // B-SEC1: value is encrypted, check it's present
+    expect(storageMap.GITHUB_TOKEN).toBeDefined();
     expect(storageMap.GITHUB_TOKEN_DOMAINS).toBe('api.github.com');
     // The session list is now empty for that name.
     const list = await dispatch({ type: 'secrets.session.list' });
@@ -371,7 +374,8 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       domains: ['api.github.com', '*.github.com'],
     });
     expect(resp).toEqual({ ok: true });
-    expect(storageMap.GITHUB_TOKEN).toBe('ghp_realtoken');
+    // B-SEC1: value is encrypted, check it's present
+    expect(storageMap.GITHUB_TOKEN).toBeDefined();
     expect(storageMap.GITHUB_TOKEN_DOMAINS).toBe('api.github.com,*.github.com');
   });
 
@@ -419,14 +423,65 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       if (result === true) break;
     }
     await new Promise((r) => setTimeout(r, 30));
-    expect(storageMap['oauth.testprov.token']).toBe('tok_realtoken');
+    // B-SEC1: value is now encrypted
+    expect(typeof storageMap['oauth.testprov.token']).toBe('object');
     expect(storageMap['oauth.testprov.token_DOMAINS']).toBe('example.com,api.example.com');
     expect(typeof response.maskedValue).toBe('string');
     expect(response.maskedValue.length).toBeGreaterThan(0);
   });
 
+  it('B-SEC1: secrets.mask-oauth-token never writes the token in plaintext, even after migration ran', async () => {
+    await import('../src/service-worker.js');
+    // Run the one-shot migration first, so only the write path can protect the token.
+    const { buildSecretsPipeline } = await import('../src/secrets-sw.js');
+    await (await buildSecretsPipeline()).reload();
+    const setMock = (globalThis as any).chrome.storage.local.set as ReturnType<typeof vi.fn>;
+    setMock.mockClear();
+    let response: any;
+    for (const l of messageListeners) {
+      const result = l(
+        {
+          type: 'secrets.mask-oauth-token',
+          providerId: 'atrest',
+          accessToken: 'tok_atRestPlaintext123',
+          domains: 'example.com',
+        },
+        // A trusted internal sender (the extension's own page), so the B-SEC1
+        // sender gate admits it once that lands.
+        {
+          id: (globalThis as any).chrome.runtime.id,
+          origin: `chrome-extension://${(globalThis as any).chrome.runtime.id}`,
+        },
+        (r: any) => {
+          response = r;
+        }
+      );
+      if (result === true) break;
+    }
+    await new Promise((r) => setTimeout(r, 30));
+    // Control: the write happened, the domains companion stays plaintext, and
+    // the pipeline still masks the (decrypted) token.
+    expect(setMock).toHaveBeenCalled();
+    expect(storageMap['oauth.atrest.token_DOMAINS']).toBe('example.com');
+    expect(typeof response.maskedValue).toBe('string');
+    expect(response.maskedValue.length).toBeGreaterThan(0);
+    // Protected: no storage write ever carried the plaintext token.
+    const written = JSON.stringify(setMock.mock.calls);
+    expect(written).not.toContain('tok_atRestPlaintext123');
+    expect(storageMap['oauth.atrest.token']).toMatchObject({
+      ct: expect.any(String),
+      iv: expect.any(String),
+    });
+  });
+
   it('secrets.mask-oauth-token skips the OAuth-token write when accessToken/domains are absent (back-compat)', async () => {
     await import('../src/service-worker.js');
+    // Trigger migration and wait for it to complete fully.
+    const { buildSecretsPipeline } = await import('../src/secrets-sw.js');
+    const pipeline = await buildSecretsPipeline();
+    await pipeline.reload();
+    // Give any remaining async storage writes time to settle.
+    await new Promise((r) => setTimeout(r, 50));
     const setSpy = (globalThis as any).chrome.storage.local.set;
     setSpy.mockClear();
     let response: any;

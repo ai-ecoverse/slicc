@@ -15,9 +15,9 @@ import {
   readOAuthExtras,
   removeOAuthExtraDomain,
 } from '@slicc/shared-ts';
+import { encryptedStorage, listSecretsIncludingUnreadable } from './secrets-encrypted-storage.js';
 import {
   deleteSecret,
-  listSecrets,
   type SecretEntry,
   type StorageArea,
   saveCustomSecret,
@@ -87,7 +87,7 @@ function refreshList(): void {
   renderList().catch(reportAsyncError);
 }
 
-const storage: StorageArea = chrome.storage.local;
+const storage: StorageArea = encryptedStorage;
 
 function createCopyNameButton(entry: SecretEntry): HTMLButtonElement {
   return el('button', {
@@ -127,27 +127,72 @@ function createDeleteSecretButton(entry: SecretEntry): HTMLButtonElement {
   });
 }
 
-function createSecretRow(entry: SecretEntry): HTMLDivElement {
+/** Exact copy for a secret whose ciphertext can no longer be decrypted. */
+export const UNREADABLE_SECRET_COPY = "This value can't be read any more. Enter it again.";
+
+/** Switch the "Add or Update" section to the given pane (tab + pane state). */
+function activatePane(target: string): void {
+  document.querySelectorAll<HTMLButtonElement>('.tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.pane === target);
+  });
+  document.querySelectorAll<HTMLDivElement>('.pane').forEach((p) => {
+    p.classList.toggle('active', p.id === `pane-${target}`);
+  });
+}
+
+/**
+ * Open the Custom secret tab prefilled for re-entering an unreadable secret:
+ * name and domains are filled in, the value stays empty (and gets focus).
+ */
+export function prefillCustomSecret(entry: Pick<SecretEntry, 'name' | 'domains'>): void {
+  activatePane('custom');
+  ($('c-name') as HTMLInputElement).value = entry.name;
+  ($('c-domains') as HTMLInputElement).value = entry.domains.join(', ');
+  const value = $('c-value') as HTMLInputElement;
+  value.value = '';
+  $('pane-custom')?.scrollIntoView?.({ block: 'nearest' });
+  value.focus();
+}
+
+function createReenterButton(entry: SecretEntry): HTMLButtonElement {
+  return el('button', {
+    class: 'btn-secondary btn',
+    text: 'Re-enter',
+    'style:font-size': '11px',
+    'style:padding': '4px 8px',
+    on: { click: () => prefillCustomSecret(entry) },
+  });
+}
+
+export function createSecretRow(entry: SecretEntry & { unreadable?: boolean }): HTMLDivElement {
+  const buttons = entry.unreadable
+    ? [createReenterButton(entry), createCopyNameButton(entry), createDeleteSecretButton(entry)]
+    : [createCopyNameButton(entry), createDeleteSecretButton(entry)];
   return el(
     'div',
-    { class: 'secret-row', dataset: { name: entry.name } },
+    {
+      class: entry.unreadable ? 'secret-row secret-row-unreadable' : 'secret-row',
+      dataset: { name: entry.name },
+    },
     el(
       'div',
       { class: 'secret-meta' },
       el('div', { class: 'secret-name', text: entry.name }),
-      el('div', { class: 'secret-domains', text: entry.domains.join(', ') })
+      el('div', { class: 'secret-domains', text: entry.domains.join(', ') }),
+      ...(entry.unreadable
+        ? [el('div', { class: 'secret-unreadable', text: UNREADABLE_SECRET_COPY })]
+        : [])
     ),
-    createCopyNameButton(entry),
-    createDeleteSecretButton(entry)
+    ...buttons
   );
 }
 
 async function renderList(): Promise<void> {
   const container = $('list');
   container.replaceChildren();
-  let entries: SecretEntry[];
+  let entries: Array<SecretEntry & { unreadable?: boolean }>;
   try {
-    entries = await listSecrets(storage);
+    entries = await listSecretsIncludingUnreadable();
   } catch (err) {
     container.appendChild(el('div', { class: 'empty', text: `Failed to read storage: ${err}` }));
     return;
@@ -163,15 +208,7 @@ async function renderList(): Promise<void> {
 
 function setupTabs(): void {
   document.querySelectorAll<HTMLButtonElement>('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      const target = tab.dataset.pane;
-      document.querySelectorAll<HTMLButtonElement>('.tab').forEach((t) => {
-        t.classList.toggle('active', t === tab);
-      });
-      document.querySelectorAll<HTMLDivElement>('.pane').forEach((p) => {
-        p.classList.toggle('active', p.id === `pane-${target}`);
-      });
-    });
+    tab.addEventListener('click', () => activatePane(tab.dataset.pane ?? ''));
   });
 }
 

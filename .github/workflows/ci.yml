@@ -913,6 +913,38 @@ jobs:
         continue-on-error: true
         run: xvfb-run -a npm run test:extension-smoke -w @slicc/chrome-extension
 
+  # Real-Chromium behaviour checks of the extension through its public
+  # surfaces (the slicc.cdp-bridge Port, secrets.html, the fetch-proxy Port).
+  # Advisory: not in the `ci` aggregate's needs; whether it becomes required
+  # is the maintainer's call.
+  extension-integration:
+    needs: changes
+    if: >-
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Install Chrome for Testing
+        run: npx --yes @puppeteer/browsers install chrome@stable
+      - name: Build webapp (dependency)
+        run: npm run build -w @slicc/webapp
+      - name: CDP bridge shield (dev build, real Chromium)
+        run: |
+          SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension
+          npm run test:cdp-shield -w @slicc/chrome-extension
+      - name: Secrets migration + Re-enter (production build, real Chromium)
+        run: |
+          npm run build -w @slicc/chrome-extension
+          npm run test:secrets-migration -w @slicc/chrome-extension
+
   cloudflare-worker:
     name: Cloudflare staging deploy
     needs: changes

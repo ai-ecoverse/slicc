@@ -29,18 +29,20 @@
  *   npm run test:cdp-shield -w @slicc/chrome-extension
  *
  * Environment: CHROME_PATH overrides the browser; SHIELD_CDP_PORT the
- * DevTools port (default 9461; never 9222-9229).
+ * DevTools port (default 9461; never 9222-9229); SHIELD_STEPS a comma list of
+ * step functions to run (default: all).
  * Exit codes: 0 all checks passed; 1 a check failed; 2 setup failed.
  */
 
-import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import puppeteer, { type Page } from 'puppeteer-core';
+import puppeteer, { type Browser, type Page } from 'puppeteer-core';
 import { findChromeExecutable } from '../../node-server/src/chrome-launch.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -62,6 +64,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const LEADER_HTML = `<!doctype html><title>leader</title><script>
 window.__events = [];
+window.__other = [];
 window.__start = (extId) => new Promise((resolve, reject) => {
   const port = chrome.runtime.connect(extId, { name: 'slicc.cdp-bridge' });
   const pending = new Map();
@@ -73,6 +76,7 @@ window.__start = (extId) => new Promise((resolve, reject) => {
       const p = pending.get(m.id); pending.delete(m.id);
       if (p) m.error ? p.reject(new Error(m.error)) : p.resolve(m.result);
     } else if (m.kind === 'cdp.event') window.__events.push(m);
+    else window.__other.push(m);
   });
   window.cdp = (method, params, sessionId) => new Promise((res, rej) => {
     const id = next++;
@@ -100,7 +104,8 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     html(LEADER_HTML);
     return;
   }
-  switch (url.pathname) {
+  // Every /handoff* path advertises a handoff Link (so near-misses are real tests).
+  switch (url.pathname.startsWith('/handoff') ? '/handoff' : url.pathname) {
     case '/redirect':
       res.writeHead(302, { location: q('to'), 'cache-control': 'no-store' });
       res.end();
@@ -127,6 +132,19 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
         });
         res.end('denied');
       }
+      break;
+    case '/handoff': {
+      const title = q('t') || q('handoff') || 'x';
+      res.writeHead(200, {
+        'content-type': 'text/html',
+        'cache-control': 'no-store',
+        link: `</>; rel="https://www.sliccy.ai/rel/handoff"; title="${title}"`,
+      });
+      res.end(page(`handoff ${title}`));
+      break;
+    }
+    case '/opener':
+      html(page('opener', '<button id="o" onclick="window.open(\'about:blank\')">open</button>'));
       break;
     case '/beacon':
       res.writeHead(204, { 'access-control-allow-origin': '*' });
@@ -196,6 +214,8 @@ async function events(leader: Page): Promise<any[]> {
 }
 
 interface Ctx {
+  browser: Browser;
+  base: (host: string) => string;
   leader: Page;
   cdp: Cdp;
   s: string;
@@ -434,6 +454,145 @@ async function c4Existing({ cdp, plain, plain2, vault }: Ctx): Promise<void> {
   );
 }
 
+/** #3977 B24-1: Target.createTarget / Page.navigate on a protected origin. */
+async function b24Targets({ cdp, s, plain, vault }: Ctx): Promise<void> {
+  const created = await cdp('Target.createTarget', { url: `${plain}/page?n=b24c` }).then(
+    (r) => String(r.targetId),
+    () => ''
+  );
+  check('B24-1 control: createTarget on a plain origin works', created !== '');
+  if (created) await cdp('Target.closeTarget', { targetId: created }).catch(() => {});
+  for (const url of [`${vault}/page?n=b24cv`, `blob:${vault}/0b9e`, `view-source:${vault}/`]) {
+    const why = await refused(cdp, 'Target.createTarget', { url });
+    check(
+      `B24-1 protected: createTarget ${url.split(':')[0]}: on the vault is refused`,
+      why.includes('refused'),
+      why
+    );
+  }
+  await sleep(500);
+  check('B24-1 protected: no vault tab was created', !served('vault.sliccy.ai', 'n=b24cv'));
+  const navWhy = await refused(cdp, 'Page.navigate', { url: `filesystem:${vault}/temporary/x` }, s);
+  check(
+    'B24-2 protected: Page.navigate to a filesystem:-wrapped vault URL is refused',
+    navWhy.includes('refused'),
+    navWhy
+  );
+}
+
+/** Open a blank popup from a page the USER loaded (an unattached tab); return the popup's tab id. */
+async function blankPopupFrom(ctx: Ctx, openerUrl: string): Promise<string | undefined> {
+  const before = new Set(
+    ((await ctx.cdp('Target.getTargets')).targetInfos as any[]).map((t) => t.targetId)
+  );
+  const opener = await ctx.browser.newPage();
+  await opener.goto(openerUrl);
+  await opener.click('#o');
+  await sleep(800);
+  const after = (await ctx.cdp('Target.getTargets')).targetInfos as any[];
+  return after.find((t) => !before.has(t.targetId) && String(t.url).startsWith('about:blank'))
+    ?.targetId;
+}
+
+/** #3977: a blank popup is judged by its real opener. */
+async function b24BlankOpener(ctx: Ctx): Promise<void> {
+  const plainPopup = await blankPopupFrom(ctx, `${ctx.plain}/opener?n=bo`);
+  const ok = plainPopup
+    ? await ctx.cdp('Target.attachToTarget', { targetId: plainPopup, flatten: true }).then(
+        (r) => !!r.sessionId,
+        () => false
+      )
+    : false;
+  check('blank-opener control: a blank popup of a plain page attaches', ok, String(plainPopup));
+  const fresh = await ctx.cdp('Target.createTarget', { url: 'about:blank' });
+  const freshOk = await ctx
+    .cdp('Target.attachToTarget', { targetId: fresh.targetId, flatten: true })
+    .then(
+      (r) => !!r.sessionId,
+      () => false
+    );
+  check('blank-opener control: a fresh about:blank tab (no opener) attaches', freshOk);
+  const vaultPopup = await blankPopupFrom(ctx, `${ctx.vault}/opener?n=bov`);
+  const why = vaultPopup
+    ? await refused(ctx.cdp, 'Target.attachToTarget', { targetId: vaultPopup, flatten: true })
+    : 'no popup';
+  check(
+    'blank-opener protected: a blank popup of the vault is refused',
+    why.includes('refused'),
+    why
+  );
+}
+
+/** #3977 B24-5: discovery never probes protected origins. */
+async function b24Discovery(ctx: Ctx): Promise<void> {
+  const visitor = await ctx.browser.newPage();
+  await visitor.goto(`${ctx.base('plain3.test')}/page?n=disc`);
+  const probed = await until(
+    () =>
+      served('plain3.test', '/.well-known/ai-catalog.json') || served('plain3.test', '/llms.txt'),
+    6000
+  );
+  check('B24-5 control: a plain origin is probed for discovery artifacts', probed);
+  for (const host of ['vault.sliccy.ai', 'get.sliccy.ai', 'mcpcat.sliccy.ai', 'sliccy.ai']) {
+    await visitor.goto(`${ctx.base(host)}/page?n=discv`).catch(() => {});
+  }
+  await sleep(2500);
+  const leaked = hits.filter(
+    (h) =>
+      h.host.endsWith('sliccy.ai') &&
+      (h.path.startsWith('/.well-known/') || h.path.startsWith('/llms.txt'))
+  );
+  check(
+    'B24-5 protected: no discovery fetch ever reached a sliccy.ai host',
+    leaked.length === 0,
+    JSON.stringify(leaked)
+  );
+  await visitor.close();
+}
+
+/** #3977 B24-5: handoff Link headers on protected origins only at the hosted /handoff endpoint. */
+async function b24Handoff(ctx: Ctx): Promise<void> {
+  const licks = async (): Promise<any[]> =>
+    ctx.leader.evaluate(() =>
+      (window as any).__other.filter((m: any) => m.kind === 'extension.lick')
+    );
+  const sawLick = async (marker: string) =>
+    (await licks()).some((m) => JSON.stringify(m).includes(marker));
+  const visitor = await ctx.browser.newPage();
+  await visitor.goto(`${ctx.plain}/handoff-page?t=plainhand`);
+  check(
+    'B24-5 control: a plain page handoff reaches the leader',
+    await until2(() => sawLick('plainhand'))
+  );
+  await visitor.goto('https://www.sliccy.ai/handoff?handoff=hostedhand');
+  check(
+    'B24-5 control: the hosted /handoff endpoint reaches the leader',
+    await until2(() => sawLick('hostedhand'))
+  );
+  for (const [url, marker] of [
+    [`${ctx.vault}/handoff-page?t=vaulthand`, 'vaulthand'],
+    [`${ctx.seven}/handoff-page?t=sevenhand`, 'sevenhand'],
+    ['https://www.sliccy.ai/handoff-page?t=wwwother', 'wwwother'],
+    ['https://www.sliccy.ai/handoff/extra?t=wwwextra', 'wwwextra'],
+  ]) {
+    await visitor.goto(url).catch(() => {});
+    await sleep(800);
+    check(
+      `B24-5 protected: handoff from ${new URL(url).host}${new URL(url).pathname} is ignored`,
+      !(await sawLick(marker))
+    );
+  }
+  await visitor.close();
+}
+
+async function until2(fn: () => Promise<boolean>, ms = 5000): Promise<boolean> {
+  for (let waited = 0; waited < ms; waited += 200) {
+    if (await fn()) return true;
+    await sleep(200);
+  }
+  return fn();
+}
+
 /** Pause-driven probe: start `expr` in the page, answer pauses with `answer`, read the result. */
 async function probe(
   { leader, cdp, s }: Ctx,
@@ -642,7 +801,7 @@ async function refusals({ cdp, s, plain, seven }: Ctx): Promise<void> {
   );
 }
 
-async function run(leader: Page, base: (host: string) => string): Promise<void> {
+async function run(browser: Browser, leader: Page, base: (host: string) => string): Promise<void> {
   const cdp = cdpOf(leader);
   const plain = base('plain.test');
   const plain2 = base('plain2.test');
@@ -657,7 +816,7 @@ async function run(leader: Page, base: (host: string) => string): Promise<void> 
   await cdp('Page.addScriptToEvaluateOnNewDocument', { source: initSource }, s);
   const go = (url: string) =>
     cdp('Runtime.evaluate', { expression: `location.href = ${JSON.stringify(url)}` }, s);
-  const ctx: Ctx = { leader, cdp, s, go, plain, plain2, vault, seven };
+  const ctx: Ctx = { browser, base, leader, cdp, s, go, plain, plain2, vault, seven };
   for (const step of [
     c1InitScript,
     c2Redirects,
@@ -668,7 +827,14 @@ async function run(leader: Page, base: (host: string) => string): Promise<void> 
     c5Vectors,
     c6Cookies,
     refusals,
+    b24Targets,
+    b24BlankOpener,
+    b24Discovery,
+    b24Handoff,
   ]) {
+    // SHIELD_STEPS=b24Discovery,b24Handoff runs a subset (e.g. against an older build).
+    const only = process.env['SHIELD_STEPS']?.split(',');
+    if (only && !only.includes(step.name)) continue;
     await step(ctx);
   }
 }
@@ -687,6 +853,35 @@ async function main(): Promise<void> {
   const server = createServer(handle);
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
+  // www.sliccy.ai is the hosted handoff origin and must be https: a TLS
+  // server with a throwaway self-signed cert (Chrome runs with
+  // --ignore-certificate-errors for this check only).
+  const tlsDir = mkdtempSync(join(tmpdir(), 'slicc-cdp-shield-tls-'));
+  execFileSync(
+    'openssl',
+    [
+      'req',
+      '-x509',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-days',
+      '1',
+      '-subj',
+      '/CN=www.sliccy.ai',
+      '-keyout',
+      join(tlsDir, 'key.pem'),
+      '-out',
+      join(tlsDir, 'cert.pem'),
+    ],
+    { stdio: 'ignore' }
+  );
+  const tlsServer = createHttpsServer(
+    { key: readFileSync(join(tlsDir, 'key.pem')), cert: readFileSync(join(tlsDir, 'cert.pem')) },
+    handle
+  );
+  await new Promise<void>((r) => tlsServer.listen(0, '127.0.0.1', r));
+  const tlsPort = (tlsServer.address() as AddressInfo).port;
   const leaderServer = createServer(handle);
   await new Promise<void>((r) => leaderServer.listen(LEADER_PORT, '127.0.0.1', r));
   const work = mkdtempSync(join(tmpdir(), 'slicc-cdp-shield-check-'));
@@ -700,7 +895,8 @@ async function main(): Promise<void> {
       '--no-first-run',
       '--no-default-browser-check',
       '--headless=new',
-      `--host-resolver-rules=MAP *.sliccy.ai 127.0.0.1:${port}, MAP *.test 127.0.0.1:${port}`,
+      `--host-resolver-rules=MAP www.sliccy.ai:443 127.0.0.1:${tlsPort}, MAP *.sliccy.ai 127.0.0.1:${port}, MAP *.test 127.0.0.1:${port}`,
+      '--ignore-certificate-errors',
       `--disable-extensions-except=${ext}`,
       `--load-extension=${ext}`,
       'about:blank',
@@ -733,13 +929,15 @@ async function main(): Promise<void> {
     const leader = await browser.newPage();
     await leader.goto(`http://localhost:${LEADER_PORT}/?slicc=leader`);
     await leader.evaluate((id) => (window as any).__start(id), new URL(sw.url()).host);
-    await run(leader, base);
+    await run(browser, leader, base);
     await browser.disconnect();
   } finally {
     clearTimeout(hardStop);
     chromeProc.kill('SIGKILL');
     server.close();
     leaderServer.close();
+    tlsServer.close();
+    rmSync(tlsDir, { recursive: true, force: true });
     rmSync(work, { recursive: true, force: true });
   }
   console.log(failures === 0 ? 'all shield checks passed' : `${failures} shield check(s) failed`);

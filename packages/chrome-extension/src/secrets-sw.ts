@@ -33,7 +33,10 @@ import { readOrCreateSwSessionId } from './sw-session-id.js';
 // "vanish on session end" semantics). Layered into every pipeline build so the
 // fetch proxy unmasks session secrets like persisted ones.
 const sessionSecretStore = new SessionSecretStore();
-const storageLocal: StorageArea = chrome.storage.local;
+
+import { encryptedStorage } from './secrets-encrypted-storage.js';
+
+const storageLocal: StorageArea = encryptedStorage;
 
 export async function buildSecretsPipeline(): Promise<SecretsPipeline> {
   const sessionId = await readOrCreateSwSessionId();
@@ -41,8 +44,8 @@ export async function buildSecretsPipeline(): Promise<SecretsPipeline> {
     get: async (name) => {
       const fromSession = sessionSecretStore.get(name);
       if (fromSession !== undefined) return fromSession;
-      const got = (await chrome.storage.local.get(name)) as Record<string, string | undefined>;
-      return got[name];
+      const got = await storageLocal.get(name);
+      return typeof got[name] === 'string' ? (got[name] as string) : undefined;
     },
     listAll: () => listSecretsWithValues(storageLocal),
   };
@@ -319,7 +322,9 @@ async function runMaskOauthTokenWrite(
   // the SW owns `chrome.storage`, before building the pipeline that
   // masks it. `domains` is the comma-joined `_DOMAINS` companion.
   if (accessToken && domains) {
-    await chrome.storage.local.set({
+    // B-SEC1: through the encrypted adapter, so the token is ciphertext from
+    // the first write (never plaintext until a later migration pass).
+    await storageLocal.set({
       [`oauth.${providerId}.token`]: accessToken,
       [`oauth.${providerId}.token_DOMAINS`]: domains,
     });

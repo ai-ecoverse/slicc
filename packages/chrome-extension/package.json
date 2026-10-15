@@ -8,6 +8,7 @@
     "postbuild:check": "bash ../dev-tools/tools/check-extension-rhc.sh",
     "size": "size-limit",
     "test:cdp-shield": "tsx ../dev-tools/tools/extension-cdp-shield-check.ts",
+    "test:secrets-migration": "tsx ../dev-tools/tools/extension-secrets-migration-check.ts",
     "test": "vitest run",
     "test:extension-smoke": "tsx ../dev-tools/tools/extension-smoke-test.ts",
     "test:raw-fetch": "tsx ../dev-tools/tools/extension-raw-fetch-check.ts",
@@ -18,7 +19,7 @@
       "name": "extension: service worker",
       "path": "../../dist/extension/service-worker.js",
       "brotli": false,
-      "limit": "100 kB"
+      "limit": "102 kB"
     },
     {
       "name": "extension: side panel entry",
@@ -30,7 +31,7 @@
       "name": "extension: total JS payload",
       "path": "../../dist/extension/**/*.js",
       "brotli": false,
-      "limit": "143 kB"
+      "limit": "148 kB"
     }
   ],
   "dependencies": {
@@ -39,5 +40,8 @@
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-coding-agent": "1.1.0",
     "@slicc/shared-ts": "*"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.5"
   }
 }
