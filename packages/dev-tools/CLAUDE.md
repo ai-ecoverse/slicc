@@ -15,7 +15,6 @@ Bare script names → `tools/`; bare dir names → `packages/dev-tools/`.
 - **Regression cluster hunter** (release-triggered): `regression-cluster-hunter/` + `.yml`. [details](../../docs/dev-tools-details.md#regression-cluster-hunter).
 - **Bedrock model scout** (weekly canary, no Claude): `model-scout/` + `.yml`. [details](../../docs/dev-tools-details.md#model-scout).
 - **e2b template**: `e2b-template/` — hosted-leader cloud float sandbox (`packages/cloud-core/CLAUDE.md`).
-- **AI comment detection**: `ai-comment-detection/` + `.yml` — labels `ai-generated`/`human-in-the-loop`. [details](../../docs/dev-tools-details.md#ai-comment-detection).
 - **no-comment mirror**: `no-comment/` + `no-comment-mirror.yml`; `lint:no-comments` no-ops on `main`, hard gate there. [details](../../docs/dev-tools-details.md#no-comment-mirror).
 - **HF caching mirror** (`tools/hf-cache-mirror.mjs`): zero-dep local `huggingface.co` mirror; e2e CI caches `.cache/hf-mirror` + sets `HF_ENDPOINT` for warm Kokoro weights.
 
