@@ -232,7 +232,7 @@ jobs:
           JOIN_URL: ${{ steps.start.outputs.join-url }}
           TRAY_ID: ${{ steps.start.outputs.tray-id }}
       - if: inputs.mask-join-url == false
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ inputs.artifact-prefix || 'slicc' }}-join
           path: ${{ runner.temp }}/slicc-gw/join/join.json
@@ -277,7 +277,7 @@ jobs:
 
       - name: Upload response
         if: inputs.prompt != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ inputs.artifact-prefix || 'slicc' }}-response
           path: ${{ runner.temp }}/slicc-gw/out/response.md
@@ -292,7 +292,7 @@ jobs:
 
       - name: Upload session
         if: inputs.export-session
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ inputs.artifact-prefix || 'slicc' }}-session
           path: ${{ runner.temp }}/slicc-gw/out/session.zip
@@ -307,7 +307,7 @@ jobs:
 
       - name: Upload VFS file
         if: inputs.fetch-file != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ inputs.artifact-prefix || 'slicc' }}-file
           path: ${{ runner.temp }}/slicc-gw/out/fetched
@@ -322,7 +322,7 @@ jobs:
 
       - name: Upload leader logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ inputs.artifact-prefix || 'slicc' }}-leader-logs
           path: ${{ runner.temp }}/slicc-gw/*.log
