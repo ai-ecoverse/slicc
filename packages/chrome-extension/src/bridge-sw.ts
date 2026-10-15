@@ -41,6 +41,7 @@ import {
   type TargetInfo,
 } from '@slicc/shared-ts';
 import { redacted, TabShield } from './cdp-shield.js';
+import { tabHasProtectedFrame } from './protected-frames-sw.js';
 import {
   isProtectedTab,
   isProtectedTarget,
@@ -211,6 +212,12 @@ export interface BridgeSwDeps {
   activateTab: (tabId: number) => Promise<void>;
   /** Origin allowlist used for the pin. Override for dev / tests. */
   allowedOrigins?: readonly string[];
+  /**
+   * B24-4: true when the tab already holds a protected (out-of-process)
+   * sub-frame that chrome.debugger cannot see. Production wires the
+   * `protected-frames-sw.ts` webRequest tracker; absent = none known.
+   */
+  tabHasProtectedFrame?: (tabId: number) => Promise<boolean>;
   /**
    * Callback when the leader tab sends its tray joinUrl (or null on tray drop).
    * The SW caches this and broadcasts it to the on-demand cherry side panel.
@@ -441,7 +448,17 @@ function subscribeShieldedEvents(deps: BridgeSwDeps, sink: DebuggerEventSink): (
 
 /** Arm the shield for a freshly attached tab (no-op if it is already armed). */
 async function ensureTabShield(tabId: number, deps: BridgeSwDeps): Promise<void> {
-  if (tabShields.has(tabId)) return;
+  const existing = tabShields.get(tabId);
+  if (existing) {
+    // Another attach may still be arming this tab: wait for it, and fail this
+    // attach too if arming failed.
+    try {
+      await existing.install();
+      return;
+    } catch {
+      throw new Error(`${PROTECTED_REFUSAL} (the tab could not be guarded)`);
+    }
+  }
   const shield = new TabShield(
     (method, params) => deps.sendDebuggerCommand(tabId, method, params),
     () => {
@@ -453,7 +470,7 @@ async function ensureTabShield(tabId: number, deps: BridgeSwDeps): Promise<void>
   try {
     await shield.install();
   } catch {
-    tabShields.delete(tabId);
+    if (tabShields.get(tabId) === shield) tabShields.delete(tabId);
     throw new Error(`${PROTECTED_REFUSAL} (the tab could not be guarded)`);
   }
 }
@@ -636,6 +653,7 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
   const base: BridgeSwDeps = {
     readStoredLeaderTabId: readStoredLeaderTabIdFromSession,
     writeStoredLeaderTabId: writeStoredLeaderTabIdToSession,
+    tabHasProtectedFrame,
     maybeUnmaskCdpFrame: async (_tabId, _method, params) => params,
     attachDebugger: async (tabId) => {
       await chrome.debugger.attach({ tabId }, '1.3');
@@ -1055,10 +1073,16 @@ async function cdpAttachToTarget(
   // round-trip (matches the existing offscreen CDP proxy's convention).
   try {
     await ensureTabShield(tabId, deps);
+    // A protected out-of-process iframe loaded before (or while) arming is
+    // invisible to the tab session: refuse the session instead.
+    if (await deps.tabHasProtectedFrame?.(tabId)) throw new Error(PROTECTED_REFUSAL);
   } catch (err) {
     if (state.ownedTabs.has(tabId)) {
       state.ownedTabs.delete(tabId);
+      tabShields.delete(tabId);
       await deps.detachDebugger(tabId);
+    } else {
+      await releaseTabShield(tabId, deps);
     }
     throw err;
   }

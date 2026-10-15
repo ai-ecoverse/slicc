@@ -901,3 +901,108 @@ describe('C5 protectVectors (slicc-cli@2d5d981)', () => {
     ).resolves.toBeDefined();
   });
 });
+
+describe('Codex round on #3986', () => {
+  const tree = (child: { id: string; url: string; securityOrigin?: string }) => ({
+    frameTree: {
+      frame: { id: 'TOP', url: PLAIN, securityOrigin: 'https://example.com' },
+      childFrames: [{ frame: child, childFrames: [] }],
+    },
+  });
+
+  it('inventories existing frames: a plain subframe arms; a protected one refuses the session', async () => {
+    const arm = (frameTree: unknown) => {
+      const shield = new TabShield(
+        async (method) =>
+          method === 'Page.getFrameTree' ? (frameTree as Record<string, unknown>) : {},
+        vi.fn()
+      );
+      return { shield, done: shield.install() };
+    };
+    // Control: plain subframe → armed, and the seeded frame is judged.
+    const plain = arm(
+      tree({ id: 'KID', url: 'https://example.org/embed', securityOrigin: 'https://example.org' })
+    );
+    await expect(plain.done).resolves.toBeUndefined();
+    await expect(
+      plain.shield.command(
+        'Page.createIsolatedWorld',
+        { frameId: 'KID' },
+        vi.fn(async () => ({}))
+      )
+    ).resolves.toBeDefined();
+    // Protected: an already-loaded vault iframe → install rejects (bridge detaches).
+    const vault = arm(
+      tree({
+        id: 'VKID',
+        url: 'https://vault.sliccy.ai/embed',
+        securityOrigin: 'https://vault.sliccy.ai',
+      })
+    );
+    await expect(vault.done).rejects.toThrow(/refused/);
+    // An inherited about:blank frame on seven's origin is caught by its securityOrigin.
+    const blank = arm(
+      tree({ id: 'B', url: 'about:blank', securityOrigin: 'https://seven.sliccy.ai' })
+    );
+    await expect(blank.done).rejects.toThrow(/refused/);
+  });
+
+  it('shares one arming promise between concurrent installs', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const send = vi.fn(async (method: string) => {
+      if (method === 'Fetch.enable') await gate;
+      return {};
+    });
+    const shield = new TabShield(send, vi.fn());
+    const first = shield.install();
+    const second = shield.install();
+    expect(second).toBe(first);
+    let settled = false;
+    void second.then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+    release();
+    await second;
+    expect(send.mock.calls.filter(([m]) => m === 'Fetch.enable')).toHaveLength(1);
+  });
+
+  it('redacts protected Page.getNavigationHistory entries, leaves plain ones', async () => {
+    const { shield } = makeShield();
+    const history = {
+      currentIndex: 2,
+      entries: [
+        { id: 1, url: PLAIN, userTypedURL: PLAIN, title: 'plain' },
+        { id: 2, url: VAULT, userTypedURL: VAULT, title: 'Vault secret' },
+        {
+          id: 3,
+          url: 'https://example.org/',
+          userTypedURL: 'https://seven.sliccy.ai/os/?k=1',
+          title: 't',
+        },
+        'junk',
+      ],
+    };
+    const result = await shield.command('Page.getNavigationHistory', {}, async () =>
+      structuredClone(history)
+    );
+    const entries = result['entries'] as Array<Record<string, unknown>>;
+    expect(entries[0]).toEqual(history.entries[0]);
+    expect(entries[1]).toEqual({
+      id: 2,
+      url: 'https://vault.sliccy.ai',
+      userTypedURL: 'https://vault.sliccy.ai',
+      title: 'https://vault.sliccy.ai',
+    });
+    expect(entries[2]).toMatchObject({
+      url: 'https://seven.sliccy.ai',
+      title: 'https://seven.sliccy.ai',
+    });
+    expect(entries[3]).toBe('junk');
+    expect(JSON.stringify(entries)).not.toContain('secret');
+  });
+});

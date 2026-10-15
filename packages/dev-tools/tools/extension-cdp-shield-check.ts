@@ -409,6 +409,31 @@ async function c5Fetch({ leader, cdp, s, go, plain, plain2, vault }: Ctx): Promi
   );
 }
 
+/** Codex #3986: a tab that ALREADY holds a protected iframe is not attachable. */
+async function c4Existing({ cdp, plain, plain2, vault }: Ctx): Promise<void> {
+  const open = async (src: string, tag: string) => {
+    const { targetId } = await cdp('Target.createTarget', {
+      url: `${plain}/frame?src=${encodeURIComponent(src)}&t=${tag}`,
+    });
+    await until(() => served(new URL(src).hostname, tag));
+    await sleep(500);
+    return targetId as string;
+  };
+  const plainTab = await open(`${plain2}/page?n=c4e`, 'c4e');
+  const ok = await cdp('Target.attachToTarget', { targetId: plainTab, flatten: true }).then(
+    (r) => !!r.sessionId,
+    () => false
+  );
+  check('C4e control: a tab with an existing plain iframe attaches', ok);
+  const vaultTab = await open(`${vault}/page?n=c4ev`, 'c4ev');
+  const why = await refused(cdp, 'Target.attachToTarget', { targetId: vaultTab, flatten: true });
+  check(
+    'C4e protected: a tab with an existing vault iframe is refused',
+    why.includes('refused'),
+    why
+  );
+}
+
 /** Pause-driven probe: start `expr` in the page, answer pauses with `answer`, read the result. */
 async function probe(
   { leader, cdp, s }: Ctx,
@@ -638,6 +663,7 @@ async function run(leader: Page, base: (host: string) => string): Promise<void> 
     c2Redirects,
     c3Popups,
     c4Iframes,
+    c4Existing,
     c5Fetch,
     c5Vectors,
     c6Cookies,

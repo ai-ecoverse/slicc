@@ -113,6 +113,16 @@ resourceType: 'Document', requestStage: 'Request' }` plus
   `Target.getTargets` entries to the origin.
 - **Backstop.** A protected main-frame commit or default execution context
   cuts the tab (`Target.detachedFromTarget` + detach).
+- **Existing frames.** Arming inventories `Page.getFrameTree` and refuses
+  the session if a protected document is already loaded. Cross-site
+  (out-of-process) iframes are invisible to the tab session, so
+  `protected-frames-sw.ts` uses `webRequest` to record tabs that loaded a
+  protected `sub_frame` (persisted in `chrome.storage.session`; cleared on the
+  tab's next main-frame response or removal). Attaching to such a tab is
+  refused.
+- **History.** `Page.getNavigationHistory` entries on a protected origin are
+  redacted to the origin (url, `userTypedURL`, title).
+- Arming runs once per tab; concurrent attaches await the same promise.
 
 Popups are never auto-attached. `Target.setAutoAttach { autoAttach: true }`
 is refused, and attaching to a blank popup whose opener is protected or gone
