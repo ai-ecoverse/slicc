@@ -132,7 +132,7 @@ jobs:
       # its digest (with the not-swept reasons) is the human-facing output.
       - name: Upload the digest
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: regression-cluster-digest
           path: ${{ runner.temp }}/regression-cluster-digest.md
@@ -146,7 +146,7 @@ jobs:
       # day and the hunter would never dispatch again after its first run.
       - name: Mark this run as a dispatch
         if: steps.scan.outputs.has_candidate == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: regression-cluster-dispatch
           path: ${{ runner.temp }}/regression-cluster-digest.md
