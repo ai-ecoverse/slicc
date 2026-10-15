@@ -1,17 +1,11 @@
 import type {
-  CdpCommandMsg,
-  CdpResponseMsg,
   ExtensionMessage,
   OAuthRequestMsg,
   OAuthResultMsg,
-  TraySocketCommandMessage,
-  TraySocketErrorMsg,
 } from '../../webapp/src/kernel/messages.js';
-import { handleCdpCommand } from './cdp-proxy-sw.js';
 import { handleOAuthRequest } from './oauth-sw.js';
-import { postServiceWorkerMessage, sendServiceWorkerMessage } from './sw-broadcast.js';
+import { sendServiceWorkerMessage } from './sw-broadcast.js';
 import type { SwMessageOutcome } from './sw-message-router.js';
-import { handleTraySocketCommand, isTraySocketCommand } from './tray-socket-sw.js';
 
 function isExtMsg(msg: unknown): msg is ExtensionMessage {
   return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
@@ -35,28 +29,6 @@ function relayOAuthRequest(oauthMsg: OAuthRequestMsg): void {
     });
 }
 
-function relayCdpCommand(command: CdpCommandMsg): void {
-  handleCdpCommand(command)
-    .then((response) => postServiceWorkerMessage(response))
-    .catch((err) => {
-      postServiceWorkerMessage({
-        type: 'cdp-response',
-        id: command.id,
-        error: err instanceof Error ? err.message : String(err),
-      } satisfies CdpResponseMsg);
-    });
-}
-
-function relayTraySocketCommand(command: TraySocketCommandMessage): void {
-  handleTraySocketCommand(command).catch((err) => {
-    postServiceWorkerMessage({
-      type: 'tray-socket-error',
-      id: command.id,
-      error: err instanceof Error ? err.message : String(err),
-    } satisfies TraySocketErrorMsg);
-  });
-}
-
 export function handleRelayMessage(message: unknown): SwMessageOutcome {
   if (!isExtMsg(message)) return 'not-handled';
 
@@ -70,10 +42,7 @@ export function handleRelayMessage(message: unknown): SwMessageOutcome {
   }
 
   if (message.source === 'offscreen') {
-    const payload = message.payload;
-    if (payload.type === 'cdp-command') relayCdpCommand(payload as CdpCommandMsg);
-    else if (isTraySocketCommand(payload)) relayTraySocketCommand(payload);
-
+    console.warn('[slicc-sw] dropping offscreen message — offscreen document no longer exists');
     return 'handled';
   }
 

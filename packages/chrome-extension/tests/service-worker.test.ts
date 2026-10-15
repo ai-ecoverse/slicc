@@ -313,92 +313,14 @@ describe('extension service worker', () => {
     });
   });
 
-  it('hosts the leader tray socket in the service worker and relays frames', async () => {
+  it('drops offscreen tray-socket commands after B24-3 relay removal', async () => {
     dispatchOffscreenMessage({
       type: 'tray-socket-open',
       id: 7,
       url: 'wss://tray.example.com/controller',
     });
 
-    expect(MockWebSocket.instances).toHaveLength(1);
-    const socket = MockWebSocket.instances[0];
-    expect(socket.url).toBe('wss://tray.example.com/controller');
-
-    socket.emit('open');
-    socket.emit('message', { data: '{"type":"leader.connected"}' });
-    await Promise.resolve();
-
-    expect(runtimeSentMessages).toContainEqual({
-      source: 'service-worker',
-      payload: { type: 'tray-socket-opened', id: 7 },
-    });
-    expect(runtimeSentMessages).toContainEqual({
-      source: 'service-worker',
-      payload: { type: 'tray-socket-message', id: 7, data: '{"type":"leader.connected"}' },
-    });
-
-    dispatchOffscreenMessage({ type: 'tray-socket-send', id: 7, data: '{"type":"ping"}' });
-    expect(socket.sent).toEqual(['{"type":"ping"}']);
-
-    dispatchOffscreenMessage({ type: 'tray-socket-close', id: 7, code: 1000, reason: 'done' });
-    expect(socket.closeArgs).toEqual({ code: 1000, reason: 'done' });
-  });
-
-  it('does not report the replacement tray socket as closed when the socket it replaced closes', async () => {
-    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 7, url: 'wss://tray.example.com/a' });
-    const first = MockWebSocket.instances[0];
-    first.emit('open');
-    await flushAsync();
-
-    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 7, url: 'wss://tray.example.com/b' });
-    expect(MockWebSocket.instances).toHaveLength(2);
-    const second = MockWebSocket.instances[1];
-    expect(first.closeArgs).toEqual({ code: 1000, reason: 'replaced' });
-
-    runtimeSentMessages.length = 0;
-    first.emit('close');
-    first.emit('error');
-    first.emit('message', { data: '{"stale":true}' });
-    await flushAsync();
-    expect(runtimeSentMessages).toEqual([]);
-
-    second.emit('open');
-    await flushAsync();
-    expect(runtimeSentMessages).toContainEqual({
-      source: 'service-worker',
-      payload: { type: 'tray-socket-opened', id: 7 },
-    });
-    dispatchOffscreenMessage({ type: 'tray-socket-send', id: 7, data: '{"type":"ping"}' });
-    expect(second.sent).toEqual(['{"type":"ping"}']);
-  });
-
-  it('still confirms the close of a tray socket the offscreen closed explicitly', async () => {
-    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 3, url: 'wss://tray.example.com/c' });
-    const socket = MockWebSocket.instances[0];
-    dispatchOffscreenMessage({ type: 'tray-socket-close', id: 3, code: 1000, reason: 'done' });
-    runtimeSentMessages.length = 0;
-
-    socket.emit('close');
-    await flushAsync();
-
-    expect(runtimeSentMessages).toContainEqual({
-      source: 'service-worker',
-      payload: { type: 'tray-socket-closed', id: 3 },
-    });
-  });
-
-  it('reports tray socket command failures back to offscreen', async () => {
-    dispatchOffscreenMessage({ type: 'tray-socket-send', id: 99, data: '{"type":"ping"}' });
-    await flushAsync();
-
-    expect(runtimeSentMessages).toContainEqual({
-      source: 'service-worker',
-      payload: {
-        type: 'tray-socket-error',
-        id: 99,
-        error: 'Tray socket 99 is not open',
-      },
-    });
+    expect(MockWebSocket.instances).toHaveLength(0);
   });
 
   it('rejects malformed mount sign-and-forward messages via the type guard', async () => {

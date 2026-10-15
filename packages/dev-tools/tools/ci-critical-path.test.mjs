@@ -258,6 +258,41 @@ describe('CI critical-path routing', () => {
     }
   });
 
+  it('skips, rather than fails, staging mutation after a long turnstyle wait', () => {
+    const header = worker.slice(0, worker.indexOf('    steps:'));
+    const timeoutMinutes = Number(header.match(/\n {4}timeout-minutes: (\d+)\n/)[1]);
+    const wait = stepBody(worker, 'Wait for staging mutation turn');
+    expect(wait).toContain('id: turn');
+    expect(wait).toContain('continue-after-seconds: ${{ steps.deadline.outputs.seconds }}');
+
+    expect(worker.indexOf('- name: Record job start')).toBeLessThan(
+      worker.indexOf('- uses: actions/checkout')
+    );
+    const deadline = stepBody(worker, 'Compute staging wait deadline');
+    expect(Number(deadline.match(/JOB_TIMEOUT_SECONDS: '(\d+)'/)[1])).toBe(timeoutMinutes * 60);
+    expect(Number(deadline.match(/STAGING_RESERVE_SECONDS: '(\d+)'/)[1])).toBeGreaterThanOrEqual(
+      15 * 60
+    );
+    expect(deadline).toContain('JOB_START: ${{ steps.job-start.outputs.epoch }}');
+
+    const report = stepBody(worker, 'Report skipped staging mutation');
+    expect(report).toContain("steps.turn.outputs.force_continued == 'true'");
+
+    const gated = cloudflareWorkerSteps(worker).filter(
+      (step) =>
+        step.if.includes("env.RUN_CLOUDFLARE_STAGING == 'true'") &&
+        ![
+          'Compute staging wait deadline',
+          'Wait for staging mutation turn',
+          'Report skipped staging mutation',
+        ].includes(step.name)
+    );
+    expect(gated.length).toBeGreaterThan(10);
+    for (const step of gated) {
+      expect(step.if, step.name).toContain("steps.turn.outputs.force_continued != 'true'");
+    }
+  });
+
   it('publishes phase timing summaries for both Cloudflare staging paths', () => {
     const timing = stepBody(worker, 'Publish Cloudflare timing diagnostics');
     expect(timing).toContain('ci-job-timing.mjs');
