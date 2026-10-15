@@ -944,6 +944,10 @@ jobs:
     # third contender arrives.
     timeout-minutes: 45
     steps:
+      # Start of the job's budget, for the turnstyle deadline below.
+      - name: Record job start
+        id: job-start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -995,10 +999,33 @@ jobs:
       # FIFO order through the final smoke/preview step. GitHub's native
       # concurrency keeps only one pending run and would cancel a required CI
       # job when a third contender arrived.
+      #
+      # Stop waiting for the turn while 15 minutes of the job's 45 are left
+      # (`STAGING_RESERVE_SECONDS`), enough for the deploy retries and both
+      # smoke tests, instead of running into the timeout. That wait is time
+      # spent behind another run's staging mutation (usually a merge-queue run
+      # stuck on hosted runners), not a problem in this change, so the staging
+      # steps below skip and the job stays green. The local Worker gates above
+      # already ran. The deadline counts the time those gates took.
+      - name: Compute staging wait deadline
+        id: deadline
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
+        env:
+          JOB_START: ${{ steps.job-start.outputs.epoch }}
+          JOB_TIMEOUT_SECONDS: '2700'
+          STAGING_RESERVE_SECONDS: '900'
+        run: |
+          elapsed=$(( $(date +%s) - JOB_START ))
+          seconds=$(( JOB_TIMEOUT_SECONDS - STAGING_RESERVE_SECONDS - elapsed ))
+          [ "$seconds" -lt 0 ] && seconds=0
+          echo "Job has run ${elapsed}s; waiting at most ${seconds}s for the staging turn."
+          echo "seconds=${seconds}" >> "$GITHUB_OUTPUT"
       - name: Wait for staging mutation turn
+        id: turn
         if: env.RUN_CLOUDFLARE_STAGING == 'true'
         uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4 # v3.3.3
         with:
+          continue-after-seconds: ${{ steps.deadline.outputs.seconds }}
           queue-name: staging-mutation-queue
           same-branch-only: false
           job-to-wait-for: Cloudflare staging deploy
@@ -1006,12 +1033,17 @@ jobs:
           poll-interval-seconds: 10
           initial-wait-seconds: 20
           retries: 3
+      - name: Report skipped staging mutation
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued == 'true'
+        env:
+          PREVIOUS_RUN_URL: ${{ steps.turn.outputs.previous_run_url }}
+        run: echo "::warning title=STAGING_SKIPPED::Still behind ${PREVIOUS_RUN_URL:-another staging mutation} at the wait deadline; skipping the staging deploy and smoke tests. The local Worker gates passed."
 
       # The preview-storage lifecycle is a cheap, read-only prerequisite for
       # every deploy. Keep it separate from the expensive asset copy so timing
       # data can distinguish policy verification from R2 object uploads.
       - name: Verify preview storage lifecycle
-        if: env.RUN_CLOUDFLARE_STAGING == 'true'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -1022,7 +1054,7 @@ jobs:
       # still get the staging deploy + live smoke signal, but do not re-copy an
       # unchanged webapp archive (#3146).
       - name: Archive assets to R2 (staging)
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && needs.changes.outputs.cloudflare-r2 == 'true'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && needs.changes.outputs.cloudflare-r2 == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -1049,7 +1081,7 @@ jobs:
       # production Worker.
       - name: Deploy staging worker (attempt 1)
         id: deploy_attempt_1
-        if: env.RUN_CLOUDFLARE_STAGING == 'true'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1060,7 +1092,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 1)
         id: deploy_attempt_1_secrets
-        if: env.RUN_CLOUDFLARE_STAGING == 'true'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1078,11 +1110,11 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 2
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         run: sleep 20
       - name: Deploy staging worker (attempt 2)
         id: deploy_attempt_2
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1093,7 +1125,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 2)
         id: deploy_attempt_2_secrets
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1111,11 +1143,11 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 3
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         run: sleep 40
       - name: Deploy staging worker (attempt 3)
         id: deploy_attempt_3
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1126,7 +1158,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 3)
         id: deploy_attempt_3_secrets
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1145,7 +1177,7 @@ jobs:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Finalize staging deploy
         id: deploy
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && ((steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success'))
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && ((steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success'))
         env:
           DEPLOY_A_1: ${{ steps.deploy_attempt_1.outcome }}
           DEPLOY_B_1: ${{ steps.deploy_attempt_1_secrets.outcome }}
@@ -1167,7 +1199,7 @@ jobs:
           fi
           echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging
-        if: env.RUN_CLOUDFLARE_STAGING == 'true'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true'
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
           SLICC_ARCHIVE_SMOKE: ${{ (needs.changes.outputs.cloudflare-r2 == 'true' || needs.changes.outputs.cloudflare-archive-smoke == 'true') && '1' || '' }}
@@ -1192,7 +1224,7 @@ jobs:
       # script_name) is up to date.
       - name: Deploy staging preview worker
         id: deploy_preview
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.deploy.outcome == 'success'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && steps.deploy.outcome == 'success'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1208,7 +1240,7 @@ jobs:
       # #3213). Still inside the mutation queue, so no other deploy can reset
       # the DO mid-test.
       - name: Smoke test staging live preview
-        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.deploy_preview.outcome == 'success'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && steps.deploy_preview.outcome == 'success'
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
         run: |
@@ -1620,8 +1652,10 @@ jobs:
           name: test-timings-swift-server
           path: packages/swift-server/.build/coverage/test-timings*
           if-no-files-found: ignore
+      # homebrew-core's formula. The peripheryapp tap's cask uses
+      # `depends_on macos:`, which current Homebrew rejects outright.
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1672,7 +1706,7 @@ jobs:
           path: packages/swift-optel/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1731,7 +1765,7 @@ jobs:
           path: packages/swift-traysession/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1789,7 +1823,7 @@ jobs:
           path: packages/swift-trayfollower/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1848,7 +1882,7 @@ jobs:
           path: packages/swift-widgetkit/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -1901,7 +1935,7 @@ jobs:
           path: packages/swift-traykit/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           cd packages/swift-traykit && periphery scan --disable-update-check || true
@@ -2022,7 +2056,7 @@ jobs:
           path: packages/swift-launcher/build/Sliccstart.app
           if-no-files-found: error
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
@@ -2106,7 +2140,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO
       - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
+        run: brew install periphery
       - name: Dead code detection (Periphery)
         run: |
           # Informational scan; surfaces unused Swift declarations without
