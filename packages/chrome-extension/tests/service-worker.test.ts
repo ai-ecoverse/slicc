@@ -669,7 +669,13 @@ describe('extension service worker', () => {
       'https://vault.sliccy.ai/unlock',
       'https://seven.sliccy.ai/os/',
       'https://sliccy.ai/',
+      'https://sliccy.ai/handoff',
       'https://www.sliccy.ai/other',
+      'https://www.sliccy.ai/handoff/extra',
+      'http://www.sliccy.ai/handoff',
+      'https://main--www.sliccy.ai/handoff',
+      'https://get.sliccy.ai/handoff',
+      'https://mcpcat.sliccy.ai/',
     ]) {
       fireHandoffSighting(`</>; rel="https://www.sliccy.ai/rel/handoff"; title="from ${url}"`, url);
     }
