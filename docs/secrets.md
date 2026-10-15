@@ -123,6 +123,14 @@ Either way the typed value goes straight from the dialog to the trusted-realm st
 
 The dialog mounts into the **trusted layer**, above every panel and sprinkle, so page content can neither cover it nor forge a look-alike "enter your API key" form. A float with no trusted layer refuses to prompt at all and reports the request as unavailable — `secret set` and the settings UI remain the way in.
 
+### Option 4: the extension's secrets page
+
+In the Chrome extension, the extension's options page (**Mount Secrets**, `secrets.html`) lists stored secrets and adds or updates them: S3 / R2 / MinIO profiles, custom secrets, and extra OAuth domains. Values are encrypted at rest in `chrome.storage.local` (AES-GCM, with a non-extractable key in the extension's own IndexedDB), so content scripts cannot read them.
+
+**Unreadable secrets.** If a stored value can no longer be decrypted, its row stays in the list with its name and domains. The row gets a red outline and the message _"This value can't be read any more. Enter it again."_ This happens when the encryption key is gone, for example after the extension's site data (its IndexedDB) was cleared while `chrome.storage.local` survived. The ciphertext is kept, never shown, and never sent: the fetch proxy and mount signing skip the secret until it is replaced.
+
+**Re-enter** on that row opens the **Custom secret** tab with the secret's name and allowed domains already filled in. Only the value is empty, so you paste the value and save. Saving overwrites the unreadable entry with a fresh encrypted one under the same name and scope. **Delete** removes it instead.
+
 ## The `secret` shell command
 
 Inside the SLICC shell, the `secret` command manages secrets:
