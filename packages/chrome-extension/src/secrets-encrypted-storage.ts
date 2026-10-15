@@ -192,6 +192,11 @@ export async function migrateSecretsToEncrypted(): Promise<void> {
     const value = fresh[key];
     if (typeof value !== 'string') continue; // already encrypted or deleted
     const encrypted = await encryptValue(value);
+    // Encryption is async: another context (SW vs. secrets page) may have
+    // saved or deleted this secret meanwhile. Only replace the exact
+    // plaintext we encrypted, never a newer value.
+    const again = (await chrome.storage.local.get(key))[key];
+    if (again !== value) continue;
     await chrome.storage.local.set({ [key]: encrypted });
   }
 }
@@ -218,8 +223,13 @@ import type { SecretsStorageItems, StorageArea } from './secrets-storage.js';
 let migrationPromise: Promise<void> | null = null;
 function ensureMigrated(): Promise<void> {
   if (!migrationPromise) {
+    // Fail closed: a failed migration (IndexedDB / key / write error) must
+    // not let callers read still-plaintext secrets. Propagate the error and
+    // forget the attempt so the next access retries.
     migrationPromise = migrateSecretsToEncrypted().catch((err) => {
+      migrationPromise = null;
       console.error('[slicc] secrets migration failed', err);
+      throw err;
     });
   }
   return migrationPromise;

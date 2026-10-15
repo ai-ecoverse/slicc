@@ -211,3 +211,58 @@ describe('encrypted secret storage', () => {
     expect(result['FIXME']).toBe('new_working_value');
   });
 });
+
+describe('encrypted secret storage — Codex round (#4000)', () => {
+  beforeEach(() => {
+    storageMap = {};
+    vi.resetModules();
+  });
+
+  it('fails closed when migration fails, and retries on the next access', async () => {
+    const { encryptedStorage } = await loadModule();
+    storageMap = { TOKEN: 'ghp_plain', TOKEN_DOMAINS: 'example.com' };
+    const realGet = fakeLocalStorage.get;
+    let failNext = true;
+    // The migration's first read fails (e.g. a transient storage / IDB error).
+    fakeLocalStorage.get = async (keys?: null | string | string[]) => {
+      if (failNext && keys === null) {
+        failNext = false;
+        throw new Error('transient');
+      }
+      return realGet(keys);
+    };
+    try {
+      // Protected: the plaintext is NOT handed out while migration has failed.
+      await expect(encryptedStorage.get('TOKEN')).rejects.toThrow('transient');
+      expect(storageMap['TOKEN']).toBe('ghp_plain');
+      // Control: the next access retries the migration and then reads fine.
+      await expect(encryptedStorage.get('TOKEN')).resolves.toEqual({ TOKEN: 'ghp_plain' });
+      expect(storageMap['TOKEN']).toMatchObject({ ct: expect.any(String), iv: expect.any(String) });
+    } finally {
+      fakeLocalStorage.get = realGet;
+    }
+  });
+
+  it('never overwrites a value saved by another context while it was encrypting', async () => {
+    const { migrateSecretsToEncrypted, decryptValue, encryptValue } = await loadModule();
+    storageMap = { A: 'old-a', A_DOMAINS: 'a.com', B: 'old-b', B_DOMAINS: 'b.com' };
+    const newA = await encryptValue('new-a');
+    const realGet = fakeLocalStorage.get;
+    let readsOfA = 0;
+    // Another context saves A right after this migration's first read of it.
+    fakeLocalStorage.get = async (keys?: null | string | string[]) => {
+      const out = await realGet(keys);
+      if (keys === 'A' && ++readsOfA === 1) storageMap['A'] = newA;
+      return out;
+    };
+    try {
+      await migrateSecretsToEncrypted();
+    } finally {
+      fakeLocalStorage.get = realGet;
+    }
+    // Protected: the concurrent save survives (not reverted to old-a).
+    expect(await decryptValue(storageMap['A'] as any)).toBe('new-a');
+    // Control: an untouched secret is migrated normally.
+    expect(await decryptValue(storageMap['B'] as any)).toBe('old-b');
+  });
+});
