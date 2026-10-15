@@ -152,58 +152,62 @@ describe('B-SEC1: onConnect Port sender check (integration)', () => {
     await import('../src/service-worker.js');
   });
 
-  it('disconnects a port from a content script (page origin)', () => {
-    expect(connectListeners.length).toBeGreaterThan(0);
-    const port = {
-      name: 'fetch-proxy.fetch',
-      sender: { id: FAKE_EXT_ID, origin: 'https://vault.sliccy.ai' },
-      onMessage: { addListener: vi.fn() },
-      onDisconnect: { addListener: vi.fn() },
-      postMessage: vi.fn(),
-      disconnect: vi.fn(),
-    };
-    for (const l of connectListeners) l(port);
-    expect(port.disconnect).toHaveBeenCalled();
-    expect(port.onMessage.addListener).not.toHaveBeenCalled();
+  const makeConnectPort = (name: string, sender?: { id?: string; origin?: string }) => ({
+    name,
+    sender,
+    onMessage: { addListener: vi.fn() },
+    onDisconnect: { addListener: vi.fn() },
+    postMessage: vi.fn(),
+    disconnect: vi.fn(),
   });
 
-  it('disconnects a port from a foreign extension', () => {
-    const port = {
-      name: 'cherry-panel',
-      sender: { id: 'foreign-ext-id', origin: 'chrome-extension://foreign-ext-id' },
-      onMessage: { addListener: vi.fn() },
-      onDisconnect: { addListener: vi.fn() },
-      postMessage: vi.fn(),
-      disconnect: vi.fn(),
-    };
-    for (const l of connectListeners) l(port);
-    expect(port.disconnect).toHaveBeenCalled();
-  });
-
-  it('disconnects a port with no sender', () => {
-    const port = {
-      name: 'fetch-proxy.fetch',
-      onMessage: { addListener: vi.fn() },
-      onDisconnect: { addListener: vi.fn() },
-      postMessage: vi.fn(),
-      disconnect: vi.fn(),
-    };
-    for (const l of connectListeners) l(port);
-    expect(port.disconnect).toHaveBeenCalled();
-  });
-
-  it('accepts a port from the extension itself', () => {
-    const port = {
-      name: 'fetch-proxy.fetch',
-      sender: { id: FAKE_EXT_ID, origin: EXT_ORIGIN },
-      onMessage: { addListener: vi.fn() },
-      onDisconnect: { addListener: vi.fn() },
-      postMessage: vi.fn(),
-      disconnect: vi.fn(),
-    };
-    for (const l of connectListeners) l(port);
+  /** An ignored port: never disconnected (it may belong to another listener), never wired. */
+  const expectIgnored = (port: ReturnType<typeof makeConnectPort>) => {
     expect(port.disconnect).not.toHaveBeenCalled();
-    // fetch-proxy wires onMessage synchronously
-    expect(port.onMessage.addListener).toHaveBeenCalled();
+    expect(port.onMessage.addListener).not.toHaveBeenCalled();
+    expect(port.postMessage).not.toHaveBeenCalled();
+  };
+
+  it('wires a trusted fetch-proxy port, but ignores the same port from a content script', () => {
+    expect(connectListeners.length).toBeGreaterThan(0);
+    // Control: the extension's own page is handled.
+    const trusted = makeConnectPort('fetch-proxy.fetch', { id: FAKE_EXT_ID, origin: EXT_ORIGIN });
+    for (const l of connectListeners) l(trusted);
+    expect(trusted.onMessage.addListener).toHaveBeenCalled();
+    expect(trusted.disconnect).not.toHaveBeenCalled();
+    // Content script: same extension id, page origin → ignored (not disconnected).
+    const content = makeConnectPort('fetch-proxy.fetch', {
+      id: FAKE_EXT_ID,
+      origin: 'https://vault.sliccy.ai',
+    });
+    for (const l of connectListeners) l(content);
+    expectIgnored(content);
+  });
+
+  it('ignores a cherry-panel port from a foreign extension without clearing the badge', () => {
+    const port = makeConnectPort('cherry-panel', {
+      id: 'foreign-ext-id',
+      origin: 'chrome-extension://foreign-ext-id',
+    });
+    for (const l of connectListeners) l(port);
+    expectIgnored(port);
+    expect((globalThis as any).chrome.action.setBadgeText).not.toHaveBeenCalled();
+  });
+
+  it('ignores a port with no sender', () => {
+    const port = makeConnectPort('fetch-proxy.fetch');
+    for (const l of connectListeners) l(port);
+    expectIgnored(port);
+  });
+
+  it('leaves an untrusted port usable by another onConnect listener (merged builds)', () => {
+    const otherListener = vi.fn((p: ReturnType<typeof makeConnectPort>) => {
+      p.onMessage.addListener(() => {});
+    });
+    const port = makeConnectPort('relay', { id: FAKE_EXT_ID, origin: 'https://seven.sliccy.ai' });
+    for (const l of [...connectListeners, otherListener]) l(port);
+    expect(port.disconnect).not.toHaveBeenCalled();
+    expect(otherListener).toHaveBeenCalledWith(port);
+    expect(port.onMessage.addListener).toHaveBeenCalledTimes(1);
   });
 });

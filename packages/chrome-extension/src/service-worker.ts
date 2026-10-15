@@ -211,14 +211,10 @@ chrome.runtime.onConnect.addListener((port) => {
   const extOrigin = `chrome-extension://${chrome.runtime.id}`;
   const portOrigin =
     port.sender?.origin ?? (port.sender?.url ? new URL(port.sender.url).origin : undefined);
-  if (port.sender?.id !== chrome.runtime.id || portOrigin !== extOrigin) {
-    try {
-      port.disconnect();
-    } catch {
-      /* already gone */
-    }
-    return;
-  }
+  // Untrusted ports are IGNORED, not disconnected: in a merged build the same
+  // Port object reaches every onConnect listener, so disconnecting here would
+  // cut another component's port. An unhandled port gets nothing from six.
+  if (port.sender?.id !== chrome.runtime.id || portOrigin !== extOrigin) return;
   if (port.name === CHERRY_PANEL_PORT_NAME) {
     // Opening the cockpit means the user is attending SLICC — clear any pending
     // handoff badge. The old `chrome.action.onClicked` handler cleared it, but
