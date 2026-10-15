@@ -81,5 +81,9 @@ describe('secrets page — unreadable rows', () => {
     expect(css).toMatch(/\.form-grid\s*{[^}]*grid-template-columns:\s*140px 1fr/);
     const narrow = /@media \(max-width: 600px\)\s*{([\s\S]*?)\n {6}}/.exec(css)?.[1] ?? '';
     expect(narrow).toMatch(/\.form-grid\s*{[^}]*grid-template-columns:\s*1fr;/);
+    // The tab strip stays on one line and scrolls sideways instead of wrapping.
+    expect(narrow).toMatch(/\.tabs\s*{[^}]*flex-wrap:\s*nowrap;[^}]*overflow-x:\s*auto;/);
+    expect(narrow).toMatch(/\.tab\s*{[^}]*white-space:\s*nowrap;/);
+    expect(narrow).not.toMatch(/flex-wrap:\s*wrap/);
   });
 });
