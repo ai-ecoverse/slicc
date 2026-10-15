@@ -516,14 +516,14 @@ jobs:
           NODE_OPTIONS: '--max-old-space-size=6144'
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-webapp
           path: coverage/
           if-no-files-found: ignore
       - name: Upload test timing report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timing-webapp
           path: test-timing/
@@ -722,7 +722,7 @@ jobs:
         # zip is one download away. Runs on failure and success — a green run
         # with a captured trace makes it easy to diff against a red one.
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-e2e
           # Playwright resolves both the HTML reporter's `outputFolder` and the
@@ -760,7 +760,7 @@ jobs:
         # the home-directory path stays listed for a wrangler invocation that
         # does not inherit the override.
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wrangler-logs-e2e
           path: |
@@ -795,14 +795,14 @@ jobs:
         run: npm run test:coverage:node-server
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-node-server
           path: coverage/
           if-no-files-found: ignore
       - name: Upload test timing report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timing-node-server
           path: test-timing/
@@ -839,14 +839,14 @@ jobs:
         run: npm run test:coverage:chrome-extension
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-chrome-extension
           path: coverage/
           if-no-files-found: ignore
       - name: Upload test timing report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timing-chrome-extension
           path: test-timing/
@@ -856,7 +856,7 @@ jobs:
       - name: Build extension
         run: npm run build -w @slicc/chrome-extension
       - name: Upload unpacked extension build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chrome-extension-unpacked
           path: dist/extension/
@@ -966,7 +966,7 @@ jobs:
         run: npm run test:coverage:cloudflare-worker
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-cloudflare-worker
           path: coverage/
@@ -984,7 +984,7 @@ jobs:
         run: npx vitest run --project cloudflare-worker --reporter=junit --outputFile.junit=test-results/cloudflare-worker-junit.xml
       - name: Upload test timing report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timing-cloudflare-worker
           path: test-results/
@@ -1245,7 +1245,7 @@ jobs:
           --exclude-step "Publish Cloudflare timing diagnostics"
       - name: Upload Cloudflare timing diagnostics
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cloudflare-worker-phase-timing
           path: test-results/cloudflare-worker-phase-timing.json
@@ -1273,7 +1273,7 @@ jobs:
         run: npm run test:coverage:cloud-core
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-cloud-core
           path: coverage/
@@ -1301,7 +1301,7 @@ jobs:
         run: npm run test:coverage:github-workflow
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-github-workflow
           path: coverage/
@@ -1348,7 +1348,7 @@ jobs:
         run: npm run test:coverage:bench
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-bench
           path: coverage/
@@ -1436,7 +1436,7 @@ jobs:
         run: make test-json
       - name: Upload test timings
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings-slicc-cli-${{ matrix.os }}
           path: packages/slicc-cli/test-report.json
@@ -1468,7 +1468,7 @@ jobs:
         run: npm run test:coverage:shared
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-shared
           path: coverage/
@@ -1502,7 +1502,7 @@ jobs:
         run: npm run test:coverage:webcomponents
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-webcomponents
           path: packages/webcomponents/coverage/
@@ -1536,7 +1536,7 @@ jobs:
         run: npm run test:coverage:spoon
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-spoon
           path: packages/spoon/coverage/
@@ -1566,7 +1566,7 @@ jobs:
         run: npm run test:coverage:cherry
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-cherry
           path: coverage/
@@ -1608,14 +1608,14 @@ jobs:
             packages/swift-server SliccServerPackageTests
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-swift-server
           path: packages/swift-server/.build/coverage/
           if-no-files-found: ignore
       - name: Upload test timings
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings-swift-server
           path: packages/swift-server/.build/coverage/test-timings*
@@ -1659,14 +1659,14 @@ jobs:
             packages/swift-optel SwiftOptelPackageTests
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-swift-optel
           path: packages/swift-optel/.build/coverage/
           if-no-files-found: ignore
       - name: Upload test timings
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings-swift-optel
           path: packages/swift-optel/.build/coverage/test-timings*
@@ -1718,14 +1718,14 @@ jobs:
             packages/swift-traysession SliccTraySessionPackageTests
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-swift-traysession
           path: packages/swift-traysession/.build/coverage/
           if-no-files-found: ignore
       - name: Upload test timings
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings-swift-traysession
           path: packages/swift-traysession/.build/coverage/test-timings*
@@ -1776,14 +1776,14 @@ jobs:
             packages/swift-trayfollower SliccTrayFollowerPackageTests
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-swift-trayfollower
           path: packages/swift-trayfollower/.build/coverage/
           if-no-files-found: ignore
       - name: Upload test timings
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings-swift-trayfollower
           path: packages/swift-trayfollower/.build/coverage/test-timings*
@@ -1835,14 +1835,14 @@ jobs:
             packages/swift-widgetkit SliccWidgetKitPackageTests
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-swift-widgetkit
           path: packages/swift-widgetkit/.build/coverage/
           if-no-files-found: ignore
       - name: Upload test timings
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings-swift-widgetkit
           path: packages/swift-widgetkit/.build/coverage/test-timings*
@@ -1888,14 +1888,14 @@ jobs:
             packages/swift-traykit SliccTrayVFSPackageTests
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-swift-traykit
           path: packages/swift-traykit/.build/coverage/
           if-no-files-found: ignore
       - name: Upload test timings
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings-swift-traykit
           path: packages/swift-traykit/.build/coverage/test-timings*
@@ -1987,7 +1987,7 @@ jobs:
             packages/swift-launcher SliccstartPackageTests
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-swift-launcher
           path: packages/swift-launcher/.build/coverage/
@@ -1997,7 +1997,7 @@ jobs:
       # test was slow or failed on any given run.
       - name: Upload test timings
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings-swift-launcher
           path: packages/swift-launcher/.build/coverage/test-timings*
@@ -2016,7 +2016,7 @@ jobs:
       - name: Build
         run: npm run build -w @slicc/swift-launcher
       - name: Upload Sliccstart.app artifact (unsigned, for PR verification)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Sliccstart-${{ github.event.pull_request.number || github.run_id }}-unsigned
           path: packages/swift-launcher/build/Sliccstart.app
@@ -2282,7 +2282,7 @@ jobs:
             --only-testing SliccFollowerUITests/TranscriptColumnUITests
       - name: Upload coverage report
         if: always() && matrix.device == 'iPhone' && matrix.ios == '26'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-ios-app
           path: packages/ios-app/.build/coverage/lcov.info
@@ -2291,7 +2291,7 @@ jobs:
       # test can be diagnosed without re-running the simulator locally.
       - name: Upload test timings (xcresult)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings-ios-app-${{ matrix.ios }}-${{ matrix.device }}
           # Glob, not a hand-kept list: the earlier enumeration named three of

@@ -439,7 +439,7 @@ jobs:
 
       - name: Upload the shard
         if: always() && steps.leak-check.outcome != 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-${{ github.run_id }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/bench-out
@@ -490,7 +490,7 @@ jobs:
           node packages/bench/scripts/leak-check.mjs "${args[@]}"
 
       - name: Upload the report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-report-${{ github.run_id }}
           path: |
@@ -501,7 +501,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-${{ github.run_id }}
           path: ${{ runner.temp }}/bench-out
