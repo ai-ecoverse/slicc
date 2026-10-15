@@ -8,6 +8,7 @@
     "postbuild:check": "bash ../dev-tools/tools/check-extension-rhc.sh",
     "size": "size-limit",
     "test:cdp-shield": "tsx ../dev-tools/tools/extension-cdp-shield-check.ts",
+    "test:secrets-migration": "tsx ../dev-tools/tools/extension-secrets-migration-check.ts",
     "test": "vitest run",
     "test:extension-smoke": "tsx ../dev-tools/tools/extension-smoke-test.ts",
     "test:raw-fetch": "tsx ../dev-tools/tools/extension-raw-fetch-check.ts",
