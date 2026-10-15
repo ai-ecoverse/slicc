@@ -430,6 +430,45 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(response.maskedValue.length).toBeGreaterThan(0);
   });
 
+  it('B-SEC1: secrets.mask-oauth-token never writes the token in plaintext, even after migration ran', async () => {
+    await import('../src/service-worker.js');
+    // Run the one-shot migration first, so only the write path can protect the token.
+    const { buildSecretsPipeline } = await import('../src/secrets-sw.js');
+    await (await buildSecretsPipeline()).reload();
+    const setMock = (globalThis as any).chrome.storage.local.set as ReturnType<typeof vi.fn>;
+    setMock.mockClear();
+    let response: any;
+    for (const l of messageListeners) {
+      const result = l(
+        {
+          type: 'secrets.mask-oauth-token',
+          providerId: 'atrest',
+          accessToken: 'tok_atRestPlaintext123',
+          domains: 'example.com',
+        },
+        {},
+        (r: any) => {
+          response = r;
+        }
+      );
+      if (result === true) break;
+    }
+    await new Promise((r) => setTimeout(r, 30));
+    // Control: the write happened, the domains companion stays plaintext, and
+    // the pipeline still masks the (decrypted) token.
+    expect(setMock).toHaveBeenCalled();
+    expect(storageMap['oauth.atrest.token_DOMAINS']).toBe('example.com');
+    expect(typeof response.maskedValue).toBe('string');
+    expect(response.maskedValue.length).toBeGreaterThan(0);
+    // Protected: no storage write ever carried the plaintext token.
+    const written = JSON.stringify(setMock.mock.calls);
+    expect(written).not.toContain('tok_atRestPlaintext123');
+    expect(storageMap['oauth.atrest.token']).toMatchObject({
+      ct: expect.any(String),
+      iv: expect.any(String),
+    });
+  });
+
   it('secrets.mask-oauth-token skips the OAuth-token write when accessToken/domains are absent (back-compat)', async () => {
     await import('../src/service-worker.js');
     // Trigger migration and wait for it to complete fully.

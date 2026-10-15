@@ -322,7 +322,9 @@ async function runMaskOauthTokenWrite(
   // the SW owns `chrome.storage`, before building the pipeline that
   // masks it. `domains` is the comma-joined `_DOMAINS` companion.
   if (accessToken && domains) {
-    await chrome.storage.local.set({
+    // B-SEC1: through the encrypted adapter, so the token is ciphertext from
+    // the first write (never plaintext until a later migration pass).
+    await storageLocal.set({
       [`oauth.${providerId}.token`]: accessToken,
       [`oauth.${providerId}.token_DOMAINS`]: domains,
     });
