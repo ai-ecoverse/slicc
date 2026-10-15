@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The hosted leader tab proxies secrets CRUD over a `secrets.crud`
