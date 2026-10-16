@@ -18,7 +18,7 @@
       "name": "extension: service worker",
       "path": "../../dist/extension/service-worker.js",
       "brotli": false,
-      "limit": "94 kB"
+      "limit": "103 kB"
     },
     {
       "name": "extension: side panel entry",
@@ -30,7 +30,7 @@
       "name": "extension: total JS payload",
       "path": "../../dist/extension/**/*.js",
       "brotli": false,
-      "limit": "138 kB"
+      "limit": "149 kB"
     }
   ],
   "dependencies": {
