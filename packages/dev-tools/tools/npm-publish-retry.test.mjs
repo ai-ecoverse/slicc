@@ -65,6 +65,12 @@ describe('packageDir', () => {
   it('defaults to cwd', () => {
     expect(packageDir(['--provenance'], '/repo')).toBe('/repo');
   });
+
+  it('skips the values of value-taking flags', () => {
+    expect(packageDir(['--tag', 'latest', 'pkg/a'], '/repo')).toBe('/repo/pkg/a');
+    expect(packageDir(['--access', 'public', '--tag', 'latest'], '/repo')).toBe('/repo');
+    expect(packageDir(['--tag=latest', 'pkg/a'], '/repo')).toBe('/repo/pkg/a');
+  });
 });
 
 describe('localPublishArgs', () => {
@@ -85,6 +91,22 @@ describe('localPublishArgs', () => {
 
   it.each([['.'], ['./pkg/a'], ['../pkg'], ['/abs/pkg']])('leaves %s unchanged', (dir) => {
     expect(localPublishArgs([dir, '--provenance'])).toEqual([dir, '--provenance']);
+  });
+
+  it('never rewrites a value-taking flag value', () => {
+    expect(localPublishArgs(['--tag', 'latest', 'packages/x', '--otp', '123456'])).toEqual([
+      '--tag',
+      'latest',
+      './packages/x',
+      '--otp',
+      '123456',
+    ]);
+    expect(localPublishArgs(['--access', 'public', '--registry', 'https://r.example/'])).toEqual([
+      '--access',
+      'public',
+      '--registry',
+      'https://r.example/',
+    ]);
   });
 
   it('leaves flag-only args unchanged', () => {

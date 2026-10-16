@@ -88,8 +88,30 @@ export function isPublishConflict(output) {
  * @param {string} cwd
  */
 export function packageDir(args, cwd) {
-  const dir = args.find((arg) => !arg.startsWith('-'));
-  return resolve(cwd, dir ?? '.');
+  const index = packageDirIndex(args);
+  return resolve(cwd, index === -1 ? '.' : args[index]);
+}
+
+/** `npm publish` flags whose value is the NEXT argument when not `--flag=value`. */
+export const PUBLISH_VALUE_FLAGS = new Set(['--tag', '--access', '--otp', '--registry']);
+
+/**
+ * Index of the package-directory positional in `npm publish` args, or -1.
+ * Skips the values of {@link PUBLISH_VALUE_FLAGS}, so `--tag latest pkg/a`
+ * finds `pkg/a`, not `latest`.
+ *
+ * @param {string[]} args
+ */
+export function packageDirIndex(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (PUBLISH_VALUE_FLAGS.has(arg)) {
+      i++;
+      continue;
+    }
+    if (!arg.startsWith('-')) return i;
+  }
+  return -1;
 }
 
 /**
@@ -102,7 +124,7 @@ export function packageDir(args, cwd) {
  * @param {string[]} args
  */
 export function localPublishArgs(args) {
-  const index = args.findIndex((arg) => !arg.startsWith('-'));
+  const index = packageDirIndex(args);
   if (index === -1) return args;
   const dir = args[index];
   if (dir.startsWith('.') || isAbsolute(dir)) return args;
