@@ -32,6 +32,13 @@
  * `id-token: write` permission fails in verifyConditions, before the version
  * tag is pushed.
  *
+ * A relative directory with exactly one slash (`packages/cherry`) is an npm
+ * GitHub shorthand. `npm publish packages/cherry` runs
+ * `git ls-remote ssh://git@github.com/packages/cherry.git` and never packs the
+ * workspace (#4033). Specs of that shape are passed as absolute paths.
+ * `packages/dev-tools/biome-jsh` has two slashes, so npm already treats it as
+ * a directory.
+ *
  * Usage:
  *   node packages/dev-tools/tools/npm-publish-retry.mjs <dir> [npm publish args...]
  *   node packages/dev-tools/tools/npm-publish-retry.mjs --verify
@@ -90,6 +97,34 @@ export function isPublishConflict(output) {
 export function packageDir(args, cwd) {
   const dir = args.find((arg) => !arg.startsWith('-'));
   return resolve(cwd, dir ?? '.');
+}
+
+/**
+ * Turn a local directory into a spec npm will not fetch as a GitHub repo.
+ *
+ * `foo/bar` (one slash, no `.` or `/` prefix) is `github:foo/bar`. A workspace
+ * path with that shape must be absolute or `./`-prefixed (#4033).
+ *
+ * @param {string} spec First positional `npm publish` argument.
+ * @param {string} cwd
+ */
+export function localPackageSpec(spec, cwd) {
+  if (spec === '.' || spec.startsWith('.') || spec.startsWith('/')) return spec;
+  if (/^[^/]+\/[^/]+$/.test(spec)) return resolve(cwd, spec);
+  return spec;
+}
+
+/**
+ * @param {string[]} args `npm publish` arguments.
+ * @param {string} cwd
+ */
+export function npmPublishArgs(args, cwd) {
+  let replaced = false;
+  return args.map((arg) => {
+    if (replaced || arg.startsWith('-')) return arg;
+    replaced = true;
+    return localPackageSpec(arg, cwd);
+  });
 }
 
 /**
@@ -226,7 +261,7 @@ export async function publishWithRetry({
   const startedAt = now();
 
   for (let attempt = 1; ; attempt++) {
-    const result = await run(spawnFn, 'npm', ['publish', ...args], {
+    const result = await run(spawnFn, 'npm', ['publish', ...npmPublishArgs(args, cwd)], {
       cwd,
       env,
       timeoutMs: publishTimeoutMs,

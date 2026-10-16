@@ -1090,7 +1090,10 @@ publish, and closes it on a green non-deferred publish.
 
 `tools/npm-publish-retry.mjs` runs `npm publish` for `sliccy` (first in the
 `@semantic-release/exec` `publishCmd`), `@ai-ecoverse/biome-jsh`, and
-`@ai-ecoverse/cherry`. It
+`@ai-ecoverse/cherry`. A directory argument shaped like `name/repo`
+(`packages/cherry`) is passed as an absolute path: npm otherwise treats it as
+a GitHub shorthand and runs `git ls-remote ssh://git@github.com/packages/cherry.git`
+(#4033). It
 retries transient DNS/socket, sigstore CA/TLog/TSA, and registry 408/429/5xx
 failures with 15s–240s backoff (5-minute per-attempt kill, 60s registry
 probes, 20-minute retry budget). After a transient failure or version
