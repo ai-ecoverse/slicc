@@ -26,17 +26,6 @@ export const IOS_PATH_PREFIXES = [
 
 export const SLICC_CLI_PATH_PREFIXES = ['packages/slicc-cli/', 'packages/go-optel/'];
 
-export const EXTENSION_PATH_PREFIXES = [
-  'packages/chrome-extension/',
-  'packages/webapp/',
-  'packages/webcomponents/',
-  'packages/shared-ts/',
-  'packages/cherry/',
-  'packages/spoon/',
-  'packages/cloud-core/',
-  'packages/assets/',
-];
-
 export const WORKER_PATH_PREFIXES = [
   'packages/cloudflare-worker/',
   'packages/webapp/',
@@ -63,8 +52,6 @@ export const IOS_SCRIPT_CMD =
   'chmod +x packages/ios-app/scripts/package-and-upload-testflight.sh && packages/ios-app/scripts/package-and-upload-testflight.sh';
 
 export const SLICC_CLI_SCRIPT = 'packages/slicc-cli/sign-and-package.sh';
-
-export const CHROME_PUBLISH_CMD = 'npm run publish:chrome';
 
 export const BIOME_JSH_PUBLISH_CMD =
   'node packages/dev-tools/tools/npm-publish-retry.mjs packages/dev-tools/biome-jsh --provenance --access public';
@@ -109,16 +96,6 @@ export function decideSliccCliGating({ lastTag, changedFiles = [] } = {}) {
   }
   return {
     sliccCli: changedFiles.some((f) => matchesAnyPrefix(f, SLICC_CLI_PATH_PREFIXES)),
-    firstRelease: false,
-  };
-}
-
-export function decideChromeGating({ lastTag, changedFiles = [] } = {}) {
-  if (isFirstRelease(lastTag)) {
-    return { chrome: true, firstRelease: true };
-  }
-  return {
-    chrome: changedFiles.some((f) => matchesAnyPrefix(f, EXTENSION_PATH_PREFIXES)),
     firstRelease: false,
   };
 }
@@ -212,10 +189,10 @@ function writeBiomeJshVersion(version, targetPath = BIOME_JSH_PKG_JSON_PATH) {
   return manifest;
 }
 
-const HELP = `release-native — gate native packaging, worker deploy, Chrome publish, and the biome-jsh npm release on source changes
+const HELP = `release-native — gate native packaging, worker deploy, and the biome-jsh npm release on source changes
 
 Usage:
-  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=chrome|worker|biome-jsh|biome-jsh-version] [--dry-run]
+  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=worker|biome-jsh|biome-jsh-version] [--dry-run]
 
 Options:
   --last=<tag>   Previous release git tag. Empty => first release => run ALL gated steps.
@@ -226,8 +203,6 @@ Options:
                  --gate=biome-jsh-version. Empty => skip the pointer update / version
                  stamp (never fails the release).
                  In .releaserc.json use --next='\${nextRelease.version}'.
-  --gate=chrome  Gate the Chrome Web Store publish (\`${CHROME_PUBLISH_CMD}\`) instead of
-                 the default native macOS/iOS packaging.
   --gate=worker  Print "deploy" when the production worker/UI should deploy, otherwise
                  print "skip". This decision mode never runs the deploy itself.
   --gate=biome-jsh-version
@@ -249,8 +224,6 @@ Behavior:
     ${MACOS_PATH_PREFIXES.join(', ')} changed, iOS only if
     ${IOS_PATH_PREFIXES.join(', ')} changed, and the signed + notarized slicc CLI
     binaries only if ${SLICC_CLI_PATH_PREFIXES.join(', ')} changed.
-  - --gate=chrome: use the same resolved diff ref and publish to the Chrome Web Store if one of
-    ${EXTENSION_PATH_PREFIXES.join(', ')} changed.
   - --gate=worker: use the same resolved diff ref and print deploy only if one of
     ${WORKER_PATH_PREFIXES.join(', ')} changed.
   - --gate=biome-jsh[-version]: use the same resolved diff ref and bump / publish
@@ -417,33 +390,6 @@ export function main(argv = process.argv.slice(2)) {
 
   if (args.gate === 'biome-jsh' || args.gate === 'biome-jsh-version') {
     runBiomeJshGate(args, changedFiles);
-    return 0;
-  }
-
-  if (args.gate === 'chrome') {
-    const decision = decideChromeGating({ lastTag: args.last, changedFiles });
-    if (decision.firstRelease) {
-      console.log(
-        '[release-native] First release (no previous tag) — publishing the extension to the Chrome Web Store.'
-      );
-    } else {
-      console.log(`[release-native] Changed since ${args.last}: ${changedFiles.length} file(s).`);
-    }
-
-    if (decision.chrome) {
-      runStep(
-        'Chrome Web Store extension',
-        CHROME_PUBLISH_CMD,
-        args.dryRun,
-        'Publishing',
-        'publish'
-      );
-    } else {
-      console.log(
-        '[release-native] Skipping Chrome Web Store publish (no extension-relevant changes).'
-      );
-    }
-
     return 0;
   }
 

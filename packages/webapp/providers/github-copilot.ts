@@ -19,6 +19,7 @@ import { getModel, getModels } from '../src/core/model-catalog.js';
 import { copilotAnthropicModel } from '../src/providers/copilot-anthropic-model.js';
 import { fetchCopilotUsage } from '../src/providers/github-copilot-usage.js';
 import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
+import { withSupportedTemperature } from '../src/providers/temperature-support.js';
 import type {
   DeviceCodePrompter,
   InterceptingOAuthLauncher,
@@ -622,7 +623,7 @@ async function pumpCopilotStream(
             provider: 'github-copilot',
           } as Model<Api>);
 
-    const opts = { ...options, apiKey };
+    const opts = withSupportedTemperature(model.id, model.name, { ...options, apiKey });
     const fn = pickCopilotStreamFn(resolved.api, simple);
     const upstream = fn(inner as never, context as never, opts as never);
     for await (const event of upstream) {

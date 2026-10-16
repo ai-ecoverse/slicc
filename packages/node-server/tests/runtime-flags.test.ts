@@ -489,4 +489,56 @@ describe('parseMountTableMapping', () => {
     expect(parseMountTableMapping('/a:/')).toBeNull();
     expect(parseMountTableMapping('')).toBeNull();
   });
+
+  it('falls back to empty string when HOME is unset', () => {
+    const saved = process.env['HOME'];
+    try {
+      delete process.env['HOME'];
+
+      expect(parseMountTableMapping('~/foo:/bar')).toBeNull();
+    } finally {
+      if (saved !== undefined) process.env['HOME'] = saved;
+    }
+  });
+
+  it('rejects Windows drive paths with dot or empty segments', () => {
+    expect(parseMountTableMapping('C:\\foo\\..\\bar:/vfs')).toBeNull();
+    expect(parseMountTableMapping('D:\\foo\\.:/vfs')).toBeNull();
+    expect(parseMountTableMapping('E:\\\\double:/vfs')).toBeNull();
+  });
+});
+
+describe('parseCliRuntimeFlags — empty-value equals forms', () => {
+  it('sets profile to null for --profile= with empty value', () => {
+    const flags = parseCliRuntimeFlags(['--profile=']);
+    expect(flags.profile).toBeNull();
+  });
+
+  it('sets installDir to null for --install-dir= with empty value', () => {
+    const flags = parseCliRuntimeFlags(['--install-dir=']);
+    expect(flags.installDir).toBeNull();
+  });
+
+  it('sets leadWorkerBaseUrl to null for --lead= with empty value', () => {
+    const flags = parseCliRuntimeFlags(['--lead=']);
+    expect(flags.lead).toBe(true);
+    expect(flags.leadWorkerBaseUrl).toBeNull();
+  });
+
+  it('sets joinUrl to null for --join= with empty value', () => {
+    const flags = parseCliRuntimeFlags(['--join=']);
+    expect(flags.join).toBe(true);
+    expect(flags.joinUrl).toBeNull();
+  });
+
+  it('sets electronApp to null for --electron-app= with empty value', () => {
+    const flags = parseCliRuntimeFlags(['--electron-app=']);
+    expect(flags.electron).toBe(true);
+    expect(flags.electronApp).toBeNull();
+  });
+
+  it('sets envFile to null for --env-file= with empty value', () => {
+    const flags = parseCliRuntimeFlags(['--env-file=']);
+    expect(flags.envFile).toBeNull();
+  });
 });
