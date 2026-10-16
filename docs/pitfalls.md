@@ -2265,6 +2265,13 @@ grok-4.7 answer `400` on the Copilot gateway and on chatgpt.com the same way
 they do on Bedrock. `quick-llm` always sends `temperature: 0.3`, so a spread
 of raw options fails those helpers on every float.
 
+`grok-4.7` rejects the field on `api.x.ai` with the same
+`400 "This model doesn't support the temperature field"` (the default xAI
+Grok model, and what `quick-llm` hits with `temperature: 0.3` or `0`).
+`providers/xai-grok.ts` must run both `pumpXaiStream` and
+`pumpSimpleXaiStream` options through `withSupportedTemperature` before
+`streamOpenAIResponses` / `streamOpenAICompletions`. Models that still
+accept the field, such as `grok-4.5`, keep the caller value.
 ### Proxy Anthropic transports must override native conversation capabilities
 
 pi-ai catalog models can enable `supportsMidConvoEffort`, which inserts
