@@ -115,8 +115,42 @@ function createDeleteSecretButton(entry: SecretEntry): HTMLButtonElement {
   });
 }
 
-function createSecretRow(entry: SecretEntry & { unreadable?: boolean }): HTMLDivElement {
-  const row = el(
+export const UNREADABLE_SECRET_COPY = "This value can't be read any more. Enter it again.";
+
+function activatePane(target: string): void {
+  document.querySelectorAll<HTMLButtonElement>('.tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.pane === target);
+  });
+  document.querySelectorAll<HTMLDivElement>('.pane').forEach((p) => {
+    p.classList.toggle('active', p.id === `pane-${target}`);
+  });
+}
+
+export function prefillCustomSecret(entry: Pick<SecretEntry, 'name' | 'domains'>): void {
+  activatePane('custom');
+  ($('c-name') as HTMLInputElement).value = entry.name;
+  ($('c-domains') as HTMLInputElement).value = entry.domains.join(', ');
+  const value = $('c-value') as HTMLInputElement;
+  value.value = '';
+  $('pane-custom')?.scrollIntoView?.({ block: 'nearest' });
+  value.focus();
+}
+
+function createReenterButton(entry: SecretEntry): HTMLButtonElement {
+  return el('button', {
+    class: 'btn-secondary btn',
+    text: 'Re-enter',
+    'style:font-size': '11px',
+    'style:padding': '4px 8px',
+    on: { click: () => prefillCustomSecret(entry) },
+  });
+}
+
+export function createSecretRow(entry: SecretEntry & { unreadable?: boolean }): HTMLDivElement {
+  const buttons = entry.unreadable
+    ? [createReenterButton(entry), createCopyNameButton(entry), createDeleteSecretButton(entry)]
+    : [createCopyNameButton(entry), createDeleteSecretButton(entry)];
+  return el(
     'div',
     {
       class: entry.unreadable ? 'secret-row secret-row-unreadable' : 'secret-row',
@@ -128,18 +162,11 @@ function createSecretRow(entry: SecretEntry & { unreadable?: boolean }): HTMLDiv
       el('div', { class: 'secret-name', text: entry.name }),
       el('div', { class: 'secret-domains', text: entry.domains.join(', ') }),
       ...(entry.unreadable
-        ? [
-            el('div', {
-              class: 'secret-unreadable',
-              text: '\u26a0\ufe0f Unreadable \u2014 encryption key lost. Please re-enter this secret.',
-            }),
-          ]
+        ? [el('div', { class: 'secret-unreadable', text: UNREADABLE_SECRET_COPY })]
         : [])
     ),
-    createCopyNameButton(entry),
-    createDeleteSecretButton(entry)
+    ...buttons
   );
-  return row;
 }
 
 async function renderList(): Promise<void> {
@@ -163,15 +190,7 @@ async function renderList(): Promise<void> {
 
 function setupTabs(): void {
   document.querySelectorAll<HTMLButtonElement>('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      const target = tab.dataset.pane;
-      document.querySelectorAll<HTMLButtonElement>('.tab').forEach((t) => {
-        t.classList.toggle('active', t === tab);
-      });
-      document.querySelectorAll<HTMLDivElement>('.pane').forEach((p) => {
-        p.classList.toggle('active', p.id === `pane-${target}`);
-      });
-    });
+    tab.addEventListener('click', () => activatePane(tab.dataset.pane ?? ''));
   });
 }
 
