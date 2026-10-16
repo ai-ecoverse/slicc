@@ -763,6 +763,7 @@ describe('onConnectExternal — fetch-proxy.fetch branch', () => {
 
 interface FakePanelPort {
   name: string;
+  sender?: { id: string; origin?: string };
   _sent: unknown[];
   _rx: (msg: unknown) => void;
   postMessage: (msg: unknown) => void;
@@ -775,6 +776,7 @@ function fakePanelPort(): FakePanelPort {
   let onMsg: ((m: unknown) => void) | undefined;
   return {
     name: CHERRY_PANEL_PORT_NAME,
+    sender: { id: 'test-ext', origin: 'chrome-extension://test-ext' },
     _sent: msgs,
     _rx: (m: unknown) => onMsg?.(m),
     postMessage: (m: unknown) => msgs.push(m),

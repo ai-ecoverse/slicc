@@ -21,6 +21,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     };
     (globalThis as any).chrome = {
       runtime: {
+        id: 'test-ext-id',
         onConnect: { addListener: (fn: any) => connectListeners.push(fn) },
         onConnectExternal: { addListener: vi.fn() },
         onMessage: { addListener: (fn: any) => messageListeners.push(fn) },
@@ -29,7 +30,6 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
         onUpdateAvailable: { addListener: vi.fn() },
         reload: vi.fn(),
         getContexts: vi.fn(async () => []),
-        id: 'test-id',
       },
       storage: {
         local: {
@@ -108,6 +108,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(connectListeners.length).toBeGreaterThan(0);
     const fakePort: any = {
       name: 'fetch-proxy.fetch',
+      sender: { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
       onMessage: { addListener: vi.fn() },
       onDisconnect: { addListener: vi.fn() },
       postMessage: vi.fn(),
@@ -125,6 +126,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     await import('../src/service-worker.js');
     const other: any = {
       name: 'other-port',
+      sender: { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
       onMessage: { addListener: vi.fn() },
       onDisconnect: { addListener: vi.fn() },
       postMessage: vi.fn(),
@@ -143,9 +145,13 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     let response: any;
     let kept = false;
     for (const l of messageListeners) {
-      const result = l({ type: 'secrets.list-masked-entries' }, {}, (r: any) => {
-        response = r;
-      });
+      const result = l(
+        { type: 'secrets.list-masked-entries' },
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
+        (r: any) => {
+          response = r;
+        }
+      );
       if (result === true) {
         kept = true;
         break;
@@ -169,9 +175,13 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     let response: any;
     let kept = false;
     for (const l of messageListeners) {
-      const result = l({ type: 'secrets.list' }, {}, (r: any) => {
-        response = r;
-      });
+      const result = l(
+        { type: 'secrets.list' },
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
+        (r: any) => {
+          response = r;
+        }
+      );
       if (result === true) {
         kept = true;
         break;
@@ -200,7 +210,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
           value: 'sess-real',
           domains: ['api.session.com'],
         },
-        {},
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
         (r: any) => {
           setResp = r;
         }
@@ -213,9 +223,13 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     let response: any;
     let kept = false;
     for (const l of messageListeners) {
-      const result = l({ type: 'secrets.list-with-values-for-pipeline' }, {}, (r: any) => {
-        response = r;
-      });
+      const result = l(
+        { type: 'secrets.list-with-values-for-pipeline' },
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
+        (r: any) => {
+          response = r;
+        }
+      );
       if (result === true) {
         kept = true;
         break;
@@ -249,7 +263,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
           value: 'new-real-value',
           domains: ['api.new.com', '*.new.com'],
         },
-        {},
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
         (r: any) => {
           response = r;
         }
@@ -304,9 +318,13 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     let response: any;
     let kept = false;
     for (const l of messageListeners) {
-      const result = l(msg, {}, (r: any) => {
-        response = r;
-      });
+      const result = l(
+        msg,
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
+        (r: any) => {
+          response = r;
+        }
+      );
       if (result === true) {
         kept = true;
         break;
@@ -380,9 +398,13 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     let response: any;
     let kept = false;
     for (const l of messageListeners) {
-      const result = l({ type: 'secrets.mask-oauth-token', providerId: 'github' }, {}, (r: any) => {
-        response = r;
-      });
+      const result = l(
+        { type: 'secrets.mask-oauth-token', providerId: 'github' },
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
+        (r: any) => {
+          response = r;
+        }
+      );
       if (result === true) {
         kept = true;
         break;
@@ -411,7 +433,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
           accessToken: 'tok_realtoken',
           domains: 'example.com,api.example.com',
         },
-        {},
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
         (r: any) => {
           response = r;
         }
@@ -431,9 +453,13 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     setSpy.mockClear();
     let response: any;
     for (const l of messageListeners) {
-      const result = l({ type: 'secrets.mask-oauth-token', providerId: 'github' }, {}, (r: any) => {
-        response = r;
-      });
+      const result = l(
+        { type: 'secrets.mask-oauth-token', providerId: 'github' },
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
+        (r: any) => {
+          response = r;
+        }
+      );
       if (result === true) break;
     }
     await new Promise((r) => setTimeout(r, 30));
@@ -461,7 +487,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
           accessToken: 't',
           domains: 'x.com',
         },
-        {},
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
         (r: any) => {
           response = r;
         }
@@ -489,7 +515,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
           accessToken: 't',
           domains: 'x.com',
         },
-        {},
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
         (r: any) => {
           response = r;
         }

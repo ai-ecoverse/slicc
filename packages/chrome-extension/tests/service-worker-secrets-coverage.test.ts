@@ -35,6 +35,7 @@ describe('service-worker secrets handlers — branch coverage', () => {
       });
     (globalThis as any).chrome = {
       runtime: {
+        id: 'test-ext-id',
         onConnect: { addListener: vi.fn() },
         onConnectExternal: { addListener: vi.fn() },
         onMessage: { addListener: (fn: MsgListener) => messageListeners.push(fn) },
@@ -43,7 +44,6 @@ describe('service-worker secrets handlers — branch coverage', () => {
         onUpdateAvailable: { addListener: vi.fn() },
         reload: vi.fn(),
         getContexts: vi.fn(async () => []),
-        id: 'test-id',
       },
       storage: {
         local: { get: localGet, set: localSet, remove: localRemove },
@@ -121,10 +121,14 @@ describe('service-worker secrets handlers — branch coverage', () => {
     let kept = false;
     for (const l of messageListeners) {
       let captured = false;
-      const result = l(msg, {}, (r: any) => {
-        captured = true;
-        response = r;
-      });
+      const result = l(
+        msg,
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
+        (r: any) => {
+          captured = true;
+          response = r;
+        }
+      );
       if (result === true) {
         kept = true;
         break;

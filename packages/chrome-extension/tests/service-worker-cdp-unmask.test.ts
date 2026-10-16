@@ -72,6 +72,7 @@ describe('service-worker CDP outgoing unmask', () => {
 
     (globalThis as any).chrome = {
       runtime: {
+        id: 'test-ext-id',
         onConnect: { addListener: vi.fn() },
         onConnectExternal: {
           addListener: (listener: (port: FakePort) => void) =>
@@ -83,7 +84,6 @@ describe('service-worker CDP outgoing unmask', () => {
         onUpdateAvailable: { addListener: vi.fn() },
         reload: vi.fn(),
         getContexts: vi.fn(async () => []),
-        id: 'test-id',
         sendMessage: vi.fn(async (m: any) => {
           runtimeSentMessages.push(m);
         }),
@@ -181,7 +181,8 @@ describe('service-worker CDP outgoing unmask', () => {
           source: 'offscreen',
           payload: { type: 'cdp-command', id: 1, method: 'Target.getTargets' },
         },
-        {},
+        // A trusted internal sender, so the drop is the relay removal, not the B-SEC1 gate.
+        { id: 'test-id', origin: 'chrome-extension://test-id' },
         () => {}
       );
     }

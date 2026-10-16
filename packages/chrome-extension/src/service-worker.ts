@@ -204,6 +204,17 @@ function connectExternalFetchProxy(port: ChromeRuntimePort): void {
 }
 
 chrome.runtime.onConnect.addListener((port) => {
+  // B-SEC1: gate internal Port connections on sender identity. The sender's
+  // origin must be the extension's own origin. Content scripts carry the
+  // page's origin, so they're refused. Extension pages in a tab (secrets.html
+  // with open_in_tab) pass because their origin is the extension's.
+  const extOrigin = `chrome-extension://${chrome.runtime.id}`;
+  const portOrigin =
+    port.sender?.origin ?? (port.sender?.url ? new URL(port.sender.url).origin : undefined);
+  // Untrusted ports are IGNORED, not disconnected: in a merged build the same
+  // Port object reaches every onConnect listener, so disconnecting here would
+  // cut another component's port. An unhandled port gets nothing from six.
+  if (port.sender?.id !== chrome.runtime.id || portOrigin !== extOrigin) return;
   if (port.name === CHERRY_PANEL_PORT_NAME) {
     // Opening the cockpit means the user is attending SLICC — clear any pending
     // handoff badge. The old `chrome.action.onClicked` handler cleared it, but
