@@ -59,18 +59,39 @@ export function deadlineShards(jobs, annotations) {
   return shardsMatching(jobs, annotations, DEADLINE_PATTERNS);
 }
 
-/** A shard must have only the known interruption/deadline signals before it is retried. */
+/**
+ * GitHub always annotates a failed step with `Process completed with exit code N`.
+ * Deadline stops exit 1 that way; kill stops exit 130 (already a {@link KILLED_PATTERNS} hit).
+ * Treat the bare exit-code line as noise so it does not veto a deadline resume.
+ * Real bench errors are a separate `::error::` from `run.mjs` (`N run(s) errored before the
+ * judge…`) — with multiple leaders a lane can hit the deadline while another still increments
+ * `state.errors`, and both share exit code 1; that distinct annotation is what blocks resume.
+ */
+export const ANNOTATION_NOISE_PATTERNS = [/^Process completed with exit code \d+\.?$/];
+
+function isResumeSignal(message) {
+  return [...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(message));
+}
+
+function isAnnotationNoise(message) {
+  const text = String(message ?? '').trim();
+  // Blank messages are not evidence of a bench failure (API nulls / empty rows).
+  if (!text) return true;
+  return ANNOTATION_NOISE_PATTERNS.some((p) => p.test(text));
+}
+
+/**
+ * A shard must have a kill/deadline signal and no *other* error annotation (and no failed
+ * post-step) before it is retried. The generic Actions exit-code line is not "other"; a
+ * concurrent-lane bench-error annotation from `run.mjs` is.
+ */
 export function ownFailureShards(jobs, annotations) {
   return jobs
     .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
     .filter((j) => {
       const messages = annotations.get(j.id) ?? [];
-      const hasResumeSignal = messages.some((m) =>
-        [...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(m))
-      );
-      const hasOtherError = messages.some(
-        (m) => ![...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(m))
-      );
+      const hasResumeSignal = messages.some((m) => isResumeSignal(m));
+      const hasOtherError = messages.some((m) => !isResumeSignal(m) && !isAnnotationNoise(m));
       // The benchmark step itself fails when it stops on the deadline. A failed post-step (for
       // example the leak check) is independent evidence that this shard needs human attention.
       const failedPostStep = (j.steps ?? []).some(

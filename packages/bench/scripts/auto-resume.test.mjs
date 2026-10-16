@@ -238,15 +238,125 @@ describe('autoResume', () => {
     expect(dispatched).toEqual([]);
   });
 
-  it('leaves a deadline-marked shard alone when its benchmark run also errored', async () => {
+  it('still deadline-resumes when Actions adds the generic exit-code-1 annotation', async () => {
+    // Real explore-40 shape (run 38173105528): deadline ::error:: plus GitHub's
+    // "Process completed with exit code 1." — the latter must not veto the resume.
     const { fetchImpl, dispatched } = fakeGithub(
       new Map([[3, [DEADLINE, 'Process completed with exit code 1.']]]),
+      oneFailedShard
+    );
+    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
+    expect(result).toMatchObject({ action: 'resumed', deadline: ['Shard 1'] });
+    expect(dispatched).toHaveLength(1);
+  });
+
+  it('leaves a deadline-marked shard alone when a real bench error annotation is also present', async () => {
+    const { fetchImpl, dispatched } = fakeGithub(
+      new Map([
+        [
+          3,
+          [
+            DEADLINE,
+            'Process completed with exit code 1.',
+            'memory extraction finished with no durable memories',
+          ],
+        ],
+      ]),
       oneFailedShard
     );
     const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
     expect(result.action).toBe('none');
     expect(result.reason).toMatch(/Shard 1 failed on their own/);
     expect(dispatched).toEqual([]);
+  });
+
+  it('leaves a mixed multi-lane deadline+error stop alone (exit-1 noise is not enough)', async () => {
+    // With --leaders N, one lane can emit the deadline annotation while another still
+    // increments state.errors; run.mjs then emits a distinct bench-error ::error:: before
+    // exiting 1. Ignoring only the generic Actions exit-code line must not auto-resume.
+    const { fetchImpl, dispatched } = fakeGithub(
+      new Map([
+        [
+          3,
+          [
+            DEADLINE,
+            '2 run(s) errored before the judge; rerun with the same --out to retry them',
+            'Process completed with exit code 1.',
+          ],
+        ],
+      ]),
+      oneFailedShard
+    );
+    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
+    expect(result.action).toBe('none');
+    expect(result.reason).toMatch(/Shard 1 failed on their own/);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('ignores null/empty annotation messages when deciding own failures', () => {
+    const shard = [{ id: 3, name: 'Shard 1', conclusion: 'failure' }];
+    expect(
+      ownFailureShards(
+        shard,
+        new Map([[3, [DEADLINE, null, undefined, '', 'Process completed with exit code 1.']]])
+      )
+    ).toEqual([]);
+  });
+
+  it('paginates jobs and annotations, and tolerates a null annotation message', async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => ({
+      id: 1000 + i,
+      name: i === 0 ? 'Shard 1' : `Other ${i}`,
+      conclusion: i === 0 ? 'failure' : 'success',
+    }));
+    const page2 = [{ id: 3, name: 'Shard 2', conclusion: 'failure' }];
+    const annPages = new Map([
+      [
+        1000,
+        { 1: [{ message: LOST }, { message: null }], 2: [{ message: 'Termination requested' }] },
+      ],
+      [3, { 1: Array.from({ length: 100 }, () => ({ message: 'x' })), 2: [{ message: DEADLINE }] }],
+    ]);
+    const dispatched = [];
+    const fetchImpl = vi.fn(async (url, init = {}) => {
+      const u = new URL(url);
+      const path = u.pathname;
+      if (init.method === 'POST' && path.endsWith('/actions/workflows/bench.yml/dispatches')) {
+        dispatched.push(JSON.parse(init.body));
+        return new Response(null, { status: 204 });
+      }
+      if (path.endsWith('/jobs')) {
+        const page = Number(u.searchParams.get('page') ?? 1);
+        return Response.json({ jobs: page === 1 ? page1 : page === 2 ? page2 : [] });
+      }
+      const m = /\/check-runs\/(\d+)\/annotations$/.exec(path);
+      if (m) {
+        const page = Number(u.searchParams.get('page') ?? 1);
+        const pages = annPages.get(Number(m[1])) ?? {};
+        return Response.json(pages[page] ?? []);
+      }
+      return new Response('not found', { status: 404 });
+    });
+    const result = await autoResume({
+      ...base,
+      inputs: { 'auto-resumed-from': '' },
+      fetchImpl,
+    });
+    expect(result).toMatchObject({
+      action: 'none',
+      killed: ['Shard 1'],
+      deadline: ['Shard 2'],
+    });
+    expect(dispatched).toEqual([]);
+  });
+
+  it('summarises a kill-only resume when deadline is absent', () => {
+    expect(
+      summaryLines(
+        { action: 'resumed', reason: 'Shard 1 lost their runner', killed: ['Shard 1'] },
+        '7'
+      ).join('\n')
+    ).toMatch(/once; kill resumes do not chain/);
   });
 
   it('leaves a deadline-marked shard alone when a post-step fails', async () => {
