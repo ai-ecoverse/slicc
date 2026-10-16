@@ -17,8 +17,12 @@ import { writeFileSync } from 'node:fs';
 import {
   BIOME_JSH_PATH_PREFIXES,
   buildBiomeJshManifest,
+  buildCherryLockfile,
   buildKnownGoodPointer,
+  CHERRY_PATH_PREFIXES,
+  CHERRY_PUBLISH_CMD,
   decideBiomeJshGating,
+  decideCherryGating,
   decideGating,
   decideSliccCliGating,
   decideWorkerGating,
@@ -33,6 +37,7 @@ import {
   parseArgs,
   parseChangedFiles,
   resolveDiffRef,
+  resolveNpmPackageGate,
   runNonGatingStep,
   WORKER_PATH_PREFIXES,
 } from './release-native.mjs';
@@ -456,6 +461,81 @@ describe('decideBiomeJshGating', () => {
   });
 });
 
+describe('decideCherryGating', () => {
+  it('publishes on first release with an empty last tag', () => {
+    expect(decideCherryGating({ lastTag: '', changedFiles: [] })).toEqual({
+      cherry: true,
+      firstRelease: true,
+    });
+  });
+
+  it.each([
+    'packages/cherry/src/mount.ts',
+    'packages/cherry/package.json',
+    'packages/cherry/README.md',
+    'packages/cherry/scripts/build-preview-bootstrap.mjs',
+    'packages/cherry/tsconfig.build.json',
+  ])('publishes for shipped input %s', (file) => {
+    expect(CHERRY_PATH_PREFIXES).toContain('packages/cherry/');
+    expect(decideCherryGating({ lastTag: 'v6.249.4', changedFiles: [file] })).toEqual({
+      cherry: true,
+      firstRelease: false,
+    });
+  });
+
+  it('skips changes confined to tests, the harness, and developer docs', () => {
+    expect(
+      decideCherryGating({
+        lastTag: 'v6.249.4',
+        changedFiles: [
+          'packages/cherry/tests/mount.test.ts',
+          'packages/cherry/examples/host.html',
+          'packages/cherry/CLAUDE.md',
+          'packages/cherry/AGENTS.md',
+          'packages/webapp/src/cdp/cherry-host-protocol.ts',
+          'docs/cherry-details.md',
+        ],
+      })
+    ).toEqual({ cherry: false, firstRelease: false });
+  });
+
+  it('publishes from the workspace directory with provenance', () => {
+    expect(CHERRY_PUBLISH_CMD).toBe(
+      'node packages/dev-tools/tools/npm-publish-retry.mjs packages/cherry --provenance --access public'
+    );
+  });
+});
+
+describe('buildCherryLockfile', () => {
+  const lockfile = {
+    name: 'sliccy',
+    packages: {
+      '': { name: 'sliccy', version: '6.249.4' },
+      'packages/cherry': { name: '@ai-ecoverse/cherry', version: '0.0.0', license: 'Apache-2.0' },
+    },
+  };
+
+  it('stamps only the cherry workspace entry', () => {
+    const out = buildCherryLockfile(lockfile, 'v6.250.0');
+    expect(out.packages['packages/cherry']).toEqual({
+      name: '@ai-ecoverse/cherry',
+      version: '6.250.0',
+      license: 'Apache-2.0',
+    });
+    expect(out.packages['']).toEqual(lockfile.packages['']);
+    expect(lockfile.packages['packages/cherry'].version).toBe('0.0.0');
+  });
+
+  it('returns a lockfile without a cherry entry unchanged', () => {
+    const other = { packages: { '': { version: '1.0.0' } } };
+    expect(buildCherryLockfile(other, '6.250.0')).toBe(other);
+  });
+
+  it('throws on an empty version', () => {
+    expect(() => buildCherryLockfile(lockfile, ' ')).toThrow();
+  });
+});
+
 describe('buildBiomeJshManifest', () => {
   const manifest = { name: '@ai-ecoverse/biome-jsh', version: '5.85.2', main: './lib.mjs' };
 
@@ -642,6 +722,82 @@ describe('main biome-jsh gate', () => {
       expect(main(['--gate=biome-jsh-version', '--last=', '--next=5.92.0', '--dry-run'])).toBe(0);
     } finally {
       logSpy.mockRestore();
+    }
+    expect(writeFileSync).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveNpmPackageGate', () => {
+  it.each([
+    ['biome-jsh', 'biome-jsh', true],
+    ['biome-jsh-version', 'biome-jsh', false],
+    ['cherry', 'cherry', true],
+    ['cherry-version', 'cherry', false],
+  ])('maps --gate=%s to the %s package (publish phase: %s)', (gate, key, publishPhase) => {
+    expect(resolveNpmPackageGate(gate)).toMatchObject({ key, publishPhase });
+  });
+
+  it.each(['', 'worker', 'constructor', 'toString-version', undefined])(
+    'returns null for non-package gate %s',
+    (gate) => {
+      expect(resolveNpmPackageGate(gate)).toBeNull();
+    }
+  );
+});
+
+describe('main cherry gate', () => {
+  it('does not stamp when nothing in the package changed', () => {
+    writeFileSync.mockClear();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(main(['--gate=cherry-version', '--last=v6.249.4', '--next=6.250.0'])).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('stamps the manifest and lockfile when the gate is open', () => {
+    writeFileSync.mockClear();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(main(['--gate=cherry-version', '--last=', '--next=6.250.0'])).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    const paths = writeFileSync.mock.calls.map(([path]) => String(path));
+    expect(paths.some((p) => p.endsWith('packages/cherry/package.json'))).toBe(true);
+    expect(paths.some((p) => p.endsWith('package-lock.json'))).toBe(true);
+    const manifest = JSON.parse(writeFileSync.mock.calls[0][1]);
+    expect(manifest).toMatchObject({ name: '@ai-ecoverse/cherry', version: '6.250.0' });
+    const lock = JSON.parse(writeFileSync.mock.calls[1][1]);
+    expect(lock.packages['packages/cherry'].version).toBe('6.250.0');
+  });
+
+  it('only logs on a dry-run publish or stamp', () => {
+    writeFileSync.mockClear();
+    const logs = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((m) => logs.push(String(m)));
+    try {
+      expect(main(['--gate=cherry', '--last=', '--dry-run'])).toBe(0);
+      expect(main(['--gate=cherry-version', '--last=', '--next=6.250.0', '--dry-run'])).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(writeFileSync).not.toHaveBeenCalled();
+    expect(logs.some((l) => l.includes('would publish @ai-ecoverse/cherry'))).toBe(true);
+    expect(logs.some((l) => l.includes('would stamp @ai-ecoverse/cherry version 6.250.0'))).toBe(
+      true
+    );
+  });
+
+  it('skips the stamp when --next is empty', () => {
+    writeFileSync.mockClear();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(main(['--gate=cherry-version', '--last='])).toBe(0);
+    } finally {
+      warnSpy.mockRestore();
     }
     expect(writeFileSync).not.toHaveBeenCalled();
   });

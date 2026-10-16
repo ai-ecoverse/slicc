@@ -169,6 +169,12 @@ npm run build -w @ai-ecoverse/cherry   # tsc -p tsconfig.build.json → dist/
 npm test -w @ai-ecoverse/cherry        # vitest (jsdom)
 ```
 
+Published to npm as `@ai-ecoverse/cherry` from the root release
+(`release` job of `.github/workflows/release.yml`, gated by
+`release-native.mjs --gate=cherry`; see `docs/development.md`). The
+version is stamped at release time — leave `version` alone. Exports
+point at `dist/`; `README.md` is the npm page.
+
 Default `tsconfig.json` is the noEmit typecheck config (incl. tests/).
 `mountSliccImpl` and `CherryHostTransport` expose `test*` seams
 (`__test_post`, `testReceive`) exercising the postMessage round-trip

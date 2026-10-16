@@ -1,7 +1,8 @@
 {
   "name": "@ai-ecoverse/cherry",
   "version": "0.0.0",
-  "private": true,
+  "description": "Cherry: embed a SLICC follower in a host web page and lend the page to a SLICC cone as a capability-limited browser target.",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -12,13 +13,30 @@
       "import": "./dist/index.js"
     },
     "./embed-ui": {
-      "types": "./src/embed-ui.ts",
-      "import": "./src/embed-ui.ts"
-    }
+      "types": "./dist/embed-ui.d.ts",
+      "import": "./dist/embed-ui.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.js"
+    },
+    "./preview-bridge.js": "./dist/preview-bridge.js",
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ai-ecoverse/slicc.git",
+    "directory": "packages/cherry"
+  },
+  "homepage": "https://github.com/ai-ecoverse/slicc/tree/main/packages/cherry#readme",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
     "html2canvas-pro": "2.5.2"
   },
