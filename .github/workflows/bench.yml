@@ -208,7 +208,7 @@ jobs:
     runs-on: >-
       ${{
       github.event_name == 'workflow_dispatch' && inputs.runner ||
-      vars.BENCH_PR_RUNNER ||
+      github.event_name != 'workflow_dispatch' && vars.BENCH_PR_RUNNER ||
       vars.CI_HEAVY_RUNNER && fromJSON(startsWith(vars.CI_HEAVY_RUNNER, '[') && vars.CI_HEAVY_RUNNER || toJSON(vars.CI_HEAVY_RUNNER)) ||
       'ubuntu-latest' }}
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
