@@ -1071,3 +1071,32 @@ describe('settled pauses (guard vectors C5.guessed-id / C5.auth)', () => {
     ).rejects.toThrow(/not paused toward this client/);
   });
 });
+
+describe('concurrent settling answers (Codex #4014)', () => {
+  it('a duplicate answer sent while the first is in flight is refused by the shield', async () => {
+    const { shield } = makeShield();
+    await shield.command(
+      'Fetch.enable',
+      {},
+      vi.fn(async () => ({}))
+    );
+    const a = paused(PLAIN, 'Fetch');
+    shield.onEvent('Fetch.requestPaused', a);
+    let release: () => void = () => {};
+    const slow = vi.fn(
+      () =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          release = () => resolve({});
+        })
+    );
+    // Control: the first answer is admitted and forwarded.
+    const first = shield.command('Fetch.continueRequest', { requestId: a.requestId }, slow);
+    // Protected: the back-to-back duplicate never reaches Chrome.
+    await expect(
+      shield.command('Fetch.fulfillRequest', { requestId: a.requestId, responseCode: 200 }, slow)
+    ).rejects.toThrow(/not paused toward this client/);
+    release();
+    await expect(first).resolves.toBeDefined();
+    expect(slow).toHaveBeenCalledTimes(1);
+  });
+});
