@@ -2,6 +2,7 @@ import {
   BRIDGE_ALLOWED_ORIGINS,
   BRIDGE_DEV_ORIGINS,
   buildDefaultBridgeSwDeps,
+  checkBridgeTabProtection,
   handleBridgePortConnect,
   postOpenSettingsToWelcomedLeaderPorts,
 } from './bridge-sw.js';
@@ -84,6 +85,18 @@ installHandoffNotifications();
 installDiscoveryObserver();
 
 installCdpProxyListeners();
+
+chrome.tabs.onUpdated.addListener(
+  (tabId: number, changeInfo: ChromeTabChangeInfo, tab: ChromeTab) => {
+    const url = changeInfo.url ?? tab.pendingUrl;
+    if (!url) return;
+    const bridgeDetached = checkBridgeTabProtection(tabId, url);
+
+    for (const detachedTabId of bridgeDetached) {
+      releaseDebuggerAttachment(detachedTabId, 'bridge').catch(() => {});
+    }
+  }
+);
 
 const rawFetchDeps = { capture: createRawFetchCapture() };
 installRawFetchCapture(rawFetchDeps.capture);

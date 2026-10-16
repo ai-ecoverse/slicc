@@ -27,6 +27,8 @@ export interface DiscoveryObserverDeps {
   probeTimeoutMs?: number;
 
   isEnabled?: () => boolean;
+
+  isProtected?: (url: string) => boolean;
 }
 
 export interface DiscoveryObserver {
@@ -67,6 +69,7 @@ export function createDiscoveryObserver(deps: DiscoveryObserverDeps): DiscoveryO
   };
 
   const isEnabled = deps.isEnabled ?? ((): boolean => true);
+  const isProtected = deps.isProtected ?? ((): boolean => false);
 
   const onHeaders = (detail: DiscoveryHeadersDetail): void => {
     if (!isEnabled()) return;
@@ -78,6 +81,8 @@ export function createDiscoveryObserver(deps: DiscoveryObserverDeps): DiscoveryO
     }
 
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+
+    if (isProtected(detail.url)) return;
     const origin = url.origin;
 
     const { match } = extractCatalogFromWebRequest(detail.responseHeaders, detail.url);

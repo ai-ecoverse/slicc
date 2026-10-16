@@ -45,6 +45,10 @@ interface ChromeTab {
   discarded?: boolean;
 
   status?: 'unloaded' | 'loading' | 'complete';
+
+  pendingUrl?: string;
+
+  openerTabId?: number;
 }
 
 interface ChromeTabChangeInfo {

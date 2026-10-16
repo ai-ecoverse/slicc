@@ -1,0 +1,372 @@
+import { EXTENSION_BRIDGE_PORT_NAME, EXTENSION_BRIDGE_PROTOCOL_VERSION } from '@slicc/shared-ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  __clearWelcomedLeaderPortsForTest,
+  type BridgeSwDeps,
+  checkBridgeTabProtection,
+  handleBridgePortConnect,
+} from '../src/bridge-sw.js';
+
+interface FakeSender {
+  origin?: string;
+  tab?: { id?: number; url?: string };
+  frameId?: number;
+  url?: string;
+}
+
+interface FakePort {
+  name: string;
+  sender?: FakeSender;
+  posted: unknown[];
+  disconnected: boolean;
+  postMessage: (msg: unknown) => void;
+  disconnect: () => void;
+  onMessage: { addListener: (cb: (msg: unknown) => void) => void };
+  onDisconnect: { addListener: (cb: () => void) => void };
+  receive: (msg: unknown) => void;
+  triggerDisconnect: () => void;
+}
+
+function makePort(name: string, sender?: FakeSender): FakePort {
+  const messageListeners: Array<(msg: unknown) => void> = [];
+  const disconnectListeners: Array<() => void> = [];
+  const port: FakePort = {
+    name,
+    sender,
+    posted: [],
+    disconnected: false,
+    postMessage: (msg) => port.posted.push(msg),
+    disconnect: () => {
+      port.disconnected = true;
+    },
+    onMessage: { addListener: (cb) => messageListeners.push(cb) },
+    onDisconnect: { addListener: (cb) => disconnectListeners.push(cb) },
+    receive: (msg) => {
+      for (const cb of messageListeners) cb(msg);
+    },
+    triggerDisconnect: () => {
+      for (const cb of disconnectListeners) cb();
+    },
+  };
+  return port;
+}
+
+const ORIGIN = 'https://www.sliccy.ai';
+
+const testTabs = new Map<
+  number,
+  {
+    id: number;
+    url: string;
+    title: string;
+    windowId: number;
+    openerTabId?: number;
+    pendingUrl?: string;
+  }
+>();
+
+function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
+  const base: BridgeSwDeps = {
+    readStoredLeaderTabId: async () => 42,
+    maybeUnmaskCdpFrame: async (_tabId, _method, params) => params,
+    attachDebugger: vi.fn(async () => true),
+    detachDebugger: vi.fn(async () => undefined),
+    sendDebuggerCommand: vi.fn(async () => ({ ok: true })),
+    subscribeDebuggerEvents: () => () => {},
+    queryTabs: async () => [...testTabs.values()],
+    queryActiveTabId: async () => undefined,
+    getTab: async (tabId) => testTabs.get(tabId) ?? undefined,
+    createTab: async () => 99,
+    createWindow: vi.fn(async () => ({
+      windowId: 7,
+      tabId: 88,
+      left: 0,
+      top: 0,
+      width: 800,
+      height: 600,
+      state: 'normal',
+    })),
+    getWindow: vi.fn(async () => ({
+      windowId: 7,
+      tabId: 88,
+      left: 0,
+      top: 0,
+      width: 800,
+      height: 600,
+      state: 'normal',
+    })),
+    updateWindow: vi.fn(async () => ({
+      windowId: 7,
+      tabId: 88,
+      left: 0,
+      top: 0,
+      width: 800,
+      height: 600,
+      state: 'normal',
+    })),
+    removeTab: vi.fn(async () => undefined),
+    activateTab: vi.fn(async () => undefined),
+    allowedOrigins: [ORIGIN],
+  };
+  return { ...base, ...overrides };
+}
+
+function leaderSender(): FakeSender {
+  return {
+    origin: ORIGIN,
+    tab: { id: 42, url: `${ORIGIN}/?slicc=leader` },
+    frameId: 0,
+    url: `${ORIGIN}/?slicc=leader`,
+  };
+}
+
+function makeHello(channelId: string) {
+  return {
+    bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+    channelId,
+    kind: 'handshake.hello',
+  };
+}
+
+function makeCdpRequest(
+  channelId: string,
+  id: number,
+  method: string,
+  params?: unknown,
+  sessionId?: string
+) {
+  return {
+    bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+    channelId,
+    kind: 'cdp.request',
+    id,
+    method,
+    params,
+    sessionId,
+  };
+}
+
+async function connectAndHandshake(deps: BridgeSwDeps): Promise<FakePort> {
+  const port = makePort(EXTENSION_BRIDGE_PORT_NAME, leaderSender());
+  await handleBridgePortConnect(port as unknown as ChromeRuntimePort, deps);
+  port.receive(makeHello('ch-1'));
+
+  await new Promise((r) => setTimeout(r, 10));
+
+  port.posted.length = 0;
+  return port;
+}
+
+describe('B24-1: bridge CDP protected origin guards', () => {
+  beforeEach(() => {
+    testTabs.clear();
+    testTabs.set(42, { id: 42, url: `${ORIGIN}/?slicc=leader`, title: 'Leader', windowId: 1 });
+    testTabs.set(100, { id: 100, url: 'https://example.com/', title: 'Normal', windowId: 1 });
+    testTabs.set(101, {
+      id: 101,
+      url: 'https://vault.sliccy.ai/',
+      title: 'Vault',
+      windowId: 1,
+    });
+    testTabs.set(102, {
+      id: 102,
+      url: 'blob:https://vault.sliccy.ai/0b9e0f6c',
+      title: 'Blob Vault',
+      windowId: 1,
+    });
+  });
+
+  afterEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+    testTabs.clear();
+  });
+
+  it('refuses Target.attachToTarget for a tab on a protected origin', async () => {
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '101' }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const resp = port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === 1) as any;
+    expect(resp).toBeDefined();
+    expect(resp.error).toMatch(/refused/i);
+  });
+
+  it('refuses Target.attachToTarget for a blob: URL wrapping a protected origin (B24-2)', async () => {
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '102' }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const resp = port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === 1) as any;
+    expect(resp).toBeDefined();
+    expect(resp.error).toMatch(/refused/i);
+  });
+
+  it('allows Target.attachToTarget for a non-protected tab', async () => {
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '100' }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const resp = port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === 1) as any;
+    expect(resp).toBeDefined();
+    expect(resp.error).toBeUndefined();
+    expect(resp.result).toEqual({ sessionId: '100' });
+  });
+
+  it('attaches to a blank tab with no opener or a plain opener, but not one opened by the vault', async () => {
+    testTabs.set(110, { id: 110, url: 'about:blank', title: '', windowId: 1 });
+    testTabs.set(111, { id: 111, url: 'about:blank', title: '', windowId: 1, openerTabId: 100 });
+    testTabs.set(112, { id: 112, url: 'about:blank', title: '', windowId: 1, openerTabId: 101 });
+    testTabs.set(113, { id: 113, url: 'about:blank', title: '', windowId: 1, openerTabId: 999 });
+    testTabs.set(114, {
+      id: 114,
+      url: 'https://example.com/',
+      title: '',
+      windowId: 1,
+      pendingUrl: 'https://vault.sliccy.ai/',
+    });
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+    const attach = async (id: number, tab: number) => {
+      port.receive(makeCdpRequest('ch-1', id, 'Target.attachToTarget', { targetId: String(tab) }));
+      await new Promise((r) => setTimeout(r, 20));
+      return port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === id) as any;
+    };
+
+    expect((await attach(1, 110)).result).toEqual({ sessionId: '110' });
+    expect((await attach(2, 111)).result).toEqual({ sessionId: '111' });
+
+    expect((await attach(3, 112)).error).toMatch(/refused/i);
+    expect((await attach(4, 113)).error).toMatch(/refused/i);
+    expect((await attach(5, 114)).error).toMatch(/refused/i);
+  });
+
+  it('refuses Target.createTarget with a protected URL', async () => {
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(
+      makeCdpRequest('ch-1', 1, 'Target.createTarget', { url: 'https://vault.sliccy.ai/' })
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    const resp = port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === 1) as any;
+    expect(resp).toBeDefined();
+    expect(resp.error).toMatch(/refused/i);
+  });
+
+  it('refuses Target.createTarget with a view-source: wrapped protected URL (B24-2)', async () => {
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(
+      makeCdpRequest('ch-1', 1, 'Target.createTarget', {
+        url: 'view-source:https://vault.sliccy.ai/',
+      })
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    const resp = port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === 1) as any;
+    expect(resp).toBeDefined();
+    expect(resp.error).toMatch(/refused/i);
+  });
+
+  it('allows Target.createTarget with about:blank (no opener)', async () => {
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.createTarget', { url: 'about:blank' }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const resp = port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === 1) as any;
+    expect(resp).toBeDefined();
+    expect(resp.error).toBeUndefined();
+  });
+
+  it('refuses Page.navigate to a protected URL', async () => {
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '100' }));
+    await new Promise((r) => setTimeout(r, 20));
+    port.posted.length = 0;
+
+    port.receive(
+      makeCdpRequest('ch-1', 2, 'Page.navigate', { url: 'https://vault.sliccy.ai/' }, '100')
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    const resp = port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === 2) as any;
+    expect(resp).toBeDefined();
+    expect(resp.error).toMatch(/refused/i);
+  });
+
+  it('refuses Page.navigate to a filesystem: wrapped protected URL (B24-2)', async () => {
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '100' }));
+    await new Promise((r) => setTimeout(r, 20));
+    port.posted.length = 0;
+
+    port.receive(
+      makeCdpRequest(
+        'ch-1',
+        2,
+        'Page.navigate',
+        { url: 'filesystem:https://vault.sliccy.ai/temporary/notes.txt' },
+        '100'
+      )
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    const resp = port.posted.find((m: any) => m.kind === 'cdp.response' && m.id === 2) as any;
+    expect(resp).toBeDefined();
+    expect(resp.error).toMatch(/refused/i);
+  });
+});
+
+describe('B24-1: checkBridgeTabProtection detaches on navigation to protected origin', () => {
+  afterEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+    testTabs.clear();
+  });
+
+  it('emits Target.detachedFromTarget when a tab navigates to a protected URL', async () => {
+    testTabs.set(100, { id: 100, url: 'https://example.com/', title: 'Normal', windowId: 1 });
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '100' }));
+    await new Promise((r) => setTimeout(r, 20));
+    port.posted.length = 0;
+
+    const detached = checkBridgeTabProtection(100, 'https://vault.sliccy.ai/');
+    expect(detached.has(100)).toBe(true);
+
+    const detachEvent = port.posted.find(
+      (m: any) => m.kind === 'cdp.event' && m.method === 'Target.detachedFromTarget'
+    ) as any;
+    expect(detachEvent).toBeDefined();
+    expect(detachEvent.params.sessionId).toBe('100');
+  });
+
+  it('does nothing when a tab navigates to a non-protected URL', async () => {
+    testTabs.set(100, { id: 100, url: 'https://example.com/', title: 'Normal', windowId: 1 });
+    const deps = makeDeps();
+    const port = await connectAndHandshake(deps);
+
+    port.receive(makeCdpRequest('ch-1', 1, 'Target.attachToTarget', { targetId: '100' }));
+    await new Promise((r) => setTimeout(r, 20));
+    port.posted.length = 0;
+
+    const detached = checkBridgeTabProtection(100, 'https://example.org/');
+    expect(detached.size).toBe(0);
+    expect(port.posted).toHaveLength(0);
+  });
+});

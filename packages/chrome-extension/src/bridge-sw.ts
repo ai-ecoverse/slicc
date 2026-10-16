@@ -12,6 +12,12 @@ import {
   SLICC_HOSTED_ORIGIN,
   type TargetInfo,
 } from '@slicc/shared-ts';
+import {
+  isProtectedTab,
+  isProtectedTarget,
+  isProtectedUrl,
+  PROTECTED_REFUSAL,
+} from './protected-origins.js';
 
 interface BridgeTargetAttachResult extends CDPPayload {
   sessionId: string;
@@ -233,6 +239,33 @@ export function notifyBridgeDebuggerDetached(tabId: number): void {
       } catch {}
     }
   }
+}
+
+export function checkBridgeTabProtection(tabId: number, url: string | undefined): Set<number> {
+  const detached = new Set<number>();
+  if (!url || !isProtectedUrl(url)) return detached;
+
+  for (const [port, state] of liveBridgePortStates) {
+    const detachedSessionIds = [...state.sessionToTab]
+      .filter(([, tid]) => tid === tabId)
+      .map(([sid]) => sid);
+    if (detachedSessionIds.length === 0) continue;
+    invalidatePortDebuggerAttachment(state, tabId);
+    detached.add(tabId);
+    if (state.channelId === null) continue;
+    for (const sessionId of detachedSessionIds) {
+      try {
+        port.postMessage({
+          bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+          channelId: state.channelId,
+          kind: 'cdp.event',
+          method: 'Target.detachedFromTarget',
+          params: { sessionId, targetId: String(tabId), reason: PROTECTED_REFUSAL },
+        } satisfies ExtensionBridgeEnvelope);
+      } catch {}
+    }
+  }
+  return detached;
 }
 
 export function postLickToWelcomedLeaderPorts(
@@ -639,6 +672,13 @@ async function dispatchCdpCommand(
     );
   }
 
+  if (method === 'Page.navigate') {
+    const navUrl = typeof params?.['url'] === 'string' ? params['url'] : undefined;
+    if (navUrl && isProtectedUrl(navUrl as string)) {
+      throw new Error(PROTECTED_REFUSAL);
+    }
+  }
+
   if (method === 'Page.bringToFront') {
     await deps.activateTab(tabId);
   }
@@ -674,9 +714,21 @@ async function cdpAttachToTarget(
   if (!Number.isFinite(tabId) || tabId <= 0) {
     throw new Error(`Invalid targetId: ${targetId}`);
   }
+
+  if (await isProtectedTab(await deps.getTab(tabId), deps.getTab)) {
+    throw new Error(PROTECTED_REFUSAL);
+  }
   if (!state.ownedTabs.has(tabId)) {
     const attachedByThisPort = await deps.attachDebugger(tabId);
     if (attachedByThisPort) state.ownedTabs.add(tabId);
+  }
+
+  if (await isProtectedTab(await deps.getTab(tabId), deps.getTab)) {
+    if (state.ownedTabs.has(tabId)) {
+      state.ownedTabs.delete(tabId);
+      await deps.detachDebugger(tabId);
+    }
+    throw new Error(PROTECTED_REFUSAL);
   }
 
   const sessionId = targetId;
@@ -717,6 +769,10 @@ async function cdpCreateTarget(
   deps: BridgeSwDeps
 ): Promise<BridgeTargetCreateResult> {
   const url = readCreateTargetUrl(params);
+
+  if (isProtectedTarget(url)) {
+    throw new Error(PROTECTED_REFUSAL);
+  }
 
   if (params['newWindow'] !== true) {
     const tabId = await deps.createTab(url);
