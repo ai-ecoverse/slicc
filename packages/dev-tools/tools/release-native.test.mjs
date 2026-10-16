@@ -501,7 +501,7 @@ describe('decideCherryGating', () => {
 
   it('publishes from the workspace directory with provenance', () => {
     expect(CHERRY_PUBLISH_CMD).toBe(
-      'node packages/dev-tools/tools/npm-publish-retry.mjs packages/cherry --provenance --access public'
+      'node packages/dev-tools/tools/npm-publish-retry.mjs ./packages/cherry --provenance --access public'
     );
   });
 });

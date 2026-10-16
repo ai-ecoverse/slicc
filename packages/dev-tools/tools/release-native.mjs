@@ -123,12 +123,14 @@ export const SLICC_CLI_SCRIPT = 'packages/slicc-cli/sign-and-package.sh';
 export const BIOME_JSH_PUBLISH_CMD =
   'node packages/dev-tools/tools/npm-publish-retry.mjs packages/dev-tools/biome-jsh --provenance --access public';
 
-// Cherry is published from its workspace directory; `--provenance` /
+// Cherry is published from its workspace directory. The `./` matters: npm reads
+// a bare `packages/cherry` as GitHub `owner/repo` shorthand (v6.250.0 failed on
+// `git ls-remote ssh://git@github.com/packages/cherry.git`). `--provenance` /
 // `--access public` match biome-jsh. npm trusted publishing (OIDC) authorizes
 // the `release` job of .github/workflows/release.yml — keep that pairing in
 // sync with the npm package settings if the publish ever moves.
 export const CHERRY_PUBLISH_CMD =
-  'node packages/dev-tools/tools/npm-publish-retry.mjs packages/cherry --provenance --access public';
+  'node packages/dev-tools/tools/npm-publish-retry.mjs ./packages/cherry --provenance --access public';
 
 // An empty / unset / placeholder tag means "first release" — build both.
 export function isFirstRelease(lastTag) {
