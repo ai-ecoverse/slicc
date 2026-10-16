@@ -12,9 +12,10 @@
 # Shape: `plan` pins the sliccy version and lists the shards; each `bench` shard is one matrix job
 # on a self-hosted runner that takes every Nth task (`run.mjs --shard K/N`) and runs it on
 # `leaders` leaders side by side; `report` merges the shards' out dirs (merge.mjs), and publishes
-# once. Shards run on `cloud-run-bench`, a Cloud Run worker pool of ephemeral just-in-time
-# runners (8 vCPU / 32 GiB, CPU always allocated, up to 30 machines, its own runner group). Its
-# image (runner-bench) brings Chrome with fonts, Node, Go, coreutils and a warm npm cache, so the
+# once. Shards run on `vars.CI_HEAVY_RUNNER` (the same runner as ci.yml's heavy jobs; since
+# 2026-10-16 `cloud-run-job`, one fresh 8 CPU / 32 GiB Cloud Run Jobs execution per job,
+# previously the `cloud-run-bench` worker pool). `vars.BENCH_PR_RUNNER` overrides it for PR
+# runs and the `runner` input for dispatches. The image brings Chrome with fonts, Node, Go, coreutils and a warm npm cache, so the
 # Chrome install below is skipped. Cloud Run sets no time limit, but may restart a machine for
 # maintenance. The shard's artifact is uploaded only when the job ends, so a restart loses the
 # shard's unsaved runs and "Re-run failed jobs" runs them again; the 420-minute deadline cap keeps
@@ -90,8 +91,8 @@ on:
         description: 'Leaders per shard, side by side (1-8; about 2 vCPU each)'
         default: '4'
       runner:
-        description: 'Runner label the shards run on: cloud-run-bench (Cloud Run pool), cloud-run-gpu (L4 GPU: leaders get WebGPU) or gcp-bench-8core (old GCE pool)'
-        default: 'cloud-run-bench'
+        description: 'Runner label the shards run on. Empty: vars.CI_HEAVY_RUNNER (the Cloud Run runner, currently cloud-run-job). cloud-run-gpu: L4 GPU, leaders get WebGPU'
+        default: ''
       resume-run:
         description: "Continue an earlier Benchmark run (its run id): each shard starts from that run's shard artifact. Use the same sets, tasks, models, skills, repeats and shards"
         default: ''
@@ -204,7 +205,12 @@ jobs:
     permissions:
       contents: read
       actions: read # resume-run downloads another run's shard artifacts
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'cloud-run-bench' }}
+    runs-on: >-
+      ${{
+      github.event_name == 'workflow_dispatch' && inputs.runner ||
+      github.event_name != 'workflow_dispatch' && vars.BENCH_PR_RUNNER ||
+      vars.CI_HEAVY_RUNNER && fromJSON(startsWith(vars.CI_HEAVY_RUNNER, '[') && vars.CI_HEAVY_RUNNER || toJSON(vars.CI_HEAVY_RUNNER)) ||
+      'ubuntu-latest' }}
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
     strategy:
       fail-fast: false
