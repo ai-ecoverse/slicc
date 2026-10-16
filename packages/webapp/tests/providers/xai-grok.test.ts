@@ -406,6 +406,56 @@ describe('xai-grok provider', () => {
     });
   });
 
+  it.each([
+    ['stream', mocks.streamOpenAIResponses],
+    ['streamSimple', mocks.streamSimpleOpenAIResponses],
+  ] as const)(
+    'omits temperature through %s for grok-4.7, which rejects the field',
+    async (entry, native) => {
+      native.mockClear().mockImplementation(endedStream);
+      const provider = getApiProvider(XAI_API)!;
+      const listed = config.getModelIds!().find((model) => model.id === 'grok-4.7')!;
+      const model = { ...listed, provider: 'xai-grok', api: XAI_API } as Model<Api>;
+
+      await drain(provider[entry](model, context, { temperature: 0.3 }));
+
+      expect(native.mock.calls[0][2]).toEqual(expect.objectContaining({ apiKey: 'oauth-token' }));
+      expect(native.mock.calls[0][2]).not.toHaveProperty('temperature');
+    }
+  );
+
+  it.each([
+    ['stream', mocks.streamOpenAIResponses],
+    ['streamSimple', mocks.streamSimpleOpenAIResponses],
+  ] as const)(
+    'omits temperature through %s when a retired model falls back to grok-4.7',
+    async (entry, native) => {
+      native.mockClear().mockImplementation(endedStream);
+      const provider = getApiProvider(XAI_API)!;
+      const model = { ...routedModel('grok-4.3'), id: 'grok-3-mini', name: 'Grok 3 Mini' };
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        await drain(provider[entry](model, context, { temperature: 0.3 }));
+
+        expect(native.mock.calls[0][0]).toEqual(expect.objectContaining({ id: 'grok-4.7' }));
+        expect(native.mock.calls[0][2]).not.toHaveProperty('temperature');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    }
+  );
+
+  it('keeps temperature for a Grok model that still accepts it', async () => {
+    const provider = getApiProvider(XAI_API)!;
+
+    await drain(provider.stream(routedModel('grok-4.5'), context, { temperature: 0.3 }));
+
+    expect(mocks.streamOpenAIResponses.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ apiKey: 'oauth-token', temperature: 0.3 })
+    );
+  });
+
   it('streams Grok 4.7 through the Responses API using the overlay', async () => {
     const provider = getApiProvider(XAI_API)!;
     const listed = config.getModelIds!().find((model) => model.id === 'grok-4.7')!;

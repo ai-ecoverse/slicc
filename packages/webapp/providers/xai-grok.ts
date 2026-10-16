@@ -23,6 +23,7 @@ import {
 import { toPiTranscriptContext } from '../src/providers/pi-transcript-context.js';
 import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../src/providers/pkce.js';
 import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
+import { withSupportedTemperature } from '../src/providers/temperature-support.js';
 import type {
   InterceptingOAuthLauncher,
   OAuthLoginOptions,
@@ -276,11 +277,11 @@ async function pumpXaiStream(
     const accessToken = await getValidAccessToken();
     const sessionId = (options as { sessionId?: string }).sessionId;
     const nativeModel = resolveNativeXaiModel(model);
-    const forwardedOptions = {
+    const forwardedOptions = withSupportedTemperature(nativeModel.id, nativeModel.name, {
       ...options,
       apiKey: accessToken,
       headers: withGrokConvHeader(options.headers, sessionId),
-    };
+    });
     const inner =
       nativeModel.api === 'openai-responses'
         ? streamOpenAIResponses(nativeModel, toPiTranscriptContext(context), forwardedOptions)
@@ -304,11 +305,11 @@ async function pumpSimpleXaiStream(
     const accessToken = await getValidAccessToken();
     const sessionId = (options as { sessionId?: string } | undefined)?.sessionId;
     const nativeModel = resolveNativeXaiModel(model);
-    const forwardedOptions: SimpleStreamOptions = {
+    const forwardedOptions = withSupportedTemperature(nativeModel.id, nativeModel.name, {
       ...options,
       apiKey: accessToken,
       headers: withGrokConvHeader(options?.headers, sessionId),
-    };
+    } as SimpleStreamOptions);
     const inner =
       nativeModel.api === 'openai-responses'
         ? streamSimpleOpenAIResponses(nativeModel, toPiTranscriptContext(context), forwardedOptions)
