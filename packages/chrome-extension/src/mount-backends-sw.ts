@@ -6,6 +6,7 @@ import {
   type SecretGetter,
   type SignAndForwardReply,
 } from '@slicc/shared-ts';
+import { encryptedStorage } from './secrets-encrypted-storage.js';
 import type { SwMessageOutcome } from './sw-message-router.js';
 import { beginPortPin, type PortPinDeps } from './sw-pinned-port.js';
 
@@ -27,7 +28,7 @@ function isMountSignAndForwardRequest(msg: unknown): msg is MountSignAndForwardR
 
 const chromeStorageSecretGetter: SecretGetter = {
   async get(key: string): Promise<string | undefined> {
-    const result = await chrome.storage.local.get(key);
+    const result = await encryptedStorage.get(key);
     const value = result[key];
     return typeof value === 'string' ? value : undefined;
   },

@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MsgListener = (msg: any, sender: any, sendResponse: (r: any) => void) => boolean | void;
