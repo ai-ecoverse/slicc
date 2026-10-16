@@ -53,6 +53,27 @@ describe('createDiscoveryObserver', () => {
     ]);
   });
 
+  it('B24-5: emits for a plain origin but skips header scan and probe on a protected one', async () => {
+    const fetchImpl = makeFetch({});
+    const isProtected = (url: string) => new URL(url).hostname.endsWith('sliccy.ai');
+    const obs = createDiscoveryObserver({ fetchImpl, emit, isProtected });
+    const header = (origin: string) =>
+      linkHeader(`<${origin}/.well-known/ai-catalog.json>; rel="ai-catalog"`);
+    // Control: the plain page's Link header is surfaced.
+    obs.onHeaders({ url: 'https://example.com/p', responseHeaders: header('https://example.com') });
+    expect(emitted).toHaveLength(1);
+    // Protected: nothing surfaced and nothing fetched.
+    obs.onHeaders({
+      url: 'https://vault.sliccy.ai/p',
+      responseHeaders: header('https://vault.sliccy.ai'),
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(emitted).toHaveLength(1);
+    const fetched = fetchImpl.mock.calls.map((c) => String(c[0]));
+    expect(fetched.some((u) => u.includes('sliccy.ai'))).toBe(false);
+    expect(fetched.some((u) => u.startsWith('https://example.com/'))).toBe(true);
+  });
+
   it('emits both artifacts found by the well-known probe when no Link header is present', async () => {
     const fetchImpl = makeFetch({
       'https://example.com/.well-known/ai-catalog.json': resp(200, 'application/json'),

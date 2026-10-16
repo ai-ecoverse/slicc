@@ -661,6 +661,37 @@ describe('extension service worker', () => {
     }
   });
 
+  it('B24-5: honours handoff on a plain page and the hosted /handoff endpoint, ignores other protected pages', async () => {
+    const link = '</>; rel="https://www.sliccy.ai/rel/handoff"; title="Do the thing"';
+    // Controls: a plain page and the canonical hosted handoff endpoint notify.
+    fireHandoffSighting(link, 'https://example.com/page');
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(1);
+    fireHandoffSighting(
+      '</>; rel="https://www.sliccy.ai/rel/handoff"; title="Hosted handoff"',
+      'https://www.sliccy.ai/handoff?handoff=hosted'
+    );
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(2);
+    // Protected: vault, seven, the apex, and a non-handoff www page are ignored.
+    for (const url of [
+      'https://vault.sliccy.ai/unlock',
+      'https://seven.sliccy.ai/os/',
+      'https://sliccy.ai/',
+      'https://sliccy.ai/handoff',
+      'https://www.sliccy.ai/other',
+      'https://www.sliccy.ai/handoff/extra',
+      'http://www.sliccy.ai/handoff',
+      'https://main--www.sliccy.ai/handoff',
+      'https://get.sliccy.ai/handoff',
+      'https://mcpcat.sliccy.ai/',
+    ]) {
+      fireHandoffSighting(`</>; rel="https://www.sliccy.ai/rel/handoff"; title="from ${url}"`, url);
+    }
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(2);
+  });
+
   it('collapses control characters in the handoff instruction before rendering the toast', async () => {
     fireHandoffSighting(
       `</>; rel="https://www.sliccy.ai/rel/handoff"; title*=UTF-8''Security%20alert%3A%0Are-authenticate%20now`,
@@ -823,6 +854,37 @@ describe('extension service worker', () => {
     await loadServiceWorker();
     await flushAsync();
   }
+
+  it('B24-5: probes a plain origin but never fetches discovery artifacts from a protected one', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await reloadWithDiscoverySetting(true);
+      const discoveryListener = headersReceivedListeners[1];
+      expect(discoveryListener).toBeTruthy();
+      // Control: a plain origin is probed.
+      discoveryListener?.({ url: 'https://plain.example/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      const plainCalls = fetchMock.mock.calls.length;
+      expect(plainCalls).toBeGreaterThan(0);
+      // Protected: vault, the apex, mcpcat and get are never probed.
+      for (const url of [
+        'https://vault.sliccy.ai/',
+        'https://sliccy.ai/',
+        'https://mcpcat.sliccy.ai/x',
+        'https://get.sliccy.ai/',
+      ]) {
+        discoveryListener?.({ url, tabId: 1, responseHeaders: [] });
+      }
+      await flushAsync();
+      expect(fetchMock.mock.calls.length).toBe(plainCalls);
+      const urls = fetchMock.mock.calls.map((c) => String((c as unknown[])[0]));
+      expect(urls.some((u) => u.includes('sliccy.ai'))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 
   it('skips the discovery probe when the persisted setting is disabled', async () => {
     const originalFetch = globalThis.fetch;

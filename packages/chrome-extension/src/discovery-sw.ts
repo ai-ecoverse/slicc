@@ -22,6 +22,7 @@ import {
   postDiscoveryToWelcomedLeaderPorts,
 } from './bridge-sw.js';
 import { createDiscoveryObserver } from './discovery-observer.js';
+import { isProtectedUrl } from './protected-origins.js';
 import { getMsgType, type SwMessageOutcome } from './sw-message-router.js';
 
 // Persisted "autodiscover agentic resources" setting (default ON), mirrored
@@ -126,6 +127,7 @@ export function installDiscoveryObserver(): void {
     emit: (discovery) =>
       postDiscoveryToWelcomedLeaderPorts({ kind: 'extension.discovery', ...discovery }),
     isEnabled: () => discoveryLoaded && discoveryEnabled,
+    isProtected: isProtectedUrl,
   });
   chrome.webRequest.onHeadersReceived.addListener(
     (details) => {

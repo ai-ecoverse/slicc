@@ -60,6 +60,14 @@ export interface DiscoveryObserverDeps {
    * well-known probe are skipped. Defaults to always-enabled.
    */
   isEnabled?: () => boolean;
+  /**
+   * B24-5: true for URLs on a protected origin (seven, the vault, every
+   * `*.sliccy.ai` host). Their responses are neither scanned for `Link`
+   * headers nor probed for well-known artifacts, so the SW never fetches
+   * `/.well-known/ai-catalog.json` or `/llms.txt` from them.
+   * `discovery-sw.ts` wires the catalog matcher; defaults to none protected.
+   */
+  isProtected?: (url: string) => boolean;
 }
 
 export interface DiscoveryObserver {
@@ -118,6 +126,7 @@ export function createDiscoveryObserver(deps: DiscoveryObserverDeps): DiscoveryO
   };
 
   const isEnabled = deps.isEnabled ?? ((): boolean => true);
+  const isProtected = deps.isProtected ?? ((): boolean => false);
 
   const onHeaders = (detail: DiscoveryHeadersDetail): void => {
     if (!isEnabled()) return;
@@ -130,6 +139,8 @@ export function createDiscoveryObserver(deps: DiscoveryObserverDeps): DiscoveryO
     // Only probe real web origins — chrome://, chrome-extension://, file://,
     // etc. never publish discovery artifacts and would waste a fetch.
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+    // B24-5: never scan or probe a protected origin.
+    if (isProtected(detail.url)) return;
     const origin = url.origin;
 
     const { match } = extractCatalogFromWebRequest(detail.responseHeaders, detail.url);
