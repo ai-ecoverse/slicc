@@ -1070,7 +1070,7 @@ output (the square grid is locked at 1:1.595; DTG printing wants
 `packages/dev-tools/tools/release-plan.mjs` (Linux preflight) +
 `release-native.mjs` gate macOS/iOS packaging, the `slicc` Go CLI
 (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store / worker
-publish, and `@ai-ecoverse/biome-jsh`.
+publish, `@ai-ecoverse/biome-jsh`, and `@ai-ecoverse/cherry`.
 
 `tools/merge-queue-busy.mjs` (+ `merge-queue-lib.mjs`) defers Release
 while the default-branch merge queue has entries, so the queue never
@@ -1089,7 +1089,8 @@ does not GraphQL-resolve `#NNNN` from commit messages. It writes
 publish, and closes it on a green non-deferred publish.
 
 `tools/npm-publish-retry.mjs` runs `npm publish` for `sliccy` (first in the
-`@semantic-release/exec` `publishCmd`) and `@ai-ecoverse/biome-jsh`. It
+`@semantic-release/exec` `publishCmd`), `@ai-ecoverse/biome-jsh`, and
+`@ai-ecoverse/cherry`. It
 retries transient DNS/socket, sigstore CA/TLog/TSA, and registry 408/429/5xx
 failures with 15s–240s backoff (5-minute per-attempt kill, 60s registry
 probes, 20-minute retry budget). After a transient failure or version

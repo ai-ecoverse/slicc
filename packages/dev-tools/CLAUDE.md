@@ -54,7 +54,7 @@ Each bold gate is an `npm run` script unless a raw command is shown.
 - **Agent merch grid**: `tools/agent-merch.mjs` (+ `agent-merch-lib.mjs`) — `<slicc-agent-avatar>` grid → 300-dpi PNGs in `dist/merch/` (Playwright; build `@slicc/webcomponents` first; `--help`). [details](../../docs/dev-tools-details.md#agent-merch-grid).
 - **CI phase timings**: `tools/ci-job-timing.mjs` (+ `-lib.mjs`) — step timestamps → Markdown summary + JSON artifact; both Cloudflare staging workflows.
 - **Preflight deps check**: `tools/preflight-deps.mjs` (via `pretypecheck`/`pretest`).
-- **Release gating** ([details](../../docs/dev-tools-details.md#release-gating)): `tools/release-plan.mjs` (Linux preflight), `release-native.mjs`, `merge-queue-busy.mjs` (+ `merge-queue-lib.mjs`), `release-publish.mjs` (wraps `npx semantic-release`), `npm-publish-retry.mjs` (retry publish for sliccy + biome-jsh), `release-alert.mjs` (red-release tracking issue).
+- **Release gating** ([details](../../docs/dev-tools-details.md#release-gating)): `tools/release-plan.mjs` (Linux preflight), `release-native.mjs`, `merge-queue-busy.mjs` (+ `merge-queue-lib.mjs`), `release-publish.mjs` (wraps `npx semantic-release`), `npm-publish-retry.mjs` (retry publish for sliccy + biome-jsh + cherry), `release-alert.mjs` (red-release tracking issue).
 - **Extension raw-fetch check** (`npm run test:raw-fetch -w @slicc/chrome-extension`): `tools/extension-raw-fetch-check.ts` drives raw fetch end to end in the built extension, then a wasm program through the realm proxy from a leader page (`extension-realm-proxy-case.ts`/`-page.ts`; HTTPS via `SLICC_WASM_CURL_TLS`).
 - **Optional-binary guard**: `tools/run-if-installed.mjs <binary> [args…]` — runs iff on `PATH` else exits 0; `lint-staged` Swift/Go globs.
 

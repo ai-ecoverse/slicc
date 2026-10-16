@@ -60,6 +60,8 @@ The **Chrome Web Store publish** has moved to [ai-ecoverse/slicc-extension](http
 
 `@ai-ecoverse/biome-jsh` (`packages/dev-tools/biome-jsh/`) is published **conditionally**, not on every release: `packages/dev-tools/tools/release-native.mjs --gate=biome-jsh-version` stamps the release version into its `package.json` during `prepareCmd` (committed by `@semantic-release/git`) and `--gate=biome-jsh` runs `npm publish` during `publishCmd`, both only when `packages/dev-tools/biome-jsh/` changed since the previous tag (or on a first release). Otherwise the package stays at its last published version instead of republishing an identical tarball.
 
+`@ai-ecoverse/cherry` (`packages/cherry/`, the embedded-follower host SDK) follows the same conditional pattern: `--gate=cherry-version` stamps the release version into `packages/cherry/package.json` and its `package-lock.json` workspace entry during `prepareCmd`, and `--gate=cherry` publishes `packages/cherry` (its `dist/` and `README.md`, built by the root `npm run build` in `prepareCmd`) during `publishCmd`. The gate opens only when a shipped file under `packages/cherry/` changed; `tests/`, `examples/`, `CLAUDE.md`, and `AGENTS.md` are ignored. npm trusted publishing for both scoped packages authorizes the `release` job of `.github/workflows/release.yml` (no GitHub environment), so renaming that workflow file or job requires updating the npm package settings first.
+
 ### Required repo configuration
 
 - Release branch: semantic-release is configured for `main` only.

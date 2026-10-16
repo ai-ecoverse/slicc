@@ -118,8 +118,8 @@ so local framing works without worker config.
 as a real consumer would write it —
 `import { mountSlicc } from '@ai-ecoverse/cherry'`. A real embedder
 `npm install`s the package and their bundler (or a CDN like esm.sh) resolves
-it plus its `html2canvas-pro` dependency automatically. Since this SDK isn't
-published yet and the harness has no bundler, `host.html` carries an
+it plus its `html2canvas-pro` dependency automatically. The harness exercises
+the local build and has no bundler, so `host.html` carries an
 `importmap` (clearly labelled as plumbing) that maps the
 `@ai-ecoverse/cherry` specifier to the local `dist/` and the
 `html2canvas-pro` specifier to the copy in the repo's `node_modules` — the
