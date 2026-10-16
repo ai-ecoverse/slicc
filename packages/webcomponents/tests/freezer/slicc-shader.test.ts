@@ -490,9 +490,15 @@ describe('slicc-shader', () => {
       const spy = spyDraws();
       el.pulse(Number.NaN);
       await wait(300);
-      // The finite guard rejects NaN, so no wake and no loop; without it a NaN
-      // energy would never clear the rest floor and the loop would run forever.
-      expect(spy.mock.calls.length).toBe(0);
+      // The finite guard rejects NaN, so pulse opens no burst and arms no loop;
+      // without it a NaN energy would never clear the rest floor and the loop
+      // would run forever. One stray ambient frame is tolerated: under CI
+      // throttling the ResizeObserver's initial-notification wake can fall
+      // outside settle()'s quiet window and fire now (same +1 tolerance as the
+      // speed=0 connect tests). What the guard prevents is a *spin* — assert the
+      // field is stopped and never opened a burst, not that it drew exactly zero.
+      await expectStopped(spy);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(1);
     });
 
     it('a static field revealed from display:none renders at its real size', async () => {
