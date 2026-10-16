@@ -46,8 +46,8 @@ on:
         description: 'Leaders per shard, side by side (1-8; about 2 vCPU each)'
         default: '4'
       runner:
-        description: 'Runner label the shards run on: cloud-run-bench (Cloud Run pool), cloud-run-gpu (L4 GPU: leaders get WebGPU) or gcp-bench-8core (old GCE pool)'
-        default: 'cloud-run-bench'
+        description: 'Runner label the shards run on. Empty: vars.CI_HEAVY_RUNNER (the Cloud Run runner, currently cloud-run-job). cloud-run-gpu: L4 GPU, leaders get WebGPU'
+        default: ''
       resume-run:
         description: "Continue an earlier Benchmark run (its run id): each shard starts from that run's shard artifact. Use the same sets, tasks, models, skills, repeats and shards"
         default: ''
@@ -156,7 +156,12 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'cloud-run-bench' }}
+    runs-on: >-
+      ${{
+      github.event_name == 'workflow_dispatch' && inputs.runner ||
+      github.event_name != 'workflow_dispatch' && vars.BENCH_PR_RUNNER ||
+      vars.CI_HEAVY_RUNNER && fromJSON(startsWith(vars.CI_HEAVY_RUNNER, '[') && vars.CI_HEAVY_RUNNER || toJSON(vars.CI_HEAVY_RUNNER)) ||
+      'ubuntu-latest' }}
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
     strategy:
       fail-fast: false
