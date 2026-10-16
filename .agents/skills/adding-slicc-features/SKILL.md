@@ -23,9 +23,12 @@ npm run lint
 # Check playwright-cli command parity after adding/changing a subcommand
 node packages/dev-tools/tools/playwright-cli-sync.mjs
 
-# Build the extension for dual-mode verification
-npm run build -w @slicc/chrome-extension
 ```
+
+The Chrome extension is built and tested in
+[ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension). For
+dual-mode verification, run it against your local webapp from there; an
+extension-protocol change here needs a matching PR there.
 
 Use these common extension points:
 
@@ -885,7 +888,7 @@ export function register(): void {
 - `packages/webapp/src/providers/oauth-service.ts` — `createOAuthLauncher()` factory (CLI popup vs extension chrome.identity)
 - `packages/webapp/src/ui/provider-settings.ts` — Calls `config.onOAuthLogin(launcher, onSuccess)` when login button clicked
 - `packages/node-server/src/index.ts` — `/auth/callback` route (reads query params + fragment, postMessages to opener)
-- `packages/chrome-extension/src/service-worker.ts` — `handleOAuthRequest()` (generic `chrome.identity.launchWebAuthFlow`)
+- The extension SW's `handleOAuthRequest()` (generic `chrome.identity.launchWebAuthFlow`), in ai-ecoverse/slicc-extension
 
 **Dual-mode redirect URIs**:
 
@@ -1027,10 +1030,9 @@ npm run test
 # Standalone dev
 npm run dev
 
-# Extension dev
-npm run build -w @slicc/chrome-extension
-# Then load dist/extension in chrome://extensions
 ```
+
+Extension dev happens in ai-ecoverse/slicc-extension.
 
 ---
 

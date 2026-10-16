@@ -1,6 +1,6 @@
 // @ai-ecoverse/spoon — the injection web component. A self-contained package
 // holding the `<slicc-launcher>` overlay element, its pure state helpers, and
-// the inject/remove glue. Consumed by webapp, the chrome-extension, node-server,
+// the inject/remove glue. Consumed by webapp, node-server,
 // and swift-server (which embeds the built `dist/ui/electron-overlay-entry.js`
 // IIFE). Importing the barrel registers the `<slicc-launcher>` custom element.
 

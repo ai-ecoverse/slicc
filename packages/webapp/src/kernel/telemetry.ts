@@ -89,7 +89,7 @@ function getModeLabel(
 /**
  * Initialize operational telemetry. Call once from each host's boot:
  * `ui/main.ts` (page-side standalone / electron / extension panel),
- * `chrome-extension/src/offscreen.ts` (extension agent realm), and
+ * the extension's offscreen document (ai-ecoverse/slicc-extension), and
  * `kernel/kernel-worker.ts` (standalone agent realm).
  *
  * `opts.isExtensionRealm` is the page-realm caller's own already-resolved

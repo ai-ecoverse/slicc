@@ -3,7 +3,7 @@
  * panel-driven `TerminalSessionHost` wiring.
  *
  * Both the standalone DedicatedWorker (`kernel-worker.ts`) and the
- * extension offscreen document (`chrome-extension/src/offscreen.ts`)
+ * extension offscreen document (ai-ecoverse/slicc-extension)
  * stand up a `TerminalSessionHost` so the panel's
  * `RemoteTerminalView` can drive shell sessions in the kernel-side
  * realm. Without a shared factory, the two floats can drift —

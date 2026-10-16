@@ -609,7 +609,7 @@ describe('HarRecorder', () => {
 
 // Regression guard for the thin-bridge cleanup: har filtering compiles + applies
 // the user filter directly (per-entry `(${filterCode})(entry)`), with no
-// chrome-extension sandbox-iframe dependency (the extension realm was removed).
+// extension sandbox-iframe dependency (the extension realm was removed).
 describe('applyFilterDirect (no sandbox dependency)', () => {
   it('applies a per-entry filter directly, keeping matching entries', () => {
     const entries = [

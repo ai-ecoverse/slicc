@@ -7,7 +7,7 @@
  * package.json the PR sits red forever (e.g. #3424 codemirror +163 B, #3449
  * mediabunny +3.19 kB, #3455 lucide +5.49 kB).
  *
- * This measures the ALREADY-BUILT dist/ (run both builds first) with
+ * This measures the ALREADY-BUILT dist/ (run the webapp build first) with
  * `size-limit --json` for each budgeted package and, with --write, raises an
  * exceeded budget to the measured size rounded up to the next kB — but only
  * when the overshoot is within --max-growth-kb. A larger jump is reported as
@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { applyBudgetRaises, planBudgetRaises } from './bundle-budget-reconcile-lib.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const PACKAGES = ['packages/webapp', 'packages/chrome-extension'];
+const PACKAGES = ['packages/webapp'];
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {

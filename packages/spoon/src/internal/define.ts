@@ -9,8 +9,8 @@
  * alone would let `customElements.get(...)` throw a `TypeError`. The `== null`
  * check covers both `null` and `undefined` and skips registration cleanly —
  * callers in those worlds are expected to mount the element in the page MAIN
- * world (see `packages/chrome-extension/manifest.json` content_scripts entry
- * with `"world": "MAIN"`).
+ * world (see the extension's `manifest.json` content_scripts entry with
+ * `"world": "MAIN"`, in ai-ecoverse/slicc-extension).
  */
 export function define(tag: string, ctor: CustomElementConstructor): void {
   if (typeof customElements === 'undefined' || customElements == null) return;

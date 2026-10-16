@@ -15,7 +15,7 @@ CSP, and sprinkles/dips through a second sandbox (`sprinkle-sandbox.html`).
 worker lives inside the hosted leader tab (`https://www.sliccy.ai`), a normal
 `https` origin under ordinary web CSP — there is no MV3 CSP to escape, so the
 sandbox-iframe path (`createIframeRealm` / `realm-iframe.ts` /
-`chrome-extension/sandbox.html`) and the `sprinkle-sandbox.html` sprinkle
+the extension's `sandbox.html`) and the `sprinkle-sandbox.html` sprinkle
 sandbox were removed. `isExtensionRealm()` / `isExtensionRuntime()` are false
 in the hosted leader tab + its worker, so those extension-origin branches were
 already dead.
@@ -56,14 +56,14 @@ Chrome's `chrome-extension://`-origin surfaces cannot host macOS TCC (Transparen
 ## WASM in Extension Mode Runs in the Hosted Tab
 
 **Historical.** The fat extension bundled ImageMagick WASM, Pyodide, and the
-ffmpeg-core JS glue under `dist/extension/` (`magick.wasm`, `pyodide/`,
+ffmpeg-core JS glue in its bundle (`magick.wasm`, `pyodide/`,
 `vendor/ffmpeg-core.js`) and loaded them via `chrome.runtime.getURL()` to
 satisfy MV3 CSP.
 
 **Current reality.** The thin extension bundles no WASM. `convert` / `python3`
 / `ffmpeg` run in the hosted leader tab's kernel worker (a normal
 `https://www.sliccy.ai` origin), loading their WASM the same way CLI standalone
-does — from the `dist/ui` build, not from `dist/extension/`. `magick.wasm`,
+does — from the `dist/ui` build, not from the extension bundle. `magick.wasm`,
 `pyodide/`, and `vendor/ffmpeg-core.js` are no longer copied into the extension
 package.
 
@@ -447,7 +447,7 @@ See `resolvePyodideIndexURL()` in `kernel/realm/realm-factory.ts` and
 (`runInRealm({ kind: 'js' })` → `createJsWorkerRealm()` → `js-realm-shared.ts`),
 which runs in a per-task `DedicatedWorker` in **every** float. The kernel-side
 `realm-host` proxies `vfs` / `exec` / `fetch` RPC over the realm port, so realm
-code has no direct shell/VFS access and never needs a chrome-extension sandbox
+code has no direct shell/VFS access and never needs an extension sandbox
 iframe. The old extension branch that posted shimmed code into `sandbox.html`
 was removed with the thin-bridge strip.
 
@@ -472,7 +472,7 @@ realm for minutes on a transitive `.node` loader fetch that never settled.
 **One canonical source + one hand-mirror must stay in lockstep.** Adding
 a package to the native set means updating both. Worker JS realm
 (`js-realm-shared.ts`) imports the canonical module, so it doesn't need
-hand-syncing. (The former `chrome-extension/sandbox.html` hand-mirror was
+hand-syncing. (The former extension `sandbox.html` hand-mirror was
 removed with the thin-bridge strip — the JS realm always runs in the worker
 now, so there is no extension iframe realm to sync.)
 
@@ -1103,7 +1103,7 @@ Leader tray bootstrap waits for a `leader.connected` control frame.
 
 **The Solution**
 
-In the thin extension the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`) is a regular `https` page and owns the leader tray `WebSocket` directly via the standard page-side `LeaderSyncManager` (`packages/webapp/src/ui/page-leader-tray.ts`) — same shape as the standalone CLI. The service worker is not in the tray data path; it only pass-through-proxies CDP through the `slicc.cdp-bridge` Port in `packages/chrome-extension/src/bridge-sw.ts`.
+In the thin extension the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`) is a regular `https` page and owns the leader tray `WebSocket` directly via the standard page-side `LeaderSyncManager` (`packages/webapp/src/ui/page-leader-tray.ts`) — same shape as the standalone CLI. The service worker is not in the tray data path; it only pass-through-proxies CDP through the `slicc.cdp-bridge` Port in the extension's `bridge-sw.ts` (ai-ecoverse/slicc-extension).
 
 | Mode          | Leader tray socket owner                                                       |
 | ------------- | ------------------------------------------------------------------------------ |
@@ -1131,7 +1131,7 @@ A hosted leader's Chrome also hides the host address behind an mDNS name (`WebRt
 `launchWebAuthFlow({ interactive: false })` alone flashes / fails for Adobe IMS
 because its `prompt=none` page JS-redirects after load. Keep the
 `abortOnLoadForNonInteractive: false` + `timeoutMsForNonInteractive` options in
-`packages/chrome-extension/src/oauth-flow-options.ts`. See
+the extension's `oauth-flow-options.ts` (ai-ecoverse/slicc-extension). See
 `docs/oauth-intercept.md` "Silent token renewal".
 
 ## A 200 From the Hosted Origin Is Not a Successful `/api` Call
@@ -1295,7 +1295,7 @@ The extension float makes this worse: Chrome MV3 strips `Cookie`/`Referer`/`Prox
 
 **The DNR mechanism (extension SW only)**
 
-`installForbiddenHeaderRule` in `packages/chrome-extension/src/fetch-proxy-shared.ts`:
+`installForbiddenHeaderRule` in the extension's `fetch-proxy-shared.ts` (ai-ecoverse/slicc-extension):
 
 1. Scans the decoded `headers` dict for forbidden names (`cookie`, `origin`, `referer`, anything `proxy-*`).
 2. Mints a unique URL fragment token (`#slicc-req-<uuid>`) and appends it to the cleaned upstream URL, stripping any caller-supplied fragment so the DNR `urlFilter` matches exactly one in-flight request. The fragment never reaches the upstream server but DNR `urlFilter` sees it (empirically verified against Chrome for Testing 146).
@@ -1333,7 +1333,7 @@ The extension SW runs `fetch()` in a Service Worker context, so the same browser
 - `packages/webapp/src/shell/proxy-headers.ts` — `encodeForbiddenRequestHeaders` / `decodeForbiddenRequestHeaders` (shared by both floats)
 - `packages/webapp/src/shell/proxied-fetch.ts` — `createProxiedFetch` factory; CLI and extension branches both encode
 - `packages/node-server/src/index.ts` — `/api/fetch-proxy` handler; decode + localhost-strip + default-origin synth
-- `packages/chrome-extension/src/fetch-proxy-shared.ts` — SW `handleFetchProxyConnectionAsync`; decode + default-origin synth + `installForbiddenHeaderRule` (DNR session-rule shim, fragment-keyed, cleanup in `finally`)
+- extension `fetch-proxy-shared.ts` (ai-ecoverse/slicc-extension) — SW `handleFetchProxyConnectionAsync`; decode + default-origin synth + `installForbiddenHeaderRule` (DNR session-rule shim, fragment-keyed, cleanup in `finally`)
 
 ## Downloaded `slicc` CLI: Notarization Without a Staple
 
@@ -1381,7 +1381,7 @@ LNA adds a _user-permission_ layer on top of the old PNA preflight. A **headless
 launch (cloud `--hosted`) can't show a prompt at all, so the request is blocked
 outright unless the check is disabled.
 
-The dev harness (`dev:standalone:fresh`, `dev:extension:fresh`) serves the UI
+The dev harness (`dev:standalone:fresh`) serves the UI
 from `http://localhost:8787`, so the hop is **local → local** — LNA does _not_
 gate it. That is why this only reproduces with a **production** float
 (Sliccstart / packaged `npx sliccy`), not in the wrangler dev rig.
@@ -1560,7 +1560,7 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 ```
 
-See `packages/chrome-extension/src/fetch-proxy-shared.ts:handleFetchProxyConnectionAsync` for the production pattern. Regression test: `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` — "handleFetchProxyConnectionAsync — synchronous listener attach".
+See `handleFetchProxyConnectionAsync` in the extension's `fetch-proxy-shared.ts` (ai-ecoverse/slicc-extension) for the production pattern, and its `fetch-proxy-shared.test.ts` regression test — "handleFetchProxyConnectionAsync — synchronous listener attach".
 
 ### Service-worker proxy configuration requires a top-level window source
 
@@ -1576,7 +1576,7 @@ This was hit by the `secret list` shell command and the secrets management UI: t
 
 **The Solution**
 
-For management operations that must touch `chrome.storage.local`, **route through the SW via `chrome.runtime.sendMessage`** (the `externally_connectable` matches in `packages/chrome-extension/manifest.json` allow the hosted origin to talk to the SW directly). The SW has full storage access. Add a handler to the relevant `*-sw.ts` backend and register it in the `SW_MESSAGE_HANDLERS` list in `service-worker.ts` — the SW has exactly ONE `chrome.runtime.onMessage` listener (`sw-message-router.ts`); do not add a second. See the `secrets.list` / `secrets.set` / `secrets.delete` handlers in `secrets-sw.ts` for the canonical pattern. Return `'handled-async'` for async work (the router translates that into Chrome's `return true`), and always include `chrome.runtime.lastError` handling on the caller side.
+For management operations that must touch `chrome.storage.local`, **route through the SW via `chrome.runtime.sendMessage`** (the `externally_connectable` matches in the extension's `manifest.json` (ai-ecoverse/slicc-extension) allow the hosted origin to talk to the SW directly). The SW has full storage access. Add a handler to the relevant `*-sw.ts` backend and register it in the `SW_MESSAGE_HANDLERS` list in `service-worker.ts` — the SW has exactly ONE `chrome.runtime.onMessage` listener (`sw-message-router.ts`); do not add a second. See the `secrets.list` / `secrets.set` / `secrets.delete` handlers in `secrets-sw.ts` for the canonical pattern. Return `'handled-async'` for async work (the router translates that into Chrome's `return true`), and always include `chrome.runtime.lastError` handling on the caller side.
 
 Historical note: prior to the thin-bridge release the same pattern existed because MV3 offscreen documents inherit only a subset of the manifest's `permissions` (notably, `chrome.storage` is not exposed in offscreen documents). The fix shape is identical; only the realm that lacks `chrome.storage` changed (offscreen → hosted leader tab).
 
@@ -1603,15 +1603,15 @@ This design choice preserves compatibility with existing node-server callers tha
 
 The codebase has two independent TypeScript builds:
 
-- **Browser bundle** (`tsconfig.json`): Everything under `packages/webapp/src/` and `packages/chrome-extension/src/`
+- **Browser bundle** (`tsconfig.json`): Everything under `packages/webapp/src/` and `packages/shared-ts/src/`
 - **CLI server** (`tsconfig.cli.json`): Only `packages/node-server/src/`
 
 Cross-importing breaks the build.
 
-| Violation                                                                    | Problem                                                        |
-| ---------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Browser code imports `packages/node-server/src/`                             | CLI-only modules not bundled; runtime import error             |
-| CLI code imports `packages/webapp/src/ui/`, `packages/chrome-extension/src/` | Browser-only code (DOM, chrome.debugger) not available in Node |
+| Violation                                        | Problem                                                        |
+| ------------------------------------------------ | -------------------------------------------------------------- |
+| Browser code imports `packages/node-server/src/` | CLI-only modules not bundled; runtime import error             |
+| CLI code imports `packages/webapp/src/ui/`       | Browser-only code (DOM, chrome.debugger) not available in Node |
 
 **How to Check**: `npm run typecheck` runs both configs. Fix: move shared code to `packages/webapp/src/shared/` or duplicate type definitions.
 
@@ -1948,7 +1948,7 @@ The sprinkle subsystem is the canonical reference for full bidirectional dispatc
 - `packages/webapp/src/kernel/kernel-worker.ts` (publishes the proxy on the worker)
 - `packages/webapp/src/ui/wc/wc-sprinkles.ts` (`installSprinkleManagerHandlerOverChannel` — where the page-side handler is registered)
 
-Historical note: prior to the thin-bridge release the equivalent split was the chrome-extension side panel (page) vs the offscreen document (agent), bridged through `chrome.runtime.sendMessage` routed by the service worker. The realms changed but the page/worker idea is the same.
+Historical note: prior to the thin-bridge release the equivalent split was the extension side panel (page) vs the offscreen document (agent), bridged through `chrome.runtime.sendMessage` routed by the service worker. The realms changed but the page/worker idea is the same.
 
 ## `any` → `unknown` Refactors at External Boundaries
 
@@ -1994,8 +1994,7 @@ When adding a feature that touches:
 **Manual Testing**
 
 - [ ] Test in standalone CLI mode (`npm run dev`)
-- [ ] Test in extension mode (`npm run build -w @slicc/chrome-extension` → load in chrome://extensions)
-- [ ] If added WASM, verify bundled path in extension build
+- [ ] Test in extension mode (extension from ai-ecoverse/slicc-extension against the hosted leader tab)
 - [ ] If added command, test in both terminal modes
 
 ## Adobe Proxy `X-Session-Id` on LLM Call Paths
@@ -2594,8 +2593,8 @@ e2b from the worker, since the worker genuinely calls the SDK at runtime.
 ## Biome Build-Asset Strip: Cloudflare 25 MiB Cap
 
 `wasm-bindgen`'s `new URL('biome_wasm_bg.wasm', import.meta.url)` fallback causes
-Vite to statically emit the 33 MB Biome WASM binary into `dist/ui/` and
-`dist/extension/` even though the runtime always fetches it from the CDN.
+Vite to statically emit the 33 MB Biome WASM binary into `dist/ui/`
+even though the runtime always fetches it from the CDN.
 That 33 MB asset trips Cloudflare's **25 MiB per-file upload cap** and breaks
 `wrangler deploy`.
 

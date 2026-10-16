@@ -53,7 +53,7 @@ to `~/.slicc/slicc/` and builds it on first run (2-3 minutes).
 
 If run from inside the SLICC repo (e.g., `packages/swift-launcher/build/Sliccstart.app`),
 it auto-detects the local checkout and uses it directly — no clone needed.
-You still need to build SLICC first: `npm install && npm run build && npm run build:extension`
+You still need to build SLICC first: `npm install && npm run build`
 and build the native server: `cd packages/swift-server && swift build`
 
 ## Features

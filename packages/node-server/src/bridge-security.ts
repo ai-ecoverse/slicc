@@ -283,7 +283,7 @@ export interface BridgeUpgradeGateResult {
   /**
    * Reason exposed in logs for rejection. Intentionally coarse — does not
    * tell the caller WHICH check failed, mirroring `validateBridgePin` in
-   * the chrome-extension bridge SW.
+   * the extension's bridge SW (ai-ecoverse/slicc-extension).
    */
   reason?: 'origin-not-allowed' | 'subprotocol-missing-or-mismatched';
 }

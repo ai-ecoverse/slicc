@@ -23,7 +23,7 @@
 #
 # Args:
 #   <source.app>  enclosing .app bundle of a Chrome for Testing install
-#   <label>       Switcher label, e.g. "SLICC-Ext" (also the default id leaf)
+#   <label>       Switcher label, e.g. "SLICC-Node" (also the default id leaf)
 #   [bundle-id]   optional CFBundleIdentifier (default: ai.sliccy.cft.<label>)
 #
 # Output (stdout): absolute path to the cloned .app bundle. All status/logging

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Browser app core (`src/`). Extension-only: `packages/chrome-extension/CLAUDE.md`.
+Browser app core (`src/`). The Chrome extension lives in [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension); webapp keeps the client side of its protocol (`kernel/messages.ts`, offscreen/runtime-mode/picker-popup clients). A change there must also land in slicc-extension.
 
 ## Architecture
 
@@ -9,7 +9,7 @@ Layer stack (each consumed by the next); data flow + maps in `docs/architecture.
 ```text
 Virtual Filesystem (fs/) → RestrictedFS → Shell (shell/) + Git (git/)
   → CDP (cdp/) → Tools (tools/) → Core Agent (core/)
-    → Scoops Orchestrator (scoops/) → UI (ui/) → node-server + chrome-extension floats
+    → Scoops Orchestrator (scoops/) → UI (ui/) → node-server + extension floats
 ```
 
 ## Key Subsystems
@@ -136,4 +136,4 @@ Paths + invariants: [`docs/webapp-details.md`](../../docs/webapp-details.md); ro
 
 ## Related Guides
 
-Floats: `packages/chrome-extension/CLAUDE.md`, `packages/node-server/CLAUDE.md`.
+Floats: `packages/node-server/CLAUDE.md`; extension: ai-ecoverse/slicc-extension.

@@ -142,12 +142,7 @@ npm run dev
 
 The extension is a **thin CDP bridge** — no bundled UI, no offscreen agent engine. The full SLICC webapp loads from the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`); the extension just pins that tab, proxies `chrome.debugger` to it, and — when you click the toolbar icon — opens an on-demand Chrome side panel that iframes the hosted `?cherry=1` follower for inline use.
 
-```bash
-npm install
-npm run build -w @slicc/chrome-extension
-```
-
-Load `dist/extension/` as an unpacked extension in `chrome://extensions`. The service worker pins the hosted leader tab on install; clicking the toolbar icon focuses it (or recreates it if the user closed it). Each page you visit gets the launcher overlay, which iframes the same hosted webapp as an auto-follow follower.
+Install it from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf). The extension's source, build, and release live in [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension); this repo keeps only the webapp side of the protocol it speaks. The service worker pins the hosted leader tab on install; clicking the toolbar icon focuses it (or recreates it if the user closed it). Each page you visit gets the launcher overlay, which iframes the same hosted webapp as an auto-follow follower.
 
 ### 5. Run a second browser
 

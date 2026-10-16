@@ -3,8 +3,7 @@
  *
  * `__SLICC_VERSION__` / `__SLICC_RELEASED_AT__` / `__SLICC_BUILD_ID__` are Vite
  * `define`s baked from the root `package.json` (see
- * `packages/webapp/vite.config.ts` and `packages/chrome-extension/vite.config.ts`)
- * — the same version the upgrade lick compares. This module sits in `base/` so
+ * `packages/webapp/vite.config.ts`) — the same version the upgrade lick compares. This module sits in `base/` so
  * every layer above it can read the build identity without a back-edge:
  * `scoops/upgrade-detection.ts` (the lick), `shell/supplemental-commands/`
  * (`uname -r`, `upgrade status`), and the JS realm's `SLICC_VERSION` global.

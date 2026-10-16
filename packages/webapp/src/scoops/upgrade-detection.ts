@@ -4,7 +4,7 @@
  * root `package.json`) against the version recorded in IndexedDB during
  * the previous boot.
  *
- * On version change, the caller (ui/main.ts, chrome-extension offscreen)
+ * On version change, the caller (ui/main.ts, the extension's offscreen doc)
  * emits an `upgrade` lick to the cone. The upgrade skill can then surface
  * a changelog and offer a three-way merge of bundled vfs-root content
  * into the user's workspace.

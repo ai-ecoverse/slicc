@@ -1,43 +1,36 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { describe, expect, it } from 'vitest';
 
 import {
-  collectZipEntries,
-  comparePaths,
-  createDeterministicZip,
-  createExtensionArchive,
   createNpmPackageTarball,
   packageReleaseArtifacts,
   parseNpmPackFilename,
   requirePath,
   resolveNpmCommand,
-  sanitizeArtifactName,
   toProjectRelative,
   writeReleaseManifest,
 } from '../src/release-package.js';
 
 function makeReleaseTree(): string {
   const root = mkdtempSync(join(tmpdir(), 'slicc-release-package-'));
-  mkdirSync(join(root, 'dist', 'extension'), { recursive: true });
   mkdirSync(join(root, 'dist', 'node-server'), { recursive: true });
   mkdirSync(join(root, 'dist', 'ui'), { recursive: true });
-  writeFileSync(join(root, 'dist', 'extension', 'manifest.json'), '{"manifest_version":3}');
   writeFileSync(join(root, 'package.json'), '{"name":"@slicc/test","version":"1.2.3"}');
   return root;
 }
 
 describe('release-package', () => {
-  it('sanitizes artifact names for stable filenames', () => {
-    expect(sanitizeArtifactName('@AI-Ecoverse/SLICC Release')).toBe('ai-ecoverse-slicc-release');
-    expect(sanitizeArtifactName(' --- ')).toBe('');
-    expect(comparePaths('same', 'same')).toBe(0);
-    expect(comparePaths('a', 'b')).toBe(-1);
-    expect(comparePaths('b', 'a')).toBe(1);
-  });
-
   it('reads the packed tarball filename from npm pack json output', () => {
     expect(parseNpmPackFilename('[{"filename":"sliccy-0.1.0.tgz"}]\n')).toBe('sliccy-0.1.0.tgz');
   });
@@ -46,26 +39,6 @@ describe('release-package', () => {
     expect(() => parseNpmPackFilename('[{}]\n')).toThrow(
       'npm pack did not report an output filename.'
     );
-  });
-
-  it('creates deterministic zip output from filesystem input', () => {
-    const root = mkdtempSync(join(tmpdir(), 'slicc-release-package-'));
-
-    try {
-      mkdirSync(join(root, 'nested'), { recursive: true });
-      writeFileSync(join(root, 'b.txt'), 'bravo');
-      writeFileSync(join(root, 'nested', 'a.txt'), 'alpha');
-
-      const entries = collectZipEntries(root);
-      const zipA = createDeterministicZip(entries);
-      const zipB = createDeterministicZip([...entries].reverse());
-
-      expect(Buffer.compare(zipA, zipB)).toBe(0);
-      expect(zipA.includes(Buffer.from('b.txt'))).toBe(true);
-      expect(zipA.includes(Buffer.from('nested/a.txt'))).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 
   it('validates required paths and normalizes project-relative paths', () => {
@@ -95,30 +68,20 @@ describe('release-package', () => {
     });
   });
 
-  it('creates the extension archive and manifest in a caller-owned release directory', () => {
+  it('writes the release manifest into a caller-owned release directory', () => {
     const root = makeReleaseTree();
     const releaseDir = join(root, 'release');
     mkdirSync(releaseDir);
     try {
-      const archive = createExtensionArchive(
-        { name: '@slicc/test', version: '1.2.3' },
-        root,
-        releaseDir
-      );
-      expect(archive).toBe(join(releaseDir, 'slicc-test-extension-v1.2.3.zip'));
-      expect(readFileSync(archive).includes(Buffer.from('manifest.json'))).toBe(true);
-
       const manifestPath = writeReleaseManifest(
         {
           version: '1.2.3',
-          extensionArchive: 'release/extension.zip',
           npmPackageTarball: 'release/package.tgz',
         },
         releaseDir
       );
       expect(JSON.parse(readFileSync(manifestPath, 'utf8'))).toEqual({
         version: '1.2.3',
-        extensionArchive: 'release/extension.zip',
         npmPackageTarball: 'release/package.tgz',
       });
     } finally {
@@ -163,9 +126,6 @@ describe('release-package', () => {
     const releaseDir = join(root, 'release');
     mkdirSync(releaseDir);
     try {
-      expect(() =>
-        createExtensionArchive({ name: 'test', version: '1' }, root, releaseDir)
-      ).toThrow('Extension build output was not found');
       expect(() => createNpmPackageTarball({ projectRoot: root, releaseDir })).toThrow(
         'CLI build output was not found'
       );
@@ -215,10 +175,15 @@ describe('release-package', () => {
       });
       expect(manifest).toEqual({
         version: '1.2.3',
-        extensionArchive: 'artifacts/release/slicc-test-extension-v1.2.3.zip',
         npmPackageTarball: 'artifacts/release/slicc-test-1.2.3.tgz',
       });
       expect(existsSync(join(releaseDir, 'stale.txt'))).toBe(false);
+      // The extension ships from ai-ecoverse/slicc-extension, so the release
+      // directory carries no extension zip.
+      expect(readdirSync(releaseDir).sort()).toEqual([
+        'release-artifacts.json',
+        'slicc-test-1.2.3.tgz',
+      ]);
       expect(JSON.parse(readFileSync(join(releaseDir, 'release-artifacts.json'), 'utf8'))).toEqual(
         manifest
       );

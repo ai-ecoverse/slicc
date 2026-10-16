@@ -869,7 +869,7 @@ Two gesture paths:
   Allow click opens the picker, and the handle comes back through IDB.
 
 In the **extension**, the picker additionally routes through the shared
-picker popup window (`packages/chrome-extension/picker-popup.html` —
+picker popup window (the extension's `picker-popup.html`, in ai-ecoverse/slicc-extension —
 `?kind=directory` mode — plus the shared helpers `openMountPickerPopup` /
 `loadAndClearPendingHandle` / `reactivateHandle` in
 `packages/webapp/src/fs/mount-picker-popup.ts`). The hosted leader tab the
@@ -934,7 +934,7 @@ for the API and HTML conventions.
 | `packages/webapp/src/shell/supplemental-commands/picker-approval.ts` | Cone-driven `runDevicePickerApproval` chat card (`data-picker=…`)                                                                                   |
 | `packages/webapp/src/ui/dip.ts`                                      | `handleDipPickerAction` — runtime-aware dispatch for picker dip clicks                                                                              |
 | `packages/webapp/src/fs/mount-picker-popup.ts`                       | Extension popup helpers for the FS-Access picker                                                                                                    |
-| `packages/chrome-extension/picker-popup.html`                        | Extension picker popup shell (mount + USB/serial/HID)                                                                                               |
+| `picker-popup.html` (ai-ecoverse/slicc-extension)                    | Extension picker popup shell (mount + USB/serial/HID)                                                                                               |
 | `packages/webapp/src/ui/panel-rpc/misc-handlers.ts`                  | `permission-request` panel-RPC op (worker → surface → registry handle)                                                                              |
 
 ### Manual smoke checklist — `:8787` wrangler harness

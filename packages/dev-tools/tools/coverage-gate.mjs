@@ -30,8 +30,8 @@ export function buildVitestArgs(pkg, floors, extraArgs = []) {
       args.push(`--coverage.thresholds.${metric}=${floors[metric]}`);
     }
   }
-  // Packages with a bespoke exclude set (e.g. chrome-extension, which must
-  // drop the webapp / cherry source it transitively imports) override the
+  // Packages with a bespoke exclude set (e.g. cloud-core, which must drop
+  // the sibling-package source it transitively imports) override the
   // config's base excludes wholesale, matching the previous inline-script
   // behavior. Those packages have their own coverage gates.
   if (Array.isArray(floors.coverageExclude)) {

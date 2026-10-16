@@ -131,7 +131,6 @@ jobs:
       shared: ${{ steps.filter.outputs.shared }}
       webcomponents: ${{ steps.filter.outputs.webcomponents }}
       spoon: ${{ steps.filter.outputs.spoon }}
-      extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
       cloudflare-r2: ${{ steps.filter.outputs.cloudflare-r2 }}
       cloudflare-archive-smoke: ${{ steps.filter.outputs.cloudflare-archive-smoke }}
@@ -179,8 +178,6 @@ jobs:
               - 'packages/webcomponents/**'
             spoon:
               - 'packages/spoon/**'
-            extension:
-              - 'packages/chrome-extension/**'
             cloudflare-worker:
               - 'packages/cloudflare-worker/**'
             # The staging Worker deploy and live smoke run on every non-fork
@@ -440,12 +437,6 @@ jobs:
         # baselines (layer back-edges, float probes, record<string,unknown>)
         # — without removing its entry. Skips on merge_group / push.
         run: node packages/dev-tools/tools/check-touched-exemptions.mjs
-      - name: Check Chrome Web Store manifest justifications
-        # Fail if the extension manifest gains/drops a permission without a
-        # matching reviewer justification in docs/chrome-web-store-submission.md
-        # (or vice-versa). Keeps the CWS submission pack in sync with the
-        # shipped permission set.
-        run: bash packages/dev-tools/tools/check-manifest-justifications.sh
       - name: Dead code detection (knip)
         # Hard-fail on unused files, missing/unlisted dependencies,
         # unresolved imports, duplicate exports, and unused binaries.
@@ -528,7 +519,6 @@ jobs:
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.shared == 'true' ||
-      needs.changes.outputs.extension == 'true' ||
       needs.changes.outputs.cloudflare-worker == 'true' ||
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.dev-tools == 'true' ||
@@ -566,7 +556,6 @@ jobs:
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.shared == 'true' ||
-      needs.changes.outputs.extension == 'true' ||
       needs.changes.outputs.cloudflare-worker == 'true' ||
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.dev-tools == 'true' ||
@@ -928,116 +917,6 @@ jobs:
         run: npm run build -w @slicc/shared-ts
       - name: Build
         run: npm run build -w @slicc/node-server
-
-  chrome-extension:
-    needs: [runner, changes]
-    if: >-
-      needs.changes.outputs.extension == 'true' ||
-      needs.changes.outputs.webapp == 'true' ||
-      needs.changes.outputs.vfs-root == 'true' ||
-      needs.changes.outputs.assets == 'true' ||
-      needs.changes.outputs.shared == 'true' ||
-      needs.changes.outputs.spoon == 'true' ||
-      needs.changes.outputs.root-config == 'true'
-    runs-on: *ci-heavy-runner
-    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
-    # must not sit on a runner until the 6-hour default fires.
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          cache: npm
-      - uses: ./.github/actions/npm-ci
-      - name: Typecheck
-        run: npx tsc --noEmit -p tsconfig.json
-      - name: Test (with coverage threshold gate)
-        run: npm run test:coverage:chrome-extension
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage-chrome-extension
-          path: coverage/
-          if-no-files-found: ignore
-      - name: Upload test timing report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: test-timing-chrome-extension
-          path: test-timing/
-          if-no-files-found: ignore
-      - name: Build webapp (dependency)
-        run: npm run build -w @slicc/webapp
-      - name: Build extension
-        run: npm run build -w @slicc/chrome-extension
-      - name: Upload unpacked extension build
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: chrome-extension-unpacked
-          path: dist/extension/
-          if-no-files-found: error
-      - name: Check bundle for forbidden CDN URL literals (MV3 RHC guard)
-        run: bash packages/dev-tools/tools/check-extension-rhc.sh
-      - name: Check bundle for Node-only APIs
-        run: |
-          # Scan extension bundles for Node-only APIs that should never be bundled.
-          # Exclude pyodide files which legitimately contain Node references.
-          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
-          # Same exclusions as the webapp scan (see comment there).
-          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/*.js dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|js-realm-shared|realm-inprocess|py-realm-worker|transformers\.web' || true)
-          if [ -n "$MATCHES" ]; then
-            echo "::error::Node-only APIs found in extension bundle:"
-            for f in $MATCHES; do
-              echo "  $f:"
-              grep -nE "$FORBIDDEN" "$f" | head -5
-            done
-            exit 1
-          fi
-          echo "✓ No Node-only APIs found in extension bundle"
-      - name: Check dev deps for Node-only APIs
-        working-directory: packages/chrome-extension
-        run: |
-          # Force Vite to pre-bundle dependencies (same as dev server startup)
-          npx vite optimize --force
-          # Scan optimized deps for Node-only APIs that crash in the browser
-          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
-          # transformers.web: environment-gated Node compat branches, dead in
-          # the browser (same justification as the bundle scans above).
-          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -vE 'pyodide|transformers\.web' || true)
-          if [ -n "$MATCHES" ]; then
-            echo "::error::Node-only APIs found in Vite dev-optimized deps (extension):"
-            for f in $MATCHES; do
-              echo "  $f:"
-              grep -nE "$FORBIDDEN" "$f" | head -5
-            done
-            exit 1
-          fi
-          echo "✓ No Node-only APIs found in dev-optimized deps (extension)"
-      - name: Install Chrome for Testing
-        run: npx --yes @puppeteer/browsers install chrome@stable
-      - name: Install xvfb
-        run: |
-          if command -v xvfb-run >/dev/null; then
-            echo "xvfb-run already installed."
-          elif [ "$(id -u)" = 0 ]; then
-            apt-get update && apt-get install -y --no-install-recommends xvfb
-          elif sudo -n true 2>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
-          else
-            echo "::warning::No xvfb-run and no root on this runner; the extension smoke test will fail (continue-on-error)."
-          fi
-      - name: Extension smoke test (CDP)
-        env:
-          SLICC_CI: '1'
-        # MV3 extensions with side panels need headed Chrome; xvfb provides
-        # the required display on a headless runner. The test is permitted
-        # to fail loudly while the ffmpeg-core.js bundling work lands —
-        # `continue-on-error: true` keeps CI green during the rollout but
-        # surfaces the artifact so the breakage stays visible.
-        continue-on-error: true
-        run: xvfb-run -a npm run test:extension-smoke -w @slicc/chrome-extension
 
   cloudflare-worker:
     name: Cloudflare staging deploy
@@ -2616,11 +2495,11 @@ jobs:
             sleep "$delay"
           done
 
-  # Bundle-size budgets for the two Vite-bundled browser apps. Before this
+  # Bundle-size budgets for the Vite-bundled webapp. Before this
   # job the only shipped-size gate in the repo was the worker's
   # `wrangler deploy --dry-run` (Cloudflare's 25 MiB per-file asset cap), so
-  # webapp and extension growth was invisible until someone noticed a slow
-  # cold load. Budgets live next to the code they guard, in each package's
+  # webapp growth was invisible until someone noticed a slow
+  # cold load. Budgets live next to the code they guard, in the package's
   # `size-limit` block, and are measured on raw (non-brotli) bytes to match
   # the asset-cap framing of the worker gate.
   #
@@ -2647,7 +2526,6 @@ jobs:
     needs: [runner, changes]
     if: >-
       needs.changes.outputs.webapp == 'true' ||
-      needs.changes.outputs.extension == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.shared == 'true' ||
@@ -2676,8 +2554,6 @@ jobs:
         run: npm run build -w @slicc/webapp
         env:
           NODE_OPTIONS: '--max-old-space-size=6144'
-      - name: Build extension
-        run: npm run build -w @slicc/chrome-extension
       - name: Check bundle-size budgets
         run: npm run bundle-size
 
@@ -2704,7 +2580,6 @@ jobs:
         webapp,
         e2e,
         node-server,
-        chrome-extension,
         cloudflare-worker,
         cloud-core,
         shared,

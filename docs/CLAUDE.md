@@ -65,7 +65,6 @@ Subsystems:
 - `approvals.md` — capability approval gates: shared pattern + authority axis, sudo policy, device & gesture gates, OS capture gates
 - `oauth-intercept.md` — provider OAuth intercept and silent renewal
 - `operational-telemetry.md` — Helix RUM beacons and debug sampling
-- `extension-thin-bridge.md` — Chrome extension deep reference: bridge Port protocol, toast attribution/dedup, leader-tab lifecycle rationale, side-panel flow, dev-watch loop, QA recipe, and smoke test
 - `slicc-handoff.md` — external handoff protocol (RFC 8288 `Link` header + `navigate` lick)
 - [`.agents/skills/deploying-tray-worker/SKILL.md`](../.agents/skills/deploying-tray-worker/SKILL.md) — tray hub ops runbook: R2 asset archive setup, deploy-gating, ghost-leader reconnect, CI retry logic, and staging test guide
 - `link-discovery.md` — the standalone `discover` shell command and the `--discover` flag on `playwright-cli` subcommands (`fetch`, `goto`, `navigate`, `open`, `tab-new`); covers RFC 8288 / RFC 9727 parsing, emission, and the SLICC handoff/upskill rels

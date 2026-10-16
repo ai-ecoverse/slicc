@@ -5,9 +5,9 @@
  * Locks in that `git clone https://x-access-token:<masked>@github.com/owner/repo`
  * reaches the fetch-proxy layer with the masked-credential URL intact, so the
  * existing URL-credentials unmask path in node-server / swift-server / the
- * extension SW is the one that runs. Mirrors the
- * `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` "URL with
- * masked cred" pattern, adapted to the isomorphic-git http surface.
+ * extension SW is the one that runs. Mirrors the extension's
+ * `fetch-proxy-shared` "URL with masked cred" test (ai-ecoverse/slicc-extension)
+ * pattern, adapted to the isomorphic-git http surface.
  */
 
 import type { GitHttpRequest } from 'isomorphic-git';

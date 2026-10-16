@@ -5,9 +5,9 @@ logic or constants that should live in one place.
 ## Signals to look for in this repo
 
 - Near-identical functions or blocks that have drifted slightly (the classic
-  copy-paste-then-tweak), especially across the three floats
-  (`packages/webapp/`, `packages/node-server/`, `packages/chrome-extension/`)
-  which must stay dual-mode compatible.
+  copy-paste-then-tweak), especially between `packages/webapp/` and
+  `packages/node-server/`, which must stay dual-mode compatible (the Chrome
+  extension float lives in ai-ecoverse/slicc-extension).
 - Logic or constants repeated in more than one package that belong in
   `@slicc/shared-ts` (the home for platform-agnostic primitives) — e.g.
   duplicated secret-masking, parsing, or formatting helpers.

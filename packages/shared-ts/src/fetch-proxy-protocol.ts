@@ -1,8 +1,10 @@
 /**
  * Port-streamed fetch-proxy wire protocol shared by the extension backend and
- * browser clients. Platform-agnostic on purpose so `@slicc/webapp` and
- * `@slicc/chrome-extension` both import it *downward* from here rather than the
- * webapp reaching *up* into the extension for a duplicate copy.
+ * browser clients. Platform-agnostic on purpose so `@slicc/webapp` and the
+ * extension (ai-ecoverse/slicc-extension, which carries a copy of shared-ts)
+ * both import it *downward* from here rather than the webapp reaching *up*
+ * into the extension for a duplicate copy. A wire change here must also land
+ * in slicc-extension.
  */
 
 /**

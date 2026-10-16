@@ -167,7 +167,7 @@ Providers with an `onSilentRenew` hook renew expired tokens without UI. In the
 extension this routes through `chrome.identity.launchWebAuthFlow`. The provider
 passes `{ interactive: false }` to the launcher; the service worker then calls
 `launchWebAuthFlow` with **three** required options
-(`packages/chrome-extension/src/oauth-flow-options.ts`):
+(the extension's `oauth-flow-options.ts`, in ai-ecoverse/slicc-extension):
 
 - `interactive: false` — no window.
 - `abortOnLoadForNonInteractive: false` — do **not** stop when the authorize

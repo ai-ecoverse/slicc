@@ -196,15 +196,14 @@ describe('dev-standalone-fresh wrangler identity probe', () => {
     expect(wranglerUp('')).toBe('DOWN');
   });
 
-  it('keeps the predicate identical across all five harnesses', () => {
+  it('keeps the predicate identical across all four harnesses', () => {
     // The scripts are deliberately standalone, so the probe is duplicated.
     // Only the standalone copy is behaviourally tested above; this pins the
-    // other four to it so one cannot silently drift back to any-status reuse.
+    // other three to it so one cannot silently drift back to any-status reuse.
     const baseline = wranglerUpBody('dev-standalone-fresh.sh');
     expect(baseline).toContain('slicc-tray-hub');
     for (const name of [
       'dev-swift-fresh.sh',
-      'dev-extension-fresh.sh',
       'dev-electron-node-fresh.sh',
       'dev-electron-swift-fresh.sh',
     ]) {

@@ -33,7 +33,7 @@ const DEBT_GATE_EXCERPT = [
   'The following changed files are still on the misused-promise debt list',
   '(biome.json `overrides` → nursery.noMisusedPromises = off):',
   '',
-  '  - packages/chrome-extension/src/fetch-proxy-shared.ts  [misused-promise]',
+  '  - packages/node-server/src/fetch-proxy.ts  [misused-promise]',
   '',
   'Fix: in this same PR, keep promises out of synchronous callback/conditional',
   'positions, then remove the file from the debt-list override in biome.json.',
@@ -502,7 +502,7 @@ describe('classifyFailures', () => {
   });
 
   it('promotes a well-known code job with an empty excerpt to dispatch', () => {
-    for (const name of ['webapp', 'e2e', 'chrome-extension', 'node-matrix-tests', 'bundle-size']) {
+    for (const name of ['webapp', 'e2e', 'node-server', 'node-matrix-tests', 'bundle-size']) {
       expect(
         classifyFailures([
           { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
@@ -984,13 +984,13 @@ describe('extractLogExcerpt', () => {
       stamp(4, 'The following changed files are still on the misused-promise debt list'),
       stamp(5, '(biome.json `overrides` → nursery.noMisusedPromises = off):'),
       stamp(6, ''),
-      stamp(7, '  - packages/chrome-extension/src/fetch-proxy-shared.ts  [misused-promise]'),
+      stamp(7, '  - packages/node-server/src/fetch-proxy.ts  [misused-promise]'),
       stamp(8, ''),
       stamp(9, 'Fix: in this same PR, keep promises out of synchronous callback/conditional'),
       stamp(10, 'positions, then remove the file from the debt-list override in biome.json.'),
     ].join('\n');
     const out = extractLogExcerpt(log);
-    expect(out).toContain('packages/chrome-extension/src/fetch-proxy-shared.ts');
+    expect(out).toContain('packages/node-server/src/fetch-proxy.ts');
     expect(out).toContain('Fix: in this same PR');
   });
 
@@ -1031,7 +1031,7 @@ describe('regression: PR #2215 — a debt-gate-only automation PR', () => {
   const input = candidate({
     pr: {
       number: 2215,
-      title: 'feat(chrome-extension): share the fetch proxy',
+      title: 'feat(node-server): share the fetch proxy',
       headRef: 'automation/backlog/issue-2209',
       headSha: SHA,
       labels: [],

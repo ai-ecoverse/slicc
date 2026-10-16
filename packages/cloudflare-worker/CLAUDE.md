@@ -132,7 +132,7 @@ cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/d
 The `verify-preview-lifecycle.mjs` gate (above) blocks deployment when `sliccy-now-basic-storage`
 lacks a `previews/` object-age lifecycle rule. TTL math, token scopes, retries, staging deploy,
 `serve --bridge`, operator setup:
-[deploying-tray-worker](../../.agents/skills/deploying-tray-worker/SKILL.md). Extension: `npm run start:extension`.
+[deploying-tray-worker](../../.agents/skills/deploying-tray-worker/SKILL.md). Extension: ai-ecoverse/slicc-extension.
 
 ## Operational Notes
 

@@ -16,7 +16,7 @@
  * `blob:` URLs so the `@ffmpeg/ffmpeg` wrapper worker (also `blob:` by default)
  * can `import(coreURL)` same-scheme. In the thin extension this runs in the
  * hosted leader tab's worker (a normal `sliccy.ai` origin), not the extension
- * origin — the old vendored `dist/extension/vendor/` copies were removed.
+ * origin — the old vendored extension `vendor/` copies were removed.
  */
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';

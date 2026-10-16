@@ -7,8 +7,7 @@
  * Static-text guard, not a behavior test — main.ts has a long async boot
  * sequence (SW registration, provider registration, OAuth bootstrap) that's
  * expensive to mock. Behavior of `initTelemetry` itself is covered by
- * `webapp/tests/ui/telemetry.test.ts`. Mirrors
- * `chrome-extension/tests/offscreen-telemetry.test.ts`.
+ * `webapp/tests/ui/telemetry.test.ts`.
  */
 
 import { readFileSync } from 'node:fs';

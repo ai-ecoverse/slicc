@@ -1,13 +1,14 @@
 /**
- * Tests for extension message types and helpers.
+ * Tests for the extension-facing message envelopes in kernel/messages.ts.
+ *
+ * Moved from the extension package when it left this repo for
+ * ai-ecoverse/slicc-extension: the envelope types and the sprinkle-summary
+ * mirror live in webapp, so their compile-time guards stay here.
  */
 
 import { isExtensionMessage, type SprinkleSummary } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
-import type {
-  ExtensionMessage,
-  SprinkleSummaryEnvelope,
-} from '../../webapp/src/kernel/messages.js';
+import type { ExtensionMessage, SprinkleSummaryEnvelope } from '../../src/kernel/messages.js';
 
 describe('isExtensionMessage', () => {
   it('returns true for valid panel envelope', () => {

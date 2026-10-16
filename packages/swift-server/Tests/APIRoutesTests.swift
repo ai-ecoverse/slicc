@@ -685,7 +685,7 @@ final class APIRoutesTests: XCTestCase {
     /// `x-slicc-hmac-sign: <secretName>:<targetHeader>` — the proxy signs the
     /// (already-injected) body with the named secret's real value and attaches
     /// the hex result under the target header, stripping the sentinel before
-    /// forwarding. Mirrors node-server's / chrome-extension's coverage of the
+    /// forwarding. Mirrors node-server's / the extension's coverage of the
     /// same directive.
     func testFetchProxySignsRequestBodyViaHmacSentinelAndStripsSentinel() async throws {
         let hmacSecret = "job-signing-secret-abcdefghijklmnop"

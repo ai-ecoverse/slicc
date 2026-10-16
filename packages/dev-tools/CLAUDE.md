@@ -8,7 +8,7 @@ Bare script names → `tools/`; bare dir names → `packages/dev-tools/`.
 
 - **playwright-cli gap sync**: `tools/playwright-cli-sync.mjs` — diffs Slicc vs `@playwright/cli`. [ref](../../docs/playwright-cli-sync.md).
 - **Dev-only VFS skills** (`vfs-dev-skills/`): `__DEV__`-gated `import.meta.glob` in `packages/webapp/src/scoops/skills.ts` → `/workspace/skills/`.
-- **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `biome.json`.
+- **Build configs**: `packages/webapp/vite.config.ts`, `biome.json`.
 - **QA setup**: `packages/node-server/src/qa-setup.ts` + `npm run qa:*`; visual `packages/webapp/tests/test-dips.mjs`.
 - **RUM error triage** (nightly): `rum-error-triage/triage-rum-errors.mjs`.
 - **Scheduled agentic workflows** (selector `.mjs` + `claude-code-action`): `boy-scout-debt/`, `pr-fix-dispatcher/`, `claude-md-compactor/`, `flaky-ci-hunter/`, `backlog-dispatcher/`; event-driven `review-responder/` on `automation/*`. [details](../../docs/dev-tools-details.md#scheduled-agentic-workflows), [responder](../../docs/dev-tools-details.md#review-responder).
@@ -42,7 +42,7 @@ Each bold gate is an `npm run` script unless a raw command is shown.
 
 **Baseline ratchets** (each `tools/check-*.mjs` + `*-baseline.json`; `--update`):
 
-- **Layer back-edges** (`lint:layer-back-edges`): `check-layer-back-edges.mjs`. Per-package stacks (webapp, node-server, chrome-extension, cloudflare-worker) + zero-tolerance on relative imports escaping `webapp/src`. [details](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
+- **Layer back-edges** (`lint:layer-back-edges`): `check-layer-back-edges.mjs`. Per-package stacks (webapp, node-server, cloudflare-worker) + zero-tolerance on relative imports escaping `webapp/src`. [details](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
 - **Float probes** (`lint:no-float-probes`): `check-no-float-probes.mjs` (`--allow-growth`) — bans `FLOAT_PROBE_NAMES` + raw `__slicc_connect_mode` under `scoops/`, `tools/`, `kernel/`. [details](../../docs/dev-tools-details.md#float-probe-ratchet).
 - **`Record<string, unknown>`** (`lint:record-string-unknown`): `check-record-string-unknown.mjs` + `.biome-plugins/no-record-string-unknown.grit`, `biome.record-gate.json`. [details](../../docs/dev-tools-details.md#record-string-unknown-ratchet).
 
@@ -55,7 +55,6 @@ Each bold gate is an `npm run` script unless a raw command is shown.
 - **CI phase timings**: `tools/ci-job-timing.mjs` (+ `-lib.mjs`) — step timestamps → Markdown summary + JSON artifact; both Cloudflare staging workflows.
 - **Preflight deps check**: `tools/preflight-deps.mjs` (via `pretypecheck`/`pretest`).
 - **Release gating** ([details](../../docs/dev-tools-details.md#release-gating)): `tools/release-plan.mjs` (Linux preflight), `release-native.mjs`, `merge-queue-busy.mjs` (+ `merge-queue-lib.mjs`), `release-publish.mjs` (wraps `npx semantic-release`), `npm-publish-retry.mjs` (retry publish for sliccy + biome-jsh + cherry), `release-alert.mjs` (red-release tracking issue).
-- **Extension raw-fetch check** (`npm run test:raw-fetch -w @slicc/chrome-extension`): `tools/extension-raw-fetch-check.ts` drives raw fetch end to end in the built extension, then a wasm program through the realm proxy from a leader page (`extension-realm-proxy-case.ts`/`-page.ts`; HTTPS via `SLICC_WASM_CURL_TLS`).
 - **Optional-binary guard**: `tools/run-if-installed.mjs <binary> [args…]` — runs iff on `PATH` else exits 0; `lint-staged` Swift/Go globs.
 
 ### CDP tooling
@@ -66,7 +65,7 @@ Each bold gate is an `npm run` script unless a raw command is shown.
 
 ### Fresh Dev Harnesses
 
-Five harnesses (`tools/dev-{standalone,swift,extension,electron-node,electron-swift}-fresh.sh`) on distinct ports; reaping opt-in (`SLICC_FRESH_REAP=1`), port-scoped — never touch prod bridge `:5710` or CDP `:9222`. Run via `npm run dev:{standalone,swift,extension}:fresh` or `dev:electron:{node,swift}:fresh`. Ports, overrides, Darwin helpers: [dev](../../docs/development.md) · [details](../../docs/dev-tools-details.md#fresh-dev-harnesses).
+Four harnesses (`tools/dev-{standalone,swift,electron-node,electron-swift}-fresh.sh`) on distinct ports; reaping opt-in (`SLICC_FRESH_REAP=1`), port-scoped — never touch prod bridge `:5710` or CDP `:9222`. Run via `npm run dev:{standalone,swift}:fresh` or `dev:electron:{node,swift}:fresh`. Ports, overrides, Darwin helpers: [dev](../../docs/development.md) · [details](../../docs/dev-tools-details.md#fresh-dev-harnesses).
 
 ## Usage Notes
 

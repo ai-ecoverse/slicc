@@ -327,7 +327,7 @@ The 2-segment form (raw body digest, no expiry) is unchanged and still the right
 Notes:
 
 - `SIGNING_KEY` is a secret like any other — set it via `secret set SIGNING_KEY <value> --domain jobs.example.com --persist` or a `SIGNING_KEY=...` / `SIGNING_KEY_DOMAINS=...` pair in `~/.slicc/secrets.env`.
-- Implementation: `SecretsPipeline.signHmac` (`packages/shared-ts/src/secrets-pipeline.ts`), wired into the route in `packages/node-server/src/routes/fetch-proxy.ts` (and mirrored for the extension bridge in `packages/chrome-extension/src/fetch-proxy-shared.ts` and the swift-server bridge in `packages/swift-server/Sources/Keychain/SecretInjector.swift` / `packages/swift-server/Sources/Server/APIRoutes.swift`). The header-stripping is in `FETCH_PROXY_SKIP_HEADERS` (`packages/node-server/src/fetch-proxy-headers.ts`).
+- Implementation: `SecretsPipeline.signHmac` (`packages/shared-ts/src/secrets-pipeline.ts`), wired into the route in `packages/node-server/src/routes/fetch-proxy.ts` (and mirrored for the extension bridge in the extension's `fetch-proxy-shared.ts` (ai-ecoverse/slicc-extension) and the swift-server bridge in `packages/swift-server/Sources/Keychain/SecretInjector.swift` / `packages/swift-server/Sources/Server/APIRoutes.swift`). The header-stripping is in `FETCH_PROXY_SKIP_HEADERS` (`packages/node-server/src/fetch-proxy-headers.ts`).
 
 ### Migration note for file-PAT users
 

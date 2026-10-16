@@ -6,10 +6,8 @@ import { describe, expect, it } from 'vitest';
 import {
   BASELINE_PATH,
   baselineFiles,
-  chromeExtensionLayerOf,
   cloudflareWorkerLayerOf,
   compareToBaseline,
-  findChromeExtensionWebappEscapes,
   findCrossPackageEscapes,
   findLayerBackEdges,
   findWebcomponentsWebappEscapes,
@@ -18,7 +16,6 @@ import {
   layerOf,
   nodeServerLayerOf,
   scanBackEdges,
-  scanChromeExtensionWebappEscapes,
   scanCrossPackageEscapes,
   scanStackBackEdges,
   scanWebcomponentsWebappEscapes,
@@ -455,173 +452,6 @@ describe('check-layer-back-edges: findCrossPackageEscapes', () => {
   });
 });
 
-describe('check-layer-back-edges: findChromeExtensionWebappEscapes', () => {
-  it('allows the one permitted exception: a top-level type-only clause from kernel/messages.ts', () => {
-    const source = "import type { ExtensionMessage } from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('src/service-worker.ts', source)).toEqual([]);
-  });
-
-  it('still allows a type-only named import whose imported name is the string "buffer-from"', () => {
-    const source =
-      "import type { 'buffer-from' as ExtensionMessage } from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('src/service-worker.ts', source)).toEqual([]);
-  });
-
-  it('flags a VALUE import from kernel/messages.ts (no runtime coupling exemption)', () => {
-    const source =
-      "import { LEADER_EXT_ID_QUERY_NAME } from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('src/service-worker.ts', source)).toEqual([
-      {
-        line: 1,
-        specifier: '../../webapp/src/kernel/messages.js',
-        to: 'packages/webapp/src/kernel/messages.js',
-      },
-    ]);
-  });
-
-  it('flags a MIXED clause ({ type X, Y }) from kernel/messages.ts', () => {
-    // A mixed clause carries a real value import alongside the type — the
-    // top-level `import type` exemption is deliberately narrower than this.
-    const source =
-      "import { type ExtensionMessage, LEADER_EXT_ID_QUERY_NAME } from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('src/service-worker.ts', source)).toHaveLength(1);
-  });
-
-  it('flags a type-only import of any OTHER webapp module (exemption is path-specific)', () => {
-    const source = "import type { TargetInfo } from '../../webapp/src/cdp/types.js';";
-    expect(findChromeExtensionWebappEscapes('src/bridge-sw.ts', source)).toEqual([
-      {
-        line: 1,
-        specifier: '../../webapp/src/cdp/types.js',
-        to: 'packages/webapp/src/cdp/types.js',
-      },
-    ]);
-  });
-
-  it('flags a dynamic import() targeting webapp/src', () => {
-    const source = "async function f() { await import('../../webapp/src/net/handoff-link.js'); }";
-    expect(findChromeExtensionWebappEscapes('src/discovery-observer.ts', source)).toEqual([
-      {
-        line: 1,
-        specifier: '../../webapp/src/net/handoff-link.js',
-        to: 'packages/webapp/src/net/handoff-link.js',
-      },
-    ]);
-  });
-
-  it('flags a namespace import targeting webapp/src', () => {
-    const source = "import * as messages from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('src/service-worker.ts', source)).toHaveLength(1);
-  });
-
-  it('allows imports that stay inside packages/chrome-extension/src', () => {
-    const source = [
-      "import { CHERRY_PANEL_PORT_NAME } from './cherry-panel-protocol.js';",
-      "import { nudgeIframeRepaint } from './iframe-repaint.js';",
-    ].join('\n');
-    expect(findChromeExtensionWebappEscapes('src/sidepanel-entry.ts', source)).toEqual([]);
-  });
-
-  it('allows bare package specifiers (the real path for shared code)', () => {
-    const source = "import { probeWellKnown } from '@slicc/shared-ts';";
-    expect(findChromeExtensionWebappEscapes('src/discovery-observer.ts', source)).toEqual([]);
-  });
-
-  it('flags a template-literal (backtick) dynamic import() targeting webapp/src', () => {
-    const source = 'async function f() { await import(`../../webapp/src/net/handoff-link.js`); }';
-    expect(findChromeExtensionWebappEscapes('src/discovery-observer.ts', source)).toEqual([
-      {
-        line: 1,
-        specifier: '../../webapp/src/net/handoff-link.js',
-        to: 'packages/webapp/src/net/handoff-link.js',
-      },
-    ]);
-  });
-
-  it('flags a static template-literal whose specifier contains $ but not ${', () => {
-    const source = 'async function f() { await import(`../../webapp/src/net/price$.js`); }';
-    expect(findChromeExtensionWebappEscapes('src/discovery-observer.ts', source)).toEqual([
-      {
-        line: 1,
-        specifier: '../../webapp/src/net/price$.js',
-        to: 'packages/webapp/src/net/price$.js',
-      },
-    ]);
-  });
-
-  it('flags an interpolated template-literal import() whose literal text lands on webapp/src', () => {
-    const source = 'async function f(mod) { await import(`../../webapp/src/net/${mod}.js`); }';
-    const hits = findChromeExtensionWebappEscapes('src/discovery-observer.ts', source);
-    expect(hits).toHaveLength(1);
-    expect(hits[0].specifier).toContain('webapp/src');
-  });
-
-  it('allows an interpolated template-literal import() that does NOT reference webapp/src', () => {
-    const source = 'async function f(mod) { await import(`./commands/${mod}.js`); }';
-    expect(findChromeExtensionWebappEscapes('src/discovery-observer.ts', source)).toEqual([]);
-  });
-
-  it('flags a concatenated (+-joined) specifier targeting webapp/src', () => {
-    const source = "import('../../webapp' + '/src/net/handoff-link.js');";
-    expect(findChromeExtensionWebappEscapes('src/discovery-observer.ts', source)).toEqual([
-      {
-        line: 1,
-        specifier: '../../webapp/src/net/handoff-link.js',
-        to: 'packages/webapp/src/net/handoff-link.js',
-      },
-    ]);
-  });
-
-  it('flags a triple-slash reference path targeting webapp/src', () => {
-    const source = '/// <reference path="../../webapp/src/cdp/types.ts" />\nexport {};';
-    expect(findChromeExtensionWebappEscapes('src/bridge-sw.ts', source)).toEqual([
-      {
-        line: 1,
-        specifier: '../../webapp/src/cdp/types.ts',
-        to: 'packages/webapp/src/cdp/types.ts',
-      },
-    ]);
-  });
-
-  it('flags "export type { ... } from" — only a top-level "import type {" clause is granted', () => {
-    const source = "export type { ExtensionMessage } from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('src/service-worker.ts', source)).toEqual([
-      {
-        line: 1,
-        specifier: '../../webapp/src/kernel/messages.js',
-        to: 'packages/webapp/src/kernel/messages.js',
-      },
-    ]);
-  });
-
-  it('ignores escapes inside comments', () => {
-    const source = "// import { x } from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('src/service-worker.ts', source)).toEqual([]);
-  });
-
-  it('flags a synthetic chrome-extension tests → webapp/src climb (#3047)', () => {
-    const source = "import { isExtensionMessage } from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('tests/messages.test.ts', source)).toEqual([
-      {
-        line: 1,
-        specifier: '../../webapp/src/kernel/messages.js',
-        to: 'packages/webapp/src/kernel/messages.js',
-      },
-    ]);
-  });
-
-  it('still allows a type-only kernel/messages clause from tests/', () => {
-    const source = "import type { ExtensionMessage } from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('tests/messages.test.ts', source)).toEqual([]);
-  });
-
-  it('does not exempt a value import of kernel/messages.js from tests/', () => {
-    const source =
-      "import { type ExtensionMessage, isExtensionMessage } from '../../webapp/src/kernel/messages.js';";
-    expect(findChromeExtensionWebappEscapes('tests/messages.test.ts', source)).toHaveLength(1);
-  });
-});
-
 describe('check-layer-back-edges: findWebcomponentsWebappEscapes', () => {
   it('flags a synthetic webcomponents → webapp/src import (the #3027 cycle)', () => {
     const source = "import { createMemoryRows } from '../../../webapp/src/ui/wc/wc-memory.js';";
@@ -697,6 +527,36 @@ describe('check-layer-back-edges: findWebcomponentsWebappEscapes', () => {
         to: 'packages/webapp/src/ui/wc/wc-memory.ts',
       },
     ]);
+  });
+
+  it('flags a static template-literal whose specifier contains $ but not ${', () => {
+    const source = 'async function f() { await import(`../../../webapp/src/ui/price$.js`); }';
+    expect(findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../../webapp/src/ui/price$.js',
+        to: 'packages/webapp/src/ui/price$.js',
+      },
+    ]);
+  });
+
+  it('flags an interpolated template-literal import() whose literal text lands on webapp/src', () => {
+    const source = 'async function f(mod) { await import(`../../../webapp/src/ui/${mod}.js`); }';
+    const hits = findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.ts', source);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].specifier).toContain('webapp/src');
+  });
+
+  it('allows an interpolated template-literal import() that does NOT reference webapp/src', () => {
+    const source = 'async function f(mod) { await import(`./commands/${mod}.js`); }';
+    expect(findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.ts', source)).toEqual([]);
+  });
+
+  it('flags a namespace import and an "export type { ... } from" re-export', () => {
+    const ns = "import * as memory from '../../../webapp/src/ui/wc/wc-memory.js';";
+    expect(findWebcomponentsWebappEscapes('src/memory/memory-rows.ts', ns)).toHaveLength(1);
+    const reexport = "export type { MemoryRow } from '../../../webapp/src/ui/wc/wc-memory.js';";
+    expect(findWebcomponentsWebappEscapes('src/memory/memory-rows.ts', reexport)).toHaveLength(1);
   });
 
   it('allows imports that stay inside packages/webcomponents', () => {
@@ -784,15 +644,6 @@ describe('check-layer-back-edges: per-package layerOf', () => {
     expect(nodeServerLayerOf('electron-main.js')).toBe('entry');
   });
 
-  it('classifies chrome-extension shared/page vs sw vs the SW entry', () => {
-    expect(chromeExtensionLayerOf('secrets-storage.js')).toBe('shared');
-    expect(chromeExtensionLayerOf('sidepanel-entry.ts')).toBe('shared');
-    expect(chromeExtensionLayerOf('bridge-sw.ts')).toBe('sw');
-    expect(chromeExtensionLayerOf('secrets-sw.ts')).toBe('sw');
-    expect(chromeExtensionLayerOf('service-worker.ts')).toBe('entry');
-    expect(chromeExtensionLayerOf('service-worker.js')).toBe('entry');
-  });
-
   it('classifies cloudflare-worker shared vs routes vs index, including DO internals', () => {
     expect(cloudflareWorkerLayerOf('shared.ts')).toBe('shared');
     expect(cloudflareWorkerLayerOf('links.js')).toBe('shared');
@@ -852,53 +703,6 @@ describe('check-layer-back-edges: node-server stack', () => {
       "import { startCloud } from './cloud/start.js';",
     ].join('\n');
     expect(findLayerBackEdges('index.ts', source, stack)).toEqual([]);
-  });
-});
-
-describe('check-layer-back-edges: chrome-extension stack', () => {
-  const stack = stackById('chrome-extension');
-
-  it('flags a page/shared module importing a service-worker module', () => {
-    expect(
-      findLayerBackEdges(
-        'sidepanel-entry.ts',
-        "import { attachBridge } from './bridge-sw.js';",
-        stack
-      )
-    ).toEqual([{ line: 1, specifier: './bridge-sw.js', from: 'shared', to: 'sw' }]);
-  });
-
-  it('allows the SW entry and SW modules to import shared helpers', () => {
-    expect(
-      findLayerBackEdges(
-        'secrets-sw.ts',
-        "import { loadSecrets } from './secrets-storage.js';",
-        stack
-      )
-    ).toEqual([]);
-    expect(
-      findLayerBackEdges(
-        'service-worker.ts',
-        "import { attachBridge } from './bridge-sw.js';",
-        stack
-      )
-    ).toEqual([]);
-  });
-
-  it('flags a SW module importing the composition-root entry', () => {
-    expect(
-      findLayerBackEdges('bridge-sw.ts', "import { boot } from './service-worker.js';", stack)
-    ).toEqual([{ line: 1, specifier: './service-worker.js', from: 'sw', to: 'entry' }]);
-  });
-
-  it('allows page entries to import shared helpers (not SW modules)', () => {
-    expect(
-      findLayerBackEdges(
-        'secrets-entry.ts',
-        "import { loadSecrets } from './secrets-storage.js';",
-        stack
-      )
-    ).toEqual([]);
   });
 });
 
@@ -962,12 +766,7 @@ describe('check-layer-back-edges: end-to-end over the real tree', () => {
   });
 
   it('each package stack matches its committed baseline', () => {
-    expect(LAYER_STACKS.map((s) => s.id)).toEqual([
-      'webapp',
-      'node-server',
-      'chrome-extension',
-      'cloudflare-worker',
-    ]);
+    expect(LAYER_STACKS.map((s) => s.id)).toEqual(['webapp', 'node-server', 'cloudflare-worker']);
     for (const stack of LAYER_STACKS) {
       const baseline = JSON.parse(readFileSync(stack.baselinePath, 'utf8'));
       expect(compareToBaseline(scanStackBackEdges(stack), baseline), stack.id).toEqual([]);
@@ -976,10 +775,6 @@ describe('check-layer-back-edges: end-to-end over the real tree', () => {
 
   it('no webapp source escapes into a sibling package (zero tolerance)', () => {
     expect(scanCrossPackageEscapes()).toEqual({});
-  });
-
-  it('no chrome-extension source or test escapes into packages/webapp/src beyond the one exemption (zero tolerance)', () => {
-    expect(scanChromeExtensionWebappEscapes()).toEqual({});
   });
 
   it('no webcomponents source or test escapes into packages/webapp/src (zero tolerance)', () => {
