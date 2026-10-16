@@ -19,12 +19,12 @@
  */
 
 import { isLickChannel, type LickChannel } from '../../base/lick-channels.js';
-import type { AgentMessage } from '../../core/index.js';
 import {
   lickChannelFromBody,
   lickChannelFromSenderName,
   splitEnvelopes,
-} from '../../scoops/agent-message-to-chat.js';
+} from '../../base/message-envelope.js';
+import type { AgentMessage } from '../../core/index.js';
 import type { ChatMessage } from '../../scoops/chat-types.js';
 import type { ConversationEntry } from './types.js';
 
