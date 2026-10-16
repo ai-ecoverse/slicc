@@ -138,12 +138,7 @@ export function layerOf(relPath) {
   return relPath.split('/')[0];
 }
 
-const NODE_SERVER_ENTRY = new Set([
-  'index.ts',
-  'electron-main.ts',
-  'publish-chrome-web-store-main.ts',
-  'release-package-main.ts',
-]);
+const NODE_SERVER_ENTRY = new Set(['index.ts', 'electron-main.ts', 'release-package-main.ts']);
 const NODE_SERVER_TRANSPORT = new Set([
   'bridge-security.ts',
   'fetch-proxy-gzip.ts',
