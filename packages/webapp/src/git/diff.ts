@@ -102,31 +102,51 @@ function findMiddle(
   return undefined;
 }
 
-function lineIds(a: string[], b: string[]): [Int32Array, Int32Array] {
+function lineIds(a: string[], b: string[], range: DiffRange): [Int32Array, Int32Array] {
   const index = new Map<string, number>();
-  const intern = (lines: string[]) => {
-    const out = new Int32Array(lines.length);
-    for (let i = 0; i < lines.length; i++) {
+  const intern = (lines: string[], start: number, end: number) => {
+    const out = new Int32Array(end - start);
+    for (let i = start; i < end; i++) {
       let id = index.get(lines[i]);
       if (id === undefined) {
         id = index.size;
         index.set(lines[i], id);
       }
-      out[i] = id;
+      out[i - start] = id;
     }
     return out;
   };
-  return [intern(a), intern(b)];
+  return [intern(a, range.aStart, range.aEnd), intern(b, range.bStart, range.bEnd)];
 }
 
 function middleSearch(a: string[], b: string[]) {
-  let state: { ids: [Int32Array, Int32Array]; scratch: [Int32Array, Int32Array] } | undefined;
+  let state:
+    | {
+        ids: [Int32Array, Int32Array];
+        scratch: [Int32Array, Int32Array];
+        aBase: number;
+        bBase: number;
+      }
+    | undefined;
   return (range: DiffRange): [number, number] | undefined => {
     if (!state) {
       const size = 2 * Math.ceil((range.aEnd - range.aStart + range.bEnd - range.bStart) / 2) + 3;
-      state = { ids: lineIds(a, b), scratch: [new Int32Array(size), new Int32Array(size)] };
+      state = {
+        ids: lineIds(a, b, range),
+        scratch: [new Int32Array(size), new Int32Array(size)],
+        aBase: range.aStart,
+        bBase: range.bStart,
+      };
     }
-    return findMiddle(state.ids[0], state.ids[1], range, ...state.scratch);
+    const { aBase, bBase } = state;
+    const local = {
+      aStart: range.aStart - aBase,
+      aEnd: range.aEnd - aBase,
+      bStart: range.bStart - bBase,
+      bEnd: range.bEnd - bBase,
+    };
+    const split = findMiddle(state.ids[0], state.ids[1], local, ...state.scratch);
+    return split && [split[0] + aBase, split[1] + bBase];
   };
 }
 

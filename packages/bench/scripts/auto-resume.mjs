@@ -25,17 +25,26 @@ export function deadlineShards(jobs, annotations) {
   return shardsMatching(jobs, annotations, DEADLINE_PATTERNS);
 }
 
+export const ANNOTATION_NOISE_PATTERNS = [/^Process completed with exit code \d+\.?$/];
+
+function isResumeSignal(message) {
+  return [...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(message));
+}
+
+function isAnnotationNoise(message) {
+  const text = String(message ?? '').trim();
+
+  if (!text) return true;
+  return ANNOTATION_NOISE_PATTERNS.some((p) => p.test(text));
+}
+
 export function ownFailureShards(jobs, annotations) {
   return jobs
     .filter((j) => /^Shard \d+$/.test(j.name ?? '') && j.conclusion === 'failure')
     .filter((j) => {
       const messages = annotations.get(j.id) ?? [];
-      const hasResumeSignal = messages.some((m) =>
-        [...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(m))
-      );
-      const hasOtherError = messages.some(
-        (m) => ![...KILLED_PATTERNS, ...DEADLINE_PATTERNS].some((p) => p.test(m))
-      );
+      const hasResumeSignal = messages.some((m) => isResumeSignal(m));
+      const hasOtherError = messages.some((m) => !isResumeSignal(m) && !isAnnotationNoise(m));
 
       const failedPostStep = (j.steps ?? []).some(
         (step) => step.conclusion === 'failure' && step.name !== 'Run and judge'

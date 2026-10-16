@@ -1140,8 +1140,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   });
   console.log(writeOutputs(opts, runStart));
 
-  if (errors)
-    log(`${errors} run(s) errored before the judge; rerun with the same --out to retry them`);
+  if (errors) {
+    const msg = `${errors} run(s) errored before the judge; rerun with the same --out to retry them`;
+    log(msg);
+
+    if (process.env.GITHUB_ACTIONS) console.error(`::error::${msg}`);
+  }
   return errors || stopped ? 1 : 0;
 }
 

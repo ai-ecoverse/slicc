@@ -1694,6 +1694,60 @@ describe('lanes and guardrails', () => {
     }
   });
 
+  it('emits a distinct GitHub Actions error annotation when runs errored (not just exit 1)', async () => {
+    const prev = process.env.GITHUB_ACTIONS;
+    process.env.GITHUB_ACTIONS = 'true';
+    const dir = tmp();
+    const outDir = join(dir, 'out');
+    const q = quiet();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const down = leader({ failOn: /^rm -rf \/tmp\/bench\// });
+      expect(
+        await main(['--set', setOf(dir, 2), '--models', 'm', '--out', outDir, '--no-judge'], {
+          ...down.deps,
+          log: () => {},
+        })
+      ).toBe(1);
+      expect(err).toHaveBeenCalledWith(
+        '::error::2 run(s) errored before the judge; rerun with the same --out to retry them'
+      );
+    } finally {
+      err.mockRestore();
+      q.mockRestore();
+      if (prev === undefined) delete process.env.GITHUB_ACTIONS;
+      else process.env.GITHUB_ACTIONS = prev;
+    }
+  });
+
+  it('logs errored runs without a GitHub annotation outside Actions', async () => {
+    const prev = process.env.GITHUB_ACTIONS;
+    delete process.env.GITHUB_ACTIONS;
+    const dir = tmp();
+    const outDir = join(dir, 'out');
+    const q = quiet();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.fn();
+    try {
+      const down = leader({ failOn: /^rm -rf \/tmp\/bench\// });
+      expect(
+        await main(['--set', setOf(dir, 2), '--models', 'm', '--out', outDir, '--no-judge'], {
+          ...down.deps,
+          log,
+        })
+      ).toBe(1);
+      expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
+        /2 run\(s\) errored before the judge/
+      );
+      expect(err.mock.calls.some((c) => String(c[0]).startsWith('::error::'))).toBe(false);
+    } finally {
+      err.mockRestore();
+      q.mockRestore();
+      if (prev === undefined) delete process.env.GITHUB_ACTIONS;
+      else process.env.GITHUB_ACTIONS = prev;
+    }
+  });
+
   it("uses the next task's slicc.timeoutSeconds for the deadline", () => {
     const journal = { event: vi.fn() };
     const log = vi.fn();
