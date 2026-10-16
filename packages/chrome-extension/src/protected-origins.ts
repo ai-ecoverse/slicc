@@ -7,6 +7,13 @@ const guard = protectedOrigins(catalog.protectedOrigins) as {
   target: (opts: { url: string; previous?: boolean; opener?: string }) => boolean;
 };
 
+export const PROTECTED_RULES: {
+  domains: readonly string[];
+  hosts: readonly string[];
+  schemes: readonly string[];
+  refusal: string;
+} = catalog.protectedOrigins;
+
 export const PROTECTED_REFUSAL: string = catalog.protectedOrigins.refusal;
 
 export function isProtectedUrl(rawUrl: string | undefined): boolean {

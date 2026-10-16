@@ -32,6 +32,7 @@ import {
   writeStoredLeaderTabId,
 } from './leader-tab-sw.js';
 import { handleMountMessage, handleMountSignAndForwardPort } from './mount-backends-sw.js';
+import { installProtectedFrameTracker } from './protected-frames-sw.js';
 import { createRawFetchCapture, installRawFetchCapture } from './raw-fetch-capture.js';
 import { handleRelayMessage } from './relay-sw.js';
 import {
@@ -83,6 +84,8 @@ setCherryPanelRecoveryDeps({ reloadLeaderTabIfExists });
 
 installHandoffNotifications();
 installDiscoveryObserver();
+
+installProtectedFrameTracker();
 
 installCdpProxyListeners();
 

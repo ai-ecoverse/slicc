@@ -1395,5 +1395,5 @@ function flush(): Promise<void> {
 }
 
 async function flushMicrotasks(): Promise<void> {
-  for (let i = 0; i < 8; i++) await Promise.resolve();
+  for (let i = 0; i < 32; i++) await Promise.resolve();
 }

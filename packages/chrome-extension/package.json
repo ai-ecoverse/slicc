@@ -7,6 +7,7 @@
     "dev:extension": "SLICC_EXT_DEV=1 SLICC_EXT_DEV_WATCH=1 vite build --config vite.config.ts --watch",
     "postbuild:check": "bash ../dev-tools/tools/check-extension-rhc.sh",
     "size": "size-limit",
+    "test:cdp-shield": "tsx ../dev-tools/tools/extension-cdp-shield-check.ts",
     "test": "vitest run",
     "test:extension-smoke": "tsx ../dev-tools/tools/extension-smoke-test.ts",
     "test:raw-fetch": "tsx ../dev-tools/tools/extension-raw-fetch-check.ts",
@@ -17,7 +18,7 @@
       "name": "extension: service worker",
       "path": "../../dist/extension/service-worker.js",
       "brotli": false,
-      "limit": "94 kB"
+      "limit": "103 kB"
     },
     {
       "name": "extension: side panel entry",
@@ -29,7 +30,7 @@
       "name": "extension: total JS payload",
       "path": "../../dist/extension/**/*.js",
       "brotli": false,
-      "limit": "138 kB"
+      "limit": "149 kB"
     }
   ],
   "dependencies": {
