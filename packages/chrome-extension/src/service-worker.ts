@@ -133,6 +133,11 @@ function connectExternalFetchProxy(port: ChromeRuntimePort): void {
 }
 
 chrome.runtime.onConnect.addListener((port) => {
+  const extOrigin = `chrome-extension://${chrome.runtime.id}`;
+  const portOrigin =
+    port.sender?.origin ?? (port.sender?.url ? new URL(port.sender.url).origin : undefined);
+
+  if (port.sender?.id !== chrome.runtime.id || portOrigin !== extOrigin) return;
   if (port.name === CHERRY_PANEL_PORT_NAME) {
     chrome.action.setBadgeText({ text: '' }).catch(() => {});
     handleCherryPanelConnect(port, {

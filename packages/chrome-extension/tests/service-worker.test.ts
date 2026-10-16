@@ -114,6 +114,7 @@ function createChromeMock() {
       },
     },
     runtime: {
+      id: 'test-ext-id',
       sendMessage: vi.fn(async (message: unknown) => {
         runtimeSentMessages.push(message);
       }),
@@ -208,7 +209,11 @@ function createChromeMock() {
 
 function dispatchOffscreenMessage(payload: unknown): void {
   for (const listener of runtimeMessageListeners) {
-    listener({ source: 'offscreen', payload }, {}, () => {});
+    listener(
+      { source: 'offscreen', payload },
+      { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
+      () => {}
+    );
   }
 }
 
@@ -222,7 +227,11 @@ async function dispatchAndCaptureResponse(message: unknown): Promise<unknown> {
     };
     let asyncHandled = false;
     for (const listener of runtimeMessageListeners) {
-      const ret = listener(message, {}, sendResponse);
+      const ret = listener(
+        message,
+        { id: 'test-ext-id', origin: 'chrome-extension://test-ext-id' },
+        sendResponse
+      );
       if (ret === true) asyncHandled = true;
     }
 

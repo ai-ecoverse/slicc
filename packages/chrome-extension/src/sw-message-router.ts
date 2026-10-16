@@ -12,12 +12,23 @@ export type SwMessageHandler = (
   sendResponse: (response?: unknown) => void
 ) => SwMessageOutcome;
 
+function isTrustedInternalSender(sender: ChromeMessageSender): boolean {
+  if (typeof sender.id !== 'string' || sender.id !== chrome.runtime.id) return false;
+  const extensionOrigin = `chrome-extension://${chrome.runtime.id}`;
+
+  const senderOrigin = sender.origin ?? (sender.url ? new URL(sender.url).origin : undefined);
+  return senderOrigin === extensionOrigin;
+}
+
 export function routeSwMessage(
   handlers: readonly SwMessageHandler[],
   message: unknown,
   sender: ChromeMessageSender,
   sendResponse: (response?: unknown) => void
 ): boolean {
+  if (!isTrustedInternalSender(sender)) {
+    return false;
+  }
   for (const handler of handlers) {
     const outcome = handler(message, sender, sendResponse);
     if (outcome === 'not-handled') continue;
