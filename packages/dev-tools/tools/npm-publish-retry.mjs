@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 120_000, 240_000];
@@ -34,8 +34,30 @@ export function isPublishConflict(output) {
 }
 
 export function packageDir(args, cwd) {
-  const dir = args.find((arg) => !arg.startsWith('-'));
-  return resolve(cwd, dir ?? '.');
+  const index = packageDirIndex(args);
+  return resolve(cwd, index === -1 ? '.' : args[index]);
+}
+
+export const PUBLISH_VALUE_FLAGS = new Set(['--tag', '--access', '--otp', '--registry']);
+
+export function packageDirIndex(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (PUBLISH_VALUE_FLAGS.has(arg)) {
+      i++;
+      continue;
+    }
+    if (!arg.startsWith('-')) return i;
+  }
+  return -1;
+}
+
+export function localPublishArgs(args) {
+  const index = packageDirIndex(args);
+  if (index === -1) return args;
+  const dir = args[index];
+  if (dir.startsWith('.') || isAbsolute(dir)) return args;
+  return args.with(index, `./${dir}`);
 }
 
 export function run(spawnFn, command, args, { cwd, env, timeoutMs, stdout, stderr }) {
@@ -134,7 +156,7 @@ export async function publishWithRetry({
   const startedAt = now();
 
   for (let attempt = 1; ; attempt++) {
-    const result = await run(spawnFn, 'npm', ['publish', ...args], {
+    const result = await run(spawnFn, 'npm', ['publish', ...localPublishArgs(args)], {
       cwd,
       env,
       timeoutMs: publishTimeoutMs,

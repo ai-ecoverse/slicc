@@ -1,6 +1,6 @@
 {
   "name": "@ai-ecoverse/cherry",
-  "version": "0.0.0",
+  "version": "6.250.0",
   "description": "Cherry: embed a SLICC follower in a host web page and lend the page to a SLICC cone as a capability-limited browser target.",
   "license": "Apache-2.0",
   "type": "module",

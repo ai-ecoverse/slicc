@@ -62,7 +62,7 @@ export const BIOME_JSH_PUBLISH_CMD =
   'node packages/dev-tools/tools/npm-publish-retry.mjs packages/dev-tools/biome-jsh --provenance --access public';
 
 export const CHERRY_PUBLISH_CMD =
-  'node packages/dev-tools/tools/npm-publish-retry.mjs packages/cherry --provenance --access public';
+  'node packages/dev-tools/tools/npm-publish-retry.mjs ./packages/cherry --provenance --access public';
 
 export function isFirstRelease(lastTag) {
   const t = typeof lastTag === 'string' ? lastTag.trim() : '';
