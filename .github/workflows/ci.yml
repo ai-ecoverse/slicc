@@ -1213,7 +1213,7 @@ jobs:
           cache: false
       - name: actionlint (composite actions + slicc-*.yml)
         env:
-          ACTIONLINT_VERSION: v1.7.11
+          ACTIONLINT_VERSION: v1.7.12
         run: |
           go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
           "$(go env GOPATH)/bin/actionlint" -no-color \
@@ -1257,7 +1257,7 @@ jobs:
           cache: false
       - name: actionlint (bench.yml)
         env:
-          ACTIONLINT_VERSION: v1.7.11
+          ACTIONLINT_VERSION: v1.7.12
         run: |
           go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
           "$(go env GOPATH)/bin/actionlint" -no-color .github/workflows/bench.yml
