@@ -74,7 +74,10 @@ function isResumeSignal(message) {
 }
 
 function isAnnotationNoise(message) {
-  return ANNOTATION_NOISE_PATTERNS.some((p) => p.test(String(message ?? '').trim()));
+  const text = String(message ?? '').trim();
+  // Blank messages are not evidence of a bench failure (API nulls / empty rows).
+  if (!text) return true;
+  return ANNOTATION_NOISE_PATTERNS.some((p) => p.test(text));
 }
 
 /**
