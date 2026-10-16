@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["github>ai-ecoverse/slicc-shared-web"],
   "description": [
     "Dependency updates are intentionally NOT grouped into one 'non-major' PR — each package updates in its own PR so a breaking transitive bump fails in isolation and is trivial to identify (see the e2b 2.33.0 / Cloudflare workerd incident). Keep the purposeful cohesion groups below (semantic-release, xterm, earendil-works, just-bash, biome, patched dependencies, v86); do not re-add a broad catch-all group.",
     "gitIgnoredAuthors is the github-actions[bot] identity that the renovate-format-reconcile, renovate-patch-reconcile, renovate-swift-pin-reconcile, renovate-skill-pin-reconcile, renovate-lockfile-reconcile, and renovate-bundle-size-reconcile workflows push their reflow/reconcile commits as. Listing it here stops Renovate treating those commits as a 'someone else edited this PR' foreign edit — without it Renovate posts an Edited/Blocked notice and disables auto-rebase on the amended PR (automerge still fires once green; see #1602). Keep in sync with the `git config user.email` in those six workflows.",
@@ -47,6 +47,12 @@
       "rangeStrategy": "pin"
     },
     {
+      "description": "@ai-ecoverse/wasm-tls-engine publishes only <upstream version>-<build> versions, which Renovate treats as prereleases. From 3.6.5-1 it would only offer 3.6.5-N, never 3.6.7-1, so the pin froze for over a week after 3.6.7-1 shipped. Allow unstable versions, but never past `latest`.",
+      "matchPackageNames": ["@ai-ecoverse/wasm-tls-engine"],
+      "ignoreUnstable": false,
+      "respectLatest": true
+    },
+    {
       "matchPackageNames": ["pyodide"],
       "rangeStrategy": "pin"
     },
@@ -66,11 +72,6 @@
       "description": "TypeScript 7's native Go type-checker (adopted in PR #1633) remains on the real typescript dependency, while the in-browser compiler needs the classic JS lib/typescript.js bundle; keep the typescript-js npm alias on v6 so Renovate does not re-propose the breaking v7 bump from PR #1653.",
       "matchDepNames": ["typescript-js"],
       "allowedVersions": "<7"
-    },
-    {
-      "description": "Apply a longer 14-day cooldown for major version bumps, which carry higher risk of breaking changes and are more attractive targets for malicious actors.",
-      "matchUpdateTypes": ["major"],
-      "minimumReleaseAge": "14 days"
     },
     {
       "description": "Packages we carry a patch-package patch for (see patches/ and patches/patches.json). A bump orphans the version-pinned patch, so route these into one group, label them, and never automerge — the renovate-patch-reconcile workflow regenerates or removes the patch first, and the lint:patches guard blocks the merge until the patch matches the installed version. Keep this list in sync with patches/.",
