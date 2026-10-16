@@ -1,13 +1,15 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   isPublishConflict,
   isTransientPublishFailure,
+  localPackageSpec,
   main,
   matchesRegistry,
+  npmPublishArgs,
   packageDir,
   publishWithRetry,
   RETRY_DELAYS_MS,
@@ -63,6 +65,26 @@ describe('packageDir', () => {
 
   it('defaults to cwd', () => {
     expect(packageDir(['--provenance'], '/repo')).toBe('/repo');
+  });
+});
+
+describe('localPackageSpec', () => {
+  it('absolutizes a one-slash directory so npm does not fetch it as GitHub', () => {
+    // #4033: `npm publish packages/cherry` runs
+    // `git ls-remote ssh://git@github.com/packages/cherry.git`.
+    expect(localPackageSpec('packages/cherry', '/repo')).toBe('/repo/packages/cherry');
+    expect(
+      npmPublishArgs(['packages/cherry', '--provenance', '--access', 'public'], '/repo')
+    ).toEqual(['/repo/packages/cherry', '--provenance', '--access', 'public']);
+  });
+
+  it('leaves cwd, dotted, absolute, and multi-slash paths alone', () => {
+    expect(localPackageSpec('.', '/repo')).toBe('.');
+    expect(localPackageSpec('./packages/cherry', '/repo')).toBe('./packages/cherry');
+    expect(localPackageSpec('/repo/packages/cherry', '/repo')).toBe('/repo/packages/cherry');
+    expect(localPackageSpec('packages/dev-tools/biome-jsh', '/repo')).toBe(
+      'packages/dev-tools/biome-jsh'
+    );
   });
 });
 
@@ -345,6 +367,24 @@ describe('publishWithRetry', () => {
     });
     const result = await publishWithRetry({ ...base(), args: ['.', '--provenance'], spawn });
     expect(result).toEqual({ code: 0, attempts: 1, alreadyPublished: true });
+  });
+
+  it('publishes a one-slash workspace path as an absolute directory', async () => {
+    const spec = join('packages', 'cherry');
+    const pkgDir = join(dir, spec);
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(
+      join(pkgDir, 'package.json'),
+      JSON.stringify({ name: '@ai-ecoverse/cherry', version: '6.250.0' })
+    );
+    const { spawn, calls } = scriptedNpm([[0, '']]);
+    const result = await publishWithRetry({
+      ...base(),
+      args: [spec, '--provenance', '--access', 'public'],
+      spawn,
+    });
+    expect(result).toEqual({ code: 0, attempts: 1, alreadyPublished: false });
+    expect(calls[0]).toEqual(['publish', resolve(dir, spec), '--provenance', '--access', 'public']);
   });
 
   it('reads name and version from the positional package directory', async () => {

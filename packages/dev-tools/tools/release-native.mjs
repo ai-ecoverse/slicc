@@ -124,9 +124,11 @@ export const BIOME_JSH_PUBLISH_CMD =
   'node packages/dev-tools/tools/npm-publish-retry.mjs packages/dev-tools/biome-jsh --provenance --access public';
 
 // Cherry is published from its workspace directory; `--provenance` /
-// `--access public` match biome-jsh. npm trusted publishing (OIDC) authorizes
-// the `release` job of .github/workflows/release.yml — keep that pairing in
-// sync with the npm package settings if the publish ever moves.
+// `--access public` match biome-jsh. The one-slash path is a GitHub shorthand
+// to npm (`ssh://git@github.com/packages/cherry.git`, #4033); npm-publish-retry
+// rewrites it to an absolute path before `npm publish`. Trusted publishing
+// (OIDC) authorizes the `release` job of .github/workflows/release.yml — keep
+// that pairing in sync with the npm package settings if the publish ever moves.
 export const CHERRY_PUBLISH_CMD =
   'node packages/dev-tools/tools/npm-publish-retry.mjs packages/cherry --provenance --access public';
 
