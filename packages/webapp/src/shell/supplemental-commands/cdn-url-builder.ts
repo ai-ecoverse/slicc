@@ -179,7 +179,7 @@ export function registryUrl(pkg: string, sub?: string): URL {
  *
  * Examples:
  *   jsdelivrNpmUrl('@imagemagick/magick-wasm', '0.0.38', 'dist/')
- *     → https://cdn.jsdelivr.net/npm/@imagemagick/magick-wasm@0.0.38/dist/
+ *     → https://cdn.jsdelivr.net/npm/@imagemagick/magick-wasm@0.0.44/dist/
  *   jsdelivrNpmUrl('lodash')
  *     → https://cdn.jsdelivr.net/npm/lodash
  */
