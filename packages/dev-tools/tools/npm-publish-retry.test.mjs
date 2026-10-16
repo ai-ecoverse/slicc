@@ -14,7 +14,7 @@ import {
   run,
   verifyPublishAuth,
 } from './npm-publish-retry.mjs';
-import { BIOME_JSH_PUBLISH_CMD } from './release-native.mjs';
+import { BIOME_JSH_PUBLISH_CMD, CHERRY_PUBLISH_CMD } from './release-native.mjs';
 
 const FULCIO_DNS = `
 npm notice Publishing to https://registry.npmjs.org/ with tag latest and default access
@@ -420,6 +420,35 @@ describe('release config wiring', () => {
   it('publishes biome-jsh through the retry wrapper', () => {
     expect(BIOME_JSH_PUBLISH_CMD).toMatch(
       /^node packages\/dev-tools\/tools\/npm-publish-retry\.mjs packages\/dev-tools\/biome-jsh /
+    );
+  });
+
+  it('keeps the trusted-publishing job: release.yml `release` with id-token: write', () => {
+    const workflow = readFileSync(
+      new URL('../../../.github/workflows/release.yml', import.meta.url),
+      'utf8'
+    );
+    const start = workflow.indexOf('\n  release:\n');
+    expect(start).toBeGreaterThan(0);
+    const job = workflow.slice(start);
+    expect(job).toMatch(/permissions:[\s\S]*?id-token: write/);
+    expect(job).toMatch(/node-version: 24/);
+    expect(job).not.toMatch(/\n {4}environment:/);
+  });
+
+  it('wires the cherry version stamp, publish, and committed manifest', () => {
+    const exec = plugin('@semantic-release/exec');
+    expect(exec.prepareCmd).toContain(
+      "release-native.mjs --gate=cherry-version --last='${lastRelease.gitTag}' --next='${nextRelease.version}'"
+    );
+    expect(exec.publishCmd).toMatch(
+      /release-native\.mjs --gate=cherry --last='\$\{lastRelease\.gitTag\}'$/
+    );
+    expect(plugin('@semantic-release/git').assets).toEqual(
+      expect.arrayContaining(['packages/cherry/package.json', 'package-lock.json'])
+    );
+    expect(CHERRY_PUBLISH_CMD).toMatch(
+      /^node packages\/dev-tools\/tools\/npm-publish-retry\.mjs packages\/cherry --provenance /
     );
   });
 });

@@ -46,6 +46,11 @@ export const BIOME_JSH_PATH_PREFIXES = ['packages/dev-tools/biome-jsh/'];
 
 export const BIOME_JSH_IGNORED_PATTERN = /\.test\.mjs$/;
 
+export const CHERRY_PATH_PREFIXES = ['packages/cherry/'];
+
+export const CHERRY_IGNORED_PATTERN =
+  /^packages\/cherry\/(?:tests\/|examples\/|(?:CLAUDE|AGENTS)\.md$)/;
+
 export const MACOS_SCRIPT_CMD =
   'chmod +x packages/swift-launcher/sign-and-package.sh && packages/swift-launcher/sign-and-package.sh';
 export const IOS_SCRIPT_CMD =
@@ -55,6 +60,9 @@ export const SLICC_CLI_SCRIPT = 'packages/slicc-cli/sign-and-package.sh';
 
 export const BIOME_JSH_PUBLISH_CMD =
   'node packages/dev-tools/tools/npm-publish-retry.mjs packages/dev-tools/biome-jsh --provenance --access public';
+
+export const CHERRY_PUBLISH_CMD =
+  'node packages/dev-tools/tools/npm-publish-retry.mjs packages/cherry --provenance --access public';
 
 export function isFirstRelease(lastTag) {
   const t = typeof lastTag === 'string' ? lastTag.trim() : '';
@@ -118,6 +126,18 @@ export function decideBiomeJshGating({ lastTag, changedFiles = [] } = {}) {
     biomeJsh: changedFiles
       .filter((f) => !BIOME_JSH_IGNORED_PATTERN.test(f))
       .some((f) => matchesAnyPrefix(f, BIOME_JSH_PATH_PREFIXES)),
+    firstRelease: false,
+  };
+}
+
+export function decideCherryGating({ lastTag, changedFiles = [] } = {}) {
+  if (isFirstRelease(lastTag)) {
+    return { cherry: true, firstRelease: true };
+  }
+  return {
+    cherry: changedFiles
+      .filter((f) => !CHERRY_IGNORED_PATTERN.test(f))
+      .some((f) => matchesAnyPrefix(f, CHERRY_PATH_PREFIXES)),
     firstRelease: false,
   };
 }
@@ -189,10 +209,40 @@ function writeBiomeJshVersion(version, targetPath = BIOME_JSH_PKG_JSON_PATH) {
   return manifest;
 }
 
-const HELP = `release-native — gate native packaging, worker deploy, and the biome-jsh npm release on source changes
+export const CHERRY_PKG_JSON_PATH = fileURLToPath(
+  new URL('../../cherry/package.json', import.meta.url)
+);
+export const ROOT_LOCKFILE_PATH = fileURLToPath(
+  new URL('../../../package-lock.json', import.meta.url)
+);
+
+export function buildCherryLockfile(lockfile, version) {
+  const v = (typeof version === 'string' ? version : '').trim().replace(/^v/, '');
+  if (!v) throw new Error('buildCherryLockfile: a non-empty version is required');
+  const entry = lockfile?.packages?.['packages/cherry'];
+  if (!entry) return lockfile;
+  return {
+    ...lockfile,
+    packages: { ...lockfile.packages, 'packages/cherry': { ...entry, version: v } },
+  };
+}
+
+function writeCherryVersion(
+  version,
+  pkgPath = CHERRY_PKG_JSON_PATH,
+  lockPath = ROOT_LOCKFILE_PATH
+) {
+  const manifest = buildBiomeJshManifest(JSON.parse(readFileSync(pkgPath, 'utf8')), version);
+  writeFileSync(pkgPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const lockfile = buildCherryLockfile(JSON.parse(readFileSync(lockPath, 'utf8')), version);
+  writeFileSync(lockPath, `${JSON.stringify(lockfile, null, 2)}\n`);
+  return manifest;
+}
+
+const HELP = `release-native — gate native packaging, worker deploy, and the biome-jsh / cherry npm releases on source changes
 
 Usage:
-  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=worker|biome-jsh|biome-jsh-version] [--dry-run]
+  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=worker|biome-jsh|biome-jsh-version|cherry|cherry-version] [--dry-run]
 
 Options:
   --last=<tag>   Previous release git tag. Empty => first release => run ALL gated steps.
@@ -210,6 +260,10 @@ Options:
                  (committed by @semantic-release/git) only when the biome-jsh gate is open.
   --gate=biome-jsh
                  Publish phase: run \`${BIOME_JSH_PUBLISH_CMD}\` only when the gate is open.
+  --gate=cherry-version
+                 Prepare phase: stamp --next into packages/cherry/package.json and its
+                 package-lock.json entry only when the cherry gate is open.
+  --gate=cherry  Publish phase: run \`${CHERRY_PUBLISH_CMD}\` only when the gate is open.
   --classify-deploy-log=<path>
                  Read a captured \`wrangler deploy\` log and print "routes-only" when the
                  ONLY failure was route reconciliation (the script + assets deployed and
@@ -229,6 +283,8 @@ Behavior:
   - --gate=biome-jsh[-version]: use the same resolved diff ref and bump / publish
     @ai-ecoverse/biome-jsh only if ${BIOME_JSH_PATH_PREFIXES.join(', ')} changed, so the
     package is not republished unchanged on every SLICC release.
+  - --gate=cherry[-version]: same, for @ai-ecoverse/cherry and
+    ${CHERRY_PATH_PREFIXES.join(', ')} (tests/, examples/, CLAUDE.md, AGENTS.md ignored).
   - A failing packaging / publish script fails the release (fail-fast preserved).`;
 
 export function getChangedFiles(lastTag) {
@@ -328,44 +384,55 @@ function runNativeGate(args, changedFiles) {
   }
 }
 
-function runBiomeJshGate(args, changedFiles) {
-  const publishPhase = args.gate === 'biome-jsh';
-  const decision = decideBiomeJshGating({ lastTag: args.last, changedFiles });
+const NPM_PACKAGE_GATES = {
+  'biome-jsh': {
+    name: '@ai-ecoverse/biome-jsh',
+    paths: 'packages/dev-tools/biome-jsh',
+    isOpen: (lastTag, changedFiles) => decideBiomeJshGating({ lastTag, changedFiles }).biomeJsh,
+    publishCmd: BIOME_JSH_PUBLISH_CMD,
+    stamp: (version) => writeBiomeJshVersion(version),
+  },
+  cherry: {
+    name: '@ai-ecoverse/cherry',
+    paths: 'packages/cherry',
+    isOpen: (lastTag, changedFiles) => decideCherryGating({ lastTag, changedFiles }).cherry,
+    publishCmd: CHERRY_PUBLISH_CMD,
+    stamp: (version) => writeCherryVersion(version),
+  },
+};
 
-  if (!decision.biomeJsh) {
+export function resolveNpmPackageGate(gate) {
+  const key = String(gate ?? '').replace(/-version$/, '');
+  return Object.hasOwn(NPM_PACKAGE_GATES, key)
+    ? { key, publishPhase: gate === key, spec: NPM_PACKAGE_GATES[key] }
+    : null;
+}
+
+function runNpmPackageGate(args, changedFiles, { publishPhase, spec }) {
+  if (!spec.isOpen(args.last, changedFiles)) {
     console.log(
-      `[release-native] Skipping @ai-ecoverse/biome-jsh ${publishPhase ? 'npm publish' : 'version stamp'} (no packages/dev-tools/biome-jsh changes).`
+      `[release-native] Skipping ${spec.name} ${publishPhase ? 'npm publish' : 'version stamp'} (no ${spec.paths} changes).`
     );
     return;
   }
 
   if (publishPhase) {
-    runStep(
-      '@ai-ecoverse/biome-jsh (npm)',
-      BIOME_JSH_PUBLISH_CMD,
-      args.dryRun,
-      'Publishing',
-      'publish'
-    );
+    runStep(`${spec.name} (npm)`, spec.publishCmd, args.dryRun, 'Publishing', 'publish');
     return;
   }
 
   if (args.dryRun) {
-    console.log(
-      `[release-native] (dry-run) would stamp @ai-ecoverse/biome-jsh version ${args.next}.`
-    );
+    console.log(`[release-native] (dry-run) would stamp ${spec.name} version ${args.next}.`);
     return;
   }
 
   if (!args.next.trim()) {
-    console.warn(
-      '[release-native] --next is empty; skipping the @ai-ecoverse/biome-jsh version stamp.'
-    );
+    console.warn(`[release-native] --next is empty; skipping the ${spec.name} version stamp.`);
     return;
   }
 
-  const manifest = writeBiomeJshVersion(args.next);
-  console.log(`[release-native] Stamped @ai-ecoverse/biome-jsh version → ${manifest.version}.`);
+  const manifest = spec.stamp(args.next);
+  console.log(`[release-native] Stamped ${spec.name} version → ${manifest.version}.`);
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -388,8 +455,9 @@ export function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  if (args.gate === 'biome-jsh' || args.gate === 'biome-jsh-version') {
-    runBiomeJshGate(args, changedFiles);
+  const packageGate = resolveNpmPackageGate(args.gate);
+  if (packageGate) {
+    runNpmPackageGate(args, changedFiles, packageGate);
     return 0;
   }
 
