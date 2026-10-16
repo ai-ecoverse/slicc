@@ -304,3 +304,188 @@ describe('CI critical-path routing', () => {
     expect(workerStagingWorkflow).toContain("steps.changes.outputs.r2 == 'true'");
   });
 });
+
+const TRUSTED_RUN =
+  "((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.runner.outputs.merge-group == 'same-repo') || (github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"schedule\",\"workflow_dispatch\"]'), github.event_name)))";
+
+function poolRoute(variable) {
+  return `\${{ ${TRUSTED_RUN} && vars.${variable} && fromJSON(startsWith(vars.${variable}, '[') && vars.${variable} || toJSON(vars.${variable})) || 'ubuntu-latest' }}`;
+}
+
+function jobBlocks() {
+  const jobsStart = workflow.indexOf('\njobs:\n');
+  const names = [...workflow.slice(jobsStart).matchAll(/\n {2}([a-z0-9-]+):\n/g)].map((m) => m[1]);
+  return names.map((name, index) => {
+    const start = workflow.indexOf(`\n  ${name}:\n`, jobsStart);
+    const next = names[index + 1];
+    const end = next ? workflow.indexOf(`\n  ${next}:\n`, start + 1) : workflow.length;
+    return { name, body: workflow.slice(start, end) };
+  });
+}
+
+function runsOn(body) {
+  const match = body.match(/\n {4}runs-on: (.*)\n((?: {6}.*\n)*)/);
+  expect(match, 'job should declare runs-on').toBeTruthy();
+  const head = match[1].trim();
+  const folded = match[2]
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\$\{\{ /, '${{ ')
+    .replace(/\( /g, '(');
+  return { head, folded };
+}
+
+describe('CI runner routing', () => {
+  const LIGHT = ['changes', 'lint', 'linear-history', 'dependency-review', 'ci'];
+  const HEAVY = [
+    'typecheck',
+    'node-matrix-tests',
+    'webapp',
+    'e2e',
+    'node-server',
+    'chrome-extension',
+    'cloud-core',
+    'github-workflow',
+    'bench',
+    'go-optel',
+    'shared',
+    'webcomponents',
+    'spoon',
+    'cherry',
+    'global-install',
+    'bundle-size',
+  ];
+  const HOSTED = {
+    'cloudflare-worker': 'ubuntu-latest',
+    'swift-server': 'macos-latest',
+    'swift-optel': 'macos-latest',
+    'swift-traysession': 'macos-latest',
+    'swift-trayfollower': 'macos-latest',
+    'swift-widgetkit': 'macos-latest',
+    'swift-traykit': 'macos-latest',
+    'swift-launcher': 'macos-latest',
+    'ios-app': 'macos-26',
+    'ios-app-tests': "${{ matrix.ios == '27' && 'xcode-27' || 'macos-latest' }}",
+  };
+  const jobs = jobBlocks();
+
+  it('accounts for every job', () => {
+    const known = [...LIGHT, ...HEAVY, ...Object.keys(HOSTED), 'slicc-cli', 'runner'].sort();
+    expect(jobs.map((job) => job.name).sort()).toEqual(known);
+  });
+
+  it('defines each pool route once, behind the fork-safe trust check', () => {
+    const anchors = jobs.map((job) => runsOn(job.body)).filter((r) => r.head.startsWith('&'));
+    expect(anchors).toEqual([
+      { head: '&ci-runner >-', folded: poolRoute('CI_RUNNER') },
+      { head: '&ci-heavy-runner >-', folded: poolRoute('CI_HEAVY_RUNNER') },
+    ]);
+  });
+
+  it('puts the short jobs on the light pool and the rest on the bench pool', () => {
+    for (const job of jobs) {
+      const { head } = runsOn(job.body);
+      if (LIGHT.includes(job.name)) expect(head, job.name).toMatch(/^[&*]ci-runner\b/);
+      if (HEAVY.includes(job.name)) expect(head, job.name).toMatch(/^[&*]ci-heavy-runner\b/);
+      if (job.name in HOSTED) expect(head, job.name).toBe(HOSTED[job.name]);
+    }
+  });
+
+  it('routes only the Linux slicc-cli leg, through the same trust check', () => {
+    const { head, folded } = runsOn(jobs.find((job) => job.name === 'slicc-cli').body);
+    expect(head).toBe('>-');
+    expect(folded).toBe(
+      poolRoute('CI_HEAVY_RUNNER').replace(
+        '${{ ',
+        "${{ matrix.os != 'ubuntu-latest' && matrix.os || "
+      )
+    );
+  });
+
+  it('sends a merge group with any fork PR in the queue to hosted runners', () => {
+    const runner = jobs.find((job) => job.name === 'runner').body;
+
+    expect(runsOn(runner).folded).toBe(
+      "${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'merge_group' || (github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"schedule\",\"workflow_dispatch\"]'), github.event_name))) && (vars.CI_RUNNER || vars.CI_HEAVY_RUNNER) && fromJSON(startsWith(vars.CI_RUNNER || vars.CI_HEAVY_RUNNER, '[') && (vars.CI_RUNNER || vars.CI_HEAVY_RUNNER) || toJSON(vars.CI_RUNNER || vars.CI_HEAVY_RUNNER)) || 'ubuntu-latest' }}"
+    );
+    expect(runner).not.toContain('actions/checkout');
+    expect(runner).toContain('merge-group: ${{ steps.pick.outputs.merge-group }}');
+    expect(runner).toContain('isCrossRepository !== false');
+    expect(runner).toContain('entries.totalCount !== nodes.length');
+    expect(runner).toContain("await pick('hosted', 'merge queue lookup failed')");
+    expect(runner.match(/pick\('same-repo'/g)).toHaveLength(1);
+    for (const job of jobs.filter((j) => !(j.name in HOSTED) && j.name !== 'runner')) {
+      expect(job.body, job.name).toMatch(
+        /\n {4}needs:\s*(runner\n|\[runner,|\n(?: {6}.*\n)*? {8}runner,)/
+      );
+    }
+  });
+
+  it('decides hosted for a merge group with a fork, unknown, or truncated queue', async () => {
+    const runner = jobs.find((job) => job.name === 'runner').body;
+    const block = runner.match(/\n {8}with:\n {10}script: \|\n((?: {12}.*\n|\n)+)/)[1];
+    const script = block.replace(/^ {12}/gm, '');
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    const entry = (number, isCrossRepository) => ({ pullRequest: { number, isCrossRepository } });
+    async function decide(eventName, queue) {
+      let decision;
+      const core = {
+        setOutput: (_name, value) => {
+          decision = value;
+        },
+        warning: () => {},
+        summary: { addRaw: () => ({ write: async () => {} }) },
+      };
+      const github = {
+        graphql: async () => {
+          if (queue instanceof Error) throw queue;
+          return { repository: { mergeQueue: queue } };
+        },
+      };
+      const context = {
+        eventName,
+        repo: { owner: 'ai-ecoverse', repo: 'slicc' },
+        payload: { merge_group: { base_ref: 'refs/heads/main' } },
+      };
+      await new AsyncFunction('github', 'context', 'core', script)(github, context, core);
+      return decision;
+    }
+    const queue = (nodes, totalCount = nodes.length) => ({ entries: { totalCount, nodes } });
+
+    expect(await decide('pull_request')).toBe('n/a');
+    expect(await decide('merge_group', queue([entry(1, false), entry(2, false)]))).toBe(
+      'same-repo'
+    );
+    expect(await decide('merge_group', queue([entry(1, false), entry(7, true)]))).toBe('hosted');
+    expect(await decide('merge_group', queue([entry(1, false), { pullRequest: null }]))).toBe(
+      'hosted'
+    );
+    expect(await decide('merge_group', queue([entry(1, false)], 101))).toBe('hosted');
+    expect(await decide('merge_group', null)).toBe('hosted');
+    expect(await decide('merge_group', new Error('graphql down'))).toBe('hosted');
+  });
+
+  it('keeps secrets and write tokens off every pool job', () => {
+    expect(workflow).toMatch(/\npermissions:\n {2}contents: read\n/);
+    for (const job of jobs.filter((j) => !(j.name in HOSTED))) {
+      expect(job.body, job.name).not.toMatch(/secrets\./);
+      expect(job.body, job.name).not.toMatch(/:\s*write\b/);
+    }
+  });
+
+  it('guards every root-only step, since the pools have no sudo', () => {
+    for (const job of jobs.filter((j) => !(j.name in HOSTED))) {
+      for (const line of job.body.split('\n')) {
+        if (!/\bsudo |install-deps|--with-deps/.test(line) || line.trim().startsWith('#')) continue;
+        expect(job.body, `${job.name}: ${line.trim()}`).toMatch(
+          /if \[ "\$\(id -u\)" = 0 \]( \|\| sudo -n true 2>\/dev\/null)?; then/
+        );
+      }
+    }
+    expect(workflow).not.toContain('install --with-deps');
+
+    expect(workflow).not.toMatch(/run: tsc /);
+  });
+});
