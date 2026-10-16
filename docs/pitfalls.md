@@ -2257,6 +2257,14 @@ tracks **generations, not families** — Opus picked it up at 4.7, Sonnet at
 Assume the next new family also rejects it and verify against the real
 endpoint before adding it.
 
+The rejection is model-intrinsic, so every proxy that forwards caller options
+into a pi-ai stream must pass them through
+`withSupportedTemperature(model.id, model.name, …)` — Adobe, OpenAI Codex, and
+GitHub Copilot. gpt-5.6, gpt-6 sol/luna/astra, gpt-6.1-sol, kimi-k3, and
+grok-4.7 answer `400` on the Copilot gateway and on chatgpt.com the same way
+they do on Bedrock. `quick-llm` always sends `temperature: 0.3`, so a spread
+of raw options fails those helpers on every float.
+
 ### Proxy Anthropic transports must override native conversation capabilities
 
 pi-ai catalog models can enable `supportsMidConvoEffort`, which inserts
