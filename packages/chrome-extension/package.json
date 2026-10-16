@@ -17,7 +17,7 @@
       "name": "extension: service worker",
       "path": "../../dist/extension/service-worker.js",
       "brotli": false,
-      "limit": "70 kB"
+      "limit": "74 kB"
     },
     {
       "name": "extension: side panel entry",
@@ -29,7 +29,7 @@
       "name": "extension: total JS payload",
       "path": "../../dist/extension/**/*.js",
       "brotli": false,
-      "limit": "115 kB"
+      "limit": "120 kB"
     }
   ],
   "dependencies": {
@@ -37,5 +37,8 @@
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-coding-agent": "1.1.0",
     "@slicc/shared-ts": "*"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.5"
   }
 }

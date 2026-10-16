@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { EXTENSION_BRIDGE_PORT_NAME, EXTENSION_BRIDGE_PROTOCOL_VERSION } from '@slicc/shared-ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
