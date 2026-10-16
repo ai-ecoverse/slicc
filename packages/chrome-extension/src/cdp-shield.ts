@@ -89,6 +89,15 @@ const FETCH_ANSWERS = new Set([
   'Fetch.takeResponseBodyAsStream',
 ]);
 
+/** Fetch answers that settle a pause: afterwards the id is no longer the client's. */
+const FETCH_SETTLES = new Set([
+  'Fetch.continueRequest',
+  'Fetch.fulfillRequest',
+  'Fetch.failRequest',
+  'Fetch.continueResponse',
+  'Fetch.continueWithAuth',
+]);
+
 /** Methods refused outright: they reach past the tab to the whole browser. */
 const REFUSED_METHODS = new Map<string, string>([
   [
@@ -480,11 +489,29 @@ export class TabShield {
     await this.admit(method, input);
     const rewritten = this.rewrite(method, input);
     if (rewritten === null) return {};
+    // A settling answer reserves its pause id before it reaches Chrome, so a
+    // concurrent duplicate is refused by admit() instead of racing through.
+    // admit() is async, so re-check and reserve in one synchronous step.
+    const settles = FETCH_SETTLES.has(method);
+    const pauseId = String(input['requestId']);
+    if (settles) {
+      if (!this.forwarded.has(pauseId)) refuse(PAUSE_REFUSAL);
+      this.forwarded.delete(pauseId);
+    }
     // Keep an absent params bag absent when nothing was rewritten.
-    const result = await forward(
-      method,
-      params === undefined && rewritten === input ? undefined : rewritten
-    );
+    let result: CDPPayload;
+    try {
+      result = await forward(
+        method,
+        params === undefined && rewritten === input ? undefined : rewritten
+      );
+    } catch (err) {
+      // Retryable failure (e.g. bad parameters): the pause is still open and
+      // still the client's. Chrome no longer knowing the id is final.
+      if (settles && !/Invalid InterceptionId/i.test(String(err)))
+        this.forwarded.set(pauseId, true);
+      throw err;
+    }
     if (this.blockedFlag) refuse(PROTECTED_RULES.refusal);
     return this.after(method, result ?? {});
   }
