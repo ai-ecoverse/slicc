@@ -66,6 +66,14 @@ const FETCH_ANSWERS = new Set([
   'Fetch.takeResponseBodyAsStream',
 ]);
 
+const FETCH_SETTLES = new Set([
+  'Fetch.continueRequest',
+  'Fetch.fulfillRequest',
+  'Fetch.failRequest',
+  'Fetch.continueResponse',
+  'Fetch.continueWithAuth',
+]);
+
 const REFUSED_METHODS = new Map<string, string>([
   [
     'Target.exposeDevToolsProtocol',
@@ -406,10 +414,24 @@ export class TabShield {
     const rewritten = this.rewrite(method, input);
     if (rewritten === null) return {};
 
-    const result = await forward(
-      method,
-      params === undefined && rewritten === input ? undefined : rewritten
-    );
+    const settles = FETCH_SETTLES.has(method);
+    const pauseId = String(input['requestId']);
+    if (settles) {
+      if (!this.forwarded.has(pauseId)) refuse(PAUSE_REFUSAL);
+      this.forwarded.delete(pauseId);
+    }
+
+    let result: CDPPayload;
+    try {
+      result = await forward(
+        method,
+        params === undefined && rewritten === input ? undefined : rewritten
+      );
+    } catch (err) {
+      if (settles && !/Invalid InterceptionId/i.test(String(err)))
+        this.forwarded.set(pauseId, true);
+      throw err;
+    }
     if (this.blockedFlag) refuse(PROTECTED_RULES.refusal);
     return this.after(method, result ?? {});
   }
