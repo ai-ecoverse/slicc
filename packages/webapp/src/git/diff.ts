@@ -18,8 +18,8 @@ interface Frontier {
 }
 
 function matchingEnd(
-  a: string[],
-  b: string[],
+  a: Int32Array,
+  b: Int32Array,
   range: DiffRange,
   x: number,
   y: number,
@@ -40,8 +40,8 @@ function matchingEnd(
 }
 
 function advanceFrontier(
-  a: string[],
-  b: string[],
+  a: Int32Array,
+  b: Int32Array,
   range: DiffRange,
   d: number,
   front: Frontier,
@@ -74,8 +74,8 @@ function advanceFrontier(
 }
 
 function findMiddle(
-  a: string[],
-  b: string[],
+  a: Int32Array,
+  b: Int32Array,
   range: DiffRange,
   forwardX: Int32Array,
   reverseX: Int32Array
@@ -102,10 +102,38 @@ function findMiddle(
   return undefined;
 }
 
+function lineIds(a: string[], b: string[]): [Int32Array, Int32Array] {
+  const index = new Map<string, number>();
+  const intern = (lines: string[]) => {
+    const out = new Int32Array(lines.length);
+    for (let i = 0; i < lines.length; i++) {
+      let id = index.get(lines[i]);
+      if (id === undefined) {
+        id = index.size;
+        index.set(lines[i], id);
+      }
+      out[i] = id;
+    }
+    return out;
+  };
+  return [intern(a), intern(b)];
+}
+
+function middleSearch(a: string[], b: string[]) {
+  let state: { ids: [Int32Array, Int32Array]; scratch: [Int32Array, Int32Array] } | undefined;
+  return (range: DiffRange): [number, number] | undefined => {
+    if (!state) {
+      const size = 2 * Math.ceil((range.aEnd - range.aStart + range.bEnd - range.bStart) / 2) + 3;
+      state = { ids: lineIds(a, b), scratch: [new Int32Array(size), new Int32Array(size)] };
+    }
+    return findMiddle(state.ids[0], state.ids[1], range, ...state.scratch);
+  };
+}
+
 export function myersDiff(a: string[], b: string[]): Edit[] {
   const edits: Edit[] = [];
   const pending: DiffRange[] = [{ aStart: 0, aEnd: a.length, bStart: 0, bEnd: b.length }];
-  let scratch: [Int32Array, Int32Array] | undefined;
+  const search = middleSearch(a, b);
 
   while (pending.length > 0) {
     const range = pending.pop()!;
@@ -122,14 +150,8 @@ export function myersDiff(a: string[], b: string[]): Edit[] {
       pending.push({ aStart: aEnd, aEnd: range.aEnd, bStart: bEnd, bEnd: range.bEnd });
     }
 
-    let split: [number, number] | undefined;
-    if (aStart < aEnd && bStart < bEnd) {
-      if (!scratch) {
-        const size = 2 * Math.ceil((aEnd - aStart + bEnd - bStart) / 2) + 3;
-        scratch = [new Int32Array(size), new Int32Array(size)];
-      }
-      split = findMiddle(a, b, { aStart, aEnd, bStart, bEnd }, ...scratch);
-    }
+    const split =
+      aStart < aEnd && bStart < bEnd ? search({ aStart, aEnd, bStart, bEnd }) : undefined;
     if (split) {
       const [aMiddle, bMiddle] = split;
 
