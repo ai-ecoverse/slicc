@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { type Edit, myersDiff } from '../../src/git/diff.js';
 
 /** Independent dynamic-programming oracle, kept small enough for a full table. */
@@ -94,4 +94,25 @@ describe('myersDiff', () => {
     );
     expect(stdout.trim()).toBe('ok');
   }, 35_000); // A high-edit-distance search does real CPU work on loaded CI runners.
+
+  it('interns only the lines left after trimming equal edges', () => {
+    // Interning the whole input gave every unchanged line of a large, mostly
+    // unchanged file a map entry, extra heap the search never uses.
+    const lines = (prefix: string, length: number) => Array.from({ length }, (_, i) => prefix + i);
+    const head = lines('head-', 50_000);
+    const tail = lines('tail-', 50_000);
+    const set = vi.spyOn(Map.prototype, 'set');
+    let interned: number;
+    try {
+      const edits = myersDiff([...head, 'old', ...tail], [...head, 'new', ...tail]);
+      interned = set.mock.calls.length;
+      expect(edits.filter((edit) => edit.type !== 'equal').map((edit) => edit.line)).toEqual([
+        'old',
+        'new',
+      ]);
+    } finally {
+      set.mockRestore();
+    }
+    expect(interned).toBe(2);
+  });
 });
