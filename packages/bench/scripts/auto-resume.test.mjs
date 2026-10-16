@@ -270,6 +270,29 @@ describe('autoResume', () => {
     expect(dispatched).toEqual([]);
   });
 
+  it('leaves a mixed multi-lane deadline+error stop alone (exit-1 noise is not enough)', async () => {
+    // With --leaders N, one lane can emit the deadline annotation while another still
+    // increments state.errors; run.mjs then emits a distinct bench-error ::error:: before
+    // exiting 1. Ignoring only the generic Actions exit-code line must not auto-resume.
+    const { fetchImpl, dispatched } = fakeGithub(
+      new Map([
+        [
+          3,
+          [
+            DEADLINE,
+            '2 run(s) errored before the judge; rerun with the same --out to retry them',
+            'Process completed with exit code 1.',
+          ],
+        ],
+      ]),
+      oneFailedShard
+    );
+    const result = await autoResume({ ...base, inputs: { 'auto-resumed-from': '' }, fetchImpl });
+    expect(result.action).toBe('none');
+    expect(result.reason).toMatch(/Shard 1 failed on their own/);
+    expect(dispatched).toEqual([]);
+  });
+
   it('leaves a deadline-marked shard alone when a post-step fails', async () => {
     const shard = [
       {

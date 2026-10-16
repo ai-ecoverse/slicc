@@ -63,6 +63,9 @@ export function deadlineShards(jobs, annotations) {
  * GitHub always annotates a failed step with `Process completed with exit code N`.
  * Deadline stops exit 1 that way; kill stops exit 130 (already a {@link KILLED_PATTERNS} hit).
  * Treat the bare exit-code line as noise so it does not veto a deadline resume.
+ * Real bench errors are a separate `::error::` from `run.mjs` (`N run(s) errored before the
+ * judge…`) — with multiple leaders a lane can hit the deadline while another still increments
+ * `state.errors`, and both share exit code 1; that distinct annotation is what blocks resume.
  */
 export const ANNOTATION_NOISE_PATTERNS = [/^Process completed with exit code \d+\.?$/];
 
@@ -76,7 +79,8 @@ function isAnnotationNoise(message) {
 
 /**
  * A shard must have a kill/deadline signal and no *other* error annotation (and no failed
- * post-step) before it is retried. The generic Actions exit-code line is not "other".
+ * post-step) before it is retried. The generic Actions exit-code line is not "other"; a
+ * concurrent-lane bench-error annotation from `run.mjs` is.
  */
 export function ownFailureShards(jobs, annotations) {
   return jobs
