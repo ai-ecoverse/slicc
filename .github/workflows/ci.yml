@@ -1212,8 +1212,10 @@ jobs:
           go-version: stable
           cache: false
       - name: actionlint (composite actions + slicc-*.yml)
+        env:
+          ACTIONLINT_VERSION: v1.7.11
         run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
           "$(go env GOPATH)/bin/actionlint" -no-color \
             .github/workflows/slicc-*.yml \
             .github/workflows/github-workflow-smoke.yml
@@ -1254,8 +1256,10 @@ jobs:
           go-version: stable
           cache: false
       - name: actionlint (bench.yml)
+        env:
+          ACTIONLINT_VERSION: v1.7.11
         run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
           "$(go env GOPATH)/bin/actionlint" -no-color .github/workflows/bench.yml
 
   go-optel:
@@ -1273,9 +1277,11 @@ jobs:
 
           cache: false
       - name: Install golangci-lint
+        env:
+          GOLANGCI_LINT_VERSION: v2.12.2
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.12.2/install.sh \
-            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_LINT_VERSION}/install.sh" \
+            | sh -s -- -b "$(go env GOPATH)/bin" "${GOLANGCI_LINT_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Format, lint, vet, race tests, coverage floor
         working-directory: packages/go-optel
@@ -1318,9 +1324,11 @@ jobs:
 
       - name: Install golangci-lint
         if: matrix.os == 'ubuntu-latest'
+        env:
+          GOLANGCI_LINT_VERSION: v2.12.2
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.12.2/install.sh \
-            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_LINT_VERSION}/install.sh" \
+            | sh -s -- -b "$(go env GOPATH)/bin" "${GOLANGCI_LINT_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Format, lint, vet, race tests, coverage floor
         if: matrix.os == 'ubuntu-latest'

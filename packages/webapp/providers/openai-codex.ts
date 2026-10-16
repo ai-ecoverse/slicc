@@ -11,12 +11,14 @@ import {
   streamOpenAICodexResponses,
   streamSimpleOpenAICodexResponses,
 } from '@earendil-works/pi-ai/compat';
+import { getModels } from '../src/core/model-catalog.js';
 import {
   bridgeRefreshBlocked,
   noteBridgeTokenRequired,
 } from '../src/providers/bridge-token-required.js';
 import { toPiTranscriptContext } from '../src/providers/pi-transcript-context.js';
 import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../src/providers/pkce.js';
+import { withSupportedTemperature } from '../src/providers/temperature-support.js';
 import type {
   InterceptingOAuthLauncher,
   ModelMetadata,
@@ -42,23 +44,31 @@ const CODEX_API: Api = `${PROVIDER_ID}-openai` as Api;
 
 type CodexModelDef = { id: string; name: string } & ModelMetadata;
 
-const CODEX_THINKING_LEVEL_MAP: Record<string, string | null> = { xhigh: 'xhigh', minimal: 'low' };
+const RETIRED_CODEX_MODELS = new Set([
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.3-codex',
+  'gpt-5.3-codex-spark',
+  'gpt-5.2',
+]);
 
-const CODEX_MODELS: CodexModelDef[] = [
-  { id: 'gpt-5.5', name: 'GPT-5.5', input: ['text', 'image'] },
-  { id: 'gpt-5.4', name: 'GPT-5.4', input: ['text', 'image'] },
-  { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', input: ['text', 'image'] },
-  { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', input: ['text', 'image'] },
-  { id: 'gpt-5.3-codex-spark', name: 'GPT-5.3 Codex Spark', input: ['text'] },
-  { id: 'gpt-5.2', name: 'GPT-5.2', input: ['text', 'image'] },
-].map((m) => ({
-  ...m,
-  api: 'openai' as const,
-  reasoning: true,
-  context_window: 272000,
-  max_tokens: 128000,
-  thinkingLevelMap: CODEX_THINKING_LEVEL_MAP,
-}));
+function getCodexModels(): CodexModelDef[] {
+  return getModels(PROVIDER_ID)
+    .filter((model) => !RETIRED_CODEX_MODELS.has(model.id))
+    .map((model) => ({
+      id: model.id,
+      name: model.name,
+      api: 'openai' as const,
+      reasoning: model.reasoning,
+      input: model.input,
+      context_window: model.contextWindow,
+      max_tokens: model.maxTokens,
+      cost: model.cost,
+      compat: model.compat,
+      thinkingLevelMap: { minimal: 'low', ...model.thinkingLevelMap },
+    }));
+}
 
 interface TokenResponse {
   access_token: string;
@@ -260,11 +270,15 @@ async function pumpCodexStream(
       baseUrl: CODEX_BASE_URL,
       api: OPENAI_CODEX_RESPONSES_API,
     } as Model<'openai-codex-responses'>;
-    const inner = streamOpenAICodexResponses(proxyModel, toPiTranscriptContext(context), {
-      ...options,
-      apiKey: accessToken,
-      transport: 'sse',
-    });
+    const inner = streamOpenAICodexResponses(
+      proxyModel,
+      toPiTranscriptContext(context),
+      withSupportedTemperature(model.id, model.name, {
+        ...options,
+        apiKey: accessToken,
+        transport: 'sse' as const,
+      })
+    );
     for await (const event of inner) stream.push(event);
     stream.end();
   } catch (error) {
@@ -287,11 +301,15 @@ async function pumpSimpleCodexStream(
       baseUrl: CODEX_BASE_URL,
       api: OPENAI_CODEX_RESPONSES_API,
     } as Model<'openai-codex-responses'>;
-    const inner = streamSimpleOpenAICodexResponses(proxyModel, toPiTranscriptContext(context), {
-      ...options,
-      apiKey: accessToken,
-      transport: 'sse',
-    } as SimpleStreamOptions);
+    const inner = streamSimpleOpenAICodexResponses(
+      proxyModel,
+      toPiTranscriptContext(context),
+      withSupportedTemperature(model.id, model.name, {
+        ...options,
+        apiKey: accessToken,
+        transport: 'sse',
+      } as SimpleStreamOptions)
+    );
     for await (const event of inner) stream.push(event);
     stream.end();
   } catch (error) {
@@ -319,13 +337,13 @@ export const config: ProviderConfig = {
   id: PROVIDER_ID,
   name: 'OpenAI Codex (ChatGPT Subscription)',
   description:
-    'GPT-5 Codex via your ChatGPT Plus/Pro/Business subscription — OAuth login, no API key needed. Default model is GPT-5.5.',
+    'Codex via your ChatGPT Plus/Pro/Business subscription — OAuth login, no API key needed. Default model is GPT-6.1 Sol.',
   requiresApiKey: false,
   requiresBaseUrl: false,
   isOAuth: true,
-  defaultModelId: 'gpt-5.5',
+  defaultModelId: 'gpt-6.1-sol',
   oauthTokenDomains: ['chatgpt.com', '*.chatgpt.com', 'auth.openai.com', 'api.openai.com'],
-  getModelIds: () => CODEX_MODELS,
+  getModelIds: getCodexModels,
 
   onOAuthLoginIntercepted: async (
     launcher: InterceptingOAuthLauncher,

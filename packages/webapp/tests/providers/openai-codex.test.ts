@@ -19,6 +19,9 @@ import {
   resetApiProviders,
 } from '@earendil-works/pi-ai/compat';
 import { config, register } from '../../providers/openai-codex.js';
+import * as modelCatalog from '../../src/core/model-catalog.js';
+import { getProviderModels } from '../../src/providers/account-store.js';
+import { registerProviderConfig } from '../../src/providers/index.js';
 
 const CODEX_API = 'openai-codex-openai' as Api;
 
@@ -34,6 +37,8 @@ async function drain(stream: ReturnType<typeof endedStream>): Promise<void> {
 }
 
 describe('openai-codex provider config', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('is an OAuth provider with codex token domains', () => {
     expect(config.id).toBe('openai-codex');
     expect(config.isOAuth).toBe(true);
@@ -46,18 +51,74 @@ describe('openai-codex provider config', () => {
   it('exposes the codex model catalog tagged for the openai api', () => {
     const models = config.getModelIds!();
     const ids = models.map((m) => m.id);
-    expect(ids).toContain('gpt-5.3-codex');
-    expect(ids).toContain('gpt-5.5');
-    expect(models.length).toBe(6);
+    expect(ids).toContain('gpt-6.1-sol');
+    expect(ids).toContain('gpt-6-sol');
+    expect(ids).toContain('gpt-6-luna');
     for (const m of models) {
       expect(m.api).toBe('openai');
       expect(m.reasoning).toBe(true);
-      expect((m as { thinkingLevelMap?: Record<string, string> }).thinkingLevelMap).toEqual({
-        xhigh: 'xhigh',
-        minimal: 'low',
+      const native = modelCatalog.getModels('openai-codex').find((row) => row.id === m.id)!;
+      expect(m).toMatchObject({
+        context_window: native.contextWindow,
+        max_tokens: native.maxTokens,
+        input: native.input,
+        cost: native.cost,
+        compat: native.compat,
+        thinkingLevelMap: { minimal: 'low', ...native.thinkingLevelMap },
       });
     }
-    expect(config.defaultModelId).toBe('gpt-5.5');
+    expect(config.defaultModelId).toBe('gpt-6.1-sol');
+    expect(config.description).toContain('GPT-6.1 Sol');
+  });
+
+  it('excludes retired subscription models even when the catalog still lists them', () => {
+    const current = modelCatalog.getModels('openai-codex').find((m) => m.id === 'gpt-6.1-sol')!;
+    const retired = [
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+      'gpt-5.3-codex',
+      'gpt-5.3-codex-spark',
+      'gpt-5.2',
+    ];
+    vi.spyOn(modelCatalog, 'getModels').mockReturnValue([
+      current,
+      ...retired.map((id) => ({ ...current, id })),
+    ]);
+    expect(config.getModelIds!().map((m) => m.id)).toEqual(['gpt-6.1-sol']);
+  });
+
+  it('reads catalog changes on each call and preserves future model metadata through composition', () => {
+    const current = modelCatalog.getModels('openai-codex').find((m) => m.id === 'gpt-6.1-sol')!;
+    const future: Model<Api> = {
+      ...current,
+      id: 'codex-future-test',
+      name: 'Future Codex',
+      contextWindow: 1_050_000,
+      maxTokens: 64_000,
+      input: ['text'],
+      thinkingLevelMap: { off: null, minimal: null, xhigh: null, max: 'max' },
+      cost: { input: 3, output: 12, cacheRead: 0.3, cacheWrite: 0 },
+    };
+    const readCatalog = vi.spyOn(modelCatalog, 'getModels').mockReturnValue([current]);
+    expect(config.getModelIds!().map((m) => m.id)).toEqual([current.id]);
+    readCatalog.mockReturnValue([current, future]);
+    expect(config.getModelIds!().map((m) => m.id)).toEqual([current.id, future.id]);
+
+    registerProviderConfig(config);
+    const composed = getProviderModels('openai-codex').find((m) => m.id === future.id);
+    expect(composed).toMatchObject({
+      id: future.id,
+      api: CODEX_API,
+      provider: 'openai-codex',
+      contextWindow: future.contextWindow,
+      maxTokens: future.maxTokens,
+      input: future.input,
+      reasoning: future.reasoning,
+      cost: future.cost,
+      compat: future.compat,
+      thinkingLevelMap: future.thinkingLevelMap,
+    });
   });
 });
 
@@ -258,8 +319,8 @@ describe('openai-codex onOAuthLoginIntercepted', () => {
 
     const provider = getApiProvider(CODEX_API)!;
     const model = {
-      id: 'gpt-5.5',
-      name: 'GPT-5.5',
+      id: 'gpt-6.1-sol',
+      name: 'GPT-6.1 Sol',
       api: CODEX_API,
       provider: 'openai-codex',
     } as Model<Api>;
@@ -274,6 +335,42 @@ describe('openai-codex onOAuthLoginIntercepted', () => {
     expect(codexStreamMocks.streamOpenAICodexResponses.mock.calls[0][2]).toEqual(
       expect.objectContaining({ apiKey: 'header.e30.sig' })
     );
+  });
+
+  it.each([
+    ['stream', codexStreamMocks.streamOpenAICodexResponses],
+    ['streamSimple', codexStreamMocks.streamSimpleOpenAICodexResponses],
+  ] as const)('omits temperature through %s for models that reject it', async (entry, native) => {
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'openai-codex',
+          apiKey: '',
+          accessToken: 'codex-access',
+          tokenExpiresAt: Date.now() + 3600_000,
+        },
+      ])
+    );
+    native.mockClear().mockImplementation(endedStream);
+    resetApiProviders();
+    register();
+
+    const provider = getApiProvider(CODEX_API)!;
+    const model = {
+      id: 'gpt-6.1-sol',
+      name: 'GPT-6.1 Sol',
+      api: CODEX_API,
+      provider: 'openai-codex',
+    } as Model<Api>;
+    await drain(
+      provider[entry](model, normalizeContext({ systemPrompt: '', messages: [], tools: [] }), {
+        temperature: 0.3,
+      })
+    );
+
+    expect(native.mock.calls[0][2]).toEqual(expect.objectContaining({ apiKey: 'codex-access' }));
+    expect(native.mock.calls[0][2]).not.toHaveProperty('temperature');
   });
 
   it('throws on OAuth state mismatch', async () => {
