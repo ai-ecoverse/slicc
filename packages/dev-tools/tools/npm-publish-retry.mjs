@@ -39,7 +39,7 @@
 
 import { spawn } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Wait before retry N (1-based); the last entry bounds the attempt count. */
@@ -90,6 +90,23 @@ export function isPublishConflict(output) {
 export function packageDir(args, cwd) {
   const dir = args.find((arg) => !arg.startsWith('-'));
   return resolve(cwd, dir ?? '.');
+}
+
+/**
+ * `npm publish` arguments with the package directory made unambiguously local.
+ * npm reads a bare `owner/repo` spec as GitHub shorthand: `npm publish
+ * packages/cherry` tried `git ls-remote ssh://git@github.com/packages/cherry.git`
+ * and failed the v6.250.0 release. A `./` prefix forces the folder reading;
+ * `.`, `./x`, `../x` and absolute paths pass through unchanged.
+ *
+ * @param {string[]} args
+ */
+export function localPublishArgs(args) {
+  const index = args.findIndex((arg) => !arg.startsWith('-'));
+  if (index === -1) return args;
+  const dir = args[index];
+  if (dir.startsWith('.') || isAbsolute(dir)) return args;
+  return args.with(index, `./${dir}`);
 }
 
 /**
@@ -226,7 +243,7 @@ export async function publishWithRetry({
   const startedAt = now();
 
   for (let attempt = 1; ; attempt++) {
-    const result = await run(spawnFn, 'npm', ['publish', ...args], {
+    const result = await run(spawnFn, 'npm', ['publish', ...localPublishArgs(args)], {
       cwd,
       env,
       timeoutMs: publishTimeoutMs,

@@ -1,11 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   isPublishConflict,
   isTransientPublishFailure,
+  localPublishArgs,
   main,
   matchesRegistry,
   packageDir,
@@ -63,6 +64,31 @@ describe('packageDir', () => {
 
   it('defaults to cwd', () => {
     expect(packageDir(['--provenance'], '/repo')).toBe('/repo');
+  });
+});
+
+describe('localPublishArgs', () => {
+  it('prefixes a bare owner/repo-shaped dir so npm cannot read it as GitHub shorthand', () => {
+    // v6.250.0: `npm publish packages/cherry` ran `git ls-remote
+    // ssh://git@github.com/packages/cherry.git` and failed the release.
+    expect(localPublishArgs(['packages/cherry', '--provenance', '--access', 'public'])).toEqual([
+      './packages/cherry',
+      '--provenance',
+      '--access',
+      'public',
+    ]);
+    expect(localPublishArgs(['--provenance', 'packages/dev-tools/biome-jsh'])).toEqual([
+      '--provenance',
+      './packages/dev-tools/biome-jsh',
+    ]);
+  });
+
+  it.each([['.'], ['./pkg/a'], ['../pkg'], ['/abs/pkg']])('leaves %s unchanged', (dir) => {
+    expect(localPublishArgs([dir, '--provenance'])).toEqual([dir, '--provenance']);
+  });
+
+  it('leaves flag-only args unchanged', () => {
+    expect(localPublishArgs(['--provenance'])).toEqual(['--provenance']);
   });
 });
 
@@ -224,6 +250,22 @@ describe('publishWithRetry', () => {
     expect(result).toEqual({ code: 0, attempts: 1, alreadyPublished: false });
     expect(calls).toEqual([['publish', '.', '--provenance', '--tag', 'latest']]);
     expect(opts.sleep).not.toHaveBeenCalled();
+  });
+
+  it('passes a two-segment workspace dir to npm as a local folder', async () => {
+    mkdirSync(join(dir, 'packages', 'cherry'), { recursive: true });
+    writeFileSync(
+      join(dir, 'packages', 'cherry', 'package.json'),
+      JSON.stringify({ name: '@ai-ecoverse/cherry', version: '6.250.1' })
+    );
+    const { spawn, calls } = scriptedNpm([[0, '']]);
+    const result = await publishWithRetry({
+      ...base(),
+      args: ['packages/cherry', '--provenance', '--access', 'public'],
+      spawn,
+    });
+    expect(result.code).toBe(0);
+    expect(calls).toEqual([['publish', './packages/cherry', '--provenance', '--access', 'public']]);
   });
 
   it('rides out the #3719 Fulcio DNS failure with backoff', async () => {
@@ -459,7 +501,7 @@ describe('release config wiring', () => {
       expect.arrayContaining(['packages/cherry/package.json', 'package-lock.json'])
     );
     expect(CHERRY_PUBLISH_CMD).toMatch(
-      /^node packages\/dev-tools\/tools\/npm-publish-retry\.mjs packages\/cherry --provenance /
+      /^node packages\/dev-tools\/tools\/npm-publish-retry\.mjs \.\/packages\/cherry --provenance /
     );
   });
 });

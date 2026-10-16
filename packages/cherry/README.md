@@ -31,6 +31,15 @@ handle.destroy();
 The SLICC origin only allows framing (`frame-ancestors`) from host origins on
 its allowlist, and the host page origin must differ from `sliccOrigin`.
 
+Without a bundler, load the SDK from an ES module CDN, which also resolves
+`html2canvas-pro` for you:
+
+```html
+<script type="module">
+  import { mountSlicc } from 'https://esm.sh/@ai-ecoverse/cherry';
+</script>
+```
+
 ## Entry points
 
 | Import                                  | Contents                                                                                          |
