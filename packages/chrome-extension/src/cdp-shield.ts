@@ -89,6 +89,15 @@ const FETCH_ANSWERS = new Set([
   'Fetch.takeResponseBodyAsStream',
 ]);
 
+/** Fetch answers that settle a pause: afterwards the id is no longer the client's. */
+const FETCH_SETTLES = new Set([
+  'Fetch.continueRequest',
+  'Fetch.fulfillRequest',
+  'Fetch.failRequest',
+  'Fetch.continueResponse',
+  'Fetch.continueWithAuth',
+]);
+
 /** Methods refused outright: they reach past the tab to the whole browser. */
 const REFUSED_METHODS = new Map<string, string>([
   [
@@ -481,10 +490,22 @@ export class TabShield {
     const rewritten = this.rewrite(method, input);
     if (rewritten === null) return {};
     // Keep an absent params bag absent when nothing was rewritten.
-    const result = await forward(
-      method,
-      params === undefined && rewritten === input ? undefined : rewritten
-    );
+    let result: CDPPayload;
+    try {
+      result = await forward(
+        method,
+        params === undefined && rewritten === input ? undefined : rewritten
+      );
+    } catch (err) {
+      // Chrome no longer knows the pause: it is not the client's any more.
+      if (FETCH_SETTLES.has(method) && /Invalid InterceptionId/i.test(String(err))) {
+        this.forwarded.delete(String(input['requestId']));
+      }
+      throw err;
+    }
+    // A settled pause is done: any later answer with its id is refused, so an
+    // answered id cannot be replayed or guessed back into use.
+    if (FETCH_SETTLES.has(method)) this.forwarded.delete(String(input['requestId']));
     if (this.blockedFlag) refuse(PROTECTED_RULES.refusal);
     return this.after(method, result ?? {});
   }

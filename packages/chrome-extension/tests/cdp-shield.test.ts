@@ -1006,3 +1006,68 @@ describe('Codex round on #3986', () => {
     expect(JSON.stringify(entries)).not.toContain('secret');
   });
 });
+
+describe('settled pauses (guard vectors C5.guessed-id / C5.auth)', () => {
+  it('an answered pause id cannot be answered again; an unanswered one still can', async () => {
+    const { shield, forward } = makeShield();
+    await shield.command('Fetch.enable', { patterns: [{ urlPattern: '*' }] }, forward);
+    const a = paused(PLAIN, 'Fetch');
+    const b = paused(PLAIN, 'Fetch');
+    shield.onEvent('Fetch.requestPaused', a);
+    shield.onEvent('Fetch.requestPaused', b);
+    // Control: both ids are the client's, and answering one leaves the other answerable.
+    await expect(
+      shield.command('Fetch.continueRequest', { requestId: a.requestId }, forward)
+    ).resolves.toBeDefined();
+    await expect(
+      shield.command(
+        'Fetch.fulfillRequest',
+        { requestId: b.requestId, responseCode: 200, body: '' },
+        forward
+      )
+    ).resolves.toBeDefined();
+    // Protected: a second answer to either settled id is refused by the shield.
+    for (const method of [
+      'Fetch.fulfillRequest',
+      'Fetch.continueRequest',
+      'Fetch.failRequest',
+      'Fetch.continueWithAuth',
+    ]) {
+      await expect(shield.command(method, { requestId: a.requestId }, forward)).rejects.toThrow(
+        /not paused toward this client/
+      );
+    }
+  });
+
+  it('keeps an id answerable after a failed answer, but drops it when Chrome no longer knows it', async () => {
+    const { shield } = makeShield();
+    await shield.command(
+      'Fetch.enable',
+      {},
+      vi.fn(async () => ({}))
+    );
+    const a = paused(PLAIN, 'Fetch');
+    shield.onEvent('Fetch.requestPaused', a);
+    const bad = vi.fn(async () => {
+      throw new Error('Invalid parameters');
+    });
+    await expect(
+      shield.command('Fetch.fulfillRequest', { requestId: a.requestId }, bad)
+    ).rejects.toThrow('Invalid parameters');
+    const ok = vi.fn(async () => ({}));
+    await expect(
+      shield.command('Fetch.fulfillRequest', { requestId: a.requestId, responseCode: 200 }, ok)
+    ).resolves.toBeDefined();
+    const c = paused(PLAIN, 'Fetch');
+    shield.onEvent('Fetch.requestPaused', c);
+    const gone = vi.fn(async () => {
+      throw new Error('{"code":-32602,"message":"Invalid InterceptionId."}');
+    });
+    await expect(
+      shield.command('Fetch.continueRequest', { requestId: c.requestId }, gone)
+    ).rejects.toThrow(/Invalid InterceptionId/);
+    await expect(
+      shield.command('Fetch.continueRequest', { requestId: c.requestId }, ok)
+    ).rejects.toThrow(/not paused toward this client/);
+  });
+});
