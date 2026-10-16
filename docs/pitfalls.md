@@ -2270,8 +2270,12 @@ of raw options fails those helpers on every float.
 Grok model, and what `quick-llm` hits with `temperature: 0.3` or `0`).
 `providers/xai-grok.ts` must run both `pumpXaiStream` and
 `pumpSimpleXaiStream` options through `withSupportedTemperature` before
-`streamOpenAIResponses` / `streamOpenAICompletions`. Models that still
-accept the field, such as `grok-4.5`, keep the caller value.
+`streamOpenAIResponses` / `streamOpenAICompletions`, using the **resolved**
+native id and name. A stored id that has left the catalog falls back to
+`grok-4.7` inside `resolveNativeXaiModel` while the caller id still looks
+like a model that accepts `temperature`. Models that still accept the
+field, such as `grok-4.5`, keep the caller value.
+
 ### Proxy Anthropic transports must override native conversation capabilities
 
 pi-ai catalog models can enable `supportsMidConvoEffort`, which inserts

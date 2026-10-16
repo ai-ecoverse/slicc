@@ -350,7 +350,7 @@ async function pumpXaiStream(
     const accessToken = await getValidAccessToken();
     const sessionId = (options as { sessionId?: string }).sessionId;
     const nativeModel = resolveNativeXaiModel(model);
-    const forwardedOptions = withSupportedTemperature(model.id, model.name, {
+    const forwardedOptions = withSupportedTemperature(nativeModel.id, nativeModel.name, {
       ...options,
       apiKey: accessToken,
       headers: withGrokConvHeader(options.headers, sessionId),
@@ -378,7 +378,7 @@ async function pumpSimpleXaiStream(
     const accessToken = await getValidAccessToken();
     const sessionId = (options as { sessionId?: string } | undefined)?.sessionId;
     const nativeModel = resolveNativeXaiModel(model);
-    const forwardedOptions = withSupportedTemperature(model.id, model.name, {
+    const forwardedOptions = withSupportedTemperature(nativeModel.id, nativeModel.name, {
       ...options,
       apiKey: accessToken,
       headers: withGrokConvHeader(options?.headers, sessionId),

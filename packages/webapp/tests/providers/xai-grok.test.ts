@@ -431,6 +431,28 @@ describe('xai-grok provider', () => {
     }
   );
 
+  it.each([
+    ['stream', mocks.streamOpenAIResponses],
+    ['streamSimple', mocks.streamSimpleOpenAIResponses],
+  ] as const)(
+    'omits temperature through %s when a retired model falls back to grok-4.7',
+    async (entry, native) => {
+      native.mockClear().mockImplementation(endedStream);
+      const provider = getApiProvider(XAI_API)!;
+      const model = { ...routedModel('grok-4.3'), id: 'grok-3-mini', name: 'Grok 3 Mini' };
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        await drain(provider[entry](model, context, { temperature: 0.3 }));
+
+        expect(native.mock.calls[0][0]).toEqual(expect.objectContaining({ id: 'grok-4.7' }));
+        expect(native.mock.calls[0][2]).not.toHaveProperty('temperature');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    }
+  );
+
   it('keeps temperature for a Grok model that still accepts it', async () => {
     const provider = getApiProvider(XAI_API)!;
 
