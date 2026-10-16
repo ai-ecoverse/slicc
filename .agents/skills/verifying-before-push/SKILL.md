@@ -409,6 +409,11 @@ reproduce it locally with `npm run bundle-size` after both builds. All other lin
 justifications, knip dead-code) are now covered by the pre-push lint gate (`npm run
 verify`).
 
+Trusted runs put most Linux jobs on the org's Cloud Run pools, which have no
+sudo. A new root-only step must skip itself when `id -u` / `sudo -n true`
+fails, and a new job must be added to the runner lists in
+`ci-critical-path.test.mjs`. See [`docs/verification.md`](../../../docs/verification.md#runners).
+
 ## Knip fixture exclusion
 
 The dead-code gate uses `knip --production` to detect test-only dead files. Keep test

@@ -71,3 +71,42 @@ aggregate as `ci`.
 The repo setting is `false` (owner decision; this change does not flip it).
 GitHub will not auto-retarget a stacked child when its parent merges. Retarget
 the child yourself, then close + reopen or push so the full `ci` set runs.
+
+## Runners
+
+ai-ecoverse is on GitHub's Free plan, so about 20 GitHub-hosted jobs run at
+once across the whole org. Trusted `ci.yml` runs therefore send their
+read-only, secret-free Linux jobs to the org's Cloud Run pools. Two YAML
+anchors on `runs-on` do the routing:
+
+| Anchor             | Variable          | Pool                                 | Jobs                                                                     |
+| ------------------ | ----------------- | ------------------------------------ | ------------------------------------------------------------------------ |
+| `*ci-heavy-runner` | `CI_HEAVY_RUNNER` | `cloud-run-bench` (8 vCPU / 32 GiB)  | the default: builds, tests, Chrome, e2e, Go, slicc-cli Linux leg         |
+| `*ci-runner`       | `CI_RUNNER`       | `cloud-run` (4 vCPU / 8 GiB, shared) | `runner`, `changes`, `lint`, `linear-history`, `dependency-review`, `ci` |
+
+- **Trusted** means a same-repo pull request
+  (`head.repo.full_name == github.repository`), a merge group, or a
+  push/schedule/dispatch on `main`. A fork head always gets `ubuntu-latest`.
+- **Merge groups:** a maintainer can enqueue a fork PR, and the group commit
+  then carries its code. The `runner` job (no checkout, read scopes only) lists
+  the merge queue. When any entry is cross-repository or unknown, or the
+  lookup fails, it outputs `merge-group: hosted` and the whole group runs on
+  `ubuntu-latest`. The job itself runs on `CI_RUNNER`, falling back to
+  `CI_HEAVY_RUNNER`. This mirrors slicc-kernel's decider.
+- **Stays hosted:** `cloudflare-worker`, because it reads Cloudflare and
+  OAuth secrets, every macOS/iOS job, and the slicc-cli macOS and Windows
+  legs. The workflow pins `permissions: contents: read`, so no job can get a
+  write token.
+- **Value:** one label (`cloud-run-bench`) or a JSON label array
+  (`["self-hosted","cloud-run-bench"]`).
+- **Rollback:** unset the variable (`gh variable delete CI_HEAVY_RUNNER`).
+  Its jobs go back to `ubuntu-latest` on the next run, with no code change.
+- **No sudo on the pools.** Root-only steps (`playwright install-deps`,
+  `apt-get install xvfb`, the speech leg's disk cleanup) check
+  `id -u` / `sudo -n true` first and skip. The bench image already ships
+  Chrome's libraries, `xvfb-run`, `gh`, Go and gcc. Its `sans-serif` resolves
+  to Liberation Mono, so `webcomponents` points `sans-serif` and `system-ui`
+  at Liberation Sans through the user's fontconfig before its layout tests.
+- `packages/dev-tools/tools/ci-critical-path.test.mjs` pins the job-to-pool
+  map, the trust check, and the no-secrets/no-write rule for pool jobs.
+  Adding a job means adding it to one of its lists.

@@ -26,9 +26,102 @@ concurrency:
 env:
   NODE_OPTIONS: --dns-result-order=ipv4first
 
+# No job here needs a write-scoped token. Pinning that keeps the jobs that run
+# on the self-hosted pools read-only even if the repository default changes.
+permissions:
+  contents: read
+
+# Runner routing. ai-ecoverse's GitHub-hosted concurrency is shared across the
+# org, so trusted runs of the read-only, secret-free Linux jobs go to the org's
+# Cloud Run pools:
+#   *ci-heavy-runner  vars.CI_HEAVY_RUNNER  the default (`cloud-run-bench`)
+#   *ci-runner        vars.CI_RUNNER        only the few short jobs
+#                                           (`cloud-run`, which other repos
+#                                           share and which has few machines)
+# Either variable holds one label or a JSON label array, for example
+# `["self-hosted","cloud-run"]`. Unsetting it is the rollback: its jobs fall
+# back to `ubuntu-latest`. Only same-repo pull requests, merge groups whose
+# queue holds no fork PR (the `runner` job), and push/schedule/dispatch on main
+# are trusted. A fork head always gets `ubuntu-latest`, so fork code never runs
+# on a pool runner. A job that reads a secret or needs a write token stays on
+# `ubuntu-latest` (cloudflare-worker), and the macOS/iOS jobs stay hosted. Pool runners have no sudo, so every
+# root-only step checks `id -u` / `sudo -n true` first. The bench image already
+# ships Chrome's system libraries. ci-critical-path.test.mjs pins all of this.
 jobs:
+  # Decides whether a merge group may use the pools. A maintainer can enqueue
+  # a fork PR, and the group commit then carries that fork's code, so the whole
+  # group goes hosted when any queue entry is cross-repository or unknown.
+  # Mirrors slicc-kernel's decider. It checks out nothing and holds read
+  # scopes only, so it may run on a pool for any merge group. Other events get
+  # the same trust check as every pool job.
+  # Any error falls back to `hosted`.
+  runner:
+    runs-on: >-
+      ${{
+      ((github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'merge_group' ||
+      (github.ref == 'refs/heads/main' &&
+      contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name))) &&
+      (vars.CI_RUNNER || vars.CI_HEAVY_RUNNER) &&
+      fromJSON(startsWith(vars.CI_RUNNER || vars.CI_HEAVY_RUNNER, '[') && (vars.CI_RUNNER || vars.CI_HEAVY_RUNNER) || toJSON(vars.CI_RUNNER || vars.CI_HEAVY_RUNNER)) ||
+      'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      merge-group: ${{ steps.pick.outputs.merge-group }}
+    steps:
+      - id: pick
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pick = async (value, why) => {
+              core.setOutput('merge-group', value);
+              await core.summary.addRaw(`merge-group: ${value} (${why})\n`).write();
+            };
+            if (context.eventName !== 'merge_group') return await pick('n/a', context.eventName);
+            try {
+              const { owner, repo } = context.repo;
+              const base = context.payload.merge_group.base_ref.replace('refs/heads/', '');
+              const q = await github.graphql(
+                `query($o:String!,$n:String!,$b:String!){repository(owner:$o,name:$n){mergeQueue(branch:$b){entries(first:100){totalCount nodes{pullRequest{number isCrossRepository}}}}}}`,
+                { o: owner, n: repo, b: base }
+              );
+              const entries = q.repository.mergeQueue?.entries;
+              const nodes = entries?.nodes ?? [];
+              if (!entries || entries.totalCount !== nodes.length) {
+                return await pick('hosted', 'queue entries unknown or truncated');
+              }
+              const forks = nodes.filter((e) => e.pullRequest?.isCrossRepository !== false);
+              if (forks.length > 0) {
+                const numbers = forks.map((e) => e.pullRequest?.number ?? '?').join(', ');
+                return await pick('hosted', `fork or unknown PR in the queue: ${numbers}`);
+              }
+              await pick('same-repo', `${nodes.length} same-repo queue entries`);
+            } catch (error) {
+              core.warning(`merge queue lookup failed: ${error.message}`);
+              await pick('hosted', 'merge queue lookup failed');
+            }
+
   changes:
-    runs-on: ubuntu-latest
+    needs: runner
+    permissions:
+      contents: read
+      # dorny/paths-filter lists a PR's files through the API.
+      pull-requests: read
+    runs-on: &ci-runner >-
+      ${{
+      ((github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'merge_group' &&
+      needs.runner.outputs.merge-group == 'same-repo') ||
+      (github.ref == 'refs/heads/main' &&
+      contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name))) &&
+      vars.CI_RUNNER &&
+      fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || toJSON(vars.CI_RUNNER)) ||
+      'ubuntu-latest' }}
     outputs:
       webapp: ${{ steps.filter.outputs.webapp }}
       vfs-root: ${{ steps.filter.outputs.vfs-root }}
@@ -310,7 +403,8 @@ jobs:
           esac
 
   lint:
-    runs-on: ubuntu-latest
+    needs: runner
+    runs-on: *ci-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -381,8 +475,9 @@ jobs:
   # CI run. Catch it here, at PR time. PR-only: in the merge_group the history
   # is linear by construction, so this is skipped (= passing).
   linear-history:
+    needs: runner
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: *ci-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -400,8 +495,9 @@ jobs:
   # the comparison work outside pull_request — so the required `ci` gate
   # covers the merge-queue candidate, not just the PR head.
   dependency-review:
+    needs: runner
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ubuntu-latest
+    runs-on: *ci-runner
     permissions:
       contents: read
     steps:
@@ -424,7 +520,7 @@ jobs:
   # merged green and then broke the release (bash-tool truncate import, #2020).
   # ~7s of tsc on top of npm ci — cheap insurance against that class of break.
   typecheck:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
@@ -437,7 +533,17 @@ jobs:
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: &ci-heavy-runner >-
+      ${{
+      ((github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'merge_group' &&
+      needs.runner.outputs.merge-group == 'same-repo') ||
+      (github.ref == 'refs/heads/main' &&
+      contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name))) &&
+      vars.CI_HEAVY_RUNNER &&
+      fromJSON(startsWith(vars.CI_HEAVY_RUNNER, '[') && vars.CI_HEAVY_RUNNER || toJSON(vars.CI_HEAVY_RUNNER)) ||
+      'ubuntu-latest' }}
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -452,7 +558,7 @@ jobs:
         run: npm run typecheck
 
   node-matrix-tests:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
@@ -467,7 +573,7 @@ jobs:
       needs.changes.outputs.github-workflow == 'true' ||
       needs.changes.outputs.bench == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 25
@@ -489,7 +595,7 @@ jobs:
           SLICC_CDP_LAUNCH_TIMEOUT_MS: '60000'
 
   webapp:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
@@ -497,7 +603,7 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 25
@@ -509,7 +615,7 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck
-        run: tsc --noEmit -p tsconfig.json
+        run: npx tsc --noEmit -p tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:webapp
         env:
@@ -605,9 +711,9 @@ jobs:
   # needs Chromium's per-origin storage quota — derived from free disk — to not
   # be the variable under test.
   e2e:
-    needs: changes
+    needs: [runner, changes]
     if: needs.changes.outputs.e2e == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Budget covers setup + three builds + the full suite on one worker, and on
     # the speech leg the kokoro spec alone may take up to its 25-minute test
     # timeout (staging recovery = one page reboot + a second ~6-min download
@@ -640,8 +746,12 @@ jobs:
         if: github.event_name != 'pull_request' && needs.changes.outputs.speech == 'true'
         run: |
           df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                        /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          else
+            echo "No root on this runner (pool image): nothing to free."
+          fi
           df -h /
       # Chromium for Playwright is ~170 MB per run; key on the pinned
       # @playwright/test version so a bump re-downloads and nothing else does.
@@ -653,12 +763,19 @@ jobs:
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             playwright-chromium-${{ runner.os }}-
+      # install-deps needs root. The pool images have no sudo but already ship
+      # Chrome's system libraries, so they only fetch the browser.
       - name: Install Playwright Chromium
+        env:
+          CACHE_HIT: ${{ steps.playwright-cache.outputs.cache-hit }}
         run: |
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+          if [ "$CACHE_HIT" != "true" ]; then
+            npx playwright install chromium
+          fi
+          if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then
             npx playwright install-deps chromium
           else
-            npx playwright install --with-deps chromium
+            echo "No root on this runner: skipping playwright install-deps."
           fi
       # The speech leg stages ~92 MB of Kokoro weights through the virtual
       # shell's `hf download`. Serve them from a disk-cached local mirror
@@ -769,14 +886,14 @@ jobs:
           if-no-files-found: ignore
 
   node-server:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -788,9 +905,9 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck (build config)
-        run: tsc --noEmit -p tsconfig.cli.json
+        run: npx tsc --noEmit -p tsconfig.cli.json
       - name: Typecheck (src + tests)
-        run: tsc --noEmit -p packages/node-server/tsconfig.json
+        run: npx tsc --noEmit -p packages/node-server/tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:node-server
       - name: Upload coverage report
@@ -813,7 +930,7 @@ jobs:
         run: npm run build -w @slicc/node-server
 
   chrome-extension:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.extension == 'true' ||
       needs.changes.outputs.webapp == 'true' ||
@@ -822,7 +939,7 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -834,7 +951,7 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck
-        run: tsc --noEmit -p tsconfig.json
+        run: npx tsc --noEmit -p tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:chrome-extension
       - name: Upload coverage report
@@ -901,7 +1018,16 @@ jobs:
       - name: Install Chrome for Testing
         run: npx --yes @puppeteer/browsers install chrome@stable
       - name: Install xvfb
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+        run: |
+          if command -v xvfb-run >/dev/null; then
+            echo "xvfb-run already installed."
+          elif [ "$(id -u)" = 0 ]; then
+            apt-get update && apt-get install -y --no-install-recommends xvfb
+          elif sudo -n true 2>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+          else
+            echo "::warning::No xvfb-run and no root on this runner; the extension smoke test will fail (continue-on-error)."
+          fi
       - name: Extension smoke test (CDP)
         env:
           SLICC_CI: '1'
@@ -965,7 +1091,7 @@ jobs:
       - name: Validate worker bundle and asset sizes (dry-run)
         run: npm run build -w @slicc/cloudflare-worker
       - name: Typecheck
-        run: tsc --noEmit -p tsconfig.worker.json
+        run: npx tsc --noEmit -p tsconfig.worker.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:cloudflare-worker
       - name: Upload coverage report
@@ -1284,11 +1410,11 @@ jobs:
           if-no-files-found: ignore
 
   cloud-core:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1300,7 +1426,7 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck
-        run: tsc --noEmit -p packages/cloud-core/tsconfig.json
+        run: npx tsc --noEmit -p packages/cloud-core/tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:cloud-core
       - name: Upload coverage report
@@ -1314,11 +1440,11 @@ jobs:
         run: npm run build -w @slicc/cloud-core
 
   github-workflow:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.github-workflow == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1361,11 +1487,11 @@ jobs:
           done
 
   bench:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.bench == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1395,13 +1521,13 @@ jobs:
           "$(go env GOPATH)/bin/actionlint" -no-color .github/workflows/bench.yml
 
   go-optel:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.go-optel == 'true' ||
       needs.changes.outputs.root-config == 'true'
     # Pure stdlib string/JSON logic with no OS-specific paths, unlike
     # slicc-cli's process-group signalling — one Linux job covers it.
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@v7
@@ -1419,7 +1545,7 @@ jobs:
         run: make check
 
   slicc-cli:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.slicc-cli == 'true' ||
       needs.changes.outputs.root-config == 'true'
@@ -1432,7 +1558,20 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    # The Linux leg takes the heavy-runner route (race tests need cgo); the
+    # matrix value stays `ubuntu-latest`, so the check names do not change.
+    runs-on: >-
+      ${{
+      matrix.os != 'ubuntu-latest' && matrix.os ||
+      ((github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'merge_group' &&
+      needs.runner.outputs.merge-group == 'same-repo') ||
+      (github.ref == 'refs/heads/main' &&
+      contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name))) &&
+      vars.CI_HEAVY_RUNNER &&
+      fromJSON(startsWith(vars.CI_HEAVY_RUNNER, '[') && vars.CI_HEAVY_RUNNER || toJSON(vars.CI_HEAVY_RUNNER)) ||
+      'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@v7
@@ -1479,11 +1618,11 @@ jobs:
         run: make dist
 
   shared:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1509,12 +1648,12 @@ jobs:
         run: npm run build -w @slicc/shared-ts
 
   webcomponents:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.webcomponents == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1530,6 +1669,34 @@ jobs:
       # Functional tests run in real Chromium via the Playwright provider.
       - name: Install Chromium (browser tests)
         run: npx playwright install chromium
+      # The layout tests measure real text. The bench image resolves
+      # sans-serif and system-ui to Liberation Mono, which renders the sliccy
+      # tab 79px wide against a 72px ceiling. Point both at Liberation Sans
+      # through the user's fontconfig (no root needed). ubuntu-latest already
+      # resolves to a proportional font and is left alone.
+      - name: Use a proportional fallback font
+        run: |
+          fallback="$(fc-match -f '%{family}' sans-serif 2>/dev/null || true)"
+          echo "sans-serif resolves to: ${fallback:-unknown}"
+          case "$fallback" in
+            *Mono*)
+              if ! fc-list 'Liberation Sans' family | grep -q .; then
+                echo "::warning::sans-serif is monospace and Liberation Sans is missing; layout tests may fail."
+                exit 0
+              fi
+              mkdir -p "$HOME/.config/fontconfig"
+              cat > "$HOME/.config/fontconfig/fonts.conf" <<'EOF'
+          <?xml version="1.0"?>
+          <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+          <fontconfig>
+            <alias binding="strong"><family>sans-serif</family><prefer><family>Liberation Sans</family></prefer></alias>
+            <alias binding="strong"><family>system-ui</family><prefer><family>Liberation Sans</family></prefer></alias>
+          </fontconfig>
+          EOF
+              echo "sans-serif now resolves to: $(fc-match -f '%{family}' sans-serif)"
+              echo "system-ui now resolves to: $(fc-match -f '%{family}' system-ui)"
+              ;;
+          esac
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:webcomponents
       - name: Upload coverage report
@@ -1543,11 +1710,11 @@ jobs:
         run: npm run build -w @slicc/webcomponents
 
   spoon:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1577,11 +1744,11 @@ jobs:
         run: npm run build -w @ai-ecoverse/spoon
 
   cherry:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -1593,7 +1760,7 @@ jobs:
           cache: npm
       - uses: ./.github/actions/npm-ci
       - name: Typecheck
-        run: tsc --noEmit -p packages/cherry/tsconfig.json
+        run: npx tsc --noEmit -p packages/cherry/tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:cherry
       - name: Upload coverage report
@@ -2347,13 +2514,13 @@ jobs:
           if-no-files-found: ignore
 
   global-install:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -2465,7 +2632,7 @@ jobs:
   # `packages/dev-tools/providers.build.json` at build time to decide which
   # providers get bundled, so editing it alone moves the shipped size.
   bundle-size:
-    needs: changes
+    needs: [runner, changes]
     if: >-
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.extension == 'true' ||
@@ -2477,7 +2644,7 @@ jobs:
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
-    runs-on: ubuntu-latest
+    runs-on: *ci-heavy-runner
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
     # must not sit on a runner until the 6-hour default fires.
     timeout-minutes: 20
@@ -2515,6 +2682,7 @@ jobs:
     if: always()
     needs:
       [
+        runner,
         changes,
         lint,
         linear-history,
@@ -2546,7 +2714,7 @@ jobs:
         github-workflow,
         bench,
       ]
-    runs-on: ubuntu-latest
+    runs-on: *ci-runner
     steps:
       - name: Check job results
         run: |
