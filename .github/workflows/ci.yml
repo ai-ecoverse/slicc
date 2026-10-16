@@ -34,7 +34,7 @@ permissions:
 # Runner routing. ai-ecoverse's GitHub-hosted concurrency is shared across the
 # org, so trusted runs of the read-only, secret-free Linux jobs go to the org's
 # Cloud Run pools:
-#   *ci-heavy-runner  vars.CI_HEAVY_RUNNER  the default (`cloud-run-bench`)
+#   *ci-heavy-runner  vars.CI_HEAVY_RUNNER  the default (`cloud-run-job`)
 #   *ci-runner        vars.CI_RUNNER        only the few short jobs
 #                                           (`cloud-run`, which other repos
 #                                           share and which has few machines)

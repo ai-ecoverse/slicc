@@ -79,10 +79,10 @@ once across the whole org. Trusted `ci.yml` runs therefore send their
 read-only, secret-free Linux jobs to the org's Cloud Run pools. Two YAML
 anchors on `runs-on` do the routing:
 
-| Anchor             | Variable          | Pool                                 | Jobs                                                                     |
-| ------------------ | ----------------- | ------------------------------------ | ------------------------------------------------------------------------ |
-| `*ci-heavy-runner` | `CI_HEAVY_RUNNER` | `cloud-run-bench` (8 vCPU / 32 GiB)  | the default: builds, tests, Chrome, e2e, Go, slicc-cli Linux leg         |
-| `*ci-runner`       | `CI_RUNNER`       | `cloud-run` (4 vCPU / 8 GiB, shared) | `runner`, `changes`, `lint`, `linear-history`, `dependency-review`, `ci` |
+| Anchor             | Variable          | Pool                                                                         | Jobs                                                                     |
+| ------------------ | ----------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `*ci-heavy-runner` | `CI_HEAVY_RUNNER` | `cloud-run-job` (8 CPU / 32 GiB, one fresh Cloud Run Jobs execution per job) | the default: builds, tests, Chrome, e2e, Go, slicc-cli Linux leg         |
+| `*ci-runner`       | `CI_RUNNER`       | `cloud-run` (4 vCPU / 8 GiB, shared)                                         | `runner`, `changes`, `lint`, `linear-history`, `dependency-review`, `ci` |
 
 - **Trusted** means a same-repo pull request
   (`head.repo.full_name == github.repository`), a merge group, or a
@@ -97,8 +97,9 @@ anchors on `runs-on` do the routing:
   OAuth secrets, every macOS/iOS job, and the slicc-cli macOS and Windows
   legs. The workflow pins `permissions: contents: read`, so no job can get a
   write token.
-- **Value:** one label (`cloud-run-bench`) or a JSON label array
-  (`["self-hosted","cloud-run-bench"]`).
+- **Value:** one label (`cloud-run-job`) or a JSON label array
+  (`["self-hosted","cloud-run-job"]`). `bench.yml` and `bench-memory-chain.yml`
+  shards use `CI_HEAVY_RUNNER` too.
 - **Rollback:** unset the variable (`gh variable delete CI_HEAVY_RUNNER`).
   Its jobs go back to `ubuntu-latest` on the next run, with no code change.
 - **No sudo on the pools.** Root-only steps (`playwright install-deps`,
