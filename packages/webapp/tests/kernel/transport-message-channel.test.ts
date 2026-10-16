@@ -36,12 +36,6 @@ interface DownMsg {
   n: number;
 }
 
-function tick(ms = 5): Promise<void> {
-  // MessageChannel delivery in Node hops the event loop; setTimeout
-  // gives it room to flush across both ports before assertions run.
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 describe('createMessageChannelTransport', () => {
   it('delivers messages in both directions across a MessageChannel pair', async () => {
     const channel = new MessageChannel();
@@ -57,13 +51,13 @@ describe('createMessageChannelTransport', () => {
     a.send({ type: 'up', n: 2, payload: { nested: true } });
     b.send({ type: 'down', n: 99 });
 
-    await tick();
-
-    expect(bIn).toEqual([
-      { type: 'up', n: 1 },
-      { type: 'up', n: 2, payload: { nested: true } },
-    ]);
-    expect(aIn).toEqual([{ type: 'down', n: 99 }]);
+    await vi.waitFor(() => {
+      expect(bIn).toEqual([
+        { type: 'up', n: 1 },
+        { type: 'up', n: 2, payload: { nested: true } },
+      ]);
+      expect(aIn).toEqual([{ type: 'down', n: 99 }]);
+    });
 
     channel.port1.close();
     channel.port2.close();
@@ -78,12 +72,17 @@ describe('createMessageChannelTransport', () => {
     const off = b.onMessage((m) => seen.push(m));
 
     a.send({ type: 'up', n: 1 });
-    await tick();
-    expect(seen).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(seen).toHaveLength(1);
+    });
 
     off();
+    // A later subscriber seeing n:2 proves it was delivered (in order) while
+    // the unsubscribed listener was gone; then the negative check is sound.
+    const probe: UpMsg[] = [];
+    b.onMessage((m) => probe.push(m));
     a.send({ type: 'up', n: 2 });
-    await tick();
+    await vi.waitFor(() => expect(probe).toEqual([{ type: 'up', n: 2 }]));
     expect(seen).toHaveLength(1);
 
     channel.port1.close();
@@ -102,16 +101,16 @@ describe('createMessageChannelTransport', () => {
 
     a.send({ type: 'up', n: 7 });
     a.send({ type: 'up', n: 8 });
-    await tick();
-
-    expect(seenA).toEqual([
-      { type: 'up', n: 7 },
-      { type: 'up', n: 8 },
-    ]);
-    expect(seenB).toEqual([
-      { type: 'up', n: 7 },
-      { type: 'up', n: 8 },
-    ]);
+    await vi.waitFor(() => {
+      expect(seenA).toEqual([
+        { type: 'up', n: 7 },
+        { type: 'up', n: 8 },
+      ]);
+      expect(seenB).toEqual([
+        { type: 'up', n: 7 },
+        { type: 'up', n: 8 },
+      ]);
+    });
 
     channel.port1.close();
     channel.port2.close();
@@ -129,12 +128,12 @@ describe('createMessageChannelTransport', () => {
     // port.start() on first subscribe, which flushes the queue.
     const seen: UpMsg[] = [];
     b.onMessage((m) => seen.push(m));
-    await tick();
-
-    expect(seen).toEqual([
-      { type: 'up', n: 100 },
-      { type: 'up', n: 101 },
-    ]);
+    await vi.waitFor(() => {
+      expect(seen).toEqual([
+        { type: 'up', n: 100 },
+        { type: 'up', n: 101 },
+      ]);
+    });
 
     channel.port1.close();
     channel.port2.close();
@@ -160,10 +159,10 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
       type: 'request-state',
     };
     panelTransport.send(payload);
-    await tick();
-
-    expect(inboundOnBridge).toHaveLength(1);
-    expect(inboundOnBridge[0]).toEqual({ source: 'panel', payload });
+    await vi.waitFor(() => {
+      expect(inboundOnBridge).toHaveLength(1);
+      expect(inboundOnBridge[0]).toEqual({ source: 'panel', payload });
+    });
 
     channel.port1.close();
     channel.port2.close();
@@ -231,10 +230,10 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
       activeScoopJid: null,
     };
     bridgeTransport.send(payload);
-    await tick();
-
-    expect(inboundOnPanel).toHaveLength(1);
-    expect(inboundOnPanel[0]).toEqual({ source: 'offscreen', payload });
+    await vi.waitFor(() => {
+      expect(inboundOnPanel).toHaveLength(1);
+      expect(inboundOnPanel[0]).toEqual({ source: 'offscreen', payload });
+    });
 
     channel.port1.close();
     channel.port2.close();
@@ -251,21 +250,23 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
     panelTransport.onMessage((env) => inboundOnPanel.push(env));
 
     panelTransport.send({ type: 'request-state' });
-    await tick();
-    expect(inboundOnBridge).toEqual([{ source: 'panel', payload: { type: 'request-state' } }]);
+    await vi.waitFor(() => {
+      expect(inboundOnBridge).toEqual([{ source: 'panel', payload: { type: 'request-state' } }]);
+    });
 
     bridgeTransport.send({
       type: 'state-snapshot',
       scoops: [],
       activeScoopJid: null,
     });
-    await tick();
-    expect(inboundOnPanel).toEqual([
-      {
-        source: 'offscreen',
-        payload: { type: 'state-snapshot', scoops: [], activeScoopJid: null },
-      },
-    ]);
+    await vi.waitFor(() => {
+      expect(inboundOnPanel).toEqual([
+        {
+          source: 'offscreen',
+          payload: { type: 'state-snapshot', scoops: [], activeScoopJid: null },
+        },
+      ]);
+    });
 
     channel.port1.close();
     channel.port2.close();
