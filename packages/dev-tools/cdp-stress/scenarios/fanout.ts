@@ -14,6 +14,8 @@
  * ops rather than with fan-out, and the poisoned run's `driversWallMs` matches
  * the clean run's.
  */
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { launchChrome } from '../chrome.js';
 import { startSite } from '../site.js';
 import { buildStack, errKind, type Summary, summarize } from '../stack.js';
@@ -185,7 +187,10 @@ export async function run(opts: FanoutOptions = {}): Promise<FanoutResult> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   const drivers = Number(process.argv[2] ?? 8);
   const result = await run({ drivers, poison: process.argv.includes('--poison') });
   console.log(JSON.stringify(result, null, 2));

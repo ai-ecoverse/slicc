@@ -11,6 +11,8 @@
  * proxy starts closing the client deliberately on an upstream reset, the hop
  * needs a reset signal of its own.
  */
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { launchChrome } from '../chrome.js';
 import { startProxy } from '../proxy.js';
 import { startSite } from '../site.js';
@@ -72,6 +74,9 @@ export async function run(): Promise<StaleWorkerHopResult> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   console.log(JSON.stringify(await run(), null, 2));
 }

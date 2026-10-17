@@ -17,6 +17,8 @@
  *   guarded (`isOwnTab` wired)   — zero webSocketFrame events, handoff still seen
  *   unguarded (the old behaviour) — webSocketFrame events flow
  */
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { launchChrome } from '../chrome.js';
 import { startSite } from '../site.js';
 import { buildStack } from '../stack.js';
@@ -87,6 +89,9 @@ export async function run(): Promise<OwnTabResult> {
   return { guarded: await runArm(true), unguarded: await runArm(false) };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   console.log(JSON.stringify(await run(), null, 2));
 }

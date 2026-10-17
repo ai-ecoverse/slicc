@@ -12,8 +12,8 @@
 // paying for a second full run of the same suite.
 
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 import { readThresholds, repoRoot } from './coverage-ratchet-lib.mjs';
+import { isMainModule } from './is-main-module.mjs';
 
 const METRICS = ['lines', 'statements', 'functions', 'branches'];
 
@@ -69,9 +69,16 @@ function main(argv) {
     stdio: 'inherit',
     env: process.env,
   });
-  return result.status ?? 1;
+  const status = result.status ?? 1;
+  // The verdict line that require-verdict.mjs checks for; see its header.
+  console.log(
+    status === 0
+      ? `coverage-gate: PASS ${pkg}`
+      : `coverage-gate: FAIL ${pkg} (vitest exit ${status})`
+  );
+  return status;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   process.exit(main(process.argv.slice(2)));
 }

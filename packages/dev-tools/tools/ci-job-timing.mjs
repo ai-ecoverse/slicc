@@ -1,12 +1,12 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   buildTimingReport,
   formatTimingSummary,
   hasUnsettledStepsBefore,
   selectJob,
 } from './ci-job-timing-lib.mjs';
+import { isMainModule } from './is-main-module.mjs';
 
 function parseArgs(args) {
   const options = { excludedSteps: [] };
@@ -89,7 +89,7 @@ export async function main(args = process.argv.slice(2)) {
   process.stdout.write(`Timing JSON: ${output}\n`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
