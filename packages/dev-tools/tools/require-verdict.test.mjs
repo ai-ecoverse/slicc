@@ -20,6 +20,13 @@ describe('require-verdict', () => {
     expect(run("console.error('gate: PASS')").status).toBe(0);
   });
 
+  it('finds a PASS on stdout while stderr holds an unfinished line', () => {
+    const result = run(
+      "process.stderr.write('partial-no-newline'); setTimeout(() => process.stdout.write('gate: PASS ok\\n'), 50)"
+    );
+    expect(result.status).toBe(0);
+  });
+
   it('fails a gate that exits 0 silently', () => {
     const result = run('');
     expect(result.status).toBe(1);

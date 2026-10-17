@@ -71,6 +71,8 @@ describe('main-module guards in the repo', () => {
         '*.mjs',
         '*.js',
         '*.ts',
+        // The helper's doc comment quotes the broken comparison it replaces.
+        ':!packages/dev-tools/tools/is-main-module.mjs',
       ],
       { cwd: repoRoot, encoding: 'utf8' }
     );

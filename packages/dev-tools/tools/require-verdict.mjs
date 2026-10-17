@@ -19,32 +19,39 @@ if (!label || separator !== '--' || !command) {
 
 const verdict = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: (PASS|FAIL)\\b`);
 let seen;
-let tail = '';
-const scan = (chunk) => {
-  const text = tail + chunk.toString();
-  const lines = text.split('\n');
-  tail = lines.pop() ?? '';
-  for (const line of lines) {
-    const match = verdict.exec(line);
-    if (match) seen = match[1];
-  }
+// One partial-line buffer per stream: stdout and stderr chunks interleave,
+// and a shared buffer would glue one stream's unfinished line onto the other's
+// verdict line, so the anchored match would miss a real PASS.
+const scanner = () => {
+  let tail = '';
+  return (chunk) => {
+    const lines = (tail + chunk.toString()).split('\n');
+    tail = lines.pop() ?? '';
+    for (const line of lines) {
+      const match = verdict.exec(line);
+      if (match) seen = match[1];
+    }
+  };
 };
+const scanOut = scanner();
+const scanErr = scanner();
 
 const child = spawn(command, args, { stdio: ['inherit', 'pipe', 'pipe'] });
 child.stdout.on('data', (chunk) => {
   process.stdout.write(chunk);
-  scan(chunk);
+  scanOut(chunk);
 });
 child.stderr.on('data', (chunk) => {
   process.stderr.write(chunk);
-  scan(chunk);
+  scanErr(chunk);
 });
 child.on('error', (error) => {
   console.error(`require-verdict: could not start ${command}: ${error.message}`);
   process.exit(1);
 });
 child.on('close', (code, signal) => {
-  scan('\n');
+  scanOut('\n');
+  scanErr('\n');
   if (code !== 0) process.exit(code ?? 1);
   if (signal) process.exit(1);
   if (seen !== 'PASS') {
