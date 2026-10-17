@@ -1097,3 +1097,9 @@ single `npm publish` runs after the version tag is pushed: v6.231.1 was
 stranded by `getaddrinfo ENOTFOUND fulcio.sigstore.dev` (#3719). `--verify`
 (exec `verifyConditionsCmd`) fails early when the job lacks
 `id-token: write`.
+
+## gate-entry-guards
+
+A script's "am I the entry point?" check must compare real paths on both sides: use `isMainModule(import.meta.url)` from `packages/dev-tools/tools/is-main-module.mjs` (or, outside dev-tools, `realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))`). Node resolves symlinks for `import.meta.url` but not for `process.argv[1]`, so `import.meta.url === pathToFileURL(argv[1]).href` is false through a symlinked checkout, and the script exits 0 without doing anything. `is-main-module.test.mjs` runs `coverage-gate.mjs` through a symlinked checkout and fails if any file in the repo uses the old comparison.
+
+A gate's silence must never read as a pass. `require-verdict.mjs <label> -- <command>` fails unless the command printed `<label>: PASS …`. The `test:coverage:*` scripts wrap `coverage-gate.mjs` with it, and the CI steps wrap `verify-preview-lifecycle.mjs` with it. New gates should print a `<name>: PASS|FAIL …` line and run behind it.

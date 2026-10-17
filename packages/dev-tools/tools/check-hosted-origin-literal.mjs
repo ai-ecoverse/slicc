@@ -12,7 +12,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { argv } from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 const Filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(Filename), '..', '..', '..');
@@ -121,4 +122,4 @@ function main() {
   process.stdout.write(`ok: no raw '${LITERAL}' literals in ${scanned} package source files\n`);
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) main();
+if (isMainModule(import.meta.url, argv[1])) main();

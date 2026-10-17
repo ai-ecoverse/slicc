@@ -15,6 +15,8 @@
  * `--skip-own-tab` then hands the watcher `isOwnTab`. Running the two together
  * measures what the leader tab contributes to the per-navigation event count.
  */
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { launchChrome } from '../chrome.js';
 import { startSite } from '../site.js';
 import { buildStack } from '../stack.js';
@@ -123,7 +125,10 @@ export async function run(opts: SessionLeakOptions = {}): Promise<SessionLeakRes
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   const result = await run({
     navigationWatcher: process.argv.includes('--watcher'),
     leaderTab: process.argv.includes('--leader-tab'),

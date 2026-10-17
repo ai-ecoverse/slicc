@@ -25,12 +25,13 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { argv, exit } from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import {
   checkRandomExecutionOrder,
   findSharedDefaultsMutations,
   parseSchemeTestTargets,
 } from './check-ios-test-isolation-lib.mjs';
+import { isMainModule } from './is-main-module.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const projectPath = resolve(repoRoot, 'packages/ios-app/project.yml');
@@ -79,4 +80,4 @@ function main() {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) exit(main());
+if (isMainModule(import.meta.url, argv[1])) exit(main());

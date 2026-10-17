@@ -23,8 +23,17 @@
  * that repo has no licence and asks for the text never to be published.
  */
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { fromSkillCreatorEvals, pathSegment, validateEnvelope } from './format.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
@@ -339,7 +348,7 @@ export function main(argv = process.argv.slice(2), { log = console.error } = {})
 }
 
 const isMain =
-  process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname);
+  process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
 /* v8 ignore next 8 */
 if (isMain) {
   try {

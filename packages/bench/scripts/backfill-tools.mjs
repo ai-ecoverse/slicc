@@ -15,8 +15,9 @@
  * publish.mjs as usual.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { listFiles } from './publish.mjs';
 import { readRecordFile, readTrace, recordPath } from './run.mjs';
@@ -201,7 +202,7 @@ export function main(argv = process.argv.slice(2), { log = console.error } = {})
 }
 
 const isMain =
-  process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname);
+  process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
 /* v8 ignore next 8 */
 if (isMain) {
   try {
