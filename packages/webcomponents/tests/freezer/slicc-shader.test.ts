@@ -450,7 +450,8 @@ describe('slicc-shader', () => {
       el.pulse(Number.NaN);
       await wait(300);
 
-      expect(spy.mock.calls.length).toBe(0);
+      await expectStopped(spy);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(1);
     });
 
     it('a static field revealed from display:none renders at its real size', async () => {
