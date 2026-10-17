@@ -1,4 +1,5 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 export const KILLED_PATTERNS = [
   /Process completed with exit code 130\b/,
@@ -166,7 +167,10 @@ export function summaryLines(result, runId) {
 }
 
 /* v8 ignore next 14 */
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   const runId = process.env.RUN_ID;
   const result = await autoResume({
     repo: process.env.GITHUB_REPOSITORY,

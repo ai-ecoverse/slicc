@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { argv, exit } from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 export function pinMap(source) {
   const parsed = JSON.parse(source);
@@ -84,4 +84,4 @@ function main(files, cwd = process.cwd()) {
   return 1;
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) exit(main(argv.slice(2)));
+if (isMainModule(import.meta.url, argv[1])) exit(main(argv.slice(2)));

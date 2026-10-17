@@ -37,7 +37,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { argv } from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 const Filename = fileURLToPath(import.meta.url);
 export const repoRoot = resolve(dirname(Filename), '..', '..', '..');
@@ -207,4 +208,4 @@ function main() {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) process.exit(main());
+if (isMainModule(import.meta.url, argv[1])) process.exit(main());

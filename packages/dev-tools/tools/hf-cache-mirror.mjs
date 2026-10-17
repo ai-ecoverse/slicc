@@ -6,7 +6,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 const DEFAULT_UPSTREAM = 'https://huggingface.co';
 
@@ -141,7 +141,7 @@ async function main() {
   if (opts.readyFile) await writeFile(opts.readyFile, String(port));
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   main().catch((err) => {
     console.error(err);
     process.exit(1);

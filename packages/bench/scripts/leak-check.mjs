@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { loadSet } from './run.mjs';
 
@@ -174,7 +175,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
 }
 
 const isMain =
-  process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname);
+  process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
 /* v8 ignore next 7 */
 if (isMain) {
   main().then(

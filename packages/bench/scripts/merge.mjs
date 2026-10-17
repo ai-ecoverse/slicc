@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { listFiles } from './publish.mjs';
 import { writeOutputs } from './run.mjs';
@@ -96,7 +105,7 @@ export function main(argv = process.argv.slice(2), { log = console.error } = {})
 }
 
 const isMain =
-  process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname);
+  process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
 /* v8 ignore next 8 */
 if (isMain) {
   try {

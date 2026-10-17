@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isMainModule } from '../tools/is-main-module.mjs';
 import {
   attemptsFromPulls,
   buildDigest,
@@ -376,7 +377,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   main().catch((err) => {
     console.error(`❌ Flaky CI Hunter scan failed: ${err.message?.split('\n')[0] ?? err}`);
     process.exit(1);

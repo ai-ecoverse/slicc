@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { argv, env, exit, platform, stderr } from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 const WINDOWS_DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
 
@@ -101,4 +101,4 @@ export function run(args) {
   return result.status ?? 1;
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) exit(run(argv.slice(2)));
+if (isMainModule(import.meta.url, argv[1])) exit(run(argv.slice(2)));

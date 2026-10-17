@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -1150,7 +1151,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
 }
 
 const isMain =
-  process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname);
+  process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
 /* v8 ignore next 7 */
 if (isMain) {
   main().then(

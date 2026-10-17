@@ -3,8 +3,9 @@
 import { lstatSync, readdirSync, readlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { argv } from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { isNoCommentTree } from '../no-comment/marker.mjs';
+import { isMainModule } from './is-main-module.mjs';
 
 const Filename = fileURLToPath(import.meta.url);
 export const repoRoot = resolve(dirname(Filename), '../../..');
@@ -102,4 +103,4 @@ function main() {
   );
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) main();
+if (isMainModule(import.meta.url, argv[1])) main();

@@ -117,7 +117,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+        run: node packages/dev-tools/tools/require-verdict.mjs verify-preview-lifecycle -- node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
 
       - name: Archive assets to R2 (staging)
         if: (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && steps.changes.outputs.r2 == 'true'

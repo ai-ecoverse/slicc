@@ -2,7 +2,7 @@
 
 import { readFile as fsReadFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 const require = createRequire(import.meta.url);
 const WebSocket = require('ws');
@@ -412,7 +412,7 @@ Environment:
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   main().catch((e) => {
     console.error('Error:', e.message);
     process.exit(1);

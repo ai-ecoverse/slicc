@@ -5,8 +5,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { argv, exit, stderr, stdout } from 'node:process';
-import { pathToFileURL } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
+import { isMainModule } from './is-main-module.mjs';
 import { DEFAULT_CONCURRENCY, uploadManifest } from './storybook-screenshots-upload-lib.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -92,7 +92,7 @@ async function main() {
   writeFileSync(newUploadsOut, JSON.stringify(newUploads));
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) {
+if (isMainModule(import.meta.url, argv[1])) {
   main().catch((err) => {
     stderr.write(`storybook-screenshots-upload: ${err?.stack || err}\n`);
     exit(1);

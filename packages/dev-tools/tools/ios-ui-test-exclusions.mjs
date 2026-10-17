@@ -3,7 +3,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { argv, exit } from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 const filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(filename), '..', '..', '..');
@@ -96,4 +97,4 @@ function main(args) {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) exit(main(argv.slice(2)));
+if (isMainModule(import.meta.url, argv[1])) exit(main(argv.slice(2)));

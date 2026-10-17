@@ -5,7 +5,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } 
 import { createServer } from 'node:http';
 import { extname, join, resolve } from 'node:path';
 import { argv, exit, stderr, stdout } from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 import { resolveAffectedStories, screenshotFileName } from './storybook-affected-stories-lib.mjs';
 
 const VIEWPORT = { width: 1280, height: 900 };
@@ -169,7 +169,7 @@ async function main() {
   stdout.write(`Wrote ${manifest.shots.length} screenshot(s) + manifest.json under ${outDir}\n`);
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) {
+if (isMainModule(import.meta.url, argv[1])) {
   main().catch((err) => {
     stderr.write(`storybook-affected-screenshots: ${err?.stack || err}\n`);
     exit(1);

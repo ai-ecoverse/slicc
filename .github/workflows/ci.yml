@@ -281,6 +281,7 @@ jobs:
 
               - 'coverage-thresholds.json'
               - 'packages/dev-tools/tools/coverage-gate.mjs'
+              - 'packages/dev-tools/tools/require-verdict.mjs'
               - 'packages/dev-tools/tools/coverage-ratchet-lib.mjs'
 
 
@@ -839,7 +840,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+        run: node packages/dev-tools/tools/require-verdict.mjs verify-preview-lifecycle -- node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
 
       - name: Archive assets to R2 (staging)
         if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.turn.outputs.force_continued != 'true' && needs.changes.outputs.cloudflare-r2 == 'true'

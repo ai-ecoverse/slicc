@@ -3,7 +3,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { argv } from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 const DEP_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies'];
 
@@ -109,4 +110,4 @@ function main() {
   console.log(`check-lockfile-sync: ${checked} exact pin(s) match package-lock.json`);
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) main();
+if (isMainModule(import.meta.url, argv[1])) main();

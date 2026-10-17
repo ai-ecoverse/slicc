@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 
 import { setTimeout as sleep } from 'node:timers/promises';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 export const PREVIEW_PREFIX = 'previews/';
 export const DAY_SECONDS = 24 * 60 * 60;
@@ -114,10 +115,13 @@ export async function main(args = process.argv.slice(2), options) {
   }
   if (args.length !== 1) throw new Error(HELP);
   await verifyPreviewLifecycle(args[0], options);
-  console.log(`Verified preview lifecycle prerequisite: ${args[0]}`);
+  console.log(`verify-preview-lifecycle: PASS ${args[0]}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   main().catch((error) => {
     console.error(`Preview lifecycle prerequisite failed: ${error.message}\n${RUNBOOK}`);
     process.exitCode = 1;

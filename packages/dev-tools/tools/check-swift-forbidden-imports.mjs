@@ -3,7 +3,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { argv, exit, stderr, stdout } from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import {
   analyzeSource,
   analyzeXcodegenTarget,
@@ -11,6 +11,7 @@ import {
   formatHelp,
   hasPublicSurface,
 } from './check-swift-forbidden-imports-lib.mjs';
+import { isMainModule } from './is-main-module.mjs';
 
 const filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(filename), '..', '..', '..');
@@ -185,4 +186,4 @@ function main() {
   );
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) main();
+if (isMainModule(import.meta.url, argv[1])) main();
