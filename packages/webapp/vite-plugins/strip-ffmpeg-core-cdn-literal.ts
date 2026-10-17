@@ -10,9 +10,9 @@
  * sweep over the webapp bundle, so a leftover unpkg URL is enough to fail
  * review even when the runtime never fetches it.
  *
- * Originally lived inline in `packages/chrome-extension/vite.config.ts` and
- * only ran over `dist/extension/`. Extracted here so the `webapp` build emits
- * the same sanitized `dist/ui/` and the two configs can't drift apart again.
+ * Originally lived inline in the extension's Vite config and only ran over
+ * the extension build. Extracted here so the `webapp` build emits the same
+ * sanitized `dist/ui/`.
  *
  * The strip runs in `closeBundle` so it sees the final on-disk output —
  * including bundles produced by the esbuild `closeBundle` plugins that live
@@ -87,8 +87,7 @@ export function stripFfmpegCoreCdnLiteralFromDir(outDir: string): { rewritten: s
 
 /**
  * Build-only Vite plugin; strips the unpkg ffmpeg-core URL after the output
- * is fully written. Shared between `packages/webapp/vite.config.ts` (dist/ui)
- * and `packages/chrome-extension/vite.config.ts` (dist/extension).
+ * is fully written. Used by `packages/webapp/vite.config.ts` (dist/ui).
  */
 export function stripFfmpegCoreCdnLiteralPlugin(): Plugin {
   let outDir = '';

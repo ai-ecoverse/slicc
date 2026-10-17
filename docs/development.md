@@ -4,27 +4,25 @@ Build, run, test, and debug SLICC locally.
 
 ## Build and Development Commands
 
-| Command                                                                                           | What It Does                                                                                                              | When to Use                                                                                            |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `npm run dev`                                                                                     | Thin /cdp bridge + Chrome + CDP proxy (port 5710); UI loads from the hosted origin                                        | Quick bridge smoke-test; for local UI work use `npm run dev:standalone:fresh`                          |
-| `npm run dev:electron -- /Applications/Slack.app`                                                 | Launch the main CLI in Electron attach mode against an Electron app                                                       | Electron overlay/runtime work                                                                          |
-| `npm run start:extension`                                                                         | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension`             | Extension verification without re-loading unpacked extension by hand                                   |
-| `npm run build`                                                                                   | Production build: all workspaces (webapp, node-server, extension, worker, swift)                                          | Pre-deployment validation; final bundle check                                                          |
-| `npm run build -w @slicc/webapp`                                                                  | Vite build only into `dist/ui/`                                                                                           | Build UI assets separately (faster iteration for UI-only changes)                                      |
-| `npm run build -w @slicc/node-server`                                                             | TSC build only into `dist/node-server/`                                                                                   | Build CLI server + Electron attach helpers separately                                                  |
-| `npm run build -w @slicc/chrome-extension`                                                        | Chrome extension bundle into `dist/extension/`                                                                            | Build extension; load in `chrome://extensions`                                                         |
-| `npm run package:release`                                                                         | Package deterministic extension + Node/CLI release artifacts into `artifacts/release/` (after running the build commands) | Prepare CI/local release assets for GitHub Releases and later npm publish wiring                       |
-| `npm run start`                                                                                   | Run production CLI (requires build first)                                                                                 | Run built production bundle                                                                            |
-| `npm run start:electron -- /Applications/Slack.app`                                               | Run the built Electron attach mode                                                                                        | Smoke-test production Electron output                                                                  |
-| `npm run typecheck`                                                                               | Typecheck browser + Node targets                                                                                          | Verify no type errors before committing                                                                |
-| `npm run test`                                                                                    | Vitest run (all tests)                                                                                                    | Run full test suite; CI validation                                                                     |
-| `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration`                     | Run shared server API conformance tests against an externally running Node or Swift server                                | Validate standalone server HTTP/WebSocket behavior                                                     |
-| `npm run test:e2e`                                                                                | Playwright e2e tests for preview SW (requires `npm run build` first)                                                      | Validate preview serving and project serve mode in a real browser                                      |
-| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts`                                      | Run single test file                                                                                                      | Debug a specific module                                                                                |
-| `npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc`                             | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated)                                       | Exercise `packages/cloudflare-worker/src/` against a real Worker runtime                               |
-| `npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc`            | Deploy the staging Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc`                           | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions                         |
-| `npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc`                          | Deploy the production Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc`                        | Publish the production tray hub                                                                        |
-| `cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts` | Run the deployed tray-hub smoke test                                                                                      | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
+| Command                                                                                           | What It Does                                                                                        | When to Use                                                                                            |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `npm run dev`                                                                                     | Thin /cdp bridge + Chrome + CDP proxy (port 5710); UI loads from the hosted origin                  | Quick bridge smoke-test; for local UI work use `npm run dev:standalone:fresh`                          |
+| `npm run dev:electron -- /Applications/Slack.app`                                                 | Launch the main CLI in Electron attach mode against an Electron app                                 | Electron overlay/runtime work                                                                          |
+| `npm run build`                                                                                   | Production build: all workspaces (webapp, node-server, worker, swift)                               | Pre-deployment validation; final bundle check                                                          |
+| `npm run build -w @slicc/webapp`                                                                  | Vite build only into `dist/ui/`                                                                     | Build UI assets separately (faster iteration for UI-only changes)                                      |
+| `npm run build -w @slicc/node-server`                                                             | TSC build only into `dist/node-server/`                                                             | Build CLI server + Electron attach helpers separately                                                  |
+| `npm run package:release`                                                                         | Package the Node/CLI release artifacts into `artifacts/release/` (after running the build commands) | Prepare CI/local release assets for GitHub Releases and later npm publish wiring                       |
+| `npm run start`                                                                                   | Run production CLI (requires build first)                                                           | Run built production bundle                                                                            |
+| `npm run start:electron -- /Applications/Slack.app`                                               | Run the built Electron attach mode                                                                  | Smoke-test production Electron output                                                                  |
+| `npm run typecheck`                                                                               | Typecheck browser + Node targets                                                                    | Verify no type errors before committing                                                                |
+| `npm run test`                                                                                    | Vitest run (all tests)                                                                              | Run full test suite; CI validation                                                                     |
+| `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration`                     | Run shared server API conformance tests against an externally running Node or Swift server          | Validate standalone server HTTP/WebSocket behavior                                                     |
+| `npm run test:e2e`                                                                                | Playwright e2e tests for preview SW (requires `npm run build` first)                                | Validate preview serving and project serve mode in a real browser                                      |
+| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts`                                      | Run single test file                                                                                | Debug a specific module                                                                                |
+| `npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc`                             | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated)                 | Exercise `packages/cloudflare-worker/src/` against a real Worker runtime                               |
+| `npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc`            | Deploy the staging Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc`     | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions                         |
+| `npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc`                          | Deploy the production Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc`  | Publish the production tray hub                                                                        |
+| `cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts` | Run the deployed tray-hub smoke test                                                                | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
 
 ## Release Operations
 
@@ -35,7 +33,7 @@ Releases are automated with semantic-release. Maintainers do not cut version tag
 1. Merge or push conventional-commit changes onto `main`, or manually dispatch `.github/workflows/release.yml` against `main`. A half-hourly schedule also catches releases deferred while the merge queue was busy.
 2. A lightweight, read-only Linux preflight checks the default-branch merge queue. If the queue has any entries, the release exits without publishing (the merge queue must not wait on Release — the old `release-gate` poll burned GitHub App rate limits and dequeued green batches). When the queue is idle, the preflight invokes semantic-release's commit analyzer. Pushes with no releasable commits stop before reserving the `macos-26` release runner.
 3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
-4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the extension `manifest.json`, and `npm run build -w @slicc/chrome-extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
+4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, and `npm run build && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
 5. During publish, the `@semantic-release/exec` `publishCmd` first publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing with provenance, through `packages/dev-tools/tools/npm-publish-retry.mjs`. `@semantic-release/npm` only bumps the version (`npmPublish: false`): it runs `npm publish` exactly once, and the version tag is already pushed by then, so a sigstore DNS blip (`ENOTFOUND fulcio.sigstore.dev`, #3719) used to strand the version unshipped. The wrapper retries transient DNS, socket, sigstore (`CA_`/`TLOG_`/`TSA_` errors), and registry 408/429/5xx failures with backoff, kills and retries an attempt that hangs past 5 minutes, starts no retry more than 20 minutes in, and fails auth and validation errors on the first attempt. After a transient failure or a version conflict it accepts the version as published only when the registry `dist.integrity` matches `npm pack` of the local directory and, with `--provenance`, a provenance attestation exists. Its `--verify` mode runs in verifyConditions and fails before prepare when the job cannot mint an OIDC token (`id-token: write`). `@ai-ecoverse/biome-jsh` publishes through the same wrapper. The worker deploy script independently skips its release operations when its dependent sources did not change, and GitHub Release creation attaches the generated artifacts.
 6. `packages/dev-tools/tools/release-publish.mjs` is what the Publish step runs. If `@semantic-release/git` cannot fast-forward the version commit because `main` moved during prepare, the wrapper exits 0. That race is a deferral, not a failed publish: rebasing would tag commits the analyzer did not see, and the push that moved `main` (or the half-hourly schedule) publishes from the new tip. If `@semantic-release/github` success cannot resolve a referenced issue (CSS hex such as `#141414` parsed as `fix #141414`, or a foreign tracker number), the wrapper also exits 0: npm and the GitHub Release already published. `.releaserc.json` sets `successCommentCondition` and `releasedLabels` to `false` so that lookup is skipped. Other semantic-release failures still fail the job and open the red-release tracking issue (`packages/dev-tools/tools/release-alert.mjs fail`). A later green publish that did not defer closes that issue (`release-alert.mjs recover`).
 
@@ -43,12 +41,11 @@ Releases are automated with semantic-release. Maintainers do not cut version tag
 
 Each published GitHub Release includes semantic-release generated release notes plus these attached artifacts from `npm run package:release`:
 
-- `slicc-extension-v<version>.zip` — ZIP archive of `dist/extension/` with normalized ordering, timestamps, and permissions
 - `sliccy-<version>.tgz` — npm tarball for the publishable Node/CLI package
 - `release-artifacts.json` — stable manifest describing the generated artifact paths
 - `sliccstart-v<version>.dmg` — **conditional**: the macOS Sliccstart DMG (plus the `Sliccstart-<version>.zip` update archive) is only built and attached when macOS-relevant sources changed since the previous release tag (`packages/swift-launcher/`, `packages/swift-server/`, `packages/swift-optel/`, `packages/spoon/`, `packages/assets/`); the iOS TestFlight upload is likewise gated on `packages/ios-app/`. A first release (no previous tag) builds both. Gating is driven by `packages/dev-tools/tools/release-native.mjs`, invoked from the semantic-release `prepareCmd`; `npm run build` and `npm run package:release` always run.
 
-The **Chrome Web Store publish** has moved to [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension), which builds the extension from slicc release tags and publishes to the same CWS listing. `npm run publish:worker` runs first, but its internal worker/UI gate skips template builds, secret writes, deploys, and smoke tests for unrelated releases while retaining the required R2 asset refresh.
+The **Chrome Web Store publish** has moved to [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension), which develops, builds, and publishes the extension to the same CWS listing; GitHub Releases here no longer attach an extension zip. `npm run publish:worker` runs first, but its internal worker/UI gate skips template builds, secret writes, deploys, and smoke tests for unrelated releases while retaining the required R2 asset refresh.
 
 ### What gets published to npm
 
@@ -250,7 +247,7 @@ the selected port from the harness log.
 
 ### Fresh Dev Harness Details
 
-Five harness scripts in `packages/dev-tools/tools/` bring up isolated dev
+Four harness scripts in `packages/dev-tools/tools/` bring up isolated dev
 environments on distinct ports so they can run concurrently without port or
 profile collisions.
 
@@ -274,11 +271,9 @@ profile collisions.
   failure or non-darwin.
 - **Mock keychain**: the ad-hoc re-signed clone is not on the Keychain ACL of
   the shared "Chrome Safe Storage" item, so a fresh profile raises a
-  SecurityAgent prompt that nobody sees, and every tab (including extension
-  pages) hangs on a pending navigation until it is answered. All three
-  Chrome harnesses therefore pass `--use-mock-keychain` and
-  `--password-store=basic`: the extension harness sets them directly;
-  standalone and swift set `SLICC_CHROME_MOCK_KEYCHAIN=1`, which node-server
+  SecurityAgent prompt that nobody sees, and every tab hangs on a pending
+  navigation until it is answered. Both Chrome harnesses therefore pass
+  `--use-mock-keychain` and `--password-store=basic`: standalone and swift set `SLICC_CHROME_MOCK_KEYCHAIN=1`, which node-server
   and swift-server honor. Never set it for a real profile — the mock keychain
   re-keys cookie encryption, so every saved cookie becomes unreadable.
 
@@ -308,19 +303,6 @@ macOS Keychain ACL dialog). When the stable dev signing identity
 (`SLICC Dev Code Signing`, created by `setup-dev-cert.sh`) exists, re-signs
 the binary before launch.
 
-**Extension** (`dev-extension-fresh.sh`, CDP `:9333`,
-label `SLICC-Ext`):
-No separate bridge process — the MV3 service worker IS the bridge. Builds
-the extension with `SLICC_EXT_DEV=1` (strips manifest `key`, widens
-`externally_connectable` to localhost), syncs to a stable scratch path
-(`/tmp/slicc-ext-build`) for a stable extension ID, and self-builds the
-leader UI when missing. Launches via **LaunchServices**
-(`/usr/bin/open -n -W -a <AppBundle> --args …`) so Chrome gets a full
-macOS app-bundle identity (required for Web Speech network backend and TCC
-mic grant); falls back to raw exec when no `.app` bundle can be resolved.
-Because Chrome is not the script's child process, cleanup reaps it
-port-scoped on its own CDP port.
-
 **Electron-Node / Electron-Swift** (`dev-electron-node-fresh.sh` at
 `:5730`/`:9225`, `dev-electron-swift-fresh.sh` at `:5740`/`:9226`):
 Attach to an external Electron app (Slack/Discord/Teams/…) — no Chrome for
@@ -340,27 +322,23 @@ defaults to `/Applications/Slack.app`; override with a positional arg or
 1. **Edit** — Change source code in `packages/*/src/`
 2. **Typecheck** — Run `npm run typecheck` (browser + Node targets)
 3. **Test** — Run `npm run test`
-4. **Build** — Run all four build gates: `npm run typecheck`, `npm run test`, `npm run build`, `npm run build:extension`
+4. **Build** — Run all three build gates: `npm run typecheck`, `npm run test`, `npm run build`
 5. **Verify manually** — Test in the relevant runtimes; include Electron mode when touching float/runtime code (see checklist below)
 
 ## Verification Checklist (Before Committing)
 
-All four build gates MUST pass:
+All three build gates MUST pass:
 
 - [ ] `npm run typecheck` — Browser + Node targets
 - [ ] `npm run test` — Vitest (all tests)
 - [ ] `npm run build` — Production build (UI via Vite + CLI/Electron Node target via TSC)
-- [ ] `npm run build:extension` — Extension build (Vite with extension config)
 
 Manual verification in the relevant runtimes:
 
 - [ ] Feature works in CLI mode (`npm run dev`)
   - Launch Chrome automatically (it opens the hosted webapp, which dials back to the `/cdp` bridge on port 5710 — the bridge serves no UI)
   - Interact with UI; check functionality
-- [ ] Feature works with extension profile (`npm run start:extension`)
-  - Extension profile auto-loads `dist/extension`
-- [ ] Feature works in extension mode (load `dist/extension/` unpacked in `chrome://extensions`)
-  - Load `dist/extension/` as unpacked extension
+- [ ] Feature works in extension mode (install the extension from the Chrome Web Store, or a dev build from [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension))
   - Click the toolbar icon to focus the pinned hosted leader tab (`https://www.sliccy.ai/?slicc=leader`)
   - Interact with UI in that tab; check functionality
 - [ ] Electron-specific changes work in Electron mode (`npm run dev:electron -- /Applications/Slack.app`)
@@ -402,14 +380,14 @@ Swift or Go commit on a machine without them still succeeds — CI remains the h
 CI-only vitest settings, both defined in `vitest.config.ts`:
 
 - **Timing** — when `CI` is set, the root `test.reporters` adds vitest's `json` reporter and
-  writes per-test durations to `test-timing/vitest.json` (gitignored). The `webapp`,
-  `node-server`, and `chrome-extension` CI jobs upload it as `test-timing-<package>`.
+  writes per-test durations to `test-timing/vitest.json` (gitignored). The `webapp`
+  and `node-server` CI jobs upload it as `test-timing-<package>`.
   Reproduce locally with `CI=1 npm run test`.
 - **Cloudflare phases** — both staging workflows call
   `packages/dev-tools/tools/ci-job-timing.mjs` at the end of the job. The Actions summary
   shows every setup, build, R2, Wrangler, secret, retry, and smoke step with its duration;
   the corresponding `*-phase-timing` artifact retains the same data as JSON.
-- **Retries** — the `node-server` and `chrome-extension` projects retry once in CI (`0`
+- **Retries** — the `node-server` project retries once in CI (`0`
   locally); Playwright E2E retries twice in CI. Every other project has no retries.
 
 Policy and the artifact's JSON shape:
@@ -467,39 +445,9 @@ The worker also serves a lightweight handoff page at `GET /handoff` that echoes 
 
 ## Extension Testing Steps
 
-> **End users** install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf). The steps below are for **development** only — loading a local build for testing.
+> **End users** install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf).
 
-If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, use `npm run start:extension`.
-
-1. **Build extension bundle**
-
-   ```bash
-   npm run build:extension
-   ```
-
-2. **Load in Chrome**
-   - Open `chrome://extensions`
-   - Enable "Developer mode" (top right)
-   - Click "Load unpacked"
-   - Select the repo's `dist/extension/` directory
-
-3. **Focus the hosted leader tab**
-   - Click the extension icon in Chrome toolbar
-   - The pinned tab at `https://www.sliccy.ai/?slicc=leader` (or `http://localhost:8787/?slicc=leader` when built with `SLICC_EXT_DEV=1`) becomes active
-   - Chat/Terminal/Files/Memory tabs visible inside that tab
-
-4. **Test feature**
-   - Interact with the hosted leader tab UI
-   - Check terminal output
-   - Verify file browser works
-   - Open a `https://www.sliccy.ai/handoff?handoff=test` URL and confirm the Chat tab shows the approval card derived from the response's `Link` header
-   - Take screenshots if needed
-
-5. **Iterate**
-   - Make code changes in `packages/*/src/`
-   - Run `npm run build:extension` again
-   - Refresh extension in `chrome://extensions` (circular arrow icon)
-   - Reload the hosted leader tab to pick up new webapp code; the SW + content script pick up changes on extension reload
+The extension's source, build, dev loop, and smoke tests live in [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension). This repo keeps the webapp side of the protocol it speaks (`packages/webapp/src/kernel/messages.ts`, the offscreen / runtime-mode / picker-popup clients, and the `@slicc/shared-ts` bridge, fetch-proxy, secrets, and cherry-panel modules). A change to that protocol here must also land in slicc-extension. To test a webapp change in extension mode, run the extension from slicc-extension against the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or a dev build pointed at `http://localhost:8787/?slicc=leader`).
 
 ## Debugging Browser Features
 
@@ -608,7 +556,7 @@ New features MUST work in the relevant runtimes:
   - Can use `AsyncFunction` constructor
   - Can load WASM from `/` (web server root)
 
-- **Extension mode** (`npm run build:extension`)
+- **Extension mode** (extension from ai-ecoverse/slicc-extension)
   - Webapp runs in the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:8787/?slicc=leader` when built with `SLICC_EXT_DEV=1`); the extension is a thin CDP-bridge service worker plus a MAIN-world content-script launcher
   - CSP blocks dynamic eval and CDN fetches in extension-origin contexts (service worker, secrets page, popups)
   - Dynamic code (JS tool, `node -e`, `.jsh`), sprinkle/dip rendering, and WASM all run in the hosted leader tab / its kernel worker (a normal `https` origin) — not an extension sandbox
@@ -675,9 +623,6 @@ packages/webapp/src/
 
 packages/node-server/src/   Express server + Chrome launcher
 
-packages/chrome-extension/src/
-                   Chrome Manifest V3 extension files
-
 packages/cloudflare-worker/src/
                    Cloudflare Worker + Durable Object tray hub
 
@@ -700,5 +645,4 @@ docs/
 dist/
   ui/              Production browser bundle (Vite output)
   node-server/     Production CLI server + Electron entrypoint (TSC output)
-  extension/       Production extension bundle
 ```

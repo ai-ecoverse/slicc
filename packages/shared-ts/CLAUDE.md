@@ -1,6 +1,6 @@
 # @slicc/shared-ts
 
-Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`, `@slicc/chrome-extension`.
+Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`, and the Chrome extension in [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension), which carries its own copy. A change to an extension-facing module here (bridge, fetch-proxy, secrets, sign-and-forward, extension-message) must also land in slicc-extension.
 
 ## Contents
 
@@ -35,8 +35,8 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 - `slugify.ts` — parameterized display-name → ASCII slug (NFKD, `^-+|-+$` trim, optional `maxLen`/`fallback`). Consolidates copies.
 - `backoff.ts` — `nextBackoffDelayMs({ attempt, baseMs, capMs?, jitter?, maxShift?, random? })`: the single capped-exponential-backoff formula (`Math.min(baseMs * 2 ** attempt, capMs)` + optional jitter/exponent clamp). Consolidates the copies that drifted across the three floats + webapp internals (#3926); each site passes its own base/cap.
 - `sha256.ts` — `bytesToHex` + `sha256Hex` (offset views compacted via `byteOffset`/`byteLength` before `crypto.subtle.digest`).
-- `extension-bridge-protocol.ts` — sliccy.ai leader tab ↔ extension SW `chrome.runtime.connect` envelope contract (handshake, CDP pass-through, licks, leader join-url, open-settings). chrome-extension imports it; webapp re-exports a shim.
-- `extension-message.ts` — `isExtensionMessage` guard for the `{ source, payload }` page ↔ SW envelope. The full `ExtensionMessage` union stays in webapp `kernel/messages.ts` (type-only import); the guard is shared by extension + tests.
+- `extension-bridge-protocol.ts` — sliccy.ai leader tab ↔ extension SW `chrome.runtime.connect` envelope contract (handshake, CDP pass-through, licks, leader join-url, open-settings). The extension (slicc-extension) mirrors it; webapp re-exports a shim.
+- `extension-message.ts` — `isExtensionMessage` guard for the `{ source, payload }` page ↔ SW envelope. The full `ExtensionMessage` union stays in webapp `kernel/messages.ts` (type-only import); the guard is shared by webapp and the extension.
 - `leader-ext-id.ts` — `LEADER_EXT_ID_QUERY_NAME` alone, split out of `extension-bridge-protocol.ts` so first-load webapp pages import just the constant.
 - `link-header.ts` — pure RFC 8288 `Link` parser/builder + CDP/webRequest/Headers adapters. Dep of `discovery-link.ts` / `handoff-link.ts`; re-exported from webapp `net/discover-links.ts`.
 - `discovery-link.ts` — ARD `ai-catalog` `Link`-rel extractor + `discoveryFingerprint`.

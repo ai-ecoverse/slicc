@@ -4,8 +4,10 @@
  * Defines the typed message envelopes exchanged between the browser page
  * and the kernel web-worker (standalone mode) or the extension service
  * worker / offscreen bridge (extension mode). Historically lived in the
- * chrome-extension package; moved here (#1443) so the protocol sits next
- * to its primary consumers.
+ * extension package; moved here (#1443) so the protocol sits next to its
+ * primary consumers. The extension itself now lives in
+ * ai-ecoverse/slicc-extension, which keeps its own copy of the envelopes it
+ * speaks: a change to an extension-facing message here must also land there.
  */
 
 import {
@@ -36,7 +38,7 @@ import type { SudoDecision, SudoRequest, TurnGuestGate } from '../sudo/types.js'
  * import of `createLogger` does. This inline shape only governs the wire
  * envelope; structural compatibility with the canonical type is enforced
  * by the compile-time assignability assertion in
- * `packages/chrome-extension/tests/messages.test.ts` (typechecked in CI).
+ * `packages/webapp/tests/kernel/messages.test.ts` (typechecked in CI).
  */
 export interface SprinkleSummaryEnvelope {
   name: string;

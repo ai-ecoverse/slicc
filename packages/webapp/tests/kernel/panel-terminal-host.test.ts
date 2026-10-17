@@ -1,7 +1,7 @@
 /**
  * Tests for `createPanelTerminalHost` — the shared factory both the
  * standalone DedicatedWorker (`kernel-worker.ts`) and the extension
- * offscreen document (`chrome-extension/src/offscreen.ts`) call to
+ * offscreen document (ai-ecoverse/slicc-extension) call to
  * stand up the panel-driven `TerminalSessionHost`.
  *
  * The factory exists to pin parity: both floats MUST wire

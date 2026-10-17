@@ -61,7 +61,7 @@ The flag is read by `rum.js` on first call and cached in `window.hlx.rum`. CLI/E
 
 ### Why not bundle the helix-rum-enhancer
 
-The extension manifest CSP is `script-src 'self' 'wasm-unsafe-eval'` (`packages/chrome-extension/manifest.json`). `@adobe/helix-rum-enhancer` is fundamentally incompatible with this:
+The extension manifest CSP is `script-src 'self' 'wasm-unsafe-eval'` (the extension's `manifest.json`, in ai-ecoverse/slicc-extension). `@adobe/helix-rum-enhancer` is fundamentally incompatible with this:
 
 1. Helix-rum-js auto-loads the enhancer by injecting a `<script src="https://rum.hlx.page/.rum/@adobe/helix-rum-enhancer@^2/src/index.js">` tag — blocked by CSP.
 2. The enhancer's plugin loader uses `document.currentScript.src` to discover sibling plugins (`/tmp/helix-rum-enhancer/modules/index.js`), which only resolves when the enhancer itself was loaded as an external script. A bundled module has no `currentScript`.
@@ -155,7 +155,7 @@ Historical note: prior to the thin-bridge release the extension had two independ
 
 ### Not instrumented in this iteration
 
-- The extension service worker (`packages/chrome-extension/src/service-worker.ts`). CDP attach/detach, OAuth completion, navigate-licks, tray-socket lifecycle.
+- The extension service worker (`service-worker.ts`, ai-ecoverse/slicc-extension). CDP attach/detach, OAuth completion, navigate-licks, tray-socket lifecycle.
 - Turn-end and per-tool-call-duration events from the kernel worker. Scoop lifecycle itself (spawn/feed/complete/error) **is** wired — see `enter`/`convert`/`leave` in the checkpoint mapping above, shipped 2026-06-14 via `scoop-telemetry-hook.ts` — but there is no checkpoint yet for a turn finishing or for how long an individual tool call took. The worker's `AlmostBashShellHeadless` emits `fill` beacons for every bash call, so `feed_scoop` tool calls also show up indirectly through that channel.
 - Core Web Vitals and other enhancer-derived checkpoints in the extension. See "Extension Enhancer Parity Decision" above for the full rationale; the short version is that CSP makes the auto-loaded enhancer impossible, manual `web-vitals` integration is low-signal for a chat-app shell, and the highest-value piece (`error`) is already wired separately.
 
@@ -226,8 +226,9 @@ If/when this is implemented, update this section.
 
 ### Manual smoke test (extension)
 
-1. Build the extension: `npm run build -w @slicc/chrome-extension`.
-2. Load the unpacked extension from `dist/extension/` in `chrome://extensions`.
+1. Install the extension from the Chrome Web Store, or load a dev build from
+   [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension).
+2. Make sure it points at the leader tab whose webapp you are verifying.
 3. Click the toolbar icon to focus the pinned hosted leader tab. Right-click anywhere in the tab → Inspect to attach DevTools.
 4. In the tab's DevTools console, force 100% sampling for the next session:
    ```js
@@ -289,16 +290,16 @@ dashboard" is the wrong answer for those. This section is the post-ship lookup t
 the question that actually gets asked: **I just shipped — where do I look to see if it
 broke?**
 
-| Application         | Primary deploy-impact signal                                                                            | Ours or Apple/Cloudflare-hosted | Latency to signal                      |
-| ------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------- | -------------------------------------- |
-| `webapp`            | RUM (`RUM_GENERATION=slicc-cli` / `slicc-electron`), see "Dashboard verification"                       | ours (Helix RUM)                | minutes (sampled)                      |
-| `node-server`       | RUM (CLI generation) + `GET /api/status` on the local port                                              | ours                            | immediate / minutes                    |
-| `chrome-extension`  | RUM (`RUM_GENERATION=slicc-extension`), no enhancer checkpoints                                         | ours (Helix RUM)                | minutes (sampled)                      |
-| `swift-launcher`    | RUM via `@slicc/swift-optel` (`packages/swift-optel/`)                                                  | ours (Helix RUM)                | minutes (sampled)                      |
-| `cloudflare-worker` | `GET /status`, Cloudflare Workers metrics, `cloudflare-spend` issue tripwire                            | Cloudflare + ours               | immediate / 1 day                      |
-| `swift-server`      | `GET /api/status` + `~/.slicc/logs/slicc-<day>.log`                                                     | local only, never leaves host   | immediate                              |
-| `ios-app`           | App Store Connect TestFlight processing state, then TestFlight Crashes & Feedback                       | Apple-hosted                    | minutes / days                         |
-| `slicc-cli`         | RUM via `@ai-ecoverse/go-optel` (`packages/go-optel/`) — launch + error only, see "CLI Telemetry" above | ours (Helix RUM)                | minutes (sampled), release builds only |
+| Application                      | Primary deploy-impact signal                                                                            | Ours or Apple/Cloudflare-hosted | Latency to signal                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------- | -------------------------------------- |
+| `webapp`                         | RUM (`RUM_GENERATION=slicc-cli` / `slicc-electron`), see "Dashboard verification"                       | ours (Helix RUM)                | minutes (sampled)                      |
+| `node-server`                    | RUM (CLI generation) + `GET /api/status` on the local port                                              | ours                            | immediate / minutes                    |
+| extension (slicc-extension repo) | RUM (`RUM_GENERATION=slicc-extension`), no enhancer checkpoints                                         | ours (Helix RUM)                | minutes (sampled)                      |
+| `swift-launcher`                 | RUM via `@slicc/swift-optel` (`packages/swift-optel/`)                                                  | ours (Helix RUM)                | minutes (sampled)                      |
+| `cloudflare-worker`              | `GET /status`, Cloudflare Workers metrics, `cloudflare-spend` issue tripwire                            | Cloudflare + ours               | immediate / 1 day                      |
+| `swift-server`                   | `GET /api/status` + `~/.slicc/logs/slicc-<day>.log`                                                     | local only, never leaves host   | immediate                              |
+| `ios-app`                        | App Store Connect TestFlight processing state, then TestFlight Crashes & Feedback                       | Apple-hosted                    | minutes / days                         |
+| `slicc-cli`                      | RUM via `@ai-ecoverse/go-optel` (`packages/go-optel/`) — launch + error only, see "CLI Telemetry" above | ours (Helix RUM)                | minutes (sampled), release builds only |
 
 The four rows below the fold are the ones with no dashboard pointer anywhere else in the
 docs. Each gets its own subsection. Where an application genuinely has no signal, that is

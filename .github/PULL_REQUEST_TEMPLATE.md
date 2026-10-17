@@ -79,12 +79,13 @@ fine — name them so reviewers don't conflate them with your changes.
 - [ ] `npm run typecheck`
 - [ ] `npm run test` — `<N>` passing, no new failures
 - [ ] `npm run build`
-- [ ] `npm run build -w @slicc/chrome-extension`
 - [ ] **New / changed behavior is covered by a unit test** in
       `packages/*/tests/` mirroring the changed `src/` path
       (e.g. `npx vitest run packages/webapp/tests/<area>/<file>.test.ts`)
 - [ ] Manual smoke (CLI): `npm run dev` + …
-- [ ] Manual smoke (extension): load unpacked `dist/extension/` + …
+- [ ] **Extension protocol change?** (`kernel/messages.ts`, offscreen/picker
+      clients, `shared-ts` bridge/fetch-proxy/secrets/cherry-panel) — link the
+      matching ai-ecoverse/slicc-extension PR
 - [ ] Manual smoke (Electron / Sliccstart / worker) — if relevant
 - [ ] **UI change?** Attach a screencast of what changed (**required** for UI
       changes). Record it with the `demo-recording` skill — a CDP screencast of

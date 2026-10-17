@@ -6,7 +6,7 @@ Repo navigation hub. Keep package details in the nearest package `CLAUDE.md` and
 
 Purposes per package: [`docs/root-details.md`](docs/root-details.md). Per-package internals: each `packages/<name>/CLAUDE.md`.
 
-- **Web / TS**: `packages/webapp/`, `packages/webcomponents/`, `packages/chrome-extension/`, `packages/cherry/`, `packages/spoon/`
+- **Web / TS**: `packages/webapp/`, `packages/webcomponents/`, `packages/cherry/`, `packages/spoon/` (the Chrome extension lives in [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension))
 - **Node / cloud**: `packages/node-server/`, `packages/cloudflare-worker/`, `packages/cloud-core/`, `packages/shared-ts/`, `packages/vfs-root/`, `packages/dev-tools/`, `packages/assets/`, `packages/github-workflow/`, `packages/bench/`
 - **Native (Swift / iOS / Go)**: `packages/swift-launcher/`, `packages/swift-server/`, `packages/swift-optel/`, `packages/swift-traysession/`, `packages/swift-trayfollower/`, `packages/swift-traykit/`, `packages/swift-widgetkit/`, `packages/ios-app/`, `packages/slicc-cli/`, `packages/go-optel/`
 
@@ -18,14 +18,13 @@ Other top-level: `docs/` (long-form docs + screenshots), `packages/*/tests/` (Vi
 npm install                              # Install dependencies (first time)
 npm run build                            # Production build (all workspaces)
 npm run build -w @slicc/webapp           # UI-only build (faster for UI changes)
-npm run build -w @slicc/chrome-extension # Chrome extension build into dist/extension/
 npm run test                             # Vitest run
 npm run typecheck                        # Browser + Node typecheck
 npm run dev                              # Thin /cdp bridge + Chrome (UI from hosted origin)
 ```
 
 Runtime-specific guides:
-[webapp](packages/webapp/CLAUDE.md) · [cherry](packages/cherry/CLAUDE.md) · [chrome-extension](packages/chrome-extension/CLAUDE.md) · [cloudflare-worker](packages/cloudflare-worker/CLAUDE.md) · [node-server](packages/node-server/CLAUDE.md) · [cloud-core](packages/cloud-core/CLAUDE.md) · [shared-ts](packages/shared-ts/CLAUDE.md) · [webcomponents](packages/webcomponents/CLAUDE.md) · [spoon](packages/spoon/CLAUDE.md) · [vfs-root](packages/vfs-root/CLAUDE.md) · [go-optel](packages/go-optel/CLAUDE.md) · [swift-launcher](packages/swift-launcher/CLAUDE.md) · [swift-optel](packages/swift-optel/CLAUDE.md) · [swift-server](packages/swift-server/CLAUDE.md) · [swift-traysession](packages/swift-traysession/CLAUDE.md) · [swift-trayfollower](packages/swift-trayfollower/CLAUDE.md) · [swift-traykit](packages/swift-traykit/CLAUDE.md) · [swift-widgetkit](packages/swift-widgetkit/CLAUDE.md) · [ios-app](packages/ios-app/CLAUDE.md) · [slicc-cli](packages/slicc-cli/CLAUDE.md) · [github-workflow](packages/github-workflow/CLAUDE.md) · [bench](packages/bench/CLAUDE.md) · [dev-tools](packages/dev-tools/CLAUDE.md) · [docs](docs/CLAUDE.md)
+[webapp](packages/webapp/CLAUDE.md) · [cherry](packages/cherry/CLAUDE.md) · [cloudflare-worker](packages/cloudflare-worker/CLAUDE.md) · [node-server](packages/node-server/CLAUDE.md) · [cloud-core](packages/cloud-core/CLAUDE.md) · [shared-ts](packages/shared-ts/CLAUDE.md) · [webcomponents](packages/webcomponents/CLAUDE.md) · [spoon](packages/spoon/CLAUDE.md) · [vfs-root](packages/vfs-root/CLAUDE.md) · [go-optel](packages/go-optel/CLAUDE.md) · [swift-launcher](packages/swift-launcher/CLAUDE.md) · [swift-optel](packages/swift-optel/CLAUDE.md) · [swift-server](packages/swift-server/CLAUDE.md) · [swift-traysession](packages/swift-traysession/CLAUDE.md) · [swift-trayfollower](packages/swift-trayfollower/CLAUDE.md) · [swift-traykit](packages/swift-traykit/CLAUDE.md) · [swift-widgetkit](packages/swift-widgetkit/CLAUDE.md) · [ios-app](packages/ios-app/CLAUDE.md) · [slicc-cli](packages/slicc-cli/CLAUDE.md) · [github-workflow](packages/github-workflow/CLAUDE.md) · [bench](packages/bench/CLAUDE.md) · [dev-tools](packages/dev-tools/CLAUDE.md) · [docs](docs/CLAUDE.md)
 
 ## External Handoffs
 
@@ -80,7 +79,7 @@ SLICC runs as standalone CLI (Express + Chrome), Chrome extension, Electron floa
 ## Key Conventions
 
 - **Tests**: `packages/*/tests/` mirrors `src/`. Vitest, `globals: true`, `environment: node`. `fake-indexeddb/auto` for VFS tests.
-- **Dual-mode compatibility**: features MUST work in CLI and extension. The thin extension runs no dynamic code — UI, sprinkles/dips, JS realms, WASM all run in the hosted leader tab / kernel worker; extension assets load via `chrome.runtime.getURL()`.
+- **Dual-mode compatibility**: features MUST work in CLI and extension. The thin extension runs no dynamic code — UI, sprinkles/dips, JS realms, WASM all run in the hosted leader tab / kernel worker; extension assets load via `chrome.runtime.getURL()`. The extension itself is in `ai-ecoverse/slicc-extension`: an extension-protocol change in webapp (`kernel/messages.ts`, offscreen/picker clients) or `shared-ts` must also land there.
 - **Extension detection**: `isChromeExtensionRealm()` from `@slicc/shared-ts` (lint-gated).
 - **Model ID aliases**: use pi-ai aliases (e.g., `claude-opus-4-6`), not dated snapshot IDs.
 - **Developer vs agent CLAUDE.md**: developer-facing `CLAUDE.md` lives at repo root and each package. Agent-facing runtime `CLAUDE.md` is `packages/vfs-root/shared/CLAUDE.md` (bundled as `/shared/CLAUDE.md`). Tier table: [`docs/CLAUDE.md`](docs/CLAUDE.md).

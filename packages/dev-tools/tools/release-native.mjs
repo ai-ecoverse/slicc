@@ -444,7 +444,7 @@ export const NON_GATING_STEP_TIMEOUT_MS = 25 * 60 * 1000;
  * TestFlight archiving/upload is distribution, not build correctness (CI
  * builds and tests iOS on every PR): a signing regression on Apple's side
  * — a provisioning profile losing the iCloud capability, an expired cert —
- * would otherwise hold the worker, extension, and macOS publishes hostage.
+ * would otherwise hold the worker and macOS publishes hostage.
  * On 2026-08-02 exactly that produced 16 consecutive silent red releases
  * with a day of merged web work unshipped. The failure stays loud (a
  * GitHub Actions error annotation that surfaces on the run summary), the

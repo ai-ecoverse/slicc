@@ -5,8 +5,9 @@ name: Renovate Bundle-Size Reconcile
 # never automerges. #3424 (codemirror, +163 B), #3449 (mediabunny, +3.19 kB)
 # and #3455 (lucide, +5.49 kB) all stalled that way while the webapp total-JS
 # budget was re-measured to the byte by every feature PR. That budget now has
-# MiB-scale headroom, but the extension budgets are still tight (the service
-# worker sits within ~0.2 kB of 60 kB), so this stays as the backstop.
+# MiB-scale headroom, so this rarely fires; it stays as the backstop for any
+# tighter budget added later. (The extension budgets that kept it busy moved
+# to ai-ecoverse/slicc-extension with the extension.)
 #
 # This workflow builds a Renovate PR exactly like the CI `bundle-size` job,
 # and when a budget is exceeded by at most MAX_GROWTH_KB it raises the budget
@@ -90,10 +91,6 @@ jobs:
         env:
           NODE_OPTIONS: '--max-old-space-size=6144'
 
-      - name: Build extension
-        if: steps.scope.outputs.npm == 'true'
-        run: npm run build -w @slicc/chrome-extension
-
       - name: Raise exceeded budgets
         id: raise
         if: steps.scope.outputs.npm == 'true'
@@ -108,7 +105,7 @@ jobs:
             echo "outcome=blocked" >> "$GITHUB_OUTPUT"
           elif [ "$status" -ne 0 ]; then
             exit "$status"
-          elif git diff --quiet -- packages/webapp/package.json packages/chrome-extension/package.json; then
+          elif git diff --quiet -- packages/webapp/package.json; then
             echo "outcome=unchanged" >> "$GITHUB_OUTPUT"
           else
             echo "outcome=raised" >> "$GITHUB_OUTPUT"
@@ -121,7 +118,6 @@ jobs:
         if: steps.raise.outputs.outcome == 'raised'
         run: |
           (cd packages/webapp && npx size-limit)
-          (cd packages/chrome-extension && npx size-limit)
 
       - name: Comment a blocked raise
         if: steps.raise.outputs.outcome == 'blocked'
@@ -162,6 +158,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add packages/webapp/package.json packages/chrome-extension/package.json
+          git add packages/webapp/package.json
           git commit -m "chore(deps): raise bundle-size budget for dependency bump (renovate-bundle-size-reconcile)"
           git push

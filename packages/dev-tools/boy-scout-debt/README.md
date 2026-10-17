@@ -17,9 +17,9 @@ Authoritative procedure:
 [`.agents/skills/verifying-before-push/SKILL.md`](../../../.agents/skills/verifying-before-push/SKILL.md).
 Gate: [`../tools/check-touched-exemptions.mjs`](../tools/check-touched-exemptions.mjs).
 
-| Category id       | Source                                                                                                                                                                  |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `layer-back-edge` | [`../tools/layer-back-edge-baseline.json`](../tools/layer-back-edge-baseline.json) (+ `layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json`) |
+| Category id       | Source                                                                                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `layer-back-edge` | [`../tools/layer-back-edge-baseline.json`](../tools/layer-back-edge-baseline.json) (+ `layer-back-edge-baseline-{node-server,cloudflare-worker}.json`) |
 
 Paid down to zero and **retired from this dispatcher** (the empty ratchets stay in `check-touched-exemptions.mjs` so they cannot grow again): `function-size`, `cognitive-complexity`, `floating-promise`, `misused-promise`, `record-string-unknown`.
 

@@ -118,7 +118,7 @@ export interface SecretsPipelineOpts {
 
 /**
  * Stateful unmask/scrub pipeline shared between node-server's /api/fetch-proxy
- * and the chrome-extension SW's fetch-proxy.fetch Port handler.
+ * and the extension SW's fetch-proxy.fetch Port handler (ai-ecoverse/slicc-extension).
  *
  * Public surface has four method families:
  *

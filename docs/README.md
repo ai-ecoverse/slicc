@@ -32,7 +32,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 | Scoops Orchestrator | `packages/webapp/src/scoops/`          | `orchestrator.ts`               | Multi-agent system (cone + scoops), message routing                            |
 | UI                  | `packages/webapp/src/ui/`              | `main.ts`                       | Vanilla TS layout: Chat + Terminal + Browser Preview                           |
 | CLI Server          | `packages/node-server/src/`            | `index.ts`                      | Express + CDP WebSocket proxy, Chrome launcher                                 |
-| Extension           | `packages/chrome-extension/src/`       | `service-worker.ts`             | Chrome Manifest V3 extension (side panel)                                      |
+| Extension           | ai-ecoverse/slicc-extension            | `service-worker.ts`             | Chrome Manifest V3 extension (side panel), developed in its own repo           |
 | Sprinkles           | `packages/webapp/src/ui/sprinkle-*.ts` | `sprinkle-manager.ts`           | Composable `.shtml` panels with agent bridge API                               |
 
 ## Active Scoop Tool Surface
@@ -54,6 +54,6 @@ SLICC uses ice cream terminology to describe its multi-agent system:
 - **Licks**: External events (webhooks, cron tasks) that trigger scoops. Unified under `LickManager` and `LickEvent`. Shell commands: `webhook`, `crontask`. A lick arrives, the scoop reacts — no human in the loop.
 - **Floats**: Runtime environments. Four are tracked:
   - **CLI float**: Node.js/Express + Chrome. Code: `packages/node-server/src/`.
-  - **Extension float**: Chrome extension side panel, zero server. Code: `packages/chrome-extension/src/`.
+  - **Extension float**: Chrome extension side panel, zero server. Code: [ai-ecoverse/slicc-extension](https://github.com/ai-ecoverse/slicc-extension) (this repo keeps the webapp client side of its protocol).
   - **Electron float**: Electron BrowserWindow + hosted webapp overlay + serve-only CLI reuse. Code: `packages/node-server/src/electron-main.ts`.
   - **Cloud float**: Planned — Cloudflare Containers or E2B sandboxes.

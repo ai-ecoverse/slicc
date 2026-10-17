@@ -2,7 +2,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { FetchProxyRequestMsg, FetchProxyResponseMsg } from '../src/fetch-proxy-protocol.js';
 
 // The fetch-proxy request/response shapes are the wire contract spoken across
-// the `@slicc/webapp` page/SW side and the `@slicc/chrome-extension` backend.
+// the `@slicc/webapp` page/SW side and the extension backend (now in
+// ai-ecoverse/slicc-extension).
 // They live here — in the platform-agnostic layer both packages already depend
 // on — so neither package reaches *up* into the other for a duplicate copy
 // (the cross-package cycle removed in this change). This test pins the shape so

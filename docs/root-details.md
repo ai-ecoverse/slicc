@@ -9,7 +9,6 @@ this file when a category grows; keep the root file to bare titles.
 | ------------------------------ | --------------------------------------------------------------------------------------------- |
 | `packages/webapp/`             | Browser app core (UI, VFS, shell, CDP, tools, providers, skills, scoops)                      |
 | `packages/cherry/`             | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader                     |
-| `packages/chrome-extension/`   | Manifest V3 extension entry points, HTML shells, message bridges                              |
 | `packages/cloudflare-worker/`  | Tray hub worker: sessions, signaling, TURN, `sliccy.ai/cloud` dashboard                       |
 | `packages/node-server/`        | Node CLI/Electron server: Chrome launch, CDP proxy, dev serve, hosted-leader                  |
 | `packages/cloud-core/`         | `@slicc/cloud-core` — sandbox-lifecycle lib (worker + `node-server --cloud`)                  |
@@ -49,7 +48,7 @@ Numbering matches the root checklist. Full catalog:
 9. **Origin/bridge routing** — `fetch('/api/...')` must work in thin-bridge
    mode; normalize trailing slashes.
 10. **Layer import direction** — no imports up a documented layer stack
-    (webapp, node-server, chrome-extension, cloudflare-worker); move pure
+    (webapp, node-server, cloudflare-worker); move pure
     helpers down. Webapp also flags `scoops/` value-importing `kernel/`.
     Enforced by `npm run lint:layer-back-edges`. Swift: SPM modules +
     `public` surface; widgets must not import WebRTC

@@ -72,19 +72,6 @@
         "quickjs-wasi"
       ]
     },
-    "packages/chrome-extension": {
-      "entry": [
-        "vite.config.ts!",
-        "src/service-worker.ts!",
-        "src/sidepanel-entry.ts!",
-        "src/secrets-entry.ts!",
-        "voice-popup.js!",
-        "tests/**/*.test.ts"
-      ],
-      "project": ["src/**/*.{ts,js}!", "tests/**/*.ts"],
-      "ignore": ["src/chrome.d.ts"],
-      "ignoreDependencies": ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]
-    },
     "packages/node-server": {
       "entry": [
         "src/index.ts!",

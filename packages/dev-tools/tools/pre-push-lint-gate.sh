@@ -81,7 +81,6 @@ run_check "custom-lints" bash -c '
 
 # CI-only steps (not in lint:ci)
 run_check "boy-scout-debt" node packages/dev-tools/tools/check-touched-exemptions.mjs
-run_check "manifest" bash packages/dev-tools/tools/check-manifest-justifications.sh
 
 # Dead-code detection (two independent knip passes, pinned local binary)
 run_check "deadcode" "$BIN/knip" --include files,dependencies,devDependencies,unlisted,binaries,unresolved,duplicates --no-progress --reporter compact

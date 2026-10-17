@@ -507,8 +507,7 @@ export default defineConfig(({ mode }) => ({
     stubPiNodeInternalsPlugin(),
     buildWebappRuntimeAssetsPlugin(),
     // Sanitize the unpkg ffmpeg-core URL literal that @ffmpeg/ffmpeg bakes
-    // into its wrapper-worker chunk. Same plugin the extension config uses
-    // against dist/extension/ — runs in closeBundle after every other plugin
+    // into its wrapper-worker chunk. Runs in closeBundle after every other plugin
     // (including the esbuild closeBundle hooks above) has written output.
     stripFfmpegCoreCdnLiteralPlugin(),
   ],

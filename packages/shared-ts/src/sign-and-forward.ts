@@ -10,8 +10,8 @@
  * to upstream, and returns a JSON-cloneable reply.
  *
  * `executeS3SignAndForward` / `executeDaSignAndForward` are consumed by:
- *   - `packages/chrome-extension/src/service-worker.ts` (extension path,
- *     reads from `chrome.storage.local`)
+ *   - ai-ecoverse/slicc-extension `six/extension/service-worker.ts`
+ *     (extension path, reads from `chrome.storage.local`)
  *   - `packages/node-server/src/secrets/sign-and-forward.ts` (CLI path,
  *     wraps these in Express handlers via a SecretStore adapter)
  *   - tests in `packages/shared-ts/tests/sign-and-forward.test.ts`

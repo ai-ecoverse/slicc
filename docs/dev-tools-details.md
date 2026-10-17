@@ -595,7 +595,6 @@ each with its own layer order and baseline file:
 | ------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------- |
 | `webapp`            | `fs → shell/git → cdp → tools → core → scoops → ui`                                  | `layer-back-edge-baseline.json`                   |
 | `node-server`       | `transport → services → entry`                                                       | `layer-back-edge-baseline-node-server.json`       |
-| `chrome-extension`  | `shared/page → sw → entry`                                                           | `layer-back-edge-baseline-chrome-extension.json`  |
 | `cloudflare-worker` | `shared/links/auth → routes → entry` (routes are peer-isolated: no sideways imports) | `layer-back-edge-baseline-cloudflare-worker.json` |
 
 Pre-existing back-edges are grandfathered per file in the matching
@@ -616,10 +615,7 @@ them through would reopen the same wrong-direction dependency. A new asset mode
 is a conscious decision; the gate fails closed. Shared code belongs in
 `@slicc/shared-ts`, imported by package name.
 
-A third zero-tolerance pass flags `packages/chrome-extension` (`src/` and
-`tests/`) importing FROM `packages/webapp/src` (#2276 slice E, #3047), except a
-top-level `import type { ... }` clause from `kernel/messages.js`. Value imports
-are not exempt, including from tests. A fourth pass
+A third zero-tolerance pass
 (`scanWebcomponentsWebappEscapes`, #3027) flags `packages/webcomponents`
 (`src/` and `tests/`) importing FROM `packages/webapp/src` — no type-only
 exemption. webcomponents is a leaf library; the climb inverts the stack.
@@ -870,7 +866,7 @@ when unset or empty, existing SDK-runtime selection remains unchanged.
 
 ## fresh-dev-harnesses
 
-Five harness scripts bring up isolated dev environments on distinct
+Four harness scripts bring up isolated dev environments on distinct
 ports so they can run concurrently. Port-selection, reaping, and
 LaunchServices lifecycle are covered in
 [`docs/development.md`](development.md) § "Fresh Dev Harness Details".
@@ -879,12 +875,12 @@ LaunchServices lifecycle are covered in
 | -------------------------------------------- | ------------------ | ------- | ----------------------------- |
 | Standalone `dev-standalone-fresh.sh`         | `:$PORT` (`:5715`) | auto    | fails on occupied bridge      |
 | Swift `dev-swift-fresh.sh`                   | `:5720`            | `:9224` | native; auto-signs with cert  |
-| Extension `dev-extension-fresh.sh`           | (SW)               | `:9333` | MV3 extension IS the bridge   |
 | Electron-Node `dev-electron-node-fresh.sh`   | `:5730`            | `:9225` | external Electron app (Slack) |
 | Electron-Swift `dev-electron-swift-fresh.sh` | `:5740`            | `:9226` | Swift backend + Electron      |
 
 Run via `npm run dev:standalone:fresh` (also `dev:swift:fresh`,
-`dev:extension:fresh`, `dev:electron:{node,swift}:fresh`); override with
+`dev:electron:{node,swift}:fresh`; the extension harness moved to
+ai-ecoverse/slicc-extension); override with
 `PORT`/`WRANGLER_PORT`/`ELECTRON_APP`. Darwin helpers:
 `clone-labeled-chrome.sh` (APFS COW-clone, distinct bundle name/id for
 ⌘-Tab entries), `tools/setup-dev-cert.sh` (one-time self-signed
@@ -1069,7 +1065,7 @@ output (the square grid is locked at 1:1.595; DTG printing wants
 
 `packages/dev-tools/tools/release-plan.mjs` (Linux preflight) +
 `release-native.mjs` gate macOS/iOS packaging, the `slicc` Go CLI
-(`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store / worker
+(`packages/slicc-cli/sign-and-package.sh`), the worker
 publish, `@ai-ecoverse/biome-jsh`, and `@ai-ecoverse/cherry`.
 
 `tools/merge-queue-busy.mjs` (+ `merge-queue-lib.mjs`) defers Release

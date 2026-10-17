@@ -2,8 +2,8 @@
 # dev-electron-node-fresh — attach the node-server thin-bridge to an external
 # Electron app (Slack/Discord/Teams/…) against the hosted webapp, with a clean
 # bridge process and a freshly relaunched target app.  The node sibling of
-# dev-electron-swift-fresh.sh; both mirror dev-standalone-fresh.sh / dev-swift-
-# fresh.sh / dev-extension-fresh.sh.
+# dev-electron-swift-fresh.sh; both mirror dev-standalone-fresh.sh /
+# dev-swift-fresh.sh.
 #
 # Unlike the standalone floats there is NO Chrome for Testing here: node-server
 # ATTACHES to the Electron app's own renderer over CDP and injects the overlay,

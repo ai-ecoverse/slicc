@@ -8,7 +8,7 @@
  *
  * Consumers: `packages/node-server/src/bridge-security.ts` (server gate),
  * `packages/webapp/src/ui/boot/bridge-launch-params.ts` (leader boot),
- * `packages/chrome-extension/src/bridge-sw.ts` (SW port allowlist),
+ * ai-ecoverse/slicc-extension `six/extension/bridge-sw.ts` (SW port allowlist),
  * `packages/webapp/src/ui/llm-proxy-sw.ts` (header pass-through).
  * Swift mirror: `packages/swift-server/Sources/Server/BridgeSecurity.swift`
  * — update it when these values change.

@@ -194,34 +194,6 @@ export default defineConfig({
       },
       {
         extends: true,
-        define: {
-          // Extension code transitively imports webapp modules (e.g.
-          // offscreen-bridge → tray-leader → core/logger), which read
-          // __DEV__ at module load. Without this, those tests fail to
-          // import with `ReferenceError: __DEV__ is not defined`.
-          __DEV__: 'true',
-          // The extension build defines __SLICC_EXT_DEV__ from the
-          // SLICC_EXT_DEV env var (see vite.config.ts). Tests default to
-          // the production value (`false`) so module-level constants
-          // resolve to hosted URLs; resolver helpers are exercised in
-          // both modes through their parameterized API.
-          __SLICC_EXT_DEV__: 'false',
-          // Extension tests transitively import webapp modules; keep the
-          // wasm version constants defined so those imports don't throw.
-          ...wasmVersionDefines,
-          __SLICC_BUILD_ID__: JSON.stringify('test-build'),
-        },
-        test: {
-          name: 'chrome-extension',
-          include: ['packages/chrome-extension/tests/**/*.test.ts'],
-          // Service-worker lifecycle and leader-tab reconciliation tests drive
-          // timer- and message-ordering-sensitive state machines over mocked
-          // `chrome.*` APIs. Retry only in CI so local runs still fail fast.
-          retry: CI_RETRIES,
-        },
-      },
-      {
-        extends: true,
         test: {
           name: 'cloudflare-worker',
           include: ['packages/cloudflare-worker/tests/**/*.test.ts'],

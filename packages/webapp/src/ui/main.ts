@@ -20,8 +20,8 @@ import { createLogger } from '../core/index.js';
 import { hasChromeRuntimeConnect, isExtensionRealm } from '../core/runtime-env.js';
 import { initTelemetry } from '../kernel/telemetry.js';
 // Auto-discover and register all providers (built-in + external).
-// IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
-// — the extension agent engine runs in the offscreen document, not in this file.
+// IMPORTANT: The extension's offscreen document (ai-ecoverse/slicc-extension)
+// must register providers too — its agent engine does not run this file.
 import { registerProviders } from '../providers/index.js';
 import {
   assertLocalBridgeAcceptsToken,
@@ -133,7 +133,7 @@ async function main(): Promise<void> {
   // Initialize RUM telemetry for the page/panel realm — `trackShellCommand`,
   // `trackChatSubmit`, sprinkle `viewblock`, settings `signup`, and panel JS
   // `error` are silent no-ops until `sampleRUM` is bound here. Mirrors the
-  // offscreen init (see chrome-extension/src/offscreen.ts). Skipped for the
+  // extension's offscreen init (ai-ecoverse/slicc-extension). Skipped for the
   // `?connect=1` login-only surface, which has no kernel and no shell.
   // Fire-and-forget — telemetry init must never block the boot.
   if (runtimeMode !== 'connect') {

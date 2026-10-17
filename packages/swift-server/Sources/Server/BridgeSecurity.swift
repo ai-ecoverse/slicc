@@ -163,9 +163,9 @@ enum BridgeSecurity {
         return (corsBaseAllowHeaders + extras).joined(separator: ", ")
     }
 
-    /// Coarse rejection reason — mirrors `validateBridgePin` in the chrome-extension
-    /// bridge SW and `bridge-security.ts`'s `reason` field. Intentionally does not
-    /// tell the caller WHICH check failed.
+    /// Coarse rejection reason — mirrors `validateBridgePin` in the extension
+    /// bridge SW (ai-ecoverse/slicc-extension) and `bridge-security.ts`'s
+    /// `reason` field. Intentionally does not tell the caller WHICH check failed.
     enum RejectionReason: String, Sendable {
         case originNotAllowed = "origin-not-allowed"
         case subprotocolMissingOrMismatched = "subprotocol-missing-or-mismatched"

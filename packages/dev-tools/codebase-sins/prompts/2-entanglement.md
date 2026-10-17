@@ -8,7 +8,7 @@ The package boundaries in `CLAUDE.md` define the intended layering. Hunt for
 imports that violate it:
 
 - Documented layer stacks (webapp `fs → shell/git → cdp → tools → core → scoops → ui`;
-  node-server `transport → services → entry`; chrome-extension `shared/page → sw → entry`;
+  node-server `transport → services → entry`;
   cloudflare-worker `shared/links/auth → routes → entry`) are lint-blocked
   (`npm run lint:layer-back-edges`). Grandfathered back-edges live in
   `packages/dev-tools/tools/layer-back-edge-baseline.json` and the per-package

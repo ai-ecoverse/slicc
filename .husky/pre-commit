@@ -17,7 +17,7 @@ fi
 # Layer-stack back-edge ratchet: when a gated package's source (or a baseline)
 # is staged, fail on any NEW import pointing up that package's layer stack.
 # Sub-second scan; the same gate runs in `npm run lint` / `lint:ci` and pre-push.
-if git diff --cached --name-only | grep -qE '^(packages/(webapp|node-server|chrome-extension|cloudflare-worker)/src/|packages/dev-tools/tools/layer-back-edge-baseline)'; then
+if git diff --cached --name-only | grep -qE '^(packages/(webapp|node-server|cloudflare-worker)/src/|packages/dev-tools/tools/layer-back-edge-baseline)'; then
   node packages/dev-tools/tools/check-layer-back-edges.mjs
 fi
 

@@ -788,8 +788,9 @@ export function getAccounts(): Account[] {
  * newly-added domain on an existing token, reload the page so
  * `oauth-bootstrap` re-pushes the replica with the merged list.
  *
- * Storage impl lives in `@slicc/shared-ts` so the chrome-extension options
- * page (`secrets-entry.ts`) and the side panel share a single parser. The
+ * Storage impl lives in `@slicc/shared-ts` so the extension's options page
+ * (`secrets-entry.ts`, ai-ecoverse/slicc-extension) and the side panel share
+ * a single parser. The
  * shared module accepts a `LocalStorageLike` for DI; we bind it to the
  * page's `localStorage`. The standalone kernel-worker reads the same key
  * via its Map-backed shim (`kernel-worker.ts:installLocalStorageShim`),

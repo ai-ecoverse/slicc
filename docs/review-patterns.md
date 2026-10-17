@@ -135,7 +135,7 @@ state explicitly in the PR why a runtime is excluded; add a cross-runtime test w
 - CDP operations without validating the target / connection is live.
 - A CDP port read from disk or input and trusted without validation.
 - An extension-bridge CDP path (command or `chrome.debugger` event) that skips
-  the tab's `TabShield` (`packages/chrome-extension/src/cdp-shield.ts`), or a
+  the tab's `TabShield` (the extension's `cdp-shield.ts`, ai-ecoverse/slicc-extension), or a
   `Fetch.enable` / `Fetch.disable` that replaces the shield's backend-owned
   Document pattern instead of merging with it.
 
@@ -364,9 +364,6 @@ must be refused. Extension pages opened in a tab (e.g. `secrets.html` with
   - **node-server** `transport → services → entry` — `cdp-proxy/`, `bridge-security.ts`,
     `http-keepalive.ts` and the other transport leaves must not import services or
     `index.ts` / `*-main.ts`.
-  - **chrome-extension** `shared/page → sw → entry` — page entries (`sidepanel-entry.ts`,
-    `secrets-entry.ts`) and shared helpers must not import `*-sw.ts` / `bridge-sw.ts`;
-    SW modules must not import `service-worker.ts`.
   - **cloudflare-worker** `shared/links/auth → routes → entry` — helpers must not import
     route modules or `index.ts`; route modules must not import each other sideways.
 - The tell-tale disguise: the imported symbol is a **pure helper** (a parser, a data
@@ -404,26 +401,6 @@ isTrayExtension = getChromeExtensionRealm` and the like). Privileged float
   (`base/api-endpoint.ts` / `shell/proxied-fetch.ts`) followed by property
   access (`api.getChromeExtensionRealm()`), or a dynamic `import()` of one of
   those same mixed modules followed by property access.
-- A relative import in `packages/chrome-extension` (`src/` or `tests/`) reaching
-  into `packages/webapp/src` (#2276 slice E, #3047). This is the _reciprocal_ of
-  the cross-package-escape check above: it catches the thin extension depending
-  on webapp's runtime instead of the other direction. Value imports, dynamic
-  `import()` (quoted, template-literal, or `+`-concatenated), mixed `{ type
-X, Y }` clauses, `export type { ... } from` re-exports, namespace/default
-  imports, and TS triple-slash `/// <reference path="..." />` directives are
-  all banned outright — including from `tests/`. **Only a top-level `import
-type { ... } from '.../kernel/messages.js'` clause is granted** — nothing
-  else, including a type-only import of any OTHER webapp module, or a
-  type-only import of `kernel/messages.js` in any other shape (mixed, `export
-type`, namespace). That one exemption exists because it compiles away
-  entirely, so it carries no runtime/bundle coupling, which is what this
-  category's exit criterion is about; the message-envelope union it names is
-  core webapp-internal kernel infrastructure (11+ webapp files), not
-  extension-specific, so moving it would invert the dependency for no
-  bundle-coupling benefit. CI-enforced by `check-layer-back-edges.mjs`'s
-  `findChromeExtensionWebappEscapes` / `scanChromeExtensionWebappEscapes` —
-  zero tolerance, no baseline, scan roots `src` and `tests`, and the
-  allowlist names exactly one path in exactly one clause shape.
 - A relative import in `packages/webcomponents` (`src/` or `tests/`) reaching
   into `packages/webapp/src` (#3027). webcomponents is a leaf library that
   webapp depends on; climbing the other way is a package cycle, undeclared in
@@ -476,8 +453,8 @@ host-command.ts` reaching three rungs up into `scoops/` for the tray status read
   `base/` at `node-server/src/tray-url-shared.ts`, so the webapp's _bottom_ rung depended on
   the Node CLI package. Pure helpers, wrong package. Moving them to `@slicc/shared-ts` flipped
   the arrow; the gate now scans for the escape so the class cannot recur.
-- **#2276 slice E** — the reciprocal cross-package form: `packages/chrome-extension/src`
-  imported six pure protocol modules (`cdp/extension-bridge-protocol`, the `cdp/types`
+- **#2276 slice E** — the reciprocal cross-package form: the extension package's `src/`
+  (since moved to ai-ecoverse/slicc-extension) imported six pure protocol modules (`cdp/extension-bridge-protocol`, the `cdp/types`
   `TargetInfo` subset, `shell/proxy-headers`, `net/discovery-link`, `net/well-known-probe`,
   `net/handoff-link`, plus the transitively-required `net/link-header`) and the
   `LEADER_EXT_ID_QUERY_NAME` constant straight out of `packages/webapp/src`. Moved to
@@ -485,13 +462,13 @@ host-command.ts` reaching three rungs up into `scoops/` for the tray status read
   caller's import path changed. The 12 `kernel/messages.ts` types `service-worker.ts` needs
   stayed put and stayed `import type` — this category's exit criterion is closed with this
   slice.
-- **Issue #3047** — the same reciprocal form as #2276 slice E, in
-  `packages/chrome-extension/tests/` rather than `src/`. Four test files
-  imported `EXTENSION_BRIDGE_*` and `isExtensionMessage` from
-  `packages/webapp/src`; `scanChromeExtensionWebappEscapes` only walked
-  `src/`, so the climbs were invisible. Constants already lived in
-  `@slicc/shared-ts`; the value guard moved there too. The gate now scans
-  `src` and `tests`, matching the webcomponents pass from #3027 / PR #3033.
+- **Issue #3047** — the same reciprocal form as #2276 slice E, in the extension
+  package's `tests/` rather than `src/`. Four test files imported
+  `EXTENSION_BRIDGE_*` and `isExtensionMessage` from `packages/webapp/src`.
+  Constants already lived in `@slicc/shared-ts`; the value guard moved there
+  too. That extension-side gate left with the extension (ai-ecoverse/slicc-extension);
+  the protocol modules it protected still live in `@slicc/shared-ts` and webapp,
+  so a change to them must also land in slicc-extension.
 - **Issue #3027** — the library-cycle form: three `packages/webcomponents` files
   (`src/memory/*.stories.ts` and `tests/memory/slicc-memory-panel.test.ts`) imported
   `createMemoryRows` from `packages/webapp/src/ui/wc/wc-memory.ts`. The helper belonged
@@ -517,7 +494,7 @@ from both sides, so one wrong-direction edge becomes two correct ones.
 Deterministic enforcement: `npm run lint:layer-back-edges`
 (`packages/dev-tools/tools/check-layer-back-edges.mjs`) fails on any back-edge not in the
 matching frozen baseline (`layer-back-edge-baseline.json` for webapp,
-`layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json` for the
+`layer-back-edge-baseline-{node-server,cloudflare-worker}.json` for the
 other TS apps); each baseline is a one-way ratchet — shrink it, never grow it. Reviewers
 do not need to eyeball import direction in those packages — the gate is the spec. The same
 gate fails on any relative import that escapes `packages/webapp/src` into a sibling package —

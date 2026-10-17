@@ -66,7 +66,7 @@ describe('applyRatchet', () => {
     const thresholds = {
       typescript: {
         webapp: { lines: 71, statements: 69, functions: 70, branches: 60 },
-        'chrome-extension': {
+        'node-server': {
           lines: 69,
           statements: 67,
           functions: 62,
@@ -79,14 +79,14 @@ describe('applyRatchet', () => {
     const measured = {
       typescript: {
         webapp: { lines: 72.9, statements: 69.1, functions: 70.0, branches: 60.0 },
-        'chrome-extension': { lines: 69.0, statements: 67.0, functions: 62.0, branches: 56.0 },
+        'node-server': { lines: 69.0, statements: 67.0, functions: 62.0, branches: 56.0 },
       },
       swift: { 'swift-server': { lines: 55.7, functions: 53.0, regions: 49.9 } },
     };
     const { thresholds: next, changes } = applyRatchet(thresholds, measured);
 
     expect(next.typescript.webapp.lines).toBe(72);
-    expect(next.typescript['chrome-extension'].coverageExclude).toEqual(['**/dist/**']);
+    expect(next.typescript['node-server'].coverageExclude).toEqual(['**/dist/**']);
     expect(next.swift['swift-server']).toEqual({ lines: 55, functions: 53, regions: 49 });
     expect(thresholds.typescript.webapp.lines).toBe(71); // input not mutated
     expect(changes.map((c) => `${c.package}.${c.metric}`)).toEqual([

@@ -19,14 +19,13 @@ npm run typecheck
 npm run test
 npm run test:coverage
 npm run build
-npm run build -w @slicc/chrome-extension
 npm run bundle-size
 node packages/dev-tools/tools/check-touched-exemptions.mjs
 ```
 
 Run `npm run verify` first because formatting is the most common CI failure. Do not omit the
 separate `check-touched-exemptions.mjs` command: `npm run verify` does not include it.
-`npm run bundle-size` needs both builds to have run first — it measures files in `dist/`.
+`npm run bundle-size` needs the build to have run first — it measures files in `dist/`.
 
 ## Pre-push lint gate (automatic)
 
@@ -55,8 +54,7 @@ npm run typecheck
 npm run test
 npm run test:coverage                  # Enforces minimum coverage thresholds
 npm run build
-npm run build -w @slicc/chrome-extension
-npm run bundle-size                    # Bundle budgets; needs the builds above
+npm run bundle-size                    # Bundle budgets; needs the build above
 ```
 
 The `check-touched-exemptions.mjs` gate runs right after lint because it catches
@@ -71,7 +69,7 @@ fail on the `no-comment` benchmark branch), `lint:skills` (tessl `SKILL.md` lint
 `lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
 `lint:layer-back-edges` (no new imports pointing up a per-package layer stack —
 baseline-ratcheted; fix the layering, never grow `layer-back-edge-baseline.json` or
-`layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json`),
+`layer-back-edge-baseline-{node-server,cloudflare-worker}.json`),
 `lint:no-float-probes` (the ten names in `check-no-float-probes.mjs`'s `FLOAT_PROBE_NAMES` —
 `isExtensionRealm`, `isChromeExtensionRealm`, `hasLocalNodeServer`, `resolveFloatTopology`,
 `getChromeExtensionRealm`, `setChromeExtensionRealm`, `hasChromeRuntimeConnect`,
@@ -106,8 +104,8 @@ that skip the pre-commit hook (GitHub web UI, Copilot Autofix). Fix: `npm run li
 lines exceed the `threshold` there. It is chained into both `lint` and `lint:ci`, so the CI
 `lint` job and the pre-push gate both enforce it — there is no separate CI job.
 
-Coverage spans all eight shipped applications: TypeScript/JS for `packages/webapp`,
-`packages/node-server`, `packages/chrome-extension` and `packages/cloudflare-worker`, Swift
+Coverage spans all seven shipped applications: TypeScript/JS for `packages/webapp`,
+`packages/node-server` and `packages/cloudflare-worker`, Swift
 for `packages/swift-launcher`, `packages/swift-server` and `packages/ios-app`, and Go for
 `packages/slicc-cli`.
 
@@ -167,9 +165,8 @@ what the `go-optel` and `slicc-cli` CI jobs invoke.
 
 ## Bundle-size budgets (`bundle-size`)
 
-`npm run bundle-size` runs size-limit for the two Vite-bundled browser apps. Budgets live in
-the `size-limit` block of [`packages/webapp/package.json`](../../../packages/webapp/package.json)
-and [`packages/chrome-extension/package.json`](../../../packages/chrome-extension/package.json),
+`npm run bundle-size` runs size-limit for the Vite-bundled webapp. Budgets live in
+the `size-limit` block of [`packages/webapp/package.json`](../../../packages/webapp/package.json),
 next to the code they guard, and are measured on raw (non-brotli) bytes.
 
 The webapp `size` script also runs
@@ -226,9 +223,8 @@ alone would let many small under-threshold changes creep upward forever. They ar
 deliberate cold-boot limit, **not** a number to nudge when a build goes red: tighten them
 freely as payloads shrink, and raise one only with a reason in the PR body.
 
-It reads built output, so run `npm run build` and
-`npm run build -w @slicc/chrome-extension` first. CI enforces it in the `bundle-size` job,
-which builds both apps itself.
+It reads built output, so run `npm run build` first. CI enforces it in the `bundle-size`
+job, which builds the webapp itself.
 
 The size-limit budgets are ratchets like the duplication threshold: tighten them as payloads
 shrink. Raising one needs a justification in the PR body.
@@ -261,10 +257,10 @@ The gate enforces seven "debt lists" of files grandfathered out of a rule:
 - `nursery.noMisusedPromises` (`biome.json` `overrides`; promises cannot stand in for
   synchronous callbacks or conditions)
 - Layer-stack back-edges (`packages/dev-tools/tools/layer-back-edge-baseline.json` and
-  `layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json`; cap:
+  `layer-back-edge-baseline-{node-server,cloudflare-worker}.json`; cap:
   **0** new imports pointing up the matching stack — webapp
   `fs → shell/git → cdp → tools → core → scoops → ui`, node-server
-  `transport → services → entry`, chrome-extension `shared/page → sw → entry`,
+  `transport → services → entry`,
   cloudflare-worker `shared/links/auth → routes → entry`)
 - Float/topology probes (`packages/dev-tools/tools/float-probe-baseline.json`; cap: **0**
   reads of the ten names in `check-no-float-probes.mjs`'s `FLOAT_PROBE_NAMES` plus the raw
@@ -405,8 +401,8 @@ If local checks pass but CI still fails, inspect
 [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml). The `cloudflare-worker`
 job runs `wrangler deploy --dry-run`. This rarely trips for typical changes but lives in
 `.github/workflows/ci.yml` if you need it. The `bundle-size` job is the other CI-only gate;
-reproduce it locally with `npm run bundle-size` after both builds. All other lint-job gates (manifest
-justifications, knip dead-code) are now covered by the pre-push lint gate (`npm run
+reproduce it locally with `npm run bundle-size` after the build. All other lint-job gates (knip
+dead-code) are now covered by the pre-push lint gate (`npm run
 verify`).
 
 Trusted runs put most Linux jobs on the org's Cloud Run pools, which have no

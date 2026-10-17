@@ -13,14 +13,13 @@ const jscpdBin = resolve(repoRoot, 'node_modules/.bin/jscpd');
 const config = JSON.parse(readFileSync(configPath, 'utf8'));
 
 /**
- * The eight shipped applications, with the jscpd format each one's primary
+ * The seven shipped applications, with the jscpd format each one's primary
  * language must be tokenized as. A zero-file scan for any of these means the
  * duplication signal silently stopped covering an app.
  */
 const APPLICATIONS = {
   'packages/webapp': 'typescript',
   'packages/node-server': 'typescript',
-  'packages/chrome-extension': 'typescript',
   'packages/cloudflare-worker': 'typescript',
   'packages/swift-launcher': 'swift',
   'packages/swift-server': 'swift',
