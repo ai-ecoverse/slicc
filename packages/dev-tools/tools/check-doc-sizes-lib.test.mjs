@@ -38,7 +38,6 @@ describe('PACKAGE_CLAUDE_EXEMPTIONS', () => {
   it('graduated packages are not in the exemption map', () => {
     expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/webapp/CLAUDE.md']).toBeUndefined();
     expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/cloudflare-worker/CLAUDE.md']).toBeUndefined();
-    expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/chrome-extension/CLAUDE.md']).toBeUndefined();
     expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/dev-tools/CLAUDE.md']).toBeUndefined();
   });
 });
@@ -50,9 +49,6 @@ describe('resolvePackageClaudeLimit', () => {
       PACKAGE_CLAUDE_MAX_CHARS
     );
     expect(resolvePackageClaudeLimit('packages/cherry/CLAUDE.md')).toBe(PACKAGE_CLAUDE_MAX_CHARS);
-    expect(resolvePackageClaudeLimit('packages/chrome-extension/CLAUDE.md')).toBe(
-      PACKAGE_CLAUDE_MAX_CHARS
-    );
     expect(resolvePackageClaudeLimit('packages/dev-tools/CLAUDE.md')).toBe(
       PACKAGE_CLAUDE_MAX_CHARS
     );
@@ -191,7 +187,7 @@ describe.skipIf(existsSync(resolve(repoRoot, '.no-comment')))(
       expect(out).not.toMatch(/grandfathered/);
     });
 
-    it.each(['webapp', 'cloudflare-worker', 'chrome-extension', 'dev-tools'])(
+    it.each(['webapp', 'cloudflare-worker', 'node-server', 'dev-tools'])(
       'reports %s at the 20000 default',
       (packageName) => {
         expect(out).toMatch(

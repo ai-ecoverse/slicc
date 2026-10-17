@@ -117,7 +117,7 @@ describe('productSources', () => {
         'packages/swift-server/Sources/Server/APIRoutes.swift',
         'packages/webapp/tests/shell/proxied-fetch.test.ts',
         'docs/shell-reference.md',
-        'dist/extension/bundle.js',
+        'dist/ui/bundle.js',
         'package-lock.json',
       ])
     ).toEqual([
@@ -440,7 +440,7 @@ describe('isProductSource', () => {
       'packages/dev-tools/regression-cluster-hunter/shapes.test.mjs',
       'packages/webapp/test/helper.ts',
       'docs/shell-reference.md',
-      'dist/extension/bundle.js',
+      'dist/ui/bundle.js',
       'package-lock.json',
       'packages/webapp/src/thing.json',
     ]) {

@@ -18,13 +18,13 @@ export const DEBT_CATEGORIES = [
     label: 'layer-stack back-edges',
     source:
       'packages/dev-tools/tools/layer-back-edge-baseline.json ' +
-      '(+ layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json)',
+      '(+ layer-back-edge-baseline-{node-server,cloudflare-worker}.json)',
     kind: 'baseline',
     baseline: 'layer',
     remediation:
       'Remove every up-the-stack import from the file (webapp: ' +
       'fs → shell/git → cdp → tools → core → scoops → ui; node-server: transport → services → entry; ' +
-      'chrome-extension: shared/page → sw → entry; cloudflare-worker: shared/links/auth → routes → entry; ' +
+      'cloudflare-worker: shared/links/auth → routes → entry; ' +
       'move the pure helper DOWN into the lower layer rather than importing upward — see ' +
       'docs/review-patterns.md § Layer-stack import direction), then ratchet the baseline with ' +
       'the supported command: `node packages/dev-tools/tools/check-layer-back-edges.mjs --update`. ' +

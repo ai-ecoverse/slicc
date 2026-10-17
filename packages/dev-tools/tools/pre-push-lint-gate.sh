@@ -81,7 +81,6 @@ run_check "custom-lints" bash -c '
 
 
 run_check "boy-scout-debt" node packages/dev-tools/tools/check-touched-exemptions.mjs
-run_check "manifest" bash packages/dev-tools/tools/check-manifest-justifications.sh
 
 
 run_check "deadcode" "$BIN/knip" --include files,dependencies,devDependencies,unlisted,binaries,unresolved,duplicates --no-progress --reporter compact

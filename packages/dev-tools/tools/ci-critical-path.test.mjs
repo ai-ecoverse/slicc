@@ -345,7 +345,6 @@ describe('CI runner routing', () => {
     'webapp',
     'e2e',
     'node-server',
-    'chrome-extension',
     'cloud-core',
     'github-workflow',
     'bench',

@@ -15,7 +15,6 @@ const config = JSON.parse(readFileSync(configPath, 'utf8'));
 const APPLICATIONS = {
   'packages/webapp': 'typescript',
   'packages/node-server': 'typescript',
-  'packages/chrome-extension': 'typescript',
   'packages/cloudflare-worker': 'typescript',
   'packages/swift-launcher': 'swift',
   'packages/swift-server': 'swift',

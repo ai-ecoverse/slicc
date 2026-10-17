@@ -4,7 +4,7 @@ import { createSubstrate } from '@slicc/cloud-core';
 import { parseTrayJoinUrl, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { type ChildProcess, spawn } from 'child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { existsSync, readFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import type { Server as HttpServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { homedir } from 'os';
@@ -512,19 +512,9 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
     );
   }
 
-  if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
-    console.error(
-      `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run build -w @slicc/chrome-extension\` first.`
-    );
-    process.exit(1);
-  }
-
   if (chromeProfile.id) {
     console.log(`Using QA Chrome profile: ${chromeProfile.id}`);
     console.log(`Profile directory: ${chromeProfile.userDataDir}`);
-    if (chromeProfile.extensionPath) {
-      console.log(`Auto-loading unpacked extension from ${chromeProfile.extensionPath}`);
-    }
   }
 
   const chromeArgs = buildChromeLaunchArgs({

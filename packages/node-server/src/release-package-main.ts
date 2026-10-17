@@ -8,7 +8,6 @@ const releaseDir = resolve(projectRoot, 'artifacts', 'release');
 
 try {
   const manifest = packageReleaseArtifacts({ projectRoot, releaseDir });
-  console.log(`Created extension archive: ${manifest.extensionArchive}`);
   console.log(`Created npm package tarball: ${manifest.npmPackageTarball}`);
   console.log(
     `Created release manifest: ${toProjectRelative(projectRoot, resolve(releaseDir, 'release-artifacts.json'))}`

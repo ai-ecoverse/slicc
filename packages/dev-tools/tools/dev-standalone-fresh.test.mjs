@@ -188,12 +188,11 @@ describe('dev-standalone-fresh wrangler identity probe', () => {
     expect(wranglerUp('')).toBe('DOWN');
   });
 
-  it('keeps the predicate identical across all five harnesses', () => {
+  it('keeps the predicate identical across all four harnesses', () => {
     const baseline = wranglerUpBody('dev-standalone-fresh.sh');
     expect(baseline).toContain('slicc-tray-hub');
     for (const name of [
       'dev-swift-fresh.sh',
-      'dev-extension-fresh.sh',
       'dev-electron-node-fresh.sh',
       'dev-electron-swift-fresh.sh',
     ]) {

@@ -1,4 +1,3 @@
-import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -19,21 +18,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const extensionPath = resolve(projectRoot, 'dist', 'extension');
-  if (!existsSync(extensionPath)) {
-    console.error('dist/extension was not found. Run `npm run build:extension` first.');
-    process.exit(1);
-  }
-
   const profiles = await ensureQaProfileScaffold(projectRoot);
   console.log('SLICC QA profiles are ready.');
   console.log(`Chrome executable: ${chromePath}`);
   console.log(`QA profile root: ${resolveQaProfilesRoot(projectRoot)}`);
-  console.log(`Extension build: ${extensionPath}`);
   console.log('Profiles:');
   for (const profile of profiles) {
-    const extensionLabel = profile.extensionPath ? ' (auto-loads dist/extension)' : '';
-    console.log(`- ${profile.id}: ${profile.userDataDir}${extensionLabel}`);
+    console.log(`- ${profile.id}: ${profile.userDataDir}`);
   }
   console.log('Next commands:');
   for (const profileName of CLI_PROFILE_NAMES) {

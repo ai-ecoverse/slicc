@@ -153,23 +153,6 @@ export default defineConfig({
       },
       {
         extends: true,
-        define: {
-          __DEV__: 'true',
-
-          __SLICC_EXT_DEV__: 'false',
-
-          ...wasmVersionDefines,
-          __SLICC_BUILD_ID__: JSON.stringify('test-build'),
-        },
-        test: {
-          name: 'chrome-extension',
-          include: ['packages/chrome-extension/tests/**/*.test.ts'],
-
-          retry: CI_RETRIES,
-        },
-      },
-      {
-        extends: true,
         test: {
           name: 'cloudflare-worker',
           include: ['packages/cloudflare-worker/tests/**/*.test.ts'],

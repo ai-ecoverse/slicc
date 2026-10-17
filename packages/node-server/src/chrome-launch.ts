@@ -16,7 +16,7 @@ export function getDefaultCdpLaunchTimeoutMs(env: NodeJS.ProcessEnv = process.en
   return parsed;
 }
 
-export const CLI_PROFILE_NAMES = ['leader', 'follower', 'extension'] as const;
+export const CLI_PROFILE_NAMES = ['leader', 'follower'] as const;
 export type CliProfileName = (typeof CLI_PROFILE_NAMES)[number];
 
 const DEFAULT_USER_DATA_DIR_NAME = 'browser-coding-agent-chrome';
@@ -28,14 +28,12 @@ interface CliProfileDefinition {
   avatarIcon: string;
   profileColorSeed: number;
   profileHighlightColor: number;
-  loadsExtension: boolean;
 }
 
 export interface ChromeLaunchProfile {
   id: CliProfileName | null;
   displayName: string;
   userDataDir: string;
-  extensionPath: string | null;
 }
 
 interface FindChromeExecutableOptions {
@@ -62,7 +60,6 @@ const CLI_PROFILE_DEFINITIONS: Record<CliProfileName, CliProfileDefinition> = {
     avatarIcon: 'chrome://theme/IDR_PROFILE_AVATAR_0',
     profileColorSeed: argbToSignedInt(0xff4285f4),
     profileHighlightColor: argbToSignedInt(0xff4285f4),
-    loadsExtension: false,
   },
   follower: {
     displayName: 'SLICC QA Follower',
@@ -70,15 +67,6 @@ const CLI_PROFILE_DEFINITIONS: Record<CliProfileName, CliProfileDefinition> = {
     avatarIcon: 'chrome://theme/IDR_PROFILE_AVATAR_7',
     profileColorSeed: argbToSignedInt(0xff34a853),
     profileHighlightColor: argbToSignedInt(0xff34a853),
-    loadsExtension: false,
-  },
-  extension: {
-    displayName: 'SLICC QA Extension',
-    avatarIndex: 19,
-    avatarIcon: 'chrome://theme/IDR_PROFILE_AVATAR_19',
-    profileColorSeed: argbToSignedInt(0xffa142f4),
-    profileHighlightColor: argbToSignedInt(0xffa142f4),
-    loadsExtension: true,
   },
 };
 
@@ -191,7 +179,6 @@ export function resolveChromeLaunchProfile(options: {
       id: null,
       displayName: 'Chrome',
       userDataDir: resolveDefaultChromeUserDataDir(options.tmpDir ?? undefined, options.servePort),
-      extensionPath: null,
     };
   }
 
@@ -206,9 +193,6 @@ export function resolveChromeLaunchProfile(options: {
     id: profile,
     displayName: definition.displayName,
     userDataDir: join(resolveQaProfilesRoot(options.projectRoot), profile),
-    extensionPath: definition.loadsExtension
-      ? join(options.projectRoot, 'dist', 'extension')
-      : null,
   };
 }
 
@@ -259,11 +243,6 @@ export function buildChromeLaunchArgs(options: {
 
   if (options.mockKeychain) {
     args.push('--use-mock-keychain', '--password-store=basic');
-  }
-
-  if (options.profile.extensionPath) {
-    args.push(`--disable-extensions-except=${options.profile.extensionPath}`);
-    args.push(`--load-extension=${options.profile.extensionPath}`);
   }
 
   if (options.hosted) {

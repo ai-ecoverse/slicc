@@ -602,7 +602,7 @@ nondeterminism rather than fixing it.** Read that skill file before you start.
 Therefore the following are NOT acceptable fixes and will be rejected:
 
 - raising \`CI_RETRIES\` in \`vitest.config.ts\`, or any per-project \`retry\` count
-  (only \`node-server\` and \`chrome-extension\` retry once; Playwright E2E retries
+  (only \`node-server\` retries once; Playwright E2E retries
   twice; every other project retries zero times **by design**);
 - adding \`test.retry(...)\`;
 - adding a bare \`sleep\` / fixed delay;

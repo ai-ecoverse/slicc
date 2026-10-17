@@ -43,8 +43,8 @@ describe('check-doc-refs: resolveToken', () => {
 
   it('strips :functionName suffix', () => {
     expect(
-      resolveToken('packages/chrome-extension/src/fetch-proxy-shared.ts:handleFetchProxy').path
-    ).toBe('packages/chrome-extension/src/fetch-proxy-shared.ts');
+      resolveToken('packages/shared-ts/src/fetch-proxy-protocol.ts:FetchProxyRequestMsg').path
+    ).toBe('packages/shared-ts/src/fetch-proxy-protocol.ts');
   });
 
   it('strips :main() function-call suffix', () => {

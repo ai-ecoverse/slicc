@@ -99,21 +99,6 @@ describe('chrome-launch', () => {
       id: null,
       displayName: 'Chrome',
       userDataDir: '/tmp/test-root/browser-coding-agent-chrome',
-      extensionPath: null,
-    });
-  });
-
-  it('resolves the extension QA profile inside the repo and points at dist/extension', () => {
-    const profile = resolveChromeLaunchProfile({
-      projectRoot: '/repo',
-      profile: 'extension',
-    });
-
-    expect(profile).toEqual({
-      id: 'extension',
-      displayName: 'SLICC QA Extension',
-      userDataDir: '/repo/.qa/chrome/extension',
-      extensionPath: '/repo/dist/extension',
     });
   });
 
@@ -146,41 +131,11 @@ describe('chrome-launch', () => {
     ).toThrow(/Unknown Chrome profile/);
   });
 
-  it('builds Chrome launch args with extension flags for the extension profile', () => {
-    const profile = resolveChromeLaunchProfile({
-      projectRoot: '/repo',
-      profile: 'extension',
-    });
-
-    expect(
-      buildChromeLaunchArgs({
-        cdpPort: 9222,
-        launchUrl: 'http://localhost:3000',
-        profile,
-      })
-    ).toEqual([
-      '--remote-debugging-port=9222',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-crash-reporter',
-      '--disable-background-tracing',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
-      '--user-data-dir=/repo/.qa/chrome/extension',
-      '--disable-extensions-except=/repo/dist/extension',
-      '--load-extension=/repo/dist/extension',
-      'http://localhost:3000',
-    ]);
-  });
-
   describe('buildChromeLaunchArgs — GPU (opt-in)', () => {
     const baseOpts = {
       cdpPort: 9222,
       launchUrl: 'http://localhost:5710/',
-      profile: { id: null, displayName: 'Chrome', userDataDir: '/tmp/x', extensionPath: null },
+      profile: { id: null, displayName: 'Chrome', userDataDir: '/tmp/x' },
     };
     const webgpu = [
       '--enable-unsafe-webgpu',
@@ -222,7 +177,6 @@ describe('chrome-launch', () => {
         id: null,
         displayName: 'Chrome',
         userDataDir: '/tmp/x',
-        extensionPath: null,
       },
     };
 
@@ -502,7 +456,7 @@ describe('chrome-launch', () => {
     tempDirs.push(projectRoot);
 
     const profiles = await ensureQaProfileScaffold(projectRoot);
-    expect(profiles.map((profile) => profile.id)).toEqual(['leader', 'follower', 'extension']);
+    expect(profiles.map((profile) => profile.id)).toEqual(['leader', 'follower']);
 
     const localState = JSON.parse(
       await readFile(join(projectRoot, '.qa', 'chrome', 'leader', 'Local State'), 'utf8')
@@ -514,11 +468,11 @@ describe('chrome-launch', () => {
 
     const preferences = JSON.parse(
       await readFile(
-        join(projectRoot, '.qa', 'chrome', 'extension', 'Default', 'Preferences'),
+        join(projectRoot, '.qa', 'chrome', 'follower', 'Default', 'Preferences'),
         'utf8'
       )
     ) as { profile?: { name?: string } };
-    expect(preferences.profile?.name).toBe('SLICC QA Extension');
+    expect(preferences.profile?.name).toBe('SLICC QA Follower');
   });
 });
 

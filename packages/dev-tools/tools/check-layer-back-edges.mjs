@@ -60,24 +60,6 @@ export function nodeServerLayerOf(relPath) {
   return 'services';
 }
 
-const CHROME_EXT_SHARED = new Set([
-  'sidepanel-entry.ts',
-  'secrets-entry.ts',
-  'secrets-storage.ts',
-  'secrets-encrypted-storage.ts',
-  'cherry-panel-protocol.ts',
-  'fetch-proxy-shared.ts',
-  'oauth-flow-options.ts',
-  'discovery-observer.ts',
-]);
-
-export function chromeExtensionLayerOf(relPath) {
-  const name = toSourcePath(relPath).split('/').pop();
-  if (name === 'service-worker.ts') return 'entry';
-  if (CHROME_EXT_SHARED.has(name)) return 'shared';
-  return 'sw';
-}
-
 const WORKER_SHARED_FILES = new Set([
   'shared.ts',
   'links.ts',
@@ -148,17 +130,6 @@ export const LAYER_STACKS = [
     unrankedImporterRank: 0,
     isolatedLayers: new Set(),
     stackLabel: 'transport → services → entry',
-    accept: isPackageSource,
-  },
-  {
-    id: 'chrome-extension',
-    scanRoot: resolve(repoRoot, 'packages/chrome-extension/src'),
-    baselinePath: resolve(dirname(Filename), 'layer-back-edge-baseline-chrome-extension.json'),
-    layerRank: { shared: 0, sw: 1, entry: 2 },
-    layerOf: chromeExtensionLayerOf,
-    unrankedImporterRank: 0,
-    isolatedLayers: new Set(),
-    stackLabel: 'shared/page → sw → entry',
     accept: isPackageSource,
   },
   {
@@ -341,15 +312,11 @@ export function scanCrossPackageEscapes() {
   return escapes;
 }
 
-const CHROME_EXT_PKG = resolve(repoRoot, 'packages/chrome-extension');
-const CHROME_EXT_SCAN_DIRS = [resolve(CHROME_EXT_PKG, 'src'), resolve(CHROME_EXT_PKG, 'tests')];
 const WEBCOMPONENTS_PKG = resolve(repoRoot, 'packages/webcomponents');
 const WEBCOMPONENTS_SCAN_DIRS = [
   resolve(WEBCOMPONENTS_PKG, 'src'),
   resolve(WEBCOMPONENTS_PKG, 'tests'),
 ];
-
-const ALLOWED_TYPE_ONLY_WEBAPP_TARGET = 'packages/webapp/src/kernel/messages.js';
 
 const BACKTICK_IMPORT_RE = /(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)`([^`]*)`/g;
 
@@ -370,8 +337,7 @@ function resolveWebappTarget(scanRoot, importerDir, specifier) {
   return targetRel.startsWith('packages/webapp/src/') ? targetRel : null;
 }
 
-function findWebappEscapes(scanRoot, importerRel, source, options = {}) {
-  const allowTypeOnlyKernelMessages = options.allowTypeOnlyKernelMessages === true;
+function findWebappEscapes(scanRoot, importerRel, source) {
   const importerDir = dirname(importerRel);
 
   const hits = [];
@@ -384,22 +350,10 @@ function findWebappEscapes(scanRoot, importerRel, source, options = {}) {
 
   const stripped = stripComments(source);
 
-  const typeOnlyFromIndices = new Map();
-  if (allowTypeOnlyKernelMessages) {
-    for (const m of stripped.matchAll(TYPE_ONLY_NAMED_CLAUSE_RE)) {
-      const list = typeOnlyFromIndices.get(m[1]) ?? [];
-      list.push(typeOnlyFromKeywordIndex(m));
-      typeOnlyFromIndices.set(m[1], list);
-    }
-  }
-
   for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
     const specifier = m[1];
     const targetRel = resolveWebappTarget(scanRoot, importerDir, specifier);
     if (targetRel === null) continue;
-
-    const isTypeOnlyOccurrence = (typeOnlyFromIndices.get(specifier) ?? []).includes(m.index);
-    if (isTypeOnlyOccurrence && targetRel === ALLOWED_TYPE_ONLY_WEBAPP_TARGET) continue;
 
     const line = stripped.slice(0, m.index).split('\n').length;
     hits.push({ line, specifier, to: targetRel });
@@ -431,26 +385,8 @@ function findWebappEscapes(scanRoot, importerRel, source, options = {}) {
   return hits;
 }
 
-export function findChromeExtensionWebappEscapes(importerRel, source) {
-  return findWebappEscapes(CHROME_EXT_PKG, importerRel, source, {
-    allowTypeOnlyKernelMessages: true,
-  });
-}
-
 export function findWebcomponentsWebappEscapes(importerRel, source) {
   return findWebappEscapes(WEBCOMPONENTS_PKG, importerRel, source);
-}
-
-export function scanChromeExtensionWebappEscapes() {
-  const escapes = {};
-  for (const dir of CHROME_EXT_SCAN_DIRS) {
-    for (const abs of collectTs(dir)) {
-      const pkgRel = relative(CHROME_EXT_PKG, abs).split('\\').join('/');
-      const hits = findChromeExtensionWebappEscapes(pkgRel, readFileSync(abs, 'utf8'));
-      if (hits.length > 0) escapes[relative(repoRoot, abs).split('\\').join('/')] = hits;
-    }
-  }
-  return escapes;
 }
 
 function collectTs(dir) {
@@ -547,7 +483,6 @@ function main() {
     current: scanStackBackEdges(stack),
   }));
   const escapes = scanCrossPackageEscapes();
-  const chromeExtEscapes = scanChromeExtensionWebappEscapes();
   const webcomponentsEscapes = scanWebcomponentsWebappEscapes();
 
   if (argv.includes('--update')) {
@@ -567,14 +502,6 @@ function main() {
       (h) =>
         `a relative import out of packages/webapp/src into ${h.to}. Move the shared code ` +
         'into @slicc/shared-ts and import it by package name instead.'
-    ) ||
-    reportEscapes(
-      chromeExtEscapes,
-      () =>
-        'packages/chrome-extension (src and tests) must not depend on packages/webapp/src. ' +
-        'The only permitted exception is a top-level `import type { ... }` clause from ' +
-        'kernel/messages.ts (compiles away — no runtime coupling). Value imports are not ' +
-        'exempt. Move shared protocol code into @slicc/shared-ts instead.'
     ) ||
     reportEscapes(
       webcomponentsEscapes,
@@ -602,8 +529,7 @@ function main() {
   });
   const fileCount = stackScans.reduce((n, { current }) => n + Object.keys(current).length, 0);
   process.stdout.write(
-    `ok: no new layer back-edges, no cross-package escapes in packages/webapp/src, no ` +
-      `packages/chrome-extension (src+tests) → packages/webapp/src escapes, and no ` +
+    `ok: no new layer back-edges, no cross-package escapes in packages/webapp/src, and no ` +
       `packages/webcomponents → packages/webapp/src escapes ` +
       `(${totals.join(', ')} grandfathered in ${fileCount} baselined files)\n`
   );

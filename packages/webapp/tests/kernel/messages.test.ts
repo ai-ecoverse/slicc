@@ -1,9 +1,6 @@
 import { isExtensionMessage, type SprinkleSummary } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
-import type {
-  ExtensionMessage,
-  SprinkleSummaryEnvelope,
-} from '../../webapp/src/kernel/messages.js';
+import type { ExtensionMessage, SprinkleSummaryEnvelope } from '../../src/kernel/messages.js';
 
 describe('isExtensionMessage', () => {
   it('returns true for valid panel envelope', () => {

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { applyBudgetRaises, planBudgetRaises } from './bundle-budget-reconcile-lib.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const PACKAGES = ['packages/webapp', 'packages/chrome-extension'];
+const PACKAGES = ['packages/webapp'];
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {

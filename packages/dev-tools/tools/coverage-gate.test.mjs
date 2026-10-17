@@ -47,7 +47,7 @@ describe('buildVitestArgs', () => {
   });
 
   it('forwards a bespoke exclude list', () => {
-    const args = buildVitestArgs('chrome-extension', {
+    const args = buildVitestArgs('cloud-core', {
       coverageExclude: ['packages/webapp/src/ui/**', 'packages/webapp/src/tools/**'],
     });
     expect(args).toContain('--coverage.exclude=packages/webapp/src/ui/**');
