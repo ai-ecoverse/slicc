@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
 import { argv, cwd, exit, stdout } from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from '../tools/is-main-module.mjs';
 import { applyStrip } from './lib.mjs';
 
 export function parseArgs(args) {
@@ -31,7 +31,7 @@ function main(args = argv.slice(2)) {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) {
+if (isMainModule(import.meta.url, argv[1])) {
   exit(main());
 }
 

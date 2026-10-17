@@ -51,8 +51,9 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { argv } from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { stripComments } from './check-no-ui-imports-in-providers.mjs';
+import { isMainModule } from './is-main-module.mjs';
 
 const Filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(Filename), '..', '..', '..');
@@ -738,4 +739,4 @@ function main() {
   );
 }
 
-if (import.meta.url === pathToFileURL(argv[1] ?? '').href) main();
+if (isMainModule(import.meta.url, argv[1])) main();

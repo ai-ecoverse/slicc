@@ -9,8 +9,8 @@
  * `<out>/memory/CLAUDE.md` (or `BENCH_MEMORY_RESTORED=1`) lets save/skip skip scored tasks.
  */
 
-import { appendFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { appendFileSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { hasMemoryCheckpoint } from './memory-checkpoint.mjs';
 import { loadAndPlan, parseCli, previous, resumeAction } from './run.mjs';
 
@@ -145,7 +145,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
 }
 
 const isMain =
-  process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname);
+  process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
 /* v8 ignore next 7 */
 if (isMain) {
   main().then(
