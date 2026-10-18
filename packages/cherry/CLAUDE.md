@@ -93,8 +93,9 @@ Field notes (theme, layout, screenshot) in the details doc. Invariants:
 SDK on the **host page**; follower in the **iframe**. Iframe side:
 `CherryHostTransport` (`packages/webapp/src/cdp/cherry-host-transport.ts`),
 the **third** `CDPTransport`. Synthesizes session lifecycle locally
-(`Target.*`, `Page`/`Runtime`/`DOM.enable`, `Page.getFrameTree`);
-forwards the rest as `cdp.request`. SDK runs `createCdpHostHandler` in
+(`Target.getTargets`/`attachToTarget`/`detachFromTarget`/`closeTarget`,
+`Page`/`Runtime`/`DOM.enable`, `Page.getFrameTree`); forwards the rest
+(including `Target.createTarget`) as `cdp.request`. SDK runs `createCdpHostHandler` in
 the host realm; unimplemented methods → `CherryUnsupportedError`
 (`-32601`).
 

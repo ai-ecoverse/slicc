@@ -52,8 +52,8 @@ Leaders can stop accepting `slicc` connections (`tray connect timed out`) with C
 - **A prompt returning while the agent still works waits again.** `slicc prompt` exit 0 + empty answer → reprobe spend `BUSY_PROBE_MS` (20 s) apart; still rising → `slicc wait --allsettled 2m` + re-export (`resumed_after_settle`).
 - **Lanes** (`--leaders N`): one home/port/`<home>/join.json` per leader, shared queue; share `/slicc/cone-config.json` (locked boots).
 - **Cloud Run shard loss auto-resumes once.** `auto-resume.mjs` re-dispatches `resume-run=<run>` when every failed shard was host-maintenance-killed (new run carries `auto-resumed-from`). Mixed kill+real-failure → hand resume named in the summary.
-- **Harness drifts; records say so.** Hosted leaders load the webapp from production; `leader.slicc_version`/`slicc_versions` flag a mix; `pin-webapp` serves this package's `dist/ui`.
-- **Guardrails** (`guardrails()`): no new run past deadline or `--max-cost`; `watchSpend` aborts past `--max-task-cost`. Deadline-with-runs-left and `state.errors > 0` emit _distinct_ `::error::` lines. Cost null on failed/backward counters (`cost_unknown`); journals redact join tokens, not task text.
+- **Harness drifts; records say so.** Hosted leaders load the webapp from production; `leader.slicc_version`/`slicc_versions` flag a mix; `pin-webapp=true` serves the pinned npm package, a commit/tag/branch builds a detached checkout and runs its `dist/node-server` + `dist/ui`.
+- **Guardrails** (`guardrails()`): no new run past deadline or `--max-cost`; `watchSpend` aborts past `--max-task-cost`. Deadline-with-runs-left and `state.errors > 0` emit _distinct_ `::error::` lines. Cost null on failed/backward counters (`cost_unknown`); journals redact join tokens and hold no task text.
 
 ## Publishing
 
