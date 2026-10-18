@@ -30,6 +30,7 @@ import { createDigCommand } from './dig-command.js';
 import { createDiscoverCommand } from './discover-command.js';
 import { createEsbuildCommand } from './esbuild-command.js';
 import { createEsptoolCommand } from './esptool-command.js';
+import { createExportProfileCommand } from './export-profile-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFfprobeCommand } from './ffprobe-command.js';
 import { createFlagsCommand } from './flags-command.js';
@@ -300,6 +301,11 @@ function wasmCommandOptions(options: SupplementalCommandsConfig): WasmCommandOpt
   };
 }
 
+/** Transcript and profile export: `session`, `export-profile`. */
+function createTranscriptCommands(): Command[] {
+  return [createSessionCommand(), createExportProfileCommand()];
+}
+
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
   const commands: Command[] = [
     createCommandsCommand({
@@ -441,7 +447,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       syncScriptCommands: options.syncScriptCommands,
     }),
     createWfProgressCommand(),
-    createSessionCommand(),
+    ...createTranscriptCommands(),
   ];
 
   if (options.fs) {

@@ -86,6 +86,12 @@ export function panelRpcChannelName(instanceId?: string): string {
  */
 export type PanelRpcRequest =
   | { op: 'page-info'; payload?: undefined }
+  /**
+   * `export-profile`: build the SLICC 7 profile zip(s) in the leader page
+   * (the only realm that sees `slicc_accounts`, the mount table and the
+   * global VFS) and save them to Downloads. `dryRun` plans without saving.
+   */
+  | { op: 'profile-export'; payload: { dryRun: boolean } }
   | {
       op: 'screencapture';
       payload: {
@@ -842,6 +848,7 @@ export type PanelRpcRequest =
 
 export interface PanelRpcResults {
   'page-info': { origin: string; href: string; title: string };
+  'profile-export': { report: string; archives: string[] };
   screencapture: {
     bytes: ArrayBuffer;
     width: number;

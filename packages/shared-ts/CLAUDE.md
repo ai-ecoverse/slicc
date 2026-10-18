@@ -49,6 +49,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 ### Transcript
 
 - `transcript-export.ts` — `TranscriptDocumentV1` types, `TranscriptExportError`, `validateTranscriptDocumentV1()`. Shared by webapp export-service, cherry, bundle validators. Format + privacy: [`docs/transcript-export.md`](../../docs/transcript-export.md).
+- `profile-export.ts` — `slicc-profile` v1, the SLICC 6 → 7 profile export contract: `SliccProfileManifestV1`, `validateSliccProfileManifestV1()`, `profileFlagRuleFor()` (credential-like files), archive limits. Seven's `freezer import` (ai-ecoverse/slicc-agent) keeps a copy and the same fixture zip; change both together ([`docs/profile-export.md`](../../docs/profile-export.md)).
 - `transcript-redaction.ts` — `applyRedactions()` + credential-pattern detector. Runs before ZIP assembly; fail-closed (`TranscriptExportError('redaction-unavailable')`).
 
 ## Conventions

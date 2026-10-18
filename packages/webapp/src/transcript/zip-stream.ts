@@ -198,18 +198,31 @@ interface CdEntry {
 // Pull-driven ZIP generator
 // ---------------------------------------------------------------------------
 
+/** One archive entry: its name and a loader for its bytes. */
+export interface ZipEntrySource {
+  path: string;
+  /** Called once, when the generator reaches this entry. */
+  load(): Promise<Uint8Array> | Uint8Array;
+}
+
+/** A pull-driven stored ZIP plus its completion receipt. */
+export interface ZipStreamResult {
+  chunks: AsyncIterable<Uint8Array>;
+  completion: Promise<{ byteLength: number; sha256: string }>;
+}
+
 /**
  * Async generator that yields ZIP bytes on demand.
  *
- * Files are processed one at a time: the generator yields a local file header
- * then the raw file bytes. The central directory and EOCD follow after all
- * files are consumed. Aborting mid-stream (via `return()`) is safe.
+ * Entries are processed one at a time: the generator loads an entry, yields
+ * its local file header, then the raw bytes, so at most one entry's bytes are
+ * held at once. The central directory and EOCD follow after all entries are
+ * consumed. Aborting mid-stream (via `return()`) is safe.
  *
  * `completionResolve`/`completionReject` are called after the last yield.
  */
 async function* generateZip(
-  document: TranscriptDocumentV1,
-  bundleFiles: Map<string, Uint8Array>,
+  entries: Iterable<ZipEntrySource>,
   signal: AbortSignal | undefined,
   completionResolve: (r: { byteLength: number; sha256: string }) => void,
   completionReject: (e: Error) => void
@@ -239,33 +252,23 @@ async function* generateZip(
   }
 
   try {
-    // --- transcript.json ---
-    const jsonBytes = new TextEncoder().encode(JSON.stringify(document, null, 2));
-    const jsonName = encoder.encode('transcript.json');
-    const jsonCrc = crc32(jsonBytes);
-    const jsonHdr = buildLocalFileHeader(jsonName, jsonBytes.length, jsonCrc);
-    cdEntries.push({
-      nameBytes: jsonName,
-      size: jsonBytes.length,
-      crc: jsonCrc,
-      localOffset: offset,
-    });
-    if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
-    yield* emitChunk(jsonHdr);
-    if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
-    yield* emitChunk(jsonBytes);
-
-    // --- bundle files ---
-    for (const [path, data] of bundleFiles) {
+    for (const entry of entries) {
       if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
-      const nameBytes = encoder.encode(path);
+      const data = await entry.load();
+      if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
+      if (data.byteLength > ZIP32_MAX_FILE_BYTES) throw new TranscriptExportError('schema-invalid');
+      const nameBytes = encoder.encode(entry.path);
       const fileCrc = crc32(data);
       const hdr = buildLocalFileHeader(nameBytes, data.length, fileCrc);
+      if (offset + hdr.length + data.length > ZIP32_MAX_FILE_BYTES) {
+        throw new TranscriptExportError('schema-invalid', 'archive exceeds ZIP32 offsets');
+      }
       cdEntries.push({ nameBytes, size: data.length, crc: fileCrc, localOffset: offset });
       yield* emitChunk(hdr);
       if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
       yield* emitChunk(data);
     }
+    if (cdEntries.length > ZIP32_MAX_ENTRIES) throw new TranscriptExportError('schema-invalid');
 
     // --- central directory ---
     const cdStart = offset;
@@ -302,10 +305,50 @@ async function* generateZip(
 // Public factory
 // ---------------------------------------------------------------------------
 
+/** Maximum size of a single file in a ZIP32 archive (uint32 max = 4 GiB − 1). */
+const ZIP32_MAX_FILE_BYTES = 0xffffffff;
+/** Maximum number of entries in a ZIP32 archive (uint16 max = 65 535). */
+const ZIP32_MAX_ENTRIES = 0xffff;
+
+/**
+ * Create a pull-driven stored ZIP from `entries`, in order.
+ *
+ * Throws `TranscriptExportError('schema-invalid')` synchronously when an
+ * entry path fails the safety check or a name repeats; the ZIP32 size and
+ * entry-count limits are enforced while streaming.
+ */
+export function createZipStream(
+  entries: readonly ZipEntrySource[],
+  signal?: AbortSignal
+): ZipStreamResult {
+  const seen = new Set<string>();
+  for (const { path } of entries) {
+    if (!isSafeBundlePath(path) || seen.has(path)) {
+      throw new TranscriptExportError('schema-invalid');
+    }
+    seen.add(path);
+  }
+  if (entries.length > ZIP32_MAX_ENTRIES) throw new TranscriptExportError('schema-invalid');
+
+  let completionResolve!: (r: { byteLength: number; sha256: string }) => void;
+  let completionReject!: (e: Error) => void;
+  const completion = new Promise<{ byteLength: number; sha256: string }>((res, rej) => {
+    completionResolve = res;
+    completionReject = rej;
+  });
+  // A consumer that stops on a chunk error may never await the receipt; the
+  // rejection is still delivered to anyone who does.
+  completion.catch(() => undefined);
+  return {
+    chunks: generateZip(entries, signal, completionResolve, completionReject),
+    completion,
+  };
+}
+
 /**
  * Create a pull-driven uncompressed ZIP archive for a transcript bundle.
  *
- * - `transcript.json` is stored uncompressed (method 0).
+ * - `transcript.json` is stored uncompressed (method 0), first.
  * - All bundle files are stored without compression (method 0).
  * - CRC-32 is pre-computed from the bytes already in memory before each header.
  * - `completion` resolves only after the last chunk is yielded.
@@ -313,11 +356,6 @@ async function* generateZip(
  * Throws `TranscriptExportError('schema-invalid')` synchronously if any
  * bundle file path fails the safety check.
  */
-/** Maximum size of a single file in a ZIP32 archive (uint32 max = 4 GiB − 1). */
-const ZIP32_MAX_FILE_BYTES = 0xffffffff;
-/** Maximum number of entries in a ZIP32 archive (uint16 max = 65 535). */
-const ZIP32_MAX_ENTRIES = 0xffff;
-
 export function createTranscriptZip(
   document: TranscriptDocumentV1,
   bundleFiles: Map<string, Uint8Array>,
@@ -340,16 +378,12 @@ export function createTranscriptZip(
     }
   }
 
-  let completionResolve!: (r: { byteLength: number; sha256: string }) => void;
-  let completionReject!: (e: Error) => void;
-  const completion = new Promise<{ byteLength: number; sha256: string }>((res, rej) => {
-    completionResolve = res;
-    completionReject = rej;
-  });
-
-  return {
-    filename: makeFilename(document),
-    chunks: generateZip(document, bundleFiles, signal, completionResolve, completionReject),
-    completion,
-  };
+  const entries: ZipEntrySource[] = [
+    {
+      path: 'transcript.json',
+      load: () => new TextEncoder().encode(JSON.stringify(document, null, 2)),
+    },
+    ...[...bundleFiles].map(([path, data]) => ({ path, load: () => data })),
+  ];
+  return { filename: makeFilename(document), ...createZipStream(entries, signal) };
 }

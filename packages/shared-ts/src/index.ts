@@ -23,6 +23,7 @@ export * from './link-header.js';
 export * from './loopback.js';
 export * from './oauth-extra-domains-storage.js';
 export * from './preview-url.js';
+export * from './profile-export.js';
 export * from './proxy-headers.js';
 export * from './raw-fetch-protocol.js';
 export * from './raw-fetch-upload.js';
