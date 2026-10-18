@@ -5,7 +5,7 @@
  */
 import { TranscriptExportError, validateSliccProfileManifestV1 } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
-import { planProfileExport } from '../../src/transcript/profile-export.js';
+import { planProfileExport, splitForRedaction } from '../../src/transcript/profile-export.js';
 import {
   getProfileExportDeps,
   getProfileExportRunner,
@@ -14,7 +14,7 @@ import {
 } from '../../src/transcript/profile-export-provider.js';
 import { literalSecretsRedactor, redactProfileTexts } from '../../src/transcript/profile-redact.js';
 import { createZipStream } from '../../src/transcript/zip-stream.js';
-import { seedProfile, UNITS } from './profile-export-seed.js';
+import { readStoredZip, SECRETS, seedProfile, UNITS } from './profile-export-seed.js';
 
 async function bin(
   fs: { readFile: (p: string, o: { encoding: 'binary' }) => Promise<unknown> },
@@ -297,5 +297,67 @@ describe('planProfileExport — edge cases', () => {
     const controller = new AbortController();
     controller.abort();
     await expect(planProfileExport(deps, controller.signal)).rejects.toThrow();
+  });
+
+  it('redacts a text file over 1 MiB in chunks and skips a binary holding a page secret', async () => {
+    const { fs, deps } = await seedProfile();
+    const line = 'x'.repeat(1023);
+    const big = `${`${line}\n`.repeat(1100)}key ${SECRETS.anthropic}\n${`${line}\n`.repeat(50)}`;
+    await fs.writeFile('/workspace/big.log', big);
+    await fs.writeFile(
+      '/workspace/blob.bin',
+      new Uint8Array([0, 1, ...new TextEncoder().encode(SECRETS.openai), 0])
+    );
+    const plan = await planProfileExport(deps);
+    const archive = plan.archives[0]!;
+    expect(archive.manifest.skipped).toContainEqual({
+      path: '/workspace/blob.bin',
+      reason: 'secret',
+    });
+    const stream = archive.open();
+    const chunks: Uint8Array[] = [];
+    for await (const c of stream.chunks) chunks.push(c);
+    const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
+    let at = 0;
+    for (const c of chunks) {
+      bytes.set(c, at);
+      at += c.byteLength;
+    }
+    const log = readStoredZip(bytes).find((e) => e.name === 'files/cones/cone/big.log')!;
+    const text = new TextDecoder().decode(log.data);
+    expect(text).not.toContain(SECRETS.anthropic);
+    expect(text).toContain('⟦REDACTED:provider-credential:');
+    expect(new TextDecoder('latin1').decode(bytes).includes(SECRETS.openai)).toBe(false);
+  });
+
+  it('resolves lick targets folder first, then <name>-scoop, then display name', async () => {
+    const units = [
+      { jid: 'cone_1', name: 'Sliccy', folder: 'cone', parentJid: null },
+      { jid: 'scoop_a', name: 'research', folder: 'other', parentJid: 'cone_1' },
+      { jid: 'scoop_b', name: 'b', folder: 'research', parentJid: 'cone_1' },
+    ];
+    const { deps } = await seedProfile({ listUnits: () => units });
+    const p2 = await planProfileExport(deps);
+    const stream = p2.archives[0]!.open();
+    const parts: Uint8Array[] = [];
+    for await (const c of stream.chunks) parts.push(c);
+    const all = new Uint8Array(parts.reduce((n, c) => n + c.byteLength, 0));
+    let at = 0;
+    for (const c of parts) {
+      all.set(c, at);
+      at += c.byteLength;
+    }
+    const body = JSON.parse(
+      new TextDecoder().decode(readStoredZip(all).find((e) => e.name === 'licks.json')!.data)
+    );
+    expect(body.crontasks[0].targetFolder).toBe('research');
+  });
+});
+
+describe('splitForRedaction', () => {
+  it('cuts after newlines and hard-splits a single long line', () => {
+    expect(splitForRedaction('ab\ncd\nef', 4)).toEqual(['ab\n', 'cd\n', 'ef']);
+    expect(splitForRedaction('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij']);
+    expect(splitForRedaction('', 4)).toEqual([]);
   });
 });

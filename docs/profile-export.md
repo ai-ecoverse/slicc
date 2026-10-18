@@ -95,7 +95,8 @@ Some routing rules:
   - the GitHub token, MCP tokens and headers;
   - mount handles.
 - **Redacted wherever they occur:** `literalSecretsRedactor` replaces each account key and token, the GitHub token and MCP header values with `⟦REDACTED:provider-credential:psN⟧`. It runs before six's fail-closed known-secret redactor, so the replacement applies to transcripts too.
-- **Text redaction:** every UTF-8 text file up to 1 MiB passes the known-secret redactor and the at-rest credential patterns (jwt, private-key, bearer-token, api-key). So do memory, `licks.json` and the gitconfig. Transcripts pass the full transcript redaction.
+- **Text redaction:** every UTF-8 text file passes the known-secret redactor and the at-rest credential patterns (jwt, private-key, bearer-token, api-key), in 1 MiB batches; a file over 1 MiB is split after newlines so no secret straddles two batches. So do memory, `licks.json` and the gitconfig. Transcripts pass the full transcript redaction.
+- **Binary files** are stored as-is, unless they contain a page-known secret verbatim; those are skipped (`secret`).
 - **Credential-like files are stored byte for byte and listed in `flagged[]`.** These are `.env` and `.env.*` (`env`), `*.pem` (`pem`), `.git-credentials`, `.npmrc`, and anything under `.slicc/oauth/` (`slicc-oauth`). The dialog and the report warn that the zip holds them in the clear.
 
 ## Limits and parts

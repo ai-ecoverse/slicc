@@ -18,7 +18,7 @@ import { AT_REST_CREDENTIAL_CATEGORIES } from './archive-redaction.js';
 import type { KnownSecretBatchRedactor } from './redact.js';
 
 /** Shorter values are not treated as secrets: replacing them would shred ordinary text. */
-const MIN_LITERAL_SECRET_LENGTH = 8;
+export const MIN_LITERAL_SECRET_LENGTH = 8;
 /** Marker category for a page-known secret. */
 export const PROFILE_LITERAL_CATEGORY = 'provider-credential';
 /** Maximum UTF-16 code units per redactor batch (≈ 1 MiB for ASCII), as in `redact.ts`. */

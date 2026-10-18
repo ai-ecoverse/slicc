@@ -46,6 +46,7 @@ import {
   validateSliccProfileManifestV1,
   validateTranscriptDocumentV1,
 } from '@slicc/shared-ts';
+import { matchLickTargetAlias } from '../base/lick-target-match.js';
 import type { DirEntry } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { CronTaskEntry, WebhookEntry } from '../scoops/lick-manager.js';
@@ -56,7 +57,11 @@ import { isRootUnit, subtreeOf } from '../work-unit/policy.js';
 import { isPrimaryRoot } from '../work-unit/record.js';
 import type { TranscriptSnapshot } from './export-service.js';
 import { readSessionsIndex } from './frozen-archive-format.js';
-import { literalSecretsRedactor, redactProfileTexts } from './profile-redact.js';
+import {
+  literalSecretsRedactor,
+  MIN_LITERAL_SECRET_LENGTH,
+  redactProfileTexts,
+} from './profile-redact.js';
 import type { KnownSecretBatchRedactor } from './redact.js';
 import { createZipStream, type ZipEntrySource, type ZipStreamResult } from './zip-stream.js';
 
@@ -224,6 +229,7 @@ interface QueuedFile {
 const CACHE_DIRS = new Set(['node_modules', '.cache', '__pycache__']);
 const encoder = new TextEncoder();
 const strictDecoder = new TextDecoder('utf-8', { fatal: true });
+const latin1 = new TextDecoder('latin1');
 
 function addCounts(into: { [k: string]: number }, from: { readonly [k: string]: number }): void {
   for (const [k, v] of Object.entries(from)) into[k] = (into[k] ?? 0) + v;
@@ -235,12 +241,32 @@ function joinPath(dir: string, name: string): string {
 
 /** Decode `bytes` as text the redactor may rewrite, or null for binary. */
 function asText(bytes: Uint8Array): string | null {
-  if (bytes.byteLength > PROFILE_MAX_REDACTED_TEXT_BYTES || bytes.includes(0)) return null;
+  if (bytes.includes(0)) return null;
   try {
     return strictDecoder.decode(bytes);
   } catch {
     return null;
   }
+}
+
+/**
+ * Split text over the redactor's batch size into chunks of at most `max`
+ * characters, cutting after a newline where one exists so a secret (never
+ * multi-line) is not split across two batches.
+ */
+export function splitForRedaction(text: string, max = PROFILE_MAX_REDACTED_TEXT_BYTES): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + max, text.length);
+    if (end < text.length) {
+      const newline = text.lastIndexOf('\n', end - 1);
+      if (newline >= start) end = newline + 1;
+    }
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
 }
 
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
@@ -282,7 +308,8 @@ class ProfileCollector {
     readonly deps: ProfileExportDeps,
     private readonly redactor: KnownSecretBatchRedactor,
     mounts: readonly string[],
-    private readonly signal: AbortSignal | undefined
+    private readonly signal: AbortSignal | undefined,
+    private readonly literals: readonly string[] = []
   ) {
     this.mountPaths = new Set(mounts.map((m) => m.replace(/\/+$/, '') || '/'));
     this.mounts = [...this.mountPaths].sort();
@@ -436,7 +463,15 @@ class ProfileCollector {
       }
       const text = asText(bytes);
       if (text === null) {
-        await this.addFileEntry(file, bytes, false);
+        if (this.holdsLiteralSecret(bytes)) {
+          file.group.skipped.push({ path: file.vfsPath, reason: 'secret' });
+        } else {
+          await this.addFileEntry(file, bytes, false);
+        }
+        continue;
+      }
+      if (text.length > PROFILE_MAX_REDACTED_TEXT_BYTES) {
+        await this.addLargeText(file, bytes, text);
         continue;
       }
       if (batchChars + text.length > PROFILE_MAX_REDACTED_TEXT_BYTES) await flush();
@@ -444,6 +479,26 @@ class ProfileCollector {
       batchChars += text.length;
     }
     await flush();
+  }
+
+  /** A text file over one batch: redact it chunk by chunk, keep it only if it changed. */
+  private async addLargeText(file: QueuedFile, bytes: Uint8Array, text: string): Promise<void> {
+    const chunks = splitForRedaction(text);
+    const out = await redactProfileTexts(
+      chunks,
+      this.redactor,
+      file.group.redactionCounts,
+      this.signal
+    );
+    const changed = out.some((chunk, i) => chunk !== chunks[i]);
+    await this.addFileEntry(file, changed ? encoder.encode(out.join('')) : bytes, changed);
+  }
+
+  /** True when a binary file carries a page-known secret verbatim (it is then skipped). */
+  private holdsLiteralSecret(bytes: Uint8Array): boolean {
+    if (this.literals.length === 0) return false;
+    const haystack = latin1.decode(bytes);
+    return this.literals.some((secret) => haystack.includes(secret));
   }
 
   /**
@@ -604,9 +659,7 @@ function lickTargetFolder(
   folders: ReadonlyMap<string, string>
 ): string | null {
   if (!scoopField) return null;
-  const unit = units.find(
-    (u) => scoopField === u.name || scoopField === u.folder || `${scoopField}-scoop` === u.folder
-  );
+  const unit = matchLickTargetAlias(units, scoopField);
   return unit ? (folders.get(unit.jid) ?? null) : null;
 }
 
@@ -971,7 +1024,13 @@ export async function planProfileExport(
   const page = await collectPageSecrets(deps);
   const redactor = literalSecretsRedactor(deps.knownSecrets, page.literals);
   const transcripts = deps.createTranscriptSource(redactor);
-  const collector = new ProfileCollector(deps, redactor, await deps.mounts(), signal);
+  const collector = new ProfileCollector(
+    deps,
+    redactor,
+    await deps.mounts(),
+    signal,
+    page.literals.filter((l) => l.length >= MIN_LITERAL_SECRET_LENGTH)
+  );
 
   const units = deps.listUnits();
   const folders = exportFolders(units);
