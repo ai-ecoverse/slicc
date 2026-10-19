@@ -13,15 +13,6 @@ import zlib
 final class FetchProxyGzipTests: XCTestCase {
     private let plainJS = "export const aem = 1;\n"
 
-    func testMissingAndIdentityEncodingsLookUncompressed() {
-        XCTAssertTrue(FetchProxyGzip.contentEncodingLooksUncompressed(nil))
-        XCTAssertTrue(FetchProxyGzip.contentEncodingLooksUncompressed(""))
-        XCTAssertTrue(FetchProxyGzip.contentEncodingLooksUncompressed("identity"))
-        XCTAssertTrue(FetchProxyGzip.contentEncodingLooksUncompressed(" Identity "))
-        XCTAssertFalse(FetchProxyGzip.contentEncodingLooksUncompressed("gzip"))
-        XCTAssertFalse(FetchProxyGzip.contentEncodingLooksUncompressed("br"))
-    }
-
     func testStartsWithMagic() throws {
         let gz = try gzipForTest(Array(plainJS.utf8))
         XCTAssertTrue(FetchProxyGzip.startsWithMagic(gz))

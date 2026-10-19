@@ -3,7 +3,6 @@ import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import {
   bufferStartsWithGzipMagic,
-  contentEncodingLooksUncompressed,
   createMaybeGunzipStream,
   GZIP_MAGIC_0,
   GZIP_MAGIC_1,
@@ -24,16 +23,6 @@ function pipeThrough(src: Readable): Readable {
 }
 
 describe('fetch-proxy gzip sniff', () => {
-  it('treats missing and identity encodings as uncompressed declarations', () => {
-    expect(contentEncodingLooksUncompressed(null)).toBe(true);
-    expect(contentEncodingLooksUncompressed(undefined)).toBe(true);
-    expect(contentEncodingLooksUncompressed('')).toBe(true);
-    expect(contentEncodingLooksUncompressed('identity')).toBe(true);
-    expect(contentEncodingLooksUncompressed(' Identity ')).toBe(true);
-    expect(contentEncodingLooksUncompressed('gzip')).toBe(false);
-    expect(contentEncodingLooksUncompressed('br')).toBe(false);
-  });
-
   it('detects gzip magic and rejects shorter prefixes', () => {
     expect(bufferStartsWithGzipMagic(Buffer.from([GZIP_MAGIC_0, GZIP_MAGIC_1, 0x08]))).toBe(true);
     expect(bufferStartsWithGzipMagic(Buffer.from([GZIP_MAGIC_0]))).toBe(false);
