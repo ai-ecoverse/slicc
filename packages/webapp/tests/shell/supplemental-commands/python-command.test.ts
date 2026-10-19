@@ -1,6 +1,8 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { PYODIDE_VERSION } from '../../../src/kernel/realm/py-realm-shared.js';
+import type { Realm, RealmFactory } from '../../../src/kernel/realm/realm-runner.js';
+import type { RealmInitMsg } from '../../../src/kernel/realm/realm-types.js';
 import { createSupplementalCommands } from '../../../src/shell/supplemental-commands/index.js';
 import {
   computeOverlappingMountPoints,
@@ -148,8 +150,37 @@ describe('computeOverlappingMountPoints', () => {
   });
 });
 
+function makeArgvEchoRealmFactory(): RealmFactory & { inits: RealmInitMsg[] } {
+  const inits: RealmInitMsg[] = [];
+  const factory = vi.fn(async (): Promise<Realm> => {
+    const handlers = new Set<(event: MessageEvent) => void>();
+    return {
+      controlPort: {
+        postMessage: (msg: unknown) => {
+          const init = msg as RealmInitMsg;
+          if (init.type !== 'realm-init') return;
+          inits.push(init);
+          const done = {
+            type: 'realm-done',
+            stdout: JSON.stringify(init.argv),
+            stderr: '',
+            exitCode: 0,
+          };
+          queueMicrotask(() => {
+            for (const h of [...handlers]) h({ data: done } as MessageEvent);
+          });
+        },
+        addEventListener: (_type, handler) => handlers.add(handler),
+        removeEventListener: (_type, handler) => handlers.delete(handler),
+      },
+      terminate: () => {},
+    };
+  });
+  return Object.assign(factory, { inits });
+}
+
 describe('createPython3LikeCommand — interpreter flags', () => {
-  function run(args: string[]) {
+  function run(args: string[], realmFactory?: RealmFactory) {
     const fs: Partial<IFileSystem> = {
       resolvePath: (base: string, p: string) => (p.startsWith('/') ? p : `${base}/${p}`),
       exists: vi.fn().mockResolvedValue(false),
@@ -157,7 +188,7 @@ describe('createPython3LikeCommand — interpreter flags', () => {
       readdir: vi.fn().mockResolvedValue([]),
       readFile: vi.fn().mockRejectedValue(new Error('ENOENT')),
     };
-    const cmd = createPython3LikeCommand('python3');
+    const cmd = createPython3LikeCommand('python3', { realmFactory });
     const ctx = {
       fs: fs as IFileSystem,
       cwd: '/workspace',
@@ -205,8 +236,12 @@ describe('createPython3LikeCommand — interpreter flags', () => {
     const script = await run(['/workspace/emcc.py', '--version']);
     expect(script.stdout).not.toContain('(Pyodide)');
     expect(script.exitCode).not.toBe(0);
-    const inline = await run(['-c', 'print(1)', '-h']);
+    const realmFactory = makeArgvEchoRealmFactory();
+    const inline = await run(['-c', 'print(1)', '-h'], realmFactory);
     expect(inline.stdout).not.toContain('usage');
+    expect(realmFactory.inits).toHaveLength(1);
+    expect(realmFactory.inits[0].code).toBe('print(1)');
+    expect(realmFactory.inits[0].argv).toEqual(['-c', '-h']);
   });
 });
 
