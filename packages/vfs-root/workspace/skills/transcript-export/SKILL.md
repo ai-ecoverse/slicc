@@ -44,10 +44,12 @@ it in SLICC 7's Freezer (**Import from SLICC 6…**).
 
 ```bash
 export-profile --dry-run   # what would move, nothing saved
-export-profile             # save the zip(s) to Downloads
+export-profile             # opens the export dialog; the user confirms, then it saves
 ```
 
-Tell the user the two notes the command prints:
+`export-profile` never saves on its own: it opens the Export for SLICC 7
+dialog in the SLICC tab, and the user has to click **Export** there. Tell
+them to look at the tab. Afterwards, tell them the two notes it prints:
 
 - API keys and logins do **not** move. They enter them again in SLICC 7's
   Settings, for the providers listed.

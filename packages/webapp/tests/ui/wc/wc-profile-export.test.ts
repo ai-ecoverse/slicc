@@ -155,7 +155,7 @@ describe('showProfileExportDialog', () => {
     expect(button('export').textContent).toBe('Done');
     button('export').click();
     close();
-    await done;
+    await expect(done).resolves.toMatchObject({ exportId: 'id' });
     expect(document.querySelector('slicc-dialog')).toBeNull();
   });
 
@@ -176,7 +176,7 @@ describe('showProfileExportDialog', () => {
     expect(button('export').disabled).toBe(false);
     button('cancel').click();
     close();
-    await done;
+    await expect(done).resolves.toBeNull();
   });
 
   it('shows a planning failure and aborts the plan when closed', async () => {
@@ -226,6 +226,16 @@ describe('runProfileExportHeadless and the panel-RPC handler', () => {
     } finally {
       teardown();
     }
+  });
+
+  it('never saves without the dialog: a real run waits for confirmation', async () => {
+    const confirmed = vi.fn(async () => plan());
+    const result = await runProfileExportHeadless({ dryRun: false }, confirmed);
+    expect(confirmed).toHaveBeenCalledOnce();
+    expect(result.report).toContain('saved slicc6-profile-2026-10-18.zip to Downloads');
+    await expect(runProfileExportHeadless({ dryRun: false }, async () => null)).rejects.toThrow(
+      /cancelled/
+    );
   });
 
   it('saves every archive through the spool and an anchor download', async () => {

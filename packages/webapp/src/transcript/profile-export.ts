@@ -393,6 +393,17 @@ class ProfileCollector {
     group.entries.set(path, { path, size: bytes.byteLength, sha256, load: async () => bytes });
   }
 
+  /** Redact a short manifest string (a cone or scoop name, a frozen title). */
+  async redactLabel(group: Group, label: string): Promise<string> {
+    const [out] = await redactProfileTexts(
+      [label],
+      this.redactor,
+      group.redactionCounts,
+      this.signal
+    );
+    return out!;
+  }
+
   /** Redact a text entry, then add it. */
   async addText(group: Group, path: string, text: string): Promise<void> {
     const [redacted] = await redactProfileTexts(
@@ -706,7 +717,7 @@ async function collectCone(
     scoops.push({
       key: conversationKeyFor(scoop),
       folder: scoopFolder,
-      name: scoop.name,
+      name: await collector.redactLabel(group, scoop.name),
       conversation: conversationIds.has(scoop.jid) ? scoop.jid : null,
       files: queued > 0 ? prefix : null,
     });
@@ -714,7 +725,7 @@ async function collectCone(
   group.cones.push({
     key: conversationKeyFor(cone),
     folder,
-    name: cone.name,
+    name: await collector.redactLabel(group, cone.name),
     transcript: transcriptPath,
     conversation: conversationIds.has(cone.jid) ? cone.jid : null,
     files: coneFiles > 0 ? filesPrefix : null,
@@ -748,7 +759,8 @@ async function collectFrozen(
     const document = await rehomeAttachments(collector, group, snapshot);
     const transcript = `frozen/${safe}.json`;
     await collector.addBytes(group, transcript, transcriptBytes(document));
-    group.frozen.push({ id, title: entry.title, frozenAt: entry.frozenAt ?? null, transcript });
+    const title = await collector.redactLabel(group, entry.title);
+    group.frozen.push({ id, title, frozenAt: entry.frozenAt ?? null, transcript });
   }
 }
 
@@ -815,6 +827,34 @@ interface PageSecrets {
   literals: string[];
 }
 
+/**
+ * An MCP URL as the manifest may carry it: origin and path only. Userinfo,
+ * the query and the fragment can hold a token, so they are dropped, and
+ * their values join the literals redacted everywhere else.
+ */
+export function publicMcpUrl(raw: string): { url: string; secrets: string[] } {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { url: '', secrets: [raw] };
+  }
+  const decode = (v: string): string => {
+    try {
+      return decodeURIComponent(v);
+    } catch {
+      return v;
+    }
+  };
+  const secrets = [
+    decode(parsed.username),
+    decode(parsed.password),
+    ...[...parsed.searchParams.values()],
+    parsed.hash.slice(1),
+  ].filter((v) => v.length > 0);
+  return { url: `${parsed.origin}${parsed.pathname}`, secrets };
+}
+
 async function collectPageSecrets(deps: ProfileExportDeps): Promise<PageSecrets> {
   const literals: string[] = [];
   const kinds = new Set<ProfileSecretKind>(await deps.storedSecretKinds());
@@ -822,7 +862,9 @@ async function collectPageSecrets(deps: ProfileExportDeps): Promise<PageSecrets>
   const mcpProviderIds = new Set<string>();
   const mcp: ProfileMcpServer[] = [];
   for (const [name, server] of Object.entries(servers).sort(([a], [b]) => (a < b ? -1 : 1))) {
-    mcp.push({ name, url: server.url });
+    const { url, secrets } = publicMcpUrl(server.url);
+    mcp.push({ name, url });
+    literals.push(...secrets);
     const headers = Object.values(server.headers ?? {});
     literals.push(...headers);
     const auth = server.auth as { providerId?: unknown } | undefined;

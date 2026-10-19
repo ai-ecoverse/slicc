@@ -184,12 +184,19 @@ async function planNow(signal?: AbortSignal): Promise<ProfileExportPlan> {
   return planProfileExport(getProfileExportDeps(), signal);
 }
 
-/** `export-profile` in this page: plan, save unless `dryRun`, report. */
-export async function runProfileExportHeadless(opts: {
-  dryRun: boolean;
-}): Promise<{ report: string; archives: string[] }> {
-  const plan = await planNow();
-  if (!opts.dryRun) await saveProfileArchives(plan);
+/**
+ * `export-profile` in this page. `--dry-run` plans and reports without
+ * writing. A real export never saves without the user: it opens the same
+ * dialog (providers to re-enter, the credential-like files in the clear)
+ * and reports only once they confirm, so an agent or scoop running the
+ * command cannot dump the profile to Downloads unattended.
+ */
+export async function runProfileExportHeadless(
+  opts: { dryRun: boolean },
+  confirm: typeof showProfileExportDialog = showProfileExportDialog
+): Promise<{ report: string; archives: string[] }> {
+  const plan = opts.dryRun ? await planNow() : await confirm();
+  if (!plan) throw new Error('export cancelled in the SLICC tab; nothing was saved');
   return {
     report: formatProfileExportReport(plan.summary, opts),
     archives: plan.summary.archives,
@@ -257,15 +264,16 @@ export function renderProfileReview(summary: ProfileExportSummary): HTMLElement 
 type DialogEl = HTMLElement & { show?: () => void; hide?: () => void };
 
 /**
- * Open the Export for SLICC 7 dialog. Resolves when it closes. `plan` is
- * injectable for tests and screenshots; it defaults to planning this profile.
+ * Open the Export for SLICC 7 dialog. Resolves when it closes: with the plan
+ * that was saved, or null when the user closed it without saving. `plan` and
+ * `save` are injectable for tests; they default to this profile.
  */
 export function showProfileExportDialog(
   opts: {
     plan?: (signal: AbortSignal) => Promise<ProfileExportPlan>;
     save?: typeof saveProfileArchives;
   } = {}
-): Promise<void> {
+): Promise<ProfileExportPlan | null> {
   ensureStyle(document);
   const plan = opts.plan ?? planNow;
   const save = opts.save ?? saveProfileArchives;
@@ -310,6 +318,7 @@ export function showProfileExportDialog(
   };
 
   let planned: ProfileExportPlan | null = null;
+  let saved: ProfileExportPlan | null = null;
   let finished = false;
   cancel.addEventListener('click', () => dialog.hide?.());
   confirm.addEventListener('click', () => {
@@ -331,6 +340,7 @@ export function showProfileExportDialog(
     })
       .then(() => {
         finished = true;
+        saved = current;
         setStatus(
           `Saved to Downloads: ${current.summary.archives.join(', ')}. Open seven.sliccy.ai and import it in the Freezer.`
         );
@@ -348,7 +358,7 @@ export function showProfileExportDialog(
     dialog.addEventListener('slicc-dialog-close', () => {
       controller.abort();
       dialog.remove();
-      resolve();
+      resolve(saved);
     });
     document.body.append(dialog);
     dialog.show?.();

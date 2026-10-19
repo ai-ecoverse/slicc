@@ -8,7 +8,7 @@ SLICC 6 exports a whole profile for SLICC 7 (seven.sliccy.ai). SLICC 7's `freeze
   1. The dialog reads and redacts the profile and hashes each entry. Nothing is written yet.
   2. It then shows two notes: "Your API keys and logins don't move. You'll enter them again in SLICC 7's Settings", with the providers to set up again, and a warning listing every credential-like file the zip holds in the clear.
   3. **Export** saves the zip(s) to Downloads.
-- **`export-profile [--dry-run]`** writes the same zip and prints the same notes. In the kernel worker it reaches the leader page over the `profile-export` panel-RPC op. `--dry-run` plans the export and prints the report without saving.
+- **`export-profile [--dry-run]`** opens the same dialog in the leader tab and saves only once the user confirms there, then prints the same notes, so neither an agent nor a scoop can write the profile to Downloads unattended. In the kernel worker it reaches the leader page over the `profile-export` panel-RPC op. `--dry-run` plans the export and prints the report without opening the dialog or saving.
 - **The banner** "SLICC 7 is at seven.sliccy.ai." sits between the nav and the shell in the leader tab. Dismissing it is remembered per origin (`slicc-seven-banner-dismissed`).
 
 Every storage origin (`www.sliccy.ai`, `localhost:5710`, the extension) is its own profile, so you export once per origin. The export runs in the leader page because only that page can see every store a profile lives in: the kernel VFS, `slicc-groups`, `slicc_accounts`, the global VFS and the mount table.
@@ -89,6 +89,8 @@ Some routing rules:
 
 ## Secrets (G6, G8)
 
+- **MCP URLs** keep only their origin and path. Userinfo, the query and the fragment are dropped, and their values are redacted wherever else they appear.
+- **Manifest labels** (cone and scoop names, frozen titles) pass the redactor too.
 - **Never exported:**
   - provider API keys and OAuth tokens (`slicc_accounts`);
   - `secrets.env` and extension secrets;

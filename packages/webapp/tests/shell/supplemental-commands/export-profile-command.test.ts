@@ -28,6 +28,7 @@ describe('export-profile', () => {
     expect(result.stdout).toContain('slicc6-profile-<date>.zip');
     expect(result.stdout).toContain('NOT exported');
     expect(result.stdout).toContain('--dry-run');
+    expect(result.stdout).toContain('saves only when you confirm there');
   });
 
   it('asks the leader page over panel RPC from the worker', async () => {

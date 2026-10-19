@@ -5,7 +5,11 @@
  */
 import { TranscriptExportError, validateSliccProfileManifestV1 } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
-import { planProfileExport, splitForRedaction } from '../../src/transcript/profile-export.js';
+import {
+  planProfileExport,
+  publicMcpUrl,
+  splitForRedaction,
+} from '../../src/transcript/profile-export.js';
 import {
   getProfileExportDeps,
   getProfileExportRunner,
@@ -359,5 +363,37 @@ describe('splitForRedaction', () => {
     expect(splitForRedaction('ab\ncd\nef', 4)).toEqual(['ab\n', 'cd\n', 'ef']);
     expect(splitForRedaction('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij']);
     expect(splitForRedaction('', 4)).toEqual([]);
+  });
+});
+
+describe('publicMcpUrl', () => {
+  it('keeps origin and path, and returns what it dropped as secrets', () => {
+    expect(
+      publicMcpUrl('https://u%40x:p4ssw0rd-long@mcp.example.com/v1/mcp?token=abc123456789#frag')
+    ).toEqual({
+      url: 'https://mcp.example.com/v1/mcp',
+      secrets: ['u@x', 'p4ssw0rd-long', 'abc123456789', 'frag'],
+    });
+    expect(publicMcpUrl('https://mcp.linear.app/mcp')).toEqual({
+      url: 'https://mcp.linear.app/mcp',
+      secrets: [],
+    });
+    expect(publicMcpUrl('https://h/x?k=%E0%A4%A')).toMatchObject({ url: 'https://h/x' });
+    expect(publicMcpUrl('not a url')).toEqual({ url: '', secrets: ['not a url'] });
+  });
+
+  it('keeps an MCP URL token out of the manifest and redacts labels', async () => {
+    const token = 'zzfake-url-token-424242';
+    const { deps } = await seedProfile({
+      mcpServers: async () => ({ servers: { x: { url: `https://mcp.x.dev/mcp?key=${token}` } } }),
+      listUnits: () => [
+        { jid: 'cone_1', name: `Sliccy ${token}`, folder: 'cone', parentJid: null },
+      ],
+    });
+    const plan = await planProfileExport(deps);
+    const m = plan.archives[0]!.manifest;
+    expect(m.mcp).toEqual([{ name: 'x', url: 'https://mcp.x.dev/mcp' }]);
+    expect(JSON.stringify(m)).not.toContain(token);
+    expect(m.cones[0]!.name).toContain('⟦REDACTED:provider-credential:');
   });
 });

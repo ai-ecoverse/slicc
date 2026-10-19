@@ -8,7 +8,9 @@
  * profile lives in: directly when this shell is the page's, over panel RPC
  * (`profile-export`) from the kernel worker. Same zip and the same two notes
  * as Settings → Export for SLICC 7: the providers to re-enter, and the
- * credential-like files the zip holds in the clear.
+ * credential-like files the zip holds in the clear. A real export opens that
+ * dialog and waits for the user's confirmation there; only `--dry-run` runs
+ * without it.
  */
 
 import type { Command } from 'just-bash';
@@ -24,7 +26,8 @@ export const EXPORT_PROFILE_HELP = `usage: export-profile [--dry-run]
 
 Save this SLICC 6 profile as slicc6-profile-<date>.zip in Downloads, to import
 in SLICC 7 (https://seven.sliccy.ai) with Freezer → Import from SLICC 6, or
-\`freezer import <zip>\`.
+\`freezer import <zip>\`. It opens the Export for SLICC 7 dialog in the SLICC
+tab, and saves only when you confirm there.
 
 The zip holds every cone (transcript, workspace files, memory, scoops), frozen
 chats, /home/user, user skills and sprinkles, and licks. Text is redacted.
@@ -35,7 +38,7 @@ secrets.env, the GitHub token, MCP tokens and /mnt mounts never move.
 
 A profile over 2 GiB or 60,000 files is split into one zip per cone.
 
-  --dry-run   plan and print the report without saving anything
+  --dry-run   plan and print the report; no dialog, nothing saved
   -h, --help  show this help
 `;
 
