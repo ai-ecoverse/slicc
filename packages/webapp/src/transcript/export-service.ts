@@ -95,13 +95,16 @@ export interface ExportServiceDeps {
 }
 
 // ---------------------------------------------------------------------------
-// Internal result type shared across paths
+// Result type shared across paths
 // ---------------------------------------------------------------------------
 
-interface SnapshotResult {
+/** A validated document plus its bundle files, before any ZIP is built. */
+export interface TranscriptSnapshot {
   document: TranscriptDocumentV1;
   bundleFiles: Map<string, Uint8Array>;
 }
+
+type SnapshotResult = TranscriptSnapshot;
 
 // ---------------------------------------------------------------------------
 // Helpers — document skeleton builder
@@ -287,6 +290,44 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
 
     onProgress?.({ phase: 'packaging' });
     return createTranscriptZip(result.document, result.bundleFiles, signal);
+  }
+
+  /**
+   * One cone's live transcript (the cone plus every unit it owns), validated
+   * but not packaged. The SLICC 7 profile export calls this once per cone.
+   */
+  async snapshotCone(
+    cone: { jid: string; name: string },
+    signal?: AbortSignal
+  ): Promise<TranscriptSnapshot> {
+    const collected = await collectActiveTranscriptSources(this.deps.collection, signal, {
+      rootJid: cone.jid,
+    });
+    const normalized = normalizeConversations(collected.sources);
+    const document = buildDocumentSkeleton(
+      cone.jid,
+      cone.name,
+      'active',
+      normalized,
+      this.deps.version
+    );
+    const result = await processTranscriptAttachments({
+      document,
+      chatMessagesByConversation: collected.chatMessagesByConversation,
+      knownSecrets: this.deps.knownSecrets,
+      canonicalImages: normalized.canonicalImages,
+      vfsReader: (path) => this.readBinaryFromVfs(path),
+      signal,
+    });
+    assertValid(result.document);
+    return result;
+  }
+
+  /** A frozen session's transcript (stored snapshot or legacy archive), validated. */
+  async snapshotFrozen(sessionId: string, signal?: AbortSignal): Promise<TranscriptSnapshot> {
+    const result = await this.buildFrozenSnapshot(sessionId, signal);
+    assertValid(result.document);
+    return result;
   }
 
   async captureFrozen(metadata: FrozenTranscriptMetadata, signal?: AbortSignal): Promise<void> {

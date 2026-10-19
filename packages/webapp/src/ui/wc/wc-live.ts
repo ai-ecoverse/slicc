@@ -16,7 +16,14 @@ import { type SpawnedKernelHost, spawnKernelWorker } from '../../kernel/spawn.js
 import { formatBudgetResets } from '../../providers/provider-budget.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import { registerTranscriptExportService } from '../../transcript/export-provider.js';
-import { DefaultTranscriptExportService } from '../../transcript/export-service.js';
+import {
+  DefaultTranscriptExportService,
+  type ExportServiceDeps,
+} from '../../transcript/export-service.js';
+import {
+  registerProfileExportDeps,
+  registerProfileExportRunner,
+} from '../../transcript/profile-export-provider.js';
 import {
   discardSnapshotIfUnindexed,
   readSnapshot,
@@ -36,6 +43,7 @@ import {
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
+import { createPageProfileExportDeps } from '../profile-export-deps.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
 import { syncRestoringSessionNotice, threadColumnIsEmpty } from './restoring-session-notice.js';
@@ -1071,6 +1079,26 @@ export const DEFAULT_DOCK_TREE_ON_BOOT = {
  * loop back into a persist write. Runs for BOTH floats (standalone and
  * extension) via `attachWcWorkbench` — dual-mode by construction.
  */
+/** Open the Export for SLICC 7 dialog (Settings entry, banner). */
+function openProfileExportDialog(log: Pick<BootStageLogger, 'error'>): void {
+  import('./wc-profile-export.js')
+    .then(({ showProfileExportDialog }) => showProfileExportDialog())
+    .catch((err) => log.error('Export for SLICC 7 dialog failed', err));
+}
+
+/** Show the SLICC 7 banner between the nav and the shell. Lazy; never blocks boot. */
+function mountSevenBannerInShell(log: Pick<BootStageLogger, 'error'>): void {
+  import('./wc-seven-banner.js')
+    .then(({ mountSevenBanner }) => {
+      const appCol = document.querySelector<HTMLElement>('.wcui-appcol');
+      if (!appCol) return;
+      mountSevenBanner(document, appCol, appCol.querySelector(':scope > slicc-shell'), {
+        onExport: () => openProfileExportDialog(log),
+      });
+    })
+    .catch((err) => log.error('SLICC 7 banner failed', err));
+}
+
 export function wireDockTreePersistence(refs: WcShellRefs, log: BootStageLogger): void {
   const dockTreeEl = refs.dockTree as unknown as HTMLElement;
   const dockTree = refs.dockTree as unknown as { setTree(spec: unknown): void };
@@ -1515,7 +1543,7 @@ export function attachWcWorkbench(
   // Teardown is identity-safe: a later re-registration won't be evicted.
   {
     const sessions = new CanonicalSessionReader(new WorkUnitConversationStore());
-    const pageService = new DefaultTranscriptExportService({
+    const pageServiceDeps: ExportServiceDeps = {
       collection: {
         listScoops: () => client.getScoops(),
         isProcessing: (jid) => client.isProcessing(jid),
@@ -1551,10 +1579,27 @@ export function attachWcWorkbench(
         return { id: cone?.id ?? `session-${Date.now()}`, title: cone?.name ?? 'Active Session' };
       },
       version: __SLICC_VERSION__,
-    });
+    };
+    const pageService = new DefaultTranscriptExportService(pageServiceDeps);
     const teardown = registerTranscriptExportService(pageService);
     // Clean up on page unload so a re-mount doesn't leave a stale registration.
     window.addEventListener('unload', teardown, { once: true });
+    // Export for SLICC 7 (Settings, banner, `export-profile`) runs here: only
+    // the leader page sees every store a profile lives in.
+    const profileTeardown = registerProfileExportDeps(() =>
+      createPageProfileExportDeps({
+        serviceDeps: pageServiceDeps,
+        listUnits: () => client.getScoops(),
+        version: __SLICC_VERSION__,
+      })
+    );
+    const runnerTeardown = registerProfileExportRunner(async (opts) => {
+      const { runProfileExportHeadless } = await import('./wc-profile-export.js');
+      return runProfileExportHeadless(opts);
+    });
+    window.addEventListener('unload', profileTeardown, { once: true });
+    window.addEventListener('unload', runnerTeardown, { once: true });
+    mountSevenBannerInShell(log);
   }
 
   // Nav: model picker + avatar menu (settings dialog, legacy-UI escape hatch).

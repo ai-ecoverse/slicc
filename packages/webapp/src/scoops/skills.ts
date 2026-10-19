@@ -113,6 +113,18 @@ function getDefaultFileLoaders(): Record<string, () => Promise<string | Uint8Arr
   return result;
 }
 
+/**
+ * The bundled (vfs-root) bytes six seeds at `vfsPath`, or null when nothing
+ * bundled lives there. The SLICC 7 profile export compares a user's file with
+ * this to skip unchanged bundled skills, sprinkles and memory.
+ */
+export async function readBundledFile(vfsPath: string): Promise<Uint8Array | null> {
+  const load = getDefaultFileLoaders()[`/packages/vfs-root${vfsPath}`];
+  if (!load) return null;
+  const content = await load();
+  return typeof content === 'string' ? new TextEncoder().encode(content) : content;
+}
+
 export interface SkillMetadata {
   name: string;
   description: string;
