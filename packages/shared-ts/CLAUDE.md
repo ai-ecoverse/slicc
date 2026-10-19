@@ -15,7 +15,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 - `sigv4.ts` — Web Crypto SigV4 signer (no AWS SDK); AWS vectors in `tests/sigv4.test.ts`.
 - `sign-and-forward.ts` — S3 / da.live (`executeS3SignAndForward` / `executeDaSignAndForward`): validate envelope, resolve creds via async `SecretGetter`, sign (S3) or Bearer (DA), forward, cloneable reply. Webapp/node-server/ext SW.
 - `raw-fetch-protocol.ts` — raw-mode fetch-proxy contract for the wasm realm proxy: request-head JSON (`X-Slicc-Raw-Request`), probe (`X-Slicc-Raw-Probe`, `parseRawFetchProbeReply`), length-prefixed response-head frame, hop-by-hop strip, drop `Content-Encoding`/`Content-Length` on decode. node-server `routes/fetch-proxy-raw.ts`, webapp `shell/proxied-fetch-raw.ts`; Swift `packages/swift-server/Sources/Server/RawFetchProtocol.swift`.
-- `raw-fetch-upload.ts` — ext SW + webapp bridge raw uploads: `rawUploadStreams` (stream non-text ≥8 MiB or unknown length; buffer + HMAC-sign text), `withUnsentUploadRetry` (retry once on pre-body Chrome refusal).
+- `raw-fetch-upload.ts` — ext SW + webapp bridge raw uploads: `rawUploadStreams` (stream non-text ≥8 MiB/unknown length; buffer text + HMAC bodies), `withUnsentUploadRetry` (retry once on pre-body Chrome refusal).
 - `proxy-headers.ts` — forbidden-header (Cookie/Origin/Referer/Proxy-\*, Set-Cookie) encode/decode for `/api/fetch-proxy`. Webapp shell proxy + ext SW backend.
 
 ### Tray / sync wire contracts
