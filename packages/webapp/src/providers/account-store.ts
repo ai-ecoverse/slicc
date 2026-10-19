@@ -15,6 +15,7 @@ import {
   readOAuthExtras as sharedReadOAuthExtras,
   writeOAuthExtras as sharedWriteOAuthExtras,
 } from '@slicc/shared-ts';
+import { knownProviderLabel } from '../base/provider-labels.js';
 import { ACCOUNTS_KEY, readStoredAccounts } from '../base/stored-accounts.js';
 import type { Model } from '../core/index.js';
 import { createLogger, getModel, getModels, getProviders } from '../core/index.js';
@@ -341,10 +342,12 @@ export function getProviderConfig(providerId: string): ProviderConfig {
   return (
     getRegisteredProviderConfig(providerId) || {
       id: providerId,
-      name: providerId
-        .split('-')
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(' '),
+      name:
+        knownProviderLabel(providerId) ??
+        providerId
+          .split('-')
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(' '),
       description: `${providerId} provider`,
       requiresApiKey: true,
       requiresBaseUrl: false,

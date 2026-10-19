@@ -31,3 +31,12 @@ export function providerLabel(id: string | null | undefined): string | undefined
   if (!id) return undefined;
   return PROVIDER_LABELS[id] ?? id;
 }
+
+/**
+ * The curated display name for `id`, or `undefined` when there is none —
+ * for callers with their own fallback (`getProviderConfig`). The `local`
+ * phrase is prose, not a name, so it is not offered here.
+ */
+export function knownProviderLabel(id: string): string | undefined {
+  return id === 'local' ? undefined : PROVIDER_LABELS[id];
+}

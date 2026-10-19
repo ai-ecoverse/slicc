@@ -144,10 +144,19 @@ describe('showProfileExportDialog', () => {
         opts?.onArchive?.(0, { filename: 'slicc6-profile-2026-10-18.zip' } as never);
       }
     );
-    const done = showProfileExportDialog({ plan: async () => plan(), save });
+    const done = showProfileExportDialog({
+      plan: async () => plan(),
+      save,
+      providerNames: async () => (id) => ({ anthropic: 'Anthropic', openai: 'OpenAI' })[id] ?? id,
+    });
     expect(dialog().getAttribute('heading')).toBe('Export for SLICC 7');
     await vi.waitFor(() => expect(button('export').disabled).toBe(false));
     expect(dialog().textContent).toContain('/workspace/.env');
+    const chips = [...dialog().querySelectorAll<HTMLElement>('.wcpx__chip')];
+    expect(chips.map((c) => [c.textContent, c.title])).toEqual([
+      ['Anthropic', 'anthropic'],
+      ['OpenAI', 'openai'],
+    ]);
     expect(save).not.toHaveBeenCalled();
     button('export').click();
     await vi.waitFor(() => expect(dialog().textContent).toContain('Saved to Downloads'));
@@ -169,6 +178,7 @@ describe('showProfileExportDialog', () => {
     const done = showProfileExportDialog({
       plan: async () => plan(summary({ archives: ['a.zip', 'b.zip'] })),
       save,
+      providerNames: async () => (id) => id,
     });
     await vi.waitFor(() => expect(button('export').textContent).toBe('Export 2 zips'));
     button('export').click();
@@ -182,6 +192,7 @@ describe('showProfileExportDialog', () => {
   it('shows a planning failure and aborts the plan when closed', async () => {
     let signal: AbortSignal | undefined;
     const done = showProfileExportDialog({
+      providerNames: async () => (id) => id,
       plan: async (s) => {
         signal = s;
         const err = new Error('redaction-unavailable') as Error & { detail?: string };
@@ -204,6 +215,9 @@ describe('showProfileExportDialog', () => {
     let reject!: (e: Error) => void;
     const done = showProfileExportDialog({
       plan: () => new Promise((_, r) => (reject = r)),
+      providerNames: async () => {
+        throw new Error('never');
+      },
     });
     close();
     await done;

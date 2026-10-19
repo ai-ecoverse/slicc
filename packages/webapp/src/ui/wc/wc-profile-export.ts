@@ -48,7 +48,7 @@ slicc-dialog.wcpx-dialog::part(dialog){width:min(560px,94vw);}
 .wcpx__box--warn{border-color:color-mix(in srgb,#d97706 55%,var(--line));background:color-mix(in srgb,#d97706 9%,var(--canvas));}
 .wcpx__title{font-weight:600;font-size:12.5px;}
 .wcpx__chips{display:flex;flex-wrap:wrap;gap:6px;}
-.wcpx__chip{font:500 11.5px var(--mono,ui-monospace,monospace);padding:2px 8px;border-radius:999px;border:1px solid var(--line);background:var(--ghost);}
+.wcpx__chip{font:500 11.5px var(--ui);padding:2px 8px;border-radius:999px;border:1px solid var(--line);background:var(--ghost);}
 .wcpx__files{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;max-height:180px;overflow:auto;}
 .wcpx__file{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:12px;}
 .wcpx__path{font-family:var(--mono,ui-monospace,monospace);word-break:break-all;}
@@ -179,6 +179,16 @@ export async function saveProfileArchives(
   }
 }
 
+/** Display names for provider ids, from the same configs the Accounts list uses. */
+async function loadProviderNames(): Promise<(id: string) => string> {
+  try {
+    const { getProviderConfig } = await import('../provider-settings.js');
+    return (id) => getProviderConfig(id).name || id;
+  } catch {
+    return (id) => id;
+  }
+}
+
 async function planNow(signal?: AbortSignal): Promise<ProfileExportPlan> {
   const { planProfileExport } = await import('../../transcript/profile-export.js');
   return planProfileExport(getProfileExportDeps(), signal);
@@ -212,7 +222,10 @@ function errorText(err: unknown): string {
 }
 
 /** Render the planned export's review: keys note, providers, flagged files, leftovers. */
-export function renderProfileReview(summary: ProfileExportSummary): HTMLElement {
+export function renderProfileReview(
+  summary: ProfileExportSummary,
+  providerName: (id: string) => string = (id) => id
+): HTMLElement {
   const body = el('div', 'wcpx');
   body.append(el('div', 'wcpx__summary', describeContents(summary)));
 
@@ -222,7 +235,11 @@ export function renderProfileReview(summary: ProfileExportSummary): HTMLElement 
   if (summary.providers.length > 0) {
     keys.append(el('div', 'wcpx__muted', 'Providers to set up again:'));
     const chips = el('div', 'wcpx__chips');
-    for (const p of summary.providers) chips.append(el('span', 'wcpx__chip', p));
+    for (const p of summary.providers) {
+      const chip = el('span', 'wcpx__chip', providerName(p));
+      chip.title = p;
+      chips.append(chip);
+    }
     keys.append(chips);
   } else {
     keys.append(el('div', 'wcpx__muted', 'No provider accounts are set up here.'));
@@ -272,6 +289,7 @@ export function showProfileExportDialog(
   opts: {
     plan?: (signal: AbortSignal) => Promise<ProfileExportPlan>;
     save?: typeof saveProfileArchives;
+    providerNames?: () => Promise<(id: string) => string>;
   } = {}
 ): Promise<ProfileExportPlan | null> {
   ensureStyle(document);
@@ -362,10 +380,10 @@ export function showProfileExportDialog(
     });
     document.body.append(dialog);
     dialog.show?.();
-    plan(controller.signal)
-      .then((result) => {
+    Promise.all([plan(controller.signal), (opts.providerNames ?? loadProviderNames)()])
+      .then(([result, providerName]) => {
         planned = result;
-        review.replaceWith(renderProfileReview(result.summary));
+        review.replaceWith(renderProfileReview(result.summary, providerName));
         setStatus('');
         confirm.textContent =
           result.archives.length > 1 ? `Export ${result.archives.length} zips` : 'Export';
