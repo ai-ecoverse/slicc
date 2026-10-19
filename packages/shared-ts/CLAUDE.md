@@ -6,7 +6,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 
 ### Secrets & proxy
 
-- `secret-masking.ts` — HMAC-SHA256 masking, domain matching, scrubbing. `secretScopeHostname(url)` is THE name (no port, lowercase, punycode) a domain list matches against; all floats derive it.
+- `secret-masking.ts` — HMAC-SHA256 masking, domain match, scrub. `secretScopeHostname(url)` is THE name (no port, lowercase, punycode) a domain list matches against; all floats derive it.
 - `secrets-pipeline.ts` — stateful unmask/scrub class (`SecretProxyManager`); Basic-auth- + URL-credential-aware byte-safe body unmask; `unmaskHeaders` mutates in place.
 - `content-type.ts` — fetch-proxy body classifiers. `isTextContentType` gates response scrub + body caching; `isTextRequestContentType`/`isFormContentType` gate request-body unmask ONLY (form POSTs carry secrets that reach upstream raw). Swift twin `packages/swift-server/Sources/Server/ContentType.swift` — divergence leaks secrets; pinned by `tests/content-type-parity.test.ts`.
 - `form-body-unmask.ts` — `unmaskFormBody`: encoding-aware masked→real unmask for `application/x-www-form-urlencoded`. Unmasks each field's DECODED value, re-encodes only changed ones (a raw splice corrupts the form when a secret carries reserved `&`/`=`/`+`). Swift `packages/swift-server/Sources/Server/FormBodyUnmask.swift`, pinned both ways.
@@ -15,7 +15,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 - `sigv4.ts` — Web Crypto SigV4 signer (no AWS SDK); AWS vectors in `tests/sigv4.test.ts`.
 - `sign-and-forward.ts` — S3 / da.live (`executeS3SignAndForward` / `executeDaSignAndForward`): validate envelope, resolve creds via async `SecretGetter`, sign (S3) or Bearer (DA), forward, cloneable reply. Webapp/node-server/ext SW.
 - `raw-fetch-protocol.ts` — raw-mode fetch-proxy contract for the wasm realm proxy: request-head JSON (`X-Slicc-Raw-Request`), probe (`X-Slicc-Raw-Probe`, `parseRawFetchProbeReply`), length-prefixed response-head frame, hop-by-hop strip, drop `Content-Encoding`/`Content-Length` on decode. node-server `routes/fetch-proxy-raw.ts`, webapp `shell/proxied-fetch-raw.ts`; Swift `packages/swift-server/Sources/Server/RawFetchProtocol.swift`.
-- `raw-fetch-upload.ts` — ext SW + webapp bridge raw uploads: `rawUploadStreams` (stream non-text ≥8 MiB/unknown length; buffer text + HMAC bodies), `withUnsentUploadRetry` (retry once on pre-body Chrome refusal).
+- `raw-fetch-upload.ts` — ext SW + webapp bridge raw uploads: `rawUploadStreams` (stream non-text ≥8 MiB/unknown length; buffer text and HMAC-signed bodies), `withUnsentUploadRetry` (retry once if Chrome refuses pre-body).
 - `proxy-headers.ts` — forbidden-header (Cookie/Origin/Referer/Proxy-\*, Set-Cookie) encode/decode for `/api/fetch-proxy`. Webapp shell proxy + ext SW backend.
 
 ### Tray / sync wire contracts
