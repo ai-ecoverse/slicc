@@ -169,7 +169,8 @@ function composeMode(type: 'file' | 'dir' | 'symlink', rawMode: number | undefin
  * ino AND size all match what the index recorded — so every field that is
  * synthesized rather than reported guarantees a permanent cache miss, which
  * on a `refresh: true` walk means re-hashing the file and rewriting the
- * whole `.git/index`, once per file (issue #2708). Real values are used
+ * whole `.git/index` (once per file before isomorphic-git 1.42.7, once per
+ * walk since; issue #2708). Real values are used
  * whenever the filesystem supplied them; the historical placeholders remain
  * as the fallback for backends that expose nothing (S3/DA/AEM mounts).
  */

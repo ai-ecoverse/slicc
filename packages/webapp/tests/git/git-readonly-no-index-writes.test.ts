@@ -117,10 +117,11 @@ describe('read-only git commands never write (issue #2708)', () => {
 
   it('the fake filesystem really does force an index refresh (control)', async () => {
     // Guards the tests below: with isomorphic-git's default `refresh: true`
-    // these stats make it rewrite .git/index once per tracked file. If this
-    // ever stops writing, the assertions below stop proving anything.
+    // these stats make it rewrite .git/index (once per walk since 1.42.7,
+    // once per tracked file before). If this ever stops writing, the
+    // assertions below stop proving anything.
     await git.statusMatrix({ fs: ctx.lfs, dir: CWD, refresh: true });
-    expect(writes.filter((p) => p.endsWith('.git/index')).length).toBeGreaterThan(1);
+    expect(writes.filter((p) => p.endsWith('.git/index')).length).toBeGreaterThan(0);
   });
 
   it('ls-files lists tracked files without writing', async () => {
