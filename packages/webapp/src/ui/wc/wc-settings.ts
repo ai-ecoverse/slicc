@@ -338,6 +338,28 @@ function buildAddSection(deps: ViewDeps): HTMLElement {
   return section;
 }
 
+function buildSevenSection(log: SettingsLogger, closeSettings: () => void): HTMLElement {
+  const section = div('wcset__add');
+  section.dataset.settingsSection = 'slicc-7';
+  section.append(div('wcset__section-label', 'SLICC 7'));
+  section.append(
+    div(
+      'wcset__pair-hint',
+      'SLICC 7 is at seven.sliccy.ai. Export your cones, chats, files, memory and skills to import them there.'
+    )
+  );
+  const exportBtn = button('wcset__btn', 'Export for SLICC 7…', () => {
+    closeSettings();
+    import('./wc-profile-export.js')
+      .then(({ showProfileExportDialog }) => showProfileExportDialog())
+      .catch((err) => log.error('Export for SLICC 7 dialog failed', err));
+  });
+  exportBtn.dataset.settingsAction = 'export-profile';
+  exportBtn.style.alignSelf = 'flex-start';
+  section.append(exportBtn);
+  return section;
+}
+
 function buildChatPreferencesSection(): HTMLElement {
   const section = div('wcset__add');
   section.append(div('wcset__section-label', 'Chat'));
@@ -1031,7 +1053,10 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
     };
     deps.renderList();
 
-    body.append(list, addSectionSlot, status);
+    const closeSettings = (): void => {
+      (dialog as HTMLElement & { hide?: () => void }).hide?.();
+    };
+    body.append(list, addSectionSlot, buildSevenSection(log, closeSettings), status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {

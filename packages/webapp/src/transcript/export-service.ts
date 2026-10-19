@@ -62,10 +62,12 @@ export interface ExportServiceDeps {
   version: string;
 }
 
-interface SnapshotResult {
+export interface TranscriptSnapshot {
   document: TranscriptDocumentV1;
   bundleFiles: Map<string, Uint8Array>;
 }
+
+type SnapshotResult = TranscriptSnapshot;
 
 function buildDocumentSkeleton(
   sessionId: string,
@@ -201,6 +203,39 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
 
     onProgress?.({ phase: 'packaging' });
     return createTranscriptZip(result.document, result.bundleFiles, signal);
+  }
+
+  async snapshotCone(
+    cone: { jid: string; name: string },
+    signal?: AbortSignal
+  ): Promise<TranscriptSnapshot> {
+    const collected = await collectActiveTranscriptSources(this.deps.collection, signal, {
+      rootJid: cone.jid,
+    });
+    const normalized = normalizeConversations(collected.sources);
+    const document = buildDocumentSkeleton(
+      cone.jid,
+      cone.name,
+      'active',
+      normalized,
+      this.deps.version
+    );
+    const result = await processTranscriptAttachments({
+      document,
+      chatMessagesByConversation: collected.chatMessagesByConversation,
+      knownSecrets: this.deps.knownSecrets,
+      canonicalImages: normalized.canonicalImages,
+      vfsReader: (path) => this.readBinaryFromVfs(path),
+      signal,
+    });
+    assertValid(result.document);
+    return result;
+  }
+
+  async snapshotFrozen(sessionId: string, signal?: AbortSignal): Promise<TranscriptSnapshot> {
+    const result = await this.buildFrozenSnapshot(sessionId, signal);
+    assertValid(result.document);
+    return result;
   }
 
   async captureFrozen(metadata: FrozenTranscriptMetadata, signal?: AbortSignal): Promise<void> {

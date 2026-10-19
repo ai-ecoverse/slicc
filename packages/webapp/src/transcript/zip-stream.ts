@@ -135,9 +135,19 @@ interface CdEntry {
   localOffset: number;
 }
 
+export interface ZipEntrySource {
+  path: string;
+
+  load(): Promise<Uint8Array> | Uint8Array;
+}
+
+export interface ZipStreamResult {
+  chunks: AsyncIterable<Uint8Array>;
+  completion: Promise<{ byteLength: number; sha256: string }>;
+}
+
 async function* generateZip(
-  document: TranscriptDocumentV1,
-  bundleFiles: Map<string, Uint8Array>,
+  entries: Iterable<ZipEntrySource>,
   signal: AbortSignal | undefined,
   completionResolve: (r: { byteLength: number; sha256: string }) => void,
   completionReject: (e: Error) => void
@@ -165,31 +175,23 @@ async function* generateZip(
   }
 
   try {
-    const jsonBytes = new TextEncoder().encode(JSON.stringify(document, null, 2));
-    const jsonName = encoder.encode('transcript.json');
-    const jsonCrc = crc32(jsonBytes);
-    const jsonHdr = buildLocalFileHeader(jsonName, jsonBytes.length, jsonCrc);
-    cdEntries.push({
-      nameBytes: jsonName,
-      size: jsonBytes.length,
-      crc: jsonCrc,
-      localOffset: offset,
-    });
-    if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
-    yield* emitChunk(jsonHdr);
-    if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
-    yield* emitChunk(jsonBytes);
-
-    for (const [path, data] of bundleFiles) {
+    for (const entry of entries) {
       if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
-      const nameBytes = encoder.encode(path);
+      const data = await entry.load();
+      if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
+      if (data.byteLength > ZIP32_MAX_FILE_BYTES) throw new TranscriptExportError('schema-invalid');
+      const nameBytes = encoder.encode(entry.path);
       const fileCrc = crc32(data);
       const hdr = buildLocalFileHeader(nameBytes, data.length, fileCrc);
+      if (offset + hdr.length + data.length > ZIP32_MAX_FILE_BYTES) {
+        throw new TranscriptExportError('schema-invalid', 'archive exceeds ZIP32 offsets');
+      }
       cdEntries.push({ nameBytes, size: data.length, crc: fileCrc, localOffset: offset });
       yield* emitChunk(hdr);
       if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
       yield* emitChunk(data);
     }
+    if (cdEntries.length > ZIP32_MAX_ENTRIES) throw new TranscriptExportError('schema-invalid');
 
     const cdStart = offset;
     for (const entry of cdEntries) {
@@ -222,6 +224,33 @@ const ZIP32_MAX_FILE_BYTES = 0xffffffff;
 
 const ZIP32_MAX_ENTRIES = 0xffff;
 
+export function createZipStream(
+  entries: readonly ZipEntrySource[],
+  signal?: AbortSignal
+): ZipStreamResult {
+  const seen = new Set<string>();
+  for (const { path } of entries) {
+    if (!isSafeBundlePath(path) || seen.has(path)) {
+      throw new TranscriptExportError('schema-invalid');
+    }
+    seen.add(path);
+  }
+  if (entries.length > ZIP32_MAX_ENTRIES) throw new TranscriptExportError('schema-invalid');
+
+  let completionResolve!: (r: { byteLength: number; sha256: string }) => void;
+  let completionReject!: (e: Error) => void;
+  const completion = new Promise<{ byteLength: number; sha256: string }>((res, rej) => {
+    completionResolve = res;
+    completionReject = rej;
+  });
+
+  completion.catch(() => undefined);
+  return {
+    chunks: generateZip(entries, signal, completionResolve, completionReject),
+    completion,
+  };
+}
+
 export function createTranscriptZip(
   document: TranscriptDocumentV1,
   bundleFiles: Map<string, Uint8Array>,
@@ -242,16 +271,12 @@ export function createTranscriptZip(
     }
   }
 
-  let completionResolve!: (r: { byteLength: number; sha256: string }) => void;
-  let completionReject!: (e: Error) => void;
-  const completion = new Promise<{ byteLength: number; sha256: string }>((res, rej) => {
-    completionResolve = res;
-    completionReject = rej;
-  });
-
-  return {
-    filename: makeFilename(document),
-    chunks: generateZip(document, bundleFiles, signal, completionResolve, completionReject),
-    completion,
-  };
+  const entries: ZipEntrySource[] = [
+    {
+      path: 'transcript.json',
+      load: () => new TextEncoder().encode(JSON.stringify(document, null, 2)),
+    },
+    ...[...bundleFiles].map(([path, data]) => ({ path, load: () => data })),
+  ];
+  return { filename: makeFilename(document), ...createZipStream(entries, signal) };
 }

@@ -23,6 +23,15 @@ export function buildFeatureFlagHandler() {
   } satisfies Partial<PanelRpcHandlers>;
 }
 
+export function buildProfileExportHandler() {
+  return {
+    'profile-export': async ({ dryRun }: { dryRun: boolean }) => {
+      const { runProfileExportHeadless } = await import('../wc/wc-profile-export.js');
+      return runProfileExportHeadless({ dryRun });
+    },
+  };
+}
+
 export function buildThemeHandler() {
   return {
     'theme-apply': async ({

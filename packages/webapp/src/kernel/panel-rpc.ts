@@ -40,6 +40,7 @@ export function panelRpcChannelName(instanceId?: string): string {
 
 export type PanelRpcRequest =
   | { op: 'page-info'; payload?: undefined }
+  | { op: 'profile-export'; payload: { dryRun: boolean } }
   | {
       op: 'screencapture';
       payload: {
@@ -506,6 +507,7 @@ export type PanelRpcRequest =
 
 export interface PanelRpcResults {
   'page-info': { origin: string; href: string; title: string };
+  'profile-export': { report: string; archives: string[] };
   screencapture: {
     bytes: ArrayBuffer;
     width: number;

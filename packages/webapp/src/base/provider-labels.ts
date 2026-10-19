@@ -18,3 +18,7 @@ export function providerLabel(id: string | null | undefined): string | undefined
   if (!id) return undefined;
   return PROVIDER_LABELS[id] ?? id;
 }
+
+export function knownProviderLabel(id: string): string | undefined {
+  return id === 'local' ? undefined : PROVIDER_LABELS[id];
+}

@@ -40,6 +40,7 @@ import {
   buildComputerTabHandlers,
   buildFeatureFlagHandler,
   buildLayoutHandler,
+  buildProfileExportHandler,
   buildThemeHandler,
 } from './panel-rpc/ui-handlers.js';
 import type { RemoteCdpPageBridge } from './remote-cdp-page-bridge.js';
@@ -169,6 +170,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildSecretsBridgeHandler(),
     ...buildMountBridgeHandler(),
     ...buildThemeHandler(),
+    ...buildProfileExportHandler(),
     ...buildLayoutHandler(),
     ...buildFeatureFlagHandler(),
     ...buildComputerTabHandlers(),

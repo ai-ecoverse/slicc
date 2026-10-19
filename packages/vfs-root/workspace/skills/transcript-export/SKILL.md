@@ -5,7 +5,9 @@ description: |
   history; or (with Memory v2 on) to search or re-read past /sessions archives.
   Covers active-session export, archived (frozen) session export, ZIP bundle
   layout, redaction guarantees, `session export` syntax, and the Memory v2
-  `session search` / `session read` bounded search-then-read protocol.
+  `session search` / `session read` bounded search-then-read protocol. Also use
+  when the user wants to move to SLICC 7 / seven.sliccy.ai or export their whole
+  profile (`export-profile`).
 allowed-tools: bash, read_file
 ---
 
@@ -31,6 +33,32 @@ session export --id <session-id> --output /workspace/archive.zip
 ```
 
 The **default output path** is `/workspace/slicc-transcript-<session-id>.zip`.
+
+## Moving to SLICC 7 — `export-profile`
+
+SLICC 7 lives at seven.sliccy.ai. To move this whole profile there, run
+`export-profile`, or point the user to **Settings → Export for SLICC 7…**.
+Both save `slicc6-profile-<date>.zip` to the browser's Downloads (a profile
+over 2 GiB or 60,000 files becomes one zip per cone). The user then imports
+it in SLICC 7's Freezer (**Import from SLICC 6…**).
+
+```bash
+export-profile --dry-run   # what would move, nothing saved
+export-profile             # opens the export dialog; the user confirms, then it saves
+```
+
+`export-profile` never saves on its own: it opens the Export for SLICC 7
+dialog in the SLICC tab, and the user has to click **Export** there. Tell
+them to look at the tab. Afterwards, tell them the two notes it prints:
+
+- API keys and logins do **not** move. They enter them again in SLICC 7's
+  Settings, for the providers listed.
+- Credential-like files (`.env*`, `*.pem`, `.git-credentials`, `.npmrc`,
+  `.slicc/oauth/*`) are in the zip **in the clear**, as listed.
+
+`secrets.env`, the GitHub token, MCP tokens and `/mnt` mounts never move.
+Each origin (sliccy.ai, the CLI, the extension) is its own profile, so the
+export runs once in each.
 
 ## Memory v2 — search then read (feature flag)
 

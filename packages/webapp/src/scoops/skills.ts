@@ -81,6 +81,13 @@ function getDefaultFileLoaders(): Record<string, () => Promise<string | Uint8Arr
   return result;
 }
 
+export async function readBundledFile(vfsPath: string): Promise<Uint8Array | null> {
+  const load = getDefaultFileLoaders()[`/packages/vfs-root${vfsPath}`];
+  if (!load) return null;
+  const content = await load();
+  return typeof content === 'string' ? new TextEncoder().encode(content) : content;
+}
+
 export interface SkillMetadata {
   name: string;
   description: string;

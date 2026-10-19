@@ -566,3 +566,32 @@ describe('showThemeSettings', () => {
     await result;
   });
 });
+
+describe('showWcSettings — SLICC 7', () => {
+  it('offers Export for SLICC 7, which closes Settings and opens the export dialog', async () => {
+    const result = showWcSettings(log);
+    const dialog = await openDialog();
+    const section = dialog.querySelector('[data-settings-section="slicc-7"]');
+    expect(section?.textContent).toContain('SLICC 7 is at seven.sliccy.ai');
+    const exportBtn = dialog.querySelector<HTMLButtonElement>(
+      '[data-settings-action="export-profile"]'
+    );
+    expect(exportBtn?.textContent).toBe('Export for SLICC 7…');
+    exportBtn?.click();
+    closeDialog(dialog);
+    await result;
+    await vi.waitFor(() => {
+      expect(document.querySelector('slicc-dialog.wcpx-dialog')?.getAttribute('heading')).toBe(
+        'Export for SLICC 7'
+      );
+    }, WAIT_FOR);
+    await vi.waitFor(() => {
+      expect(document.querySelector('slicc-dialog.wcpx-dialog')?.textContent).toContain(
+        'only available in the SLICC 6 leader tab'
+      );
+    }, WAIT_FOR);
+    document
+      .querySelector('slicc-dialog.wcpx-dialog')
+      ?.dispatchEvent(new CustomEvent('slicc-dialog-close'));
+  });
+});
