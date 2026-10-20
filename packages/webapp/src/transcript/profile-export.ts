@@ -1170,6 +1170,8 @@ export type ProfileProgress = (phase: 'reading' | 'writing', done: number, total
 /** Where a directory export goes; paths are entry names relative to it. */
 export interface ProfileDirectoryWriter {
   writeFile(path: string, bytes: Uint8Array): Promise<void>;
+  /** Delete the whole directory again, after a failed write. */
+  remove?(): Promise<void>;
 }
 
 export interface ProfileDirectoryPlan {

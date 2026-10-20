@@ -177,7 +177,14 @@ export async function runSixUpgradeExport(deps: SixUpgradeExportDeps): Promise<v
       deps.post({ type, phase, done, total });
     const plan = await deps.plan(progress);
     const writer = await deps.openWriter(plan.exportId);
-    await plan.write(writer, { onProgress: progress });
+    try {
+      await plan.write(writer, { onProgress: progress });
+    } catch (err) {
+      // An incomplete directory has no manifest and nothing reads it; don't
+      // leave it holding quota (a full disk may be why the write failed).
+      await writer.remove?.().catch(() => {});
+      throw err;
+    }
     deps.post({ type, done: true, exportId: plan.exportId, dir: plan.dir });
   } catch (err) {
     deps.post({ type, error: err instanceof Error ? err.message : String(err) });

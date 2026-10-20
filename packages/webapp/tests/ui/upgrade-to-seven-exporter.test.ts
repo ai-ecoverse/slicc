@@ -128,6 +128,28 @@ describe('runSixUpgradeExport', () => {
     expect(posts.at(-1)).toEqual({ type: 'slicc-six-upgrade', error: 'redaction unavailable' });
   });
 
+  it('removes the incomplete directory when a write fails', async () => {
+    const { deps } = await seedProfile();
+    const posts: SixUpgradeMessage[] = [];
+    let removed = false;
+    await runSixUpgradeExport({
+      post: (m) => posts.push(m),
+      channel: null,
+      locks: new FakeWebLocks(),
+      plan: () => planProfileDirectory(deps),
+      openWriter: async () => ({
+        writeFile: async () => {
+          throw new DOMException('full', 'QuotaExceededError');
+        },
+        remove: async () => {
+          removed = true;
+        },
+      }),
+    });
+    expect(removed).toBe(true);
+    expect(posts.at(-1)).toEqual({ type: 'slicc-six-upgrade', error: 'full' });
+  });
+
   it('refuses to read without Web Locks, since it could not stop six', async () => {
     const posts: SixUpgradeMessage[] = [];
     let planned = false;
@@ -164,6 +186,10 @@ class MemDir {
     }
     return dir;
   }
+  async removeEntry(name: string, _opts?: { recursive?: boolean }): Promise<void> {
+    this.dirs.delete(name);
+    this.files.delete(name);
+  }
   async getFileHandle(name: string, _opts?: { create?: boolean }) {
     return {
       createWritable: async () => {
@@ -190,6 +216,8 @@ describe('openOpfsProfileDirectory', () => {
     expect(base.files.get('manifest.json')).toEqual(new Uint8Array([1]));
     const cone = base.dirs.get('files')!.dirs.get('cones')!.dirs.get('cone')!;
     expect([...cone.files.keys()].sort()).toEqual(['more.md', 'notes.md']);
+    await writer.remove!();
+    expect([...root.dirs.get('slicc-v6-upgrade')!.dirs.keys()]).toEqual([]);
   });
 });
 

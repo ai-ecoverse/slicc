@@ -239,6 +239,7 @@ describe('bootstrapKernelWorker', () => {
     reply.postMessage({ type: 'kernel-worker-drained' });
     await draining;
     expect(worker.terminateCalls).toBe(1);
+    expect(await host.drain(10)).toBe(true);
   });
 
   it('drain gives up after its timeout and terminates anyway', async () => {
@@ -250,7 +251,8 @@ describe('bootstrapKernelWorker', () => {
       readyTimeoutMs: 1_000,
     });
     await host.ready;
-    await host.drain(10);
+    // No answer: reported as unflushed, so the upgrade won't read after it.
+    expect(await host.drain(10)).toBe(false);
     expect(worker.terminateCalls).toBe(1);
   });
 

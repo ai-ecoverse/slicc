@@ -102,7 +102,10 @@ export async function claimSixKernelLock(
 // ---------------------------------------------------------------------------
 
 let stopped = false;
-let kernelStop: (() => void | Promise<void>) | null = null;
+/** Resolves (or returns) false when the kernel couldn't confirm its flush. */
+type KernelStop = () => void | boolean | Promise<void | boolean>;
+
+let kernelStop: KernelStop | null = null;
 let lockRelease: (() => void) | null = null;
 let noticeDoc: Document | null = null;
 
@@ -116,7 +119,7 @@ export function isSixStoppedForUpgrade(): boolean {
  * then terminate it (`SpawnedKernelHost.drain`). A page that has already
  * stopped runs it at once, so a kernel spawned after the stop never runs.
  */
-export function registerSixKernelStop(stop: () => void | Promise<void>): void {
+export function registerSixKernelStop(stop: KernelStop): void {
   if (stopped) {
     void runQuietly(stop);
     return;
@@ -124,11 +127,13 @@ export function registerSixKernelStop(stop: () => void | Promise<void>): void {
   kernelStop = stop;
 }
 
-async function runQuietly(fn: () => void | Promise<void>): Promise<void> {
+/** Run a stop step; false when it threw or reported false. */
+async function runQuietly(fn: KernelStop): Promise<boolean> {
   try {
-    await fn();
+    return (await fn()) !== false;
   } catch (err) {
     log.error('Stopping for the upgrade threw', err);
+    return false;
   }
 }
 
@@ -155,7 +160,9 @@ export function renderSixMovedNotice(doc: Document): void {
 /**
  * Stop this page for the upgrade: the notice, then the kernel (its
  * conversations flushed first), the tray, and only then the lock, so the
- * exporter never reads before the last checkpoint landed. Idempotent.
+ * exporter never reads before the last checkpoint landed. A kernel that
+ * couldn't confirm its flush keeps the lock: the exporter then times out
+ * and the upgrade fails instead of reading a stale profile. Idempotent.
  */
 export async function stopSixPageForUpgrade(): Promise<void> {
   if (stopped) return;
@@ -163,11 +170,12 @@ export async function stopSixPageForUpgrade(): Promise<void> {
   if (noticeDoc) await runQuietly(() => renderSixMovedNotice(noticeDoc!));
   const stop = kernelStop;
   kernelStop = null;
-  if (stop) await runQuietly(stop);
+  const flushed = stop ? await runQuietly(stop) : true;
   await runQuietly(releaseTrayLeaderOnFatalBoot);
   const release = lockRelease;
   lockRelease = null;
-  release?.();
+  if (flushed) release?.();
+  else log.error('The kernel did not confirm its flush; keeping the upgrade waiting.');
 }
 
 /**

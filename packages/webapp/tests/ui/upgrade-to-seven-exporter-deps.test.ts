@@ -16,10 +16,13 @@ import { planProfileDirectory } from '../../src/transcript/profile-export.js';
 import {
   createUpgradeExportDeps,
   FRAME_KNOWN_SECRETS,
+  migrateLegacyConversations,
   openUpgradeExportDeps,
   restoredUnits,
+  SIX_HISTORY_UNREADABLE_ERROR,
   SIX_KERNEL_FS_DB_NAME,
 } from '../../src/ui/upgrade-to-seven/exporter-deps.js';
+import { WorkUnitConversationStore } from '../../src/work-unit/conversation/store.js';
 
 const scoop = (fields: Partial<RegisteredScoop>): RegisteredScoop =>
   ({ jid: 'x', name: 'x', folder: 'x', ...fields }) as RegisteredScoop;
@@ -32,6 +35,24 @@ describe('restoredUnits', () => {
     const units = restoredUnits([legacyCone, legacyScoop, modern]);
     expect(units.map((u) => u.parentJid)).toEqual([null, 'cone_1', 'cone_1']);
     expect(legacyScoop.parentJid).toBeUndefined();
+  });
+});
+
+describe('migrateLegacyConversations', () => {
+  it('fails the export when a legacy conversation cannot be migrated', async () => {
+    await new SessionStore().save({
+      id: 'broken_1',
+      messages: 'not a list' as never,
+      config: {} as never,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const store = new WorkUnitConversationStore({ dbName: 'exporter-deps-migration' });
+    await expect(
+      migrateLegacyConversations(store, [
+        scoop({ jid: 'broken_1', name: 'b', folder: 'broken', parentJid: null }),
+      ])
+    ).rejects.toThrow(SIX_HISTORY_UNREADABLE_ERROR);
   });
 });
 

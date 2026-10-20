@@ -30,6 +30,9 @@ export async function openOpfsProfileDirectory(
     return dir;
   };
   return {
+    async remove() {
+      await exports.removeEntry(exportId, { recursive: true });
+    },
     async writeFile(path, bytes) {
       const cut = path.lastIndexOf('/');
       const dir = await dirFor(cut < 0 ? '' : path.slice(0, cut));

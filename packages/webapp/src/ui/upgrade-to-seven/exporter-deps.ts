@@ -88,12 +88,17 @@ export function createUpgradeExportDeps(stores: UpgradeExportStores): ProfileExp
   };
 }
 
+/** Shown when six's chat history couldn't be brought into the store the export reads. */
+export const SIX_HISTORY_UNREADABLE_ERROR =
+  "Some of SLICC 6's chat history couldn't be read. Nothing was moved; try again.";
+
 /**
  * Run six's boot migration into the canonical conversation store, as the
  * kernel would (`Orchestrator.migrateConversations`), so a profile whose
  * history is still only in the legacy stores exports it. A no-op once done;
- * it never deletes a legacy record. A failure leaves the export to the
- * canonical records there are.
+ * it never deletes a legacy record. Unlike the kernel's boot, a pass that
+ * fails or skips a unit fails the export: an upgrade must not finish with an
+ * empty transcript while the history is still in the legacy store.
  */
 export async function migrateLegacyConversations(
   store: WorkUnitConversationStore,
@@ -107,8 +112,9 @@ export async function migrateLegacyConversations(
     ]);
   const agentSessions = new SessionStore();
   const uiSessions = new UiSessionStore();
+  let skipped = 0;
   try {
-    await migrateConversations({
+    ({ skipped } = await migrateConversations({
       store,
       units: [...units],
       loadAgentSession: async (id) => {
@@ -119,10 +125,11 @@ export async function migrateLegacyConversations(
         const saved = await uiSessions.load(id);
         return saved ? { messages: saved.messages, createdAt: saved.createdAt } : null;
       },
-    });
+    }));
   } catch {
-    // The kernel treats a failed pass the same way: the legacy stores are untouched.
+    throw new Error(SIX_HISTORY_UNREADABLE_ERROR);
   }
+  if (skipped > 0) throw new Error(SIX_HISTORY_UNREADABLE_ERROR);
 }
 
 /** Open the stores in this page and build the deps. */

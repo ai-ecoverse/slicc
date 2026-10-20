@@ -135,6 +135,19 @@ describe('a six page on the stop broadcast', () => {
     expect(locks.heldModes(SIX_KERNEL_LOCK)).toEqual([]);
   });
 
+  it('keeps the lock when the kernel could not confirm its flush', async () => {
+    const bus = new FakeChannelBus();
+    const locks = new FakeWebLocks();
+    await setupSixUpgradeStop(document, { locks, channel: bus.open() });
+    registerSixKernelStop(async () => false);
+    bus.open().postMessage({ type: 'stop' });
+    await flush();
+    await flush();
+    expect(document.getElementById('slicc-six-moved')).not.toBeNull();
+    // The exporter's wait then times out and the upgrade fails instead.
+    expect(locks.heldModes(SIX_KERNEL_LOCK)).toEqual(['shared']);
+  });
+
   it('terminates a kernel spawned after the stop at once', async () => {
     installSixUpgradeStopListener(document, null);
     await stopSixPageForUpgrade();
