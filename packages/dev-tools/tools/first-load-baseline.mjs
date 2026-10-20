@@ -162,7 +162,7 @@ export function linkNodeModules(repoRoot, tree) {
  * Read a `package-lock.json`'s `packages` map, or null when unreadable.
  *
  * @param {string} tree
- * @returns {Record<string, {version?: string, name?: string, dev?: boolean}> | null}
+ * @returns {Record<string, {version?: string, name?: string, dev?: boolean, os?: string[], cpu?: string[]}> | null}
  */
 function readLockPackages(tree) {
   try {
@@ -193,6 +193,20 @@ function lockInstallRegistryName(installName) {
  */
 function isDefinitelyTypedPackage(installName) {
   return lockInstallRegistryName(installName).startsWith('@types/');
+}
+
+/**
+ * A lock entry constrained by `os` or `cpu` is a prebuilt native binary
+ * (`@img/sharp-linux-x64`, `@esbuild/darwin-arm64`, ...). It cannot appear in
+ * `dist/ui`, so when the change REMOVES one there is nothing to restore.
+ * Bumps are still realigned: the binary must match its JS parent's version.
+ * Specimen: wrangler 4.148 -> 4.150 (Renovate PR #4006) dropped miniflare's
+ * sharp and its 26 platform packages, pushing the drift past the limit.
+ *
+ * @param {{os?: string[], cpu?: string[]}} entry base lock entry
+ */
+function isPlatformBinary(entry) {
+  return Array.isArray(entry.os) || Array.isArray(entry.cpu);
 }
 
 /**
@@ -234,6 +248,27 @@ function registryName(path, entry) {
   const installName = path.slice('node_modules/'.length);
   const idx = installName.lastIndexOf('/node_modules/');
   return idx === -1 ? installName : installName.slice(idx + '/node_modules/'.length);
+}
+
+/**
+ * True when a drifted base lock entry cannot change `dist/ui`, so the
+ * baseline may keep HEAD's copy (or none) without hiding a regression.
+ *
+ * @param {string} path lock `packages` key under `node_modules/`
+ * @param {{os?: string[], cpu?: string[], dev?: boolean}} entry base lock entry
+ * @param {string | null} to HEAD version, null when removed
+ * @param {{ base: object, head: object, workspaces: Set<string> }} ctx
+ */
+function driftNeedsNoRealignment(path, entry, to, { base, head, workspaces }) {
+  // A removed native binary cannot be imported by dist/ui — see isPlatformBinary.
+  if (to === null && isPlatformBinary(entry)) return true;
+  const installName = path.slice('node_modules/'.length);
+  if (installName.includes('/node_modules/')) return nestedCopyIsCovered(path, entry, base, head);
+  // A workspace package linked into node_modules carries the root version;
+  // the worktree's own source is already the right baseline for it.
+  if (workspaces.has(installName)) return true;
+  // `@types/*` cannot appear in dist/ui — see isDefinitelyTypedPackage.
+  return isDefinitelyTypedPackage(installName);
 }
 
 /**
@@ -307,25 +342,13 @@ export function dependencyDrift(repoRoot, tree) {
     if (!from) continue;
     const to = head[path]?.version ?? null;
     if (to === from) continue;
-    const installName = path.slice('node_modules/'.length);
-    if (installName.includes('/node_modules/')) {
-      if (nestedCopyIsCovered(path, entry, base, head)) continue;
-      // Un-hoisted nested production copy. `materializeLinkedParents` splits
-      // the parent symlink so `installBaseVersion` can swap this entry
-      // independently — treat it as changed/missing, not a hole.
-      const drift = { path, name: registryName(path, entry), from, to };
-      (to === null ? missing : changed).push(drift);
-      continue;
-    }
-    // A workspace package linked into node_modules carries the root version;
-    // the worktree's own source is already the right baseline for it.
-    if (workspaces.has(installName)) continue;
-    // `@types/*` cannot appear in dist/ui — see isDefinitelyTypedPackage.
-    if (isDefinitelyTypedPackage(installName)) continue;
+    if (driftNeedsNoRealignment(path, entry, to, { base, head, workspaces })) continue;
     // An aliased install directory is not the registry name: npm records
     // `node_modules/undici8` with `name: "undici"`. Fetching `undici8` would
     // request a DIFFERENT package that may well exist on the registry, so
     // trust the lock entry's own name over the directory it landed in.
+    // Un-hoisted nested production copies land here too: `materializeLinkedParents`
+    // splits the parent symlink so `installBaseVersion` can swap them independently.
     const drift = { path, name: registryName(path, entry), from, to };
     (to === null ? missing : changed).push(drift);
   }
