@@ -11,7 +11,7 @@
  * key=value pairs.
  */
 
-import type { VirtualFS } from '../fs/index.js';
+import { FsError, type VirtualFS } from '../fs/index.js';
 
 export const GLOBAL_GITCONFIG_PATH = '/workspace/.gitconfig';
 
@@ -150,8 +150,12 @@ export async function writeGlobalGitConfigValue(
   let content = '';
   try {
     content = await fs.readTextFile(GLOBAL_GITCONFIG_PATH);
-  } catch {
-    /* file doesn't exist yet */
+  } catch (err) {
+    // Only an absent file means "start from empty". Any other read fault
+    // (EIO, permission, decode, transient VFS glitch) must abort the write —
+    // otherwise the read-modify-write below rewrites .gitconfig with only the
+    // single key just set, clobbering user.name/email, credential.*, etc.
+    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
   }
 
   const { section, configKey } = parseConfigKey(key);
