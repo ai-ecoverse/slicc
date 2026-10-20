@@ -4,11 +4,6 @@ import { createGunzip, type Gunzip } from 'node:zlib';
 export const GZIP_MAGIC_0 = 0x1f;
 export const GZIP_MAGIC_1 = 0x8b;
 
-export function contentEncodingLooksUncompressed(value: string | null | undefined): boolean {
-  const encoding = (value ?? '').trim().toLowerCase();
-  return encoding === '' || encoding === 'identity';
-}
-
 export function bufferStartsWithGzipMagic(buf: Uint8Array): boolean {
   return buf.length >= 2 && buf[0] === GZIP_MAGIC_0 && buf[1] === GZIP_MAGIC_1;
 }

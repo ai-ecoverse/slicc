@@ -19,12 +19,6 @@ enum FetchProxyGzip {
         return first == magic0 && second == magic1
     }
 
-    
-    static func contentEncodingLooksUncompressed(_ value: String?) -> Bool {
-        let encoding = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return encoding.isEmpty || encoding == "identity"
-    }
-
     static func gunzip(_ data: Data) throws -> Data {
         let inflater = GzipInflater()
         try inflater.start()

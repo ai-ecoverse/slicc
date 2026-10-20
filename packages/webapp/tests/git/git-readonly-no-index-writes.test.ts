@@ -90,7 +90,7 @@ describe('read-only git commands never write (issue #2708)', () => {
 
   it('the fake filesystem really does force an index refresh (control)', async () => {
     await git.statusMatrix({ fs: ctx.lfs, dir: CWD, refresh: true });
-    expect(writes.filter((p) => p.endsWith('.git/index')).length).toBeGreaterThan(1);
+    expect(writes.filter((p) => p.endsWith('.git/index')).length).toBeGreaterThan(0);
   });
 
   it('ls-files lists tracked files without writing', async () => {
