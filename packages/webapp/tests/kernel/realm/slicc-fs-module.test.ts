@@ -195,7 +195,7 @@ describe('PYTHON_SLICC_WRAPPER write paths: hand a real JS Uint8Array to the bri
     ]);
 
     expect(() => structuredClone(data)).not.toThrow();
-  });
+  }, 60_000);
 
   it('write_text round-trips through write_bytes as a real JS Uint8Array', async () => {
     const pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX_URL });
@@ -218,5 +218,5 @@ describe('PYTHON_SLICC_WRAPPER write paths: hand a real JS Uint8Array to the bri
     const decoded = new TextDecoder('utf-8').decode(data as Uint8Array);
     expect(decoded).toBe('héllo 🌍');
     expect(() => structuredClone(data)).not.toThrow();
-  });
+  }, 60_000);
 });

@@ -16,7 +16,8 @@ export type FeatureFlagId =
   | 'compact-on-idle'
   | 'memory-v2'
   | 'live-model-catalog'
-  | 'no-default-skills';
+  | 'no-default-skills'
+  | 'seven-banner';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -111,6 +112,16 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     userToggleable: true,
     since: '2026-09-27',
   }),
+  Object.freeze({
+    id: 'seven-banner',
+    label: 'SLICC 7 banner',
+    description:
+      'Show a banner above the chat saying SLICC 7 is at seven.sliccy.ai, with a button to export your profile.',
+
+    defaultValue: 'off',
+    userToggleable: true,
+    since: '2026-10-20',
+  }),
 ]);
 
 const FEATURE_FLAGS_BY_ID = new Map(FEATURE_FLAGS.map((flag) => [flag.id, flag]));
@@ -120,6 +131,8 @@ let activeFloat: FeatureFlagFloat = 'standalone';
 let remoteValues: FeatureFlagValues = {};
 
 let hostValues: FeatureFlagValues = {};
+
+const centralFlagListeners = new Set<() => void>();
 
 interface FeatureFlagStorage {
   getItem(key: string): string | null;
@@ -213,6 +226,18 @@ export function updateCentralFlagValues(
 ): void {
   activeFloat = float;
   remoteValues = sanitizeValues(centralValues);
+  for (const listener of centralFlagListeners) {
+    try {
+      listener();
+    } catch {}
+  }
+}
+
+export function onCentralFlagValuesUpdated(listener: () => void): () => void {
+  centralFlagListeners.add(listener);
+  return () => {
+    centralFlagListeners.delete(listener);
+  };
 }
 
 export interface UntrustedFlagValues {
