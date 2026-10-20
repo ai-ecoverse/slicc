@@ -9,7 +9,11 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-import { FEATURE_FLAG_STORAGE_KEY, initFeatureFlags } from '../../../src/core/feature-flags.js';
+import {
+  FEATURE_FLAG_STORAGE_KEY,
+  initFeatureFlags,
+  updateCentralFlagValues,
+} from '../../../src/core/feature-flags.js';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
 import { installStripPublisher } from '../../../src/ui/wc/wc-chat.js';
@@ -1113,6 +1117,8 @@ describe('workspaceForSelection (workbench files, terminal and memory)', () => {
 });
 
 describe('mountSevenBannerInShell', () => {
+  let stop: (() => void) | undefined;
+
   beforeEach(() => {
     document.body.replaceChildren();
     localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
@@ -1123,22 +1129,55 @@ describe('mountSevenBannerInShell', () => {
     document.body.append(appCol);
   });
 
-  afterEach(() => initFeatureFlags('standalone'));
+  afterEach(() => {
+    stop?.();
+    stop = undefined;
+    initFeatureFlags('standalone');
+  });
+
+  const settle = async (): Promise<void> => {
+    await import('../../../src/ui/wc/wc-seven-banner.js');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
 
   it('shows nothing while the seven-banner flag is at its default', async () => {
     initFeatureFlags('standalone');
-    mountSevenBannerInShell(fakeLog());
-    await import('../../../src/ui/wc/wc-seven-banner.js');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    stop = mountSevenBannerInShell(fakeLog());
+    await settle();
     expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
   });
 
   it('mounts the banner before the shell once the flag is on', async () => {
     initFeatureFlags('standalone', { 'seven-banner': 'on' });
-    mountSevenBannerInShell(fakeLog());
+    stop = mountSevenBannerInShell(fakeLog());
     await vi.waitFor(() => expect(document.getElementById(SEVEN_BANNER_ID)).not.toBeNull());
     expect(document.getElementById(SEVEN_BANNER_ID)?.nextElementSibling?.localName).toBe(
       'slicc-shell'
     );
+  });
+
+  it('follows a central refresh in an open tab: on mounts it, off removes it', async () => {
+    initFeatureFlags('standalone');
+    stop = mountSevenBannerInShell(fakeLog());
+    await settle();
+    expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
+
+    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    await vi.waitFor(() => expect(document.getElementById(SEVEN_BANNER_ID)).not.toBeNull());
+    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    await settle();
+    expect(document.querySelectorAll(`#${SEVEN_BANNER_ID}`)).toHaveLength(1);
+
+    updateCentralFlagValues('standalone', {});
+    expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
+    expect(localStorage.getItem(SEVEN_BANNER_DISMISSED_KEY)).toBeNull();
+  });
+
+  it('stops following refreshes once unsubscribed', async () => {
+    initFeatureFlags('standalone');
+    mountSevenBannerInShell(fakeLog())();
+    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    await settle();
+    expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
   });
 });

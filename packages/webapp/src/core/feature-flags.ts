@@ -169,6 +169,8 @@ let remoteValues: FeatureFlagValues = {};
  * shared origin. Reset on every `initFeatureFlags` call (i.e. every boot).
  */
 let hostValues: FeatureFlagValues = {};
+/** Called after every central refresh; see {@link onCentralFlagValuesUpdated}. */
+const centralFlagListeners = new Set<() => void>();
 
 interface FeatureFlagStorage {
   getItem(key: string): string | null;
@@ -288,6 +290,26 @@ export function updateCentralFlagValues(
 ): void {
   activeFloat = float;
   remoteValues = sanitizeValues(centralValues);
+  for (const listener of centralFlagListeners) {
+    try {
+      listener();
+    } catch {
+      // A broken listener must not stop the refresh or the listeners after it.
+    }
+  }
+}
+
+/**
+ * Run `listener` after every {@link updateCentralFlagValues}, i.e. whenever a
+ * refresh of the central values lands in this realm. For UI that was gated
+ * once at boot and has to follow an operator's change in an open tab. Returns
+ * the unsubscribe.
+ */
+export function onCentralFlagValuesUpdated(listener: () => void): () => void {
+  centralFlagListeners.add(listener);
+  return () => {
+    centralFlagListeners.delete(listener);
+  };
 }
 
 /**

@@ -9,7 +9,7 @@
 
 import { clipUtf16, LAST_ACTIVITY_MAX } from '../../base/utf16-clip.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
-import { isFeatureEnabled } from '../../core/feature-flags.js';
+import { isFeatureEnabled, onCentralFlagValuesUpdated } from '../../core/feature-flags.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import type { RemoteTerminalView } from '../../kernel/remote-terminal-view.js';
 import { type SpawnedKernelHost, spawnKernelWorker } from '../../kernel/spawn.js';
@@ -1087,20 +1087,31 @@ function openProfileExportDialog(log: Pick<BootStageLogger, 'error'>): void {
 }
 
 /**
- * Show the SLICC 7 banner between the nav and the shell, when the
- * `seven-banner` flag is on. Lazy; never blocks boot.
+ * Show the SLICC 7 banner between the nav and the shell while the
+ * `seven-banner` flag is on, and follow central flag refreshes: an operator
+ * turning it on or off reaches tabs that are already open. Lazy; never blocks
+ * boot. Returns the unsubscribe.
  */
-export function mountSevenBannerInShell(log: Pick<BootStageLogger, 'error'>): void {
-  if (!isFeatureEnabled('seven-banner')) return;
-  import('./wc-seven-banner.js')
-    .then(({ mountSevenBanner }) => {
-      const appCol = document.querySelector<HTMLElement>('.wcui-appcol');
-      if (!appCol) return;
-      mountSevenBanner(document, appCol, appCol.querySelector(':scope > slicc-shell'), {
-        onExport: () => openProfileExportDialog(log),
-      });
-    })
-    .catch((err) => log.error('SLICC 7 banner failed', err));
+export function mountSevenBannerInShell(log: Pick<BootStageLogger, 'error'>): () => void {
+  let banner: typeof import('./wc-seven-banner.js') | undefined;
+  const sync = (): void => {
+    if (!isFeatureEnabled('seven-banner')) {
+      if (banner) document.getElementById(banner.SEVEN_BANNER_ID)?.remove();
+      return;
+    }
+    import('./wc-seven-banner.js')
+      .then((mod) => {
+        banner = mod;
+        const appCol = document.querySelector<HTMLElement>('.wcui-appcol');
+        if (!appCol || !isFeatureEnabled('seven-banner')) return;
+        mod.mountSevenBanner(document, appCol, appCol.querySelector(':scope > slicc-shell'), {
+          onExport: () => openProfileExportDialog(log),
+        });
+      })
+      .catch((err) => log.error('SLICC 7 banner failed', err));
+  };
+  sync();
+  return onCentralFlagValuesUpdated(sync);
 }
 
 export function wireDockTreePersistence(refs: WcShellRefs, log: BootStageLogger): void {
@@ -1603,7 +1614,7 @@ export function attachWcWorkbench(
     });
     window.addEventListener('unload', profileTeardown, { once: true });
     window.addEventListener('unload', runnerTeardown, { once: true });
-    mountSevenBannerInShell(log);
+    window.addEventListener('unload', mountSevenBannerInShell(log), { once: true });
   }
 
   // Nav: model picker + avatar menu (settings dialog, legacy-UI escape hatch).
