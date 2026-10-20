@@ -17,17 +17,17 @@ If this scares, confuses, or excites you, keep reading.
 
 > A browser-native AI agent for getting practical work done in and through the browser.
 
-🍦 **Home page & hosted app:** [www.sliccy.com](https://www.sliccy.com)
+🍦 **Home page:** [www.sliccy.com](https://www.sliccy.com) · **Hosted app:** [www.sliccy.ai/?slicc=leader](https://www.sliccy.ai/?slicc=leader)
 
 SLICC runs in a browser and controls the browser it runs in. It combines a shell, files, browser automation, and multi-agent delegation so you can do real work from one workspace — coding, web automation, authenticated app tasks, and the weird in-between jobs that do not fit neatly inside a chat panel. SLICC can orchestrate multiple browsers, and even some apps through telepathy, making it a powerful hub for your digital work.
 
 The fastest ways to try it:
 
-- **Open [www.sliccy.com](https://www.sliccy.com) in Chrome** — the hosted webapp boots SLICC straight in your browser tab.
+- **Open [www.sliccy.ai/?slicc=leader](https://www.sliccy.ai/?slicc=leader) in Chrome** — the hosted webapp boots SLICC straight in your browser tab.
 - **Install the macOS app** — grab the latest `.dmg` from [releases](https://github.com/ai-ecoverse/slicc/releases). No Windows or Linux UI yet.
 - **Run the CLI** — `npx sliccy` launches Chrome with the local workspace attached. Node 22+ required.
 - **Install the headless follower CLI** — `curl -fsSL https://www.sliccy.ai/install-cli | sh` installs the Go `slicc` follower binary (macOS, Linux, WSL, Git Bash) into `~/.local/bin` (or a writable `/usr/local/bin`). Native Windows: `irm https://www.sliccy.ai/install-cli.ps1 | iex`.
-- **Load the Chrome extension** — a thin bridge that opens SLICC in an on-demand Chrome side panel.
+- **Install the [Chrome extension](https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf)** — a thin bridge that opens SLICC in an on-demand Chrome side panel.
 
 Once you're in, you can:
 
@@ -42,7 +42,7 @@ Once you're in, you can:
 - Give it practical tools models already know how to use (`bash`, `git`, `node`, `python`, `playwright`)
 - Delegate parallel work to sub-agents so tasks get done faster
 
-> Status: active working prototype. The macOS app is the easiest way in today; the extension has been submitted to the Chrome Web Store.
+> Status: active working prototype. The macOS app is the easiest way in today; the extension is on the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf).
 
 Scoop shells bound supported filesystem traversals and command buffers. See the
 [shell work limits](docs/shell-reference.md#scoop-filesystem-work-limits) for limits
