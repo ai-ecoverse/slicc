@@ -146,6 +146,9 @@
     "vitest": "4.1.11"
   },
   "overrides": {
+    "guarded-fetch": {
+      "undici": "7.29.1"
+    },
     "kokoro-js": {
       "@huggingface/transformers": {
         "sharp": "$sharp"
