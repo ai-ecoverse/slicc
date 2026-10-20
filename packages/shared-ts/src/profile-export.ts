@@ -1,6 +1,16 @@
 export const SLICC_PROFILE_FORMAT = 'slicc-profile' as const;
 export const SLICC_PROFILE_VERSION = 1 as const;
+
+export const SLICC_PROFILE_DIRECTORY_VERSION = 2 as const;
 export const PROFILE_MANIFEST_PATH = 'manifest.json' as const;
+
+export const PROFILE_DIRECTORY_ROOT = '/slicc-v6-upgrade/' as const;
+
+export const PROFILE_SOURCE_ROOT = '/slicc-fs/' as const;
+
+export const PROFILE_SOURCE_SIDECAR = '/slicc-fs/.metadata.json' as const;
+
+export const PROFILE_SOURCE_PREFIXES: readonly string[] = ['files/', 'skills/', 'sprinkles/'];
 
 export const PROFILE_MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024;
 
@@ -95,6 +105,10 @@ export interface ProfileFileEntry {
   sha256: string;
 }
 
+export interface ProfileFileEntryV2 extends ProfileFileEntry {
+  source?: string;
+}
+
 export interface ProfileSkippedEntry {
   path: string;
   reason: ProfileSkipReason;
@@ -158,6 +172,15 @@ export interface SliccProfileManifestV1 {
   totals: ProfileTotals;
 }
 
+export interface SliccProfileManifestV2
+  extends Omit<SliccProfileManifestV1, 'version' | 'part' | 'files'> {
+  version: typeof SLICC_PROFILE_DIRECTORY_VERSION;
+
+  files: ProfileFileEntryV2[];
+}
+
+export type SliccProfileManifest = SliccProfileManifestV1 | SliccProfileManifestV2;
+
 export function profileFlagRuleFor(path: string): ProfileFlagRule | null {
   const segments = path.split('/').filter((s) => s.length > 0);
   const base = segments[segments.length - 1] ?? '';
@@ -192,6 +215,13 @@ export function isSafeProfileEntryPath(path: string): boolean {
   if (path.includes('\\') || path.includes('\0') || DRIVE_LETTER.test(path)) return false;
   return path.split('/').every((s) => s !== '' && s !== '.' && s !== '..');
 }
+
+export function isSafeProfileSourcePath(path: string): boolean {
+  if (!path.startsWith(PROFILE_SOURCE_ROOT) || path === PROFILE_SOURCE_SIDECAR) return false;
+  return isSafeProfileEntryPath(path.slice(PROFILE_SOURCE_ROOT.length));
+}
+
+type Version = typeof SLICC_PROFILE_VERSION | typeof SLICC_PROFILE_DIRECTORY_VERSION;
 
 type Obj = { [key: string]: unknown };
 
@@ -290,27 +320,52 @@ function checkNamedPath(item: unknown, path: string): ProfileValidationResult {
   return String(item['path']).endsWith('/') ? OK : fail(`${path}.path must end in "/"`);
 }
 
-function checkFile(item: unknown, path: string): ProfileValidationResult {
-  if (!isObj(item)) return fail(`${path} must be an object`);
-  const name = item['path'];
-  if (typeof name !== 'string' || !isSafeProfileEntryPath(name)) {
-    return fail(`${path}.path must be a safe relative entry path`);
+function checkSource(
+  item: Obj,
+  name: string,
+  path: string,
+  version: Version
+): ProfileValidationResult {
+  const source = item['source'];
+  if (source === undefined) return OK;
+  if (version === SLICC_PROFILE_VERSION) return fail(`${path}.source needs version 2`);
+  if (typeof source !== 'string' || !isSafeProfileSourcePath(source)) {
+    return fail(`${path}.source must be a safe path under ${PROFILE_SOURCE_ROOT}`);
   }
-  if (name === PROFILE_MANIFEST_PATH) return fail(`${path}.path must not be the manifest`);
-  if (!isCount(item['size'])) return fail(`${path}.size must be a non-negative integer`);
-  if (typeof item['sha256'] !== 'string' || !SHA256_HEX.test(item['sha256'])) {
-    return fail(`${path}.sha256 must be 64 lowercase hex characters`);
-  }
-  return OK;
+  return PROFILE_SOURCE_PREFIXES.some((prefix) => name.startsWith(prefix))
+    ? OK
+    : fail(`${path} can't stay in place: only ${PROFILE_SOURCE_PREFIXES.join(', ')} entries can`);
 }
 
-function checkSkipped(item: unknown, path: string): ProfileValidationResult {
-  if (!isObj(item) || typeof item['path'] !== 'string') {
-    return fail(`${path}.path must be a string`);
-  }
-  return PROFILE_SKIP_REASONS.includes(item['reason'] as ProfileSkipReason)
-    ? OK
-    : fail(`${path}.reason must be one of ${PROFILE_SKIP_REASONS.join(', ')}`);
+function checkFile(version: Version) {
+  return (item: unknown, path: string): ProfileValidationResult => {
+    if (!isObj(item)) return fail(`${path} must be an object`);
+    const name = item['path'];
+    if (typeof name !== 'string' || !isSafeProfileEntryPath(name)) {
+      return fail(`${path}.path must be a safe relative entry path`);
+    }
+    if (name === PROFILE_MANIFEST_PATH) return fail(`${path}.path must not be the manifest`);
+    if (!isCount(item['size'])) return fail(`${path}.size must be a non-negative integer`);
+    if (typeof item['sha256'] !== 'string' || !SHA256_HEX.test(item['sha256'])) {
+      return fail(`${path}.sha256 must be 64 lowercase hex characters`);
+    }
+    return checkSource(item, name, path, version);
+  };
+}
+
+function checkSkipped(version: Version) {
+  const reasons =
+    version === SLICC_PROFILE_VERSION
+      ? PROFILE_SKIP_REASONS
+      : PROFILE_SKIP_REASONS.filter((reason) => reason !== 'archive-limit');
+  return (item: unknown, path: string): ProfileValidationResult => {
+    if (!isObj(item) || typeof item['path'] !== 'string') {
+      return fail(`${path}.path must be a string`);
+    }
+    return reasons.includes(item['reason'] as ProfileSkipReason)
+      ? OK
+      : fail(`${path}.reason must be one of ${reasons.join(', ')}`);
+  };
 }
 
 function checkFlagged(item: unknown, path: string): ProfileValidationResult {
@@ -354,10 +409,9 @@ const TOTAL_FIELDS: readonly (keyof ProfileTotals)[] = [
   'flagged',
 ];
 
-function checkHeader(m: Obj): ProfileValidationResult {
+function checkHeader(m: Obj, version: Version): ProfileValidationResult {
   if (m['format'] !== SLICC_PROFILE_FORMAT) return fail(`format must be "${SLICC_PROFILE_FORMAT}"`);
-  if (m['version'] !== SLICC_PROFILE_VERSION)
-    return fail(`version must be ${SLICC_PROFILE_VERSION}`);
+  if (m['version'] !== version) return fail(`version must be ${version}`);
   if (typeof m['exportId'] !== 'string' || !UUID.test(m['exportId'])) {
     return fail('exportId must be a lowercase UUID');
   }
@@ -369,6 +423,9 @@ function checkHeader(m: Obj): ProfileValidationResult {
     return fail('createdAt must be an ISO 8601 date-time string');
   }
   const part = m['part'];
+  if (part !== undefined && version === SLICC_PROFILE_DIRECTORY_VERSION) {
+    return fail('part must be absent in version 2, which is never split');
+  }
   if (part !== undefined) {
     if (!isObj(part) || !isCount(part['index']) || !isCount(part['of'])) {
       return fail('part must be { index, of } with integer fields');
@@ -394,11 +451,15 @@ function checkTotals(m: Obj): ProfileValidationResult {
   return OK;
 }
 
-function checkReferences(m: SliccProfileManifestV1): ProfileValidationResult {
+function checkReferences(m: SliccProfileManifest): ProfileValidationResult {
   const paths = new Set<string>();
-  for (const file of m.files) {
+  const sources = new Set<string>();
+  for (const file of m.files as ProfileFileEntryV2[]) {
     if (paths.has(file.path)) return fail(`files lists "${file.path}" twice`);
     paths.add(file.path);
+    if (file.source === undefined) continue;
+    if (sources.has(file.source)) return fail(`files moves "${file.source}" twice`);
+    sources.add(file.source);
   }
   const hasPrefix = (prefix: string): boolean => {
     for (const p of paths) if (p.startsWith(prefix)) return true;
@@ -424,26 +485,40 @@ function checkReferences(m: SliccProfileManifestV1): ProfileValidationResult {
   return OK;
 }
 
-export function validateSliccProfileManifestV1(value: unknown): ProfileValidationResult {
+function validateManifest(value: unknown, version: Version): ProfileValidationResult {
   if (!isObj(value)) return fail('manifest must be an object');
   const steps: (() => ProfileValidationResult)[] = [
-    () => checkHeader(value),
+    () => checkHeader(value, version),
     () => checkEach(value['cones'], 'cones', checkCone),
     () => checkEach(value['frozen'], 'frozen', checkFrozen),
     () => checkEach(value['skills'], 'skills', checkNamedPath),
     () => checkEach(value['sprinkles'], 'sprinkles', checkNamedPath),
-    () => checkEach(value['files'], 'files', checkFile),
-    () => checkEach(value['skipped'], 'skipped', checkSkipped),
+    () => checkEach(value['files'], 'files', checkFile(version)),
+    () => checkEach(value['skipped'], 'skipped', checkSkipped(version)),
     () => checkEach(value['flagged'], 'flagged', checkFlagged),
     () => checkEach(value['providers'], 'providers', checkString),
     () => checkEach(value['mcp'], 'mcp', checkMcp),
     () => checkEach(value['secrets'], 'secrets', checkSecretKind),
     () => checkTotals(value),
-    () => checkReferences(value as unknown as SliccProfileManifestV1),
+    () => checkReferences(value as unknown as SliccProfileManifest),
   ];
   for (const step of steps) {
     const result = step();
     if (!result.ok) return result;
   }
   return OK;
+}
+
+export function validateSliccProfileManifestV1(value: unknown): ProfileValidationResult {
+  return validateManifest(value, SLICC_PROFILE_VERSION);
+}
+
+export function validateSliccProfileManifestV2(value: unknown): ProfileValidationResult {
+  return validateManifest(value, SLICC_PROFILE_DIRECTORY_VERSION);
+}
+
+export function validateSliccProfileManifest(value: unknown): ProfileValidationResult {
+  return isObj(value) && value['version'] === SLICC_PROFILE_DIRECTORY_VERSION
+    ? validateSliccProfileManifestV2(value)
+    : validateSliccProfileManifestV1(value);
 }
