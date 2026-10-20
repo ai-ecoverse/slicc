@@ -1,6 +1,8 @@
-# Moving to SLICC 7 (`slicc-profile` v1)
+# Moving to SLICC 7 (`slicc-profile` v1 and v2)
 
 SLICC 6 exports a whole profile for SLICC 7 (seven.sliccy.ai). SLICC 7's `freezer import` (Freezer → **Import from SLICC 6…**) reads the export. Each six cone becomes a frozen seven cone. The design and its decisions G1–G8 are in slicc-agent#6.
+
+There are two versions of the format. Version 1 is the zip that Export for SLICC 7 saves. Version 2 is the [directory form](#version-2-the-directory-form): on www.sliccy.ai, where seven runs on six's origin, six writes it to OPFS, and files stay where they are (ai-ecoverse/slicc-bios#648).
 
 ## Entry points
 
@@ -106,6 +108,41 @@ Some routing rules:
 One archive holds at most 2 GiB and 60,000 entries, with the exact size computed from names and sizes. When the profile is bigger, the export writes one zip per cone plus a profile part. The profile part holds the frozen sessions, home-user, the global memory, skills, sprinkles, licks and the gitconfig. Each part is self-contained and carries its own attachments. If a single cone doesn't fit, the export fails with a message that names the cone.
 
 The plan keeps redacted bytes in memory only where redaction changed them. Every other file is re-read when the archive is written, and its hash must still match the manifest. Otherwise the export fails with "changed while exporting".
+
+## Version 2: the directory form
+
+On `www.sliccy.ai`, seven runs next to six (`/7/`, then `/`) and shares six's origin, so its kernel's root is the OPFS root six uses. Six's kernel VFS is already inside seven's file system, at `/slicc-fs/`: ZenFS's `WebAccess` backend keeps each VFS file at the same path under OPFS `slicc-fs/` (`/workspace/notes.md` is `slicc-fs/workspace/notes.md`). Its modes and symlinks live only in the `.metadata.json` sidecar. That is why version 2 moves files instead of copying them: the upgrade needs no export and no re-import, and no second copy of a workspace (ai-ecoverse/slicc-bios#648, the exporter in slicc#4051, seven's import in ai-ecoverse/slicc-agent#487).
+
+- **Where it lives:** a directory, not a zip: `/slicc-v6-upgrade/<exportId>/` (`PROFILE_DIRECTORY_ROOT`), in OPFS and in seven's kernel. It sits outside `/slicc-fs`.
+- **What's in it:** the same entry names as the zip, `manifest.json` included, as plain files. `version` is `2`.
+- **Files left in place:** a `files[]` row whose file six can leave where it is isn't written to the directory. Instead it carries `source`, the file's path in seven's kernel:
+
+  ```json
+  {
+    "path": "files/cones/cone/notes.md",
+    "size": 912,
+    "sha256": "…",
+    "source": "/slicc-fs/workspace/notes.md"
+  }
+  ```
+
+  `path` keeps its meaning: it's the entry the manifest's references, `flagged[]` and seven's placement use. `size` and `sha256` are the file's, as six read it, and seven checks both after the move.
+
+- **What stays in place:** files under `files/`, `skills/` and `sprinkles/` whose bytes redaction left unchanged, flagged credential-like files included.
+- **What's written:** transcripts, frozen sessions, attachments, memory, `licks.json`, `git/gitconfig`, and every file redaction changed.
+- **What's left out:** symlinks and empty directories, which the walk skips in both versions.
+- **Validation:** `validateSliccProfileManifestV2` checks everything version 1 does, plus:
+  - each `source` is a safe absolute path under `/slicc-fs/` (`isSafeProfileSourcePath`), never the sidecar;
+  - a `source` sits only on `files/`, `skills/` or `sprinkles/` entries;
+  - no file is moved twice;
+  - there's no `part`, because nothing is split;
+  - no skip has the reason `archive-limit`.
+
+  Version 1 refuses a `source`. `validateSliccProfileManifest` picks the validator by `version`.
+
+- **Limits:** the zip's limits (ZIP32, 2 GiB and 60,000 entries per archive, parts, `archive-limit`) don't apply. The 256 MiB file limit and the redaction rules do.
+- **After the import:** seven deletes `/slicc-v6-upgrade/<exportId>/` once the import succeeded. When it fails, the moved files go back to their `source` paths, and the directory stays for the next try. What six leaves in `/slicc-fs` (caches, mounts, bundled files, `skipped[]`) is removed by seven's BIOS later.
+- **The exporter:** writing this form, from a page on www that seven's BIOS runs, is slicc#4051.
 
 ## Fixture
 
