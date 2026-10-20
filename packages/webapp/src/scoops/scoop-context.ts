@@ -1063,6 +1063,15 @@ export class ScoopContext {
     };
   }
 
+  /**
+   * Store the conversation now and resolve once the write landed (or
+   * failed, which is logged). A durability barrier for a stop whose caller
+   * reads the store next, such as seven's in-place upgrade.
+   */
+  flushConversation(): Promise<void> {
+    return this.sessions.flush();
+  }
+
   /** Cleanup */
   dispose(): void {
     // Final checkpoint BEFORE the disposed flag blocks writes and the agent

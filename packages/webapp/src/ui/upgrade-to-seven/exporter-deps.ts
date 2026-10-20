@@ -19,6 +19,7 @@ import type { RegisteredScoop } from '../../scoops/types.js';
 import type { ExportServiceDeps } from '../../transcript/export-service.js';
 import type { ProfileExportDeps } from '../../transcript/profile-export.js';
 import type { KnownSecretBatchRedactor } from '../../transcript/redact.js';
+import type { WorkUnitConversationStore } from '../../work-unit/conversation/store.js';
 import { legacyRecordIsCone } from '../../work-unit/record.js';
 import { createPageProfileExportDeps } from '../profile-export-deps.js';
 
@@ -87,6 +88,43 @@ export function createUpgradeExportDeps(stores: UpgradeExportStores): ProfileExp
   };
 }
 
+/**
+ * Run six's boot migration into the canonical conversation store, as the
+ * kernel would (`Orchestrator.migrateConversations`), so a profile whose
+ * history is still only in the legacy stores exports it. A no-op once done;
+ * it never deletes a legacy record. A failure leaves the export to the
+ * canonical records there are.
+ */
+export async function migrateLegacyConversations(
+  store: WorkUnitConversationStore,
+  units: readonly RegisteredScoop[]
+): Promise<void> {
+  const [{ migrateConversations }, { SessionStore }, { SessionStore: UiSessionStore }] =
+    await Promise.all([
+      import('../../work-unit/conversation/migration.js'),
+      import('../../core/session.js'),
+      import('../../scoops/chat-session-store.js'),
+    ]);
+  const agentSessions = new SessionStore();
+  const uiSessions = new UiSessionStore();
+  try {
+    await migrateConversations({
+      store,
+      units: [...units],
+      loadAgentSession: async (id) => {
+        const saved = await agentSessions.load(id);
+        return saved ? { messages: saved.messages, createdAt: saved.createdAt } : null;
+      },
+      loadChatSession: async (id) => {
+        const saved = await uiSessions.load(id);
+        return saved ? { messages: saved.messages, createdAt: saved.createdAt } : null;
+      },
+    });
+  } catch {
+    // The kernel treats a failed pass the same way: the legacy stores are untouched.
+  }
+}
+
 /** Open the stores in this page and build the deps. */
 export async function openUpgradeExportDeps(version: string): Promise<ProfileExportDeps> {
   const [{ VirtualFS }, db, { CanonicalSessionReader }, { WorkUnitConversationStore }, snap] =
@@ -99,10 +137,13 @@ export async function openUpgradeExportDeps(version: string): Promise<ProfileExp
     ]);
   const fs = await VirtualFS.create({ dbName: SIX_KERNEL_FS_DB_NAME });
   const vfs = fs as unknown as LocalVfsClient;
-  const sessions = new CanonicalSessionReader(new WorkUnitConversationStore());
+  const store = new WorkUnitConversationStore();
+  const units = restoredUnits(Object.values(await db.getAllScoops()));
+  await migrateLegacyConversations(store, units);
+  const sessions = new CanonicalSessionReader(store);
   return createUpgradeExportDeps({
     vfs,
-    units: restoredUnits(Object.values(await db.getAllScoops())),
+    units,
     loadPersistedSessions: () => sessions.loadAgentSessions(),
     loadUiChatSessions: () => sessions.loadChatSessions(),
     readSnapshot: (sessionId) => snap.readSnapshot(vfs, sessionId),

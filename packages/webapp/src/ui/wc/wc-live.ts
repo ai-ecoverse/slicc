@@ -1829,9 +1829,9 @@ export async function bootLeaderFloat(
           guardedReload();
         },
       });
-      // Seven's upgrade (slicc#4051) terminates this kernel, and with it the
-      // Python realm and process workers, before it reads the profile.
-      registerSixKernelStop(() => kernel.dispose());
+      // Seven's upgrade (slicc#4051) flushes then terminates this kernel, and
+      // with it the Python realm and process workers, before it reads.
+      registerSixKernelStop(() => kernel.drain());
       installPageStorageSync({ send: (m) => kernel.client.sendRaw(m) });
       // Extension-leader path only: late-bind the now-minted kernel client into
       // the extension-bridge `onLick` handler so forwarded handoff/upskill licks

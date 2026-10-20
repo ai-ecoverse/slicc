@@ -213,6 +213,47 @@ describe('bootstrapKernelWorker', () => {
     expect(shutdown).toBeDefined();
   });
 
+  it('drain asks the worker to flush, waits for its answer, then terminates (slicc#4051)', async () => {
+    const worker = makeMockWorker({ autoReady: true });
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+      readyTimeoutMs: 1_000,
+    });
+    await host.ready;
+
+    let drained = false;
+    const draining = host.drain(1_000).then(() => {
+      drained = true;
+    });
+    const request = worker.posted.find(
+      (p) => (p.message as { type?: string })?.type === 'kernel-worker-drain'
+    );
+    expect(request?.transfer).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(drained).toBe(false);
+    expect(worker.terminateCalls).toBe(0);
+
+    const reply = request!.transfer![0] as MessagePort;
+    reply.postMessage({ type: 'kernel-worker-drained' });
+    await draining;
+    expect(worker.terminateCalls).toBe(1);
+  });
+
+  it('drain gives up after its timeout and terminates anyway', async () => {
+    const worker = makeMockWorker({ autoReady: true });
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+      readyTimeoutMs: 1_000,
+    });
+    await host.ready;
+    await host.drain(10);
+    expect(worker.terminateCalls).toBe(1);
+  });
+
   it('dispose is idempotent', async () => {
     const worker = makeMockWorker({ autoReady: true });
     const host = bootstrapKernelWorker({

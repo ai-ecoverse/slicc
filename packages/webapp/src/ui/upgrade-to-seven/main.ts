@@ -6,6 +6,7 @@
  * nothing.
  */
 
+import { NUKE_CONTROL_CHANNEL } from '../../shell/supplemental-commands/nuke-channel.js';
 import { planProfileDirectory } from '../../transcript/profile-export.js';
 import { defaultSixLockManager, openSixUpgradeChannel } from '../six-upgrade-stop.js';
 import { isFramedBySameOrigin, postToSameOriginParent, runSixUpgradeExport } from './exporter.js';
@@ -28,6 +29,7 @@ async function start(): Promise<void> {
   await runSixUpgradeExport({
     post: postToSameOriginParent(window),
     channel: openSixUpgradeChannel(),
+    legacyReloadChannel: new BroadcastChannel(NUKE_CONTROL_CHANNEL),
     locks: defaultSixLockManager(),
     plan: async (onProgress) =>
       planProfileDirectory(await openUpgradeExportDeps(__SLICC_VERSION__), { onProgress }),

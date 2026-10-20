@@ -1841,6 +1841,16 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /** Cleanup */
+  /**
+   * Make every live conversation durable: each context's pending checkpoint
+   * is written now. Never rejects; per-context failures are logged by the
+   * persistence layer.
+   */
+  async flushConversations(): Promise<void> {
+    const contexts = [...this.lifecycle.getContexts().values()];
+    await Promise.allSettled(contexts.map((context) => context.flushConversation()));
+  }
+
   async shutdown(): Promise<void> {
     this.stopMessageLoop();
 

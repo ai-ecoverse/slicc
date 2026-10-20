@@ -685,6 +685,7 @@ const ROUTES_INDEX_BODY = {
     'GET /auth/cloud-callback.js',
     'GET /cloud',
     'GET /cloud/*',
+    'GET /upgrade-to-seven.html',
   ],
 };
 

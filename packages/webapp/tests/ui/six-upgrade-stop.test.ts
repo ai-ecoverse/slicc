@@ -83,8 +83,12 @@ describe('a six page on the stop broadcast', () => {
     const locks = new FakeWebLocks();
     const order: string[] = [];
     expect(await setupSixUpgradeStop(document, { locks, channel: bus.open() })).toBe(false);
-    registerSixKernelStop(() => order.push('kernel'));
-    registerTrayLeaderFatalCleanup(() => order.push('tray'));
+    registerSixKernelStop(() => {
+      order.push('kernel');
+    });
+    registerTrayLeaderFatalCleanup(() => {
+      order.push('tray');
+    });
     expect(locks.heldModes(SIX_KERNEL_LOCK)).toEqual(['shared']);
 
     bus.open().postMessage({ type: 'stop' });
@@ -110,16 +114,37 @@ describe('a six page on the stop broadcast', () => {
     expect(locks.heldModes(SIX_KERNEL_LOCK)).toEqual(['shared']);
   });
 
-  it('terminates a kernel spawned after the stop at once', () => {
+  it('releases the lock only after the kernel finished flushing', async () => {
+    const bus = new FakeChannelBus();
+    const locks = new FakeWebLocks();
+    let flushed!: () => void;
+    await setupSixUpgradeStop(document, { locks, channel: bus.open() });
+    registerSixKernelStop(
+      () =>
+        new Promise<void>((resolve) => {
+          flushed = resolve;
+        })
+    );
+    bus.open().postMessage({ type: 'stop' });
+    await flush();
+    // The notice is up at once, but the exporter must still wait.
+    expect(document.getElementById('slicc-six-moved')).not.toBeNull();
+    expect(locks.heldModes(SIX_KERNEL_LOCK)).toEqual(['shared']);
+    flushed();
+    await flush();
+    expect(locks.heldModes(SIX_KERNEL_LOCK)).toEqual([]);
+  });
+
+  it('terminates a kernel spawned after the stop at once', async () => {
     installSixUpgradeStopListener(document, null);
-    stopSixPageForUpgrade();
+    await stopSixPageForUpgrade();
     const kernel = vi.fn();
     registerSixKernelStop(kernel);
     expect(kernel).toHaveBeenCalledOnce();
   });
 
-  it('releases a lock it is handed after the stop', () => {
-    stopSixPageForUpgrade();
+  it('releases a lock it is handed after the stop', async () => {
+    await stopSixPageForUpgrade();
     const release = vi.fn();
     holdSixKernelLock(release);
     expect(release).toHaveBeenCalledOnce();
@@ -200,6 +225,36 @@ describe('stopSixPages (the exporter)', () => {
     await stopping;
     expect(done).toBe(true);
     expect(tick).toBeNull();
+  });
+
+  it('asks older six builds to reload, only after this build stopped and flushed', async () => {
+    const bus = new FakeChannelBus();
+    const locks = new FakeWebLocks();
+    const events: string[] = [];
+    const page = await claimSixKernelLock(locks);
+    const legacy = {
+      postMessage: (m: unknown) => events.push(`legacy:${(m as { type: string }).type}`),
+      close: () => events.push('legacy:closed'),
+    };
+    const stopping = stopSixPages({
+      post: () => {},
+      channel: bus.open(),
+      locks,
+      legacyReloadChannel: legacy,
+      legacySettleMs: 1,
+      plan: async () => {
+        throw new Error('unused');
+      },
+      openWriter: async () => {
+        throw new Error('unused');
+      },
+    }).then(() => events.push('read'));
+    await flush();
+    expect(events).toEqual([]);
+    events.push('page released');
+    page!.release();
+    await stopping;
+    expect(events).toEqual(['page released', 'legacy:nuke-reload', 'legacy:closed', 'read']);
   });
 
   it('gives up when a page never stops', async () => {

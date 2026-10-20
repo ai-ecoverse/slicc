@@ -292,6 +292,25 @@ export interface SpawnedKernelHost<TClient> {
   restartReadyDeadline(): void;
   /** Tear down the worker, the CDP forwarder, and close both ports. */
   dispose(): void;
+  /**
+   * Ask the worker to make every live conversation durable, wait for its
+   * answer (at most `timeoutMs`), then {@link dispose}. For a stop whose
+   * caller reads the stores next: seven's in-place upgrade (slicc#4051).
+   */
+  drain(timeoutMs?: number): Promise<void>;
+}
+
+/** How long {@link SpawnedKernelHost.drain} waits for the worker's answer. */
+export const KERNEL_DRAIN_TIMEOUT_MS = 5_000;
+
+/** Page → worker: flush every conversation, then answer on the transferred port. */
+export interface KernelWorkerDrainMsg {
+  type: 'kernel-worker-drain';
+}
+
+/** Worker → page, on the drain's port: the flush finished (or gave up). */
+export interface KernelWorkerDrainedMsg {
+  type: 'kernel-worker-drained';
 }
 
 // ---------------------------------------------------------------------------
@@ -568,11 +587,13 @@ export function bootstrapKernelWorker<TClient>(
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
   let disposed = false;
-  return {
+  const host: SpawnedKernelHost<TClient> = {
     client,
     ready,
     pauseReadyDeadline,
     restartReadyDeadline,
+    drain: (timeoutMs = KERNEL_DRAIN_TIMEOUT_MS) =>
+      drainKernelWorker(worker, timeoutMs, disposed).then(() => host.dispose()),
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -592,6 +613,41 @@ export function bootstrapKernelWorker<TClient>(
       cdpChannel.port1.close();
     },
   };
+  return host;
+}
+
+/**
+ * Post a drain request with its own reply port and wait for the answer, or
+ * for `timeoutMs`. Never rejects: a worker that can't answer is terminated
+ * by the caller anyway.
+ */
+function drainKernelWorker(
+  worker: WorkerLike,
+  timeoutMs: number,
+  disposed: boolean
+): Promise<void> {
+  if (disposed || typeof MessageChannel !== 'function') return Promise.resolve();
+  const reply = new MessageChannel();
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      reply.port1.close();
+      resolve();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    reply.port1.onmessage = (event: MessageEvent) => {
+      if ((event.data as KernelWorkerDrainedMsg | undefined)?.type === 'kernel-worker-drained') {
+        done();
+      }
+    };
+    try {
+      worker.postMessage({ type: 'kernel-worker-drain' } satisfies KernelWorkerDrainMsg, [
+        reply.port2,
+      ]);
+    } catch {
+      done();
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

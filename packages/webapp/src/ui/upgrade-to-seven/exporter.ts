@@ -7,6 +7,8 @@
  *    `slicc-six-upgrade`, then takes `slicc-six-kernel` exclusive, which it
  *    gets once each page has terminated its kernel and released the lock. It
  *    keeps the lock until the frame goes away, so no six page boots meanwhile.
+ *    Then it asks tabs on an older six build, which know neither, to reload
+ *    (`nuke-reload`), so they come back on this build and stop too.
  * 2. Plans the profile's version 2 directory form (`planProfileDirectory`).
  * 3. Writes it to `/slicc-v6-upgrade/<exportId>/`, `manifest.json` last.
  *
@@ -16,6 +18,7 @@
  * `{ type: 'slicc-six-upgrade', error }`.
  */
 
+import type { NukeReloadMsg } from '../../shell/supplemental-commands/nuke-channel.js';
 import type {
   ProfileDirectoryPlan,
   ProfileDirectoryWriter,
@@ -41,6 +44,8 @@ export type SixUpgradeMessage =
 export const SIX_STOP_TIMEOUT_MS = 30_000;
 /** The stop is re-sent this often while the exporter waits, for pages still booting. */
 export const SIX_STOP_RESEND_MS = 2_000;
+/** How long tabs on an older six build get to unload after the reload request. */
+export const SIX_LEGACY_SETTLE_MS = 1_500;
 
 export const SIX_STOP_TIMEOUT_ERROR =
   "A SLICC 6 tab didn't stop. Close your SLICC 6 tabs and try again.";
@@ -92,6 +97,14 @@ export interface SixUpgradeExportDeps {
   resendMs?: number;
   setInterval?(fn: () => void, ms: number): unknown;
   clearInterval?(handle: unknown): void;
+  /**
+   * The channel six builds from before this protocol reload on
+   * (`slicc-nuke-control`). Reloaded, they boot this build, which finds the
+   * lock taken and stops. Null skips the fence.
+   */
+  legacyReloadChannel?: Pick<SixChannel, 'postMessage' | 'close'> | null;
+  /** How long older tabs get to unload after the reload request. */
+  legacySettleMs?: number;
 }
 
 /**
@@ -130,6 +143,27 @@ export async function stopSixPages(deps: SixUpgradeExportDeps): Promise<void> {
     clearTimeout(timer);
     clear(resend);
   }
+  await fenceLegacySixTabs(deps);
+}
+
+/**
+ * Tabs on a six build from before this protocol neither hold the lock nor
+ * hear the stop. They all listen for `nuke-reload` (with no keys to clear it
+ * is a plain reload), so ask them to reload, after this build's pages have
+ * already flushed and stopped, and give them a moment to unload. A reloaded
+ * tab boots this build, finds the lock taken, and shows the moved notice.
+ */
+async function fenceLegacySixTabs(deps: SixUpgradeExportDeps): Promise<void> {
+  const channel = deps.legacyReloadChannel;
+  if (!channel) return;
+  try {
+    channel.postMessage({ type: 'nuke-reload' } satisfies NukeReloadMsg);
+  } catch {
+    /* no listener can hear it then either */
+  } finally {
+    channel.close();
+  }
+  await new Promise((resolve) => setTimeout(resolve, deps.legacySettleMs ?? SIX_LEGACY_SETTLE_MS));
 }
 
 /** Run the whole export and report it. Never throws: failures are posted. */

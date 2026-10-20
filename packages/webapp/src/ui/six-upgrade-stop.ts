@@ -102,7 +102,7 @@ export async function claimSixKernelLock(
 // ---------------------------------------------------------------------------
 
 let stopped = false;
-let kernelStop: (() => void) | null = null;
+let kernelStop: (() => void | Promise<void>) | null = null;
 let lockRelease: (() => void) | null = null;
 let noticeDoc: Document | null = null;
 
@@ -112,20 +112,21 @@ export function isSixStoppedForUpgrade(): boolean {
 }
 
 /**
- * Register how this page terminates its kernel. A page that has already
+ * Register how this page terminates its kernel: flush its conversations,
+ * then terminate it (`SpawnedKernelHost.drain`). A page that has already
  * stopped runs it at once, so a kernel spawned after the stop never runs.
  */
-export function registerSixKernelStop(stop: () => void): void {
+export function registerSixKernelStop(stop: () => void | Promise<void>): void {
   if (stopped) {
-    runQuietly(stop);
+    void runQuietly(stop);
     return;
   }
   kernelStop = stop;
 }
 
-function runQuietly(fn: () => void): void {
+async function runQuietly(fn: () => void | Promise<void>): Promise<void> {
   try {
-    fn();
+    await fn();
   } catch (err) {
     log.error('Stopping for the upgrade threw', err);
   }
@@ -151,15 +152,19 @@ export function renderSixMovedNotice(doc: Document): void {
   doc.title = 'SLICC moved to seven';
 }
 
-/** Stop this page for the upgrade: kernel, tray, notice, then the lock. Idempotent. */
-export function stopSixPageForUpgrade(): void {
+/**
+ * Stop this page for the upgrade: the notice, then the kernel (its
+ * conversations flushed first), the tray, and only then the lock, so the
+ * exporter never reads before the last checkpoint landed. Idempotent.
+ */
+export async function stopSixPageForUpgrade(): Promise<void> {
   if (stopped) return;
   stopped = true;
+  if (noticeDoc) await runQuietly(() => renderSixMovedNotice(noticeDoc!));
   const stop = kernelStop;
   kernelStop = null;
-  if (stop) runQuietly(stop);
-  runQuietly(releaseTrayLeaderOnFatalBoot);
-  if (noticeDoc) runQuietly(() => renderSixMovedNotice(noticeDoc!));
+  if (stop) await runQuietly(stop);
+  await runQuietly(releaseTrayLeaderOnFatalBoot);
   const release = lockRelease;
   lockRelease = null;
   release?.();
@@ -180,7 +185,7 @@ export function installSixUpgradeStopListener(
   channel.addEventListener('message', (event) => {
     if (!isSixUpgradeStop(event.data)) return;
     log.error('SLICC 7 is taking over this browser; stopping this tab.');
-    stopSixPageForUpgrade();
+    void stopSixPageForUpgrade();
   });
   return () => channel.close();
 }

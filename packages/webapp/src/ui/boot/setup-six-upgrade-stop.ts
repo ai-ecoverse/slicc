@@ -33,7 +33,7 @@ export async function setupSixUpgradeStop(
     opts.locks === undefined ? defaultSixLockManager() : opts.locks
   );
   if (!claim) {
-    stopSixPageForUpgrade();
+    await stopSixPageForUpgrade();
     return true;
   }
   holdSixKernelLock(claim.release);

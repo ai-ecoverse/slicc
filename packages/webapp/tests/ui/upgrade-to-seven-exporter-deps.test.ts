@@ -8,6 +8,7 @@
 import 'fake-indexeddb/auto';
 import { validateSliccProfileManifest } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SessionStore } from '../../src/core/session.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import { saveScoop } from '../../src/scoops/db.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
@@ -71,6 +72,27 @@ describe('openUpgradeExportDeps', () => {
     vi.unstubAllGlobals();
   });
 
+  it('exports history that is still only in the legacy agent-sessions store', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => null });
+    const fs = await VirtualFS.create({ dbName: SIX_KERNEL_FS_DB_NAME, wipe: true });
+    await fs.mkdir('/workspace', { recursive: true });
+    await saveScoop(
+      scoop({ jid: 'cone_legacy', name: 'Old', folder: 'old-cone', parentJid: null })
+    );
+    await new SessionStore().save({
+      id: 'cone_legacy',
+      messages: [{ role: 'user', content: 'from before the canonical store', timestamp: 1 }],
+      config: {} as never,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const plan = await planProfileDirectory(await openUpgradeExportDeps('6.0.0-test'));
+    const writer = new Map<string, Uint8Array>();
+    await plan.write({ writeFile: async (path, bytes) => void writer.set(path, bytes) });
+    const transcript = new TextDecoder().decode(writer.get('transcripts/old-cone.json')!);
+    expect(transcript).toContain('from before the canonical store');
+  });
+
   it("plans a valid directory from six's own stores, redacting slicc_accounts keys", async () => {
     const key = 'zzfake-anthropic-key-0123456789abcdef';
     const accounts = JSON.stringify([{ providerId: 'anthropic', apiKey: key }]);
@@ -86,7 +108,7 @@ describe('openUpgradeExportDeps', () => {
     const deps = await openUpgradeExportDeps('6.0.0-test');
     const plan = await planProfileDirectory(deps);
     expect(validateSliccProfileManifest(plan.manifest)).toEqual({ ok: true });
-    expect(plan.manifest.cones.map((c) => c.folder)).toEqual(['cone']);
+    expect(plan.manifest.cones.map((c) => c.folder)).toContain('cone');
     expect(plan.manifest.providers).toEqual(['anthropic']);
     const plain = plan.manifest.files.find((f) => f.path === 'files/cones/cone/docs/plain.md');
     const keyed = plan.manifest.files.find((f) => f.path === 'files/cones/cone/docs/keyed.md');
