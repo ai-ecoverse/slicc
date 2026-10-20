@@ -390,7 +390,8 @@ export function annotateGitHubAuthFailure(message: string, remoteUrl?: string): 
  * `compareStats` says a file's cached stats are stale it re-hashes the file
  * and — if the oid still matches — calls `index.insert(...)` purely to warm
  * the stat cache. That marks the index dirty, so `GitIndexManager.acquire`
- * serializes and writes the WHOLE `.git/index` back, once per file.
+ * serializes and writes the WHOLE `.git/index` back (once per file before
+ * isomorphic-git 1.42.7, once per walk since — still a write).
  *
  * Over a `--mount`ed host checkout the stats can never match (the hostfs
  * bridge has no ctime/ino/uid/gid of its own to report), so a single
