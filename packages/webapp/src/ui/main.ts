@@ -17,6 +17,7 @@ import { setupPreloadErrorReload } from './boot/setup-preload-error-reload.js';
 import { parseExtensionLeaderParams } from './boot/setup-standalone-prelude.js';
 import { setupStoragePersistence } from './boot/setup-storage-persistence.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
+import { stepAsideForSeven } from './boot/six-step-aside.js';
 import { applyProviderDefaults } from './provider-settings.js';
 import { releaseTrayLeaderOnFatalBoot } from './tray-leader-fatal.js';
 
@@ -48,6 +49,8 @@ function startLiveModelCatalog(): void {
 }
 
 async function main(): Promise<void> {
+  if (stepAsideForSeven(window)) return;
+
   setupPreloadErrorReload();
 
   const app = document.getElementById('app');
