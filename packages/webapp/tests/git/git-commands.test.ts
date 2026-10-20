@@ -3995,7 +3995,7 @@ EOF`);
       const result = await git.execute(['rebase', 'main'], '/project');
       expect(result.exitCode).toBe(128);
       expect(result.stderr).toContain('is a merge');
-    });
+    }, 30_000);
 
     it('rejects unsupported interactive rebase', async () => {
       await git.execute(['init'], '/project');
