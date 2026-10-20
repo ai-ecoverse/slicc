@@ -21,6 +21,7 @@ import {
 } from '../../src/scoops/live-session-curation.js';
 import { snapshotLiveSession } from '../../src/scoops/live-session-snapshot.js';
 import { runMemoryDreamPass } from '../../src/scoops/memory-dreaming.js';
+import { runMemoryHealthCheck } from '../../src/scoops/memory-health.js';
 import {
   parseFrozenArchive,
   readSessionsIndex,
@@ -72,10 +73,10 @@ function spawnPrompt(spawn: ReturnType<typeof successSpawn>, index = 0): string 
   return call[0].prompt;
 }
 
-async function seedLive(vfs: ArchiveVfs) {
+async function seedLive(vfs: ArchiveVfs, folder = 'cone') {
   const result = await snapshotLiveSession({
     vfs,
-    cone: { folder: 'cone' },
+    cone: { folder },
     messages: [agent('user', 'fix the build', 10), agent('assistant', 'on it', 20)],
     trigger: 'idle',
     now: () => 1_000,
@@ -269,6 +270,66 @@ describe('curateLiveSessionDelta', () => {
     release?.();
     await Promise.all([first, second]);
     expect(spawn).toHaveBeenCalledOnce();
+  });
+});
+
+// #3849: a slice that succeeded after an earlier failure must read as
+// curated in the ledger — for the primary AND for a non-primary cone —
+// not as "unmarked", and the record must survive the next compaction.
+describe.each(['cone', 'cone-helix'])('ledger after a successful slice (%s)', (folder) => {
+  it('stamps memoryCuratedAt, clears the failure, and the health check sees the cone', async () => {
+    const vfs = fakeVfs();
+    const live = await seedLive(vfs, folder);
+    const spawn = vi.fn(
+      async (_options: AgentSpawnOptions): Promise<AgentSpawnResult> => ({
+        finalText: 'Scoop "agent-memory-curator" failed with unrecoverable error: expired',
+        exitCode: 1,
+      })
+    );
+    await curateLiveSessionDelta({ vfs, cone: { folder }, spawn, enabled: true });
+    expect((await readSessionsIndex(vfs as never))[0].memoryFailed).toContain('failed with');
+
+    spawn.mockResolvedValueOnce({ finalText: 'folded', exitCode: 0 });
+    const curated = await curateLiveSessionDelta({ vfs, cone: { folder }, spawn, enabled: true });
+    expect(curated).toMatchObject({ status: 'curated', filename: live.entry.filename });
+
+    const [entry] = await readSessionsIndex(vfs as never);
+    expect(entry.memoryFailed).toBeUndefined();
+    expect(entry.memoryCuratedAt).toEqual(expect.any(String));
+
+    // The next compaction round rewrites the live row from scratch.
+    await snapshotLiveSession({
+      vfs,
+      cone: { folder },
+      messages: [agent('user', 'fix the build', 10), agent('assistant', 'later', 30)],
+      trigger: 'idle',
+    });
+    expect((await readSessionsIndex(vfs as never))[0].memoryCuratedAt).toBe(entry.memoryCuratedAt);
+
+    const memoryPath = folder === 'cone' ? '/workspace/CLAUDE.md' : `/cones/${folder}/CLAUDE.md`;
+    vfs.files.set(memoryPath, '- fact\n');
+    const health = await runMemoryHealthCheck(vfs);
+    expect(health.failures).toEqual([]);
+    expect(health.curation).toMatchObject({ curated: 1, failed: 0 });
+    expect(health.cones.find((cone) => cone.folder === folder)).toMatchObject({
+      curated: 1,
+      failed: 0,
+    });
+  });
+
+  it('records success from a receipt even when the cursor is already past the slice', async () => {
+    const vfs = fakeVfs();
+    const live = await seedLive(vfs, folder);
+    await advanceCuratedThrough(vfs, live.entry.filename, 20);
+    const entries = await readSessionsIndex(vfs as never);
+    entries[0] = { ...entries[0], memoryFailed: 'stale failure' };
+    vfs.files.set('/sessions/index.json', JSON.stringify(entries));
+
+    await advanceCuratedThrough(vfs, live.entry.filename, 20);
+
+    const [entry] = await readSessionsIndex(vfs as never);
+    expect(entry.memoryFailed).toBeUndefined();
+    expect(entry.curatedThrough).toBe(20);
   });
 });
 

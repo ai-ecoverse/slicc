@@ -209,6 +209,9 @@ async function writeSnapshot(
     compactions,
     ...(existing?.curatedThrough ? { curatedThrough: existing.curatedThrough } : {}),
     ...(existing?.memoryFailed ? { memoryFailed: existing.memoryFailed } : {}),
+    // The success half of the ledger survives the rewrite too, or a
+    // curated live archive reads as "unmarked" after one more round.
+    ...(existing?.memoryCuratedAt ? { memoryCuratedAt: existing.memoryCuratedAt } : {}),
   };
 
   await ensureSessionsDir(deps.vfs, sessionsDir);

@@ -1572,9 +1572,12 @@ memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactorin
   health check (~90s after boot, then daily — `scoops/memory-health.ts`) that persists its
   numbers to `/sessions/.curation/health.json` and logs an error on failure. An unreadable
   sessions index counts as a failure, never as "0 sessions, all fine". `memory status` prints
-  the last scheduled result on its `Scheduled:` line.
+  the last scheduled result on its `Scheduled:` line. Its `cones` list carries every existing cone
+  (primary and `/cones/<folder>`) with that cone's `curated` / `failed` counts.
 - The ledger is `/sessions/index.json`: `memoryCuratedAt` (success), `memoryFailed` (last attempt's
-  reason), `memoryPending` (owed), `memorySkipped` (user opted out).
+  reason), `memoryPending` (owed), `memorySkipped` (user opted out). Every pass that lands stamps
+  `memoryCuratedAt` over an earlier failure note — a freeze, a live-archive slice, or a manual
+  `memory curate`.
 - `--cone` must name an existing cone folder (`cone`, or a `/cones/<folder>` that exists); the
   value crosses the memory seam and becomes `/cones/<folder>/CLAUDE.md` on the far side, so a
   typo, a dropped cone or a path fragment fails here instead of steering a pass at the wrong

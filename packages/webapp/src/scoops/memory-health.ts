@@ -55,6 +55,8 @@ export interface ConeMemoryHealth {
   folder: string;
   /** Archives from this cone that report successful curation. */
   curated: number;
+  /** Archives from this cone whose last curation attempt failed. */
+  failed: number;
   /** Memory file size in chars; null when missing. */
   chars: number | null;
 }
@@ -66,7 +68,10 @@ export interface MemoryHealthReport {
   curation: { curated: number; failed: number; pending: number; skipped: number; none: number };
   /** Primary memory file size in chars; null when missing. */
   primaryMemoryChars: number | null;
-  /** Every cone with curated archives, and the primary always. */
+  /**
+   * The primary, every extra cone that exists, and any other cone an archive
+   * names (when the FS cannot list `/cones`).
+   */
   cones: ConeMemoryHealth[];
   /** Human-readable failure lines; empty means healthy. */
   failures: string[];
@@ -141,21 +146,32 @@ function entryState(
   return 'none';
 }
 
-/** Curated-archive counts per cone (the primary always present, maybe at 0). */
-function curatedPerCone(entries: FrozenSessionIndexEntry[]): Map<string, number> {
-  const counts = new Map<string, number>([[PRIMARY_CONE_FOLDER, 0]]);
+/** Curated and failed archive counts per cone (the primary always present). */
+function countsPerCone(
+  entries: FrozenSessionIndexEntry[],
+  live: Set<string> | null
+): Map<string, { curated: number; failed: number }> {
+  const counts = new Map<string, { curated: number; failed: number }>([
+    [PRIMARY_CONE_FOLDER, { curated: 0, failed: 0 }],
+  ]);
+  // A cone with no curated archive yet is still a cone the user runs; listing
+  // only cones with successes hid exactly the ones that never succeeded.
+  for (const folder of live ?? []) counts.set(folder, { curated: 0, failed: 0 });
   for (const entry of entries) {
-    if (entryState(entry) !== 'curated') continue;
+    const state = entryState(entry);
+    if (state !== 'curated' && state !== 'failed') continue;
     // An archive's `cone` names the memory file its curation was supposed to
     // grow (absent = the primary).
     const folder = entry.cone ?? PRIMARY_CONE_FOLDER;
-    counts.set(folder, (counts.get(folder) ?? 0) + 1);
+    const count = counts.get(folder) ?? { curated: 0, failed: 0 };
+    count[state]++;
+    counts.set(folder, count);
   }
   return counts;
 }
 
 /**
- * Each cone's curated count beside its memory file size. A cone that was
+ * Each cone's ledger counts beside its memory file size. A cone that was
  * dropped took its memory file with it — not a lie — so extra cones are
  * checked only when they still exist (when the FS can tell).
  */
@@ -165,9 +181,9 @@ async function collectConeHealth(
 ): Promise<ConeMemoryHealth[]> {
   const live = await liveExtraCones(fs);
   const cones: ConeMemoryHealth[] = [];
-  for (const [folder, curated] of curatedPerCone(entries)) {
+  for (const [folder, { curated, failed }] of countsPerCone(entries, live)) {
     if (folder !== PRIMARY_CONE_FOLDER && live && !live.has(folder)) continue;
-    cones.push({ folder, curated, chars: await memoryChars(fs, folder) });
+    cones.push({ folder, curated, failed, chars: await memoryChars(fs, folder) });
   }
   return cones;
 }
