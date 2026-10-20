@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   isSafeProfileEntryPath,
+  isSafeProfileSourcePath,
+  PROFILE_DIRECTORY_ROOT,
   PROFILE_FLAG_RULES,
+  PROFILE_SOURCE_ROOT,
   profileArchiveFilename,
   profileFlagRuleFor,
   type SliccProfileManifestV1,
+  type SliccProfileManifestV2,
+  validateSliccProfileManifest,
   validateSliccProfileManifestV1,
+  validateSliccProfileManifestV2,
 } from '../src/profile-export.js';
 
 function manifest(): SliccProfileManifestV1 {
@@ -147,6 +153,90 @@ describe('validateSliccProfileManifestV1', () => {
       ok: false,
       error: 'manifest must be an object',
     });
+  });
+});
+
+function directory(): SliccProfileManifestV2 {
+  const { part: _part, ...rest } = manifest();
+  return {
+    ...rest,
+    version: 2,
+    files: rest.files.map((file) =>
+      file.path === 'files/cones/cone/.env'
+        ? { ...file, source: '/slicc-fs/workspace/.env' }
+        : file.path === 'skills/my-skill/SKILL.md'
+          ? { ...file, source: '/slicc-fs/workspace/skills/my-skill/SKILL.md' }
+          : file
+    ),
+  };
+}
+
+type MutatorV2 = (m: SliccProfileManifestV2 & { [key: string]: unknown }) => void;
+
+describe('validateSliccProfileManifestV2', () => {
+  it('accepts the directory form, with files left in place and files written', () => {
+    expect(validateSliccProfileManifestV2(directory())).toEqual({ ok: true });
+    const written = { ...directory(), files: manifest().files };
+    expect(validateSliccProfileManifestV2(written)).toEqual({ ok: true });
+    expect(PROFILE_DIRECTORY_ROOT).toBe('/slicc-v6-upgrade/');
+    expect(PROFILE_SOURCE_ROOT).toBe('/slicc-fs/');
+  });
+
+  const cases: [string, MutatorV2, RegExp][] = [
+    ['version', (m) => void (m.version = 1 as never), /version must be 2/],
+    ['part', (m) => void ((m as { part?: unknown }).part = { index: 1, of: 2 }), /never split/],
+    ['archive-limit', (m) => void (m.skipped[0]!.reason = 'archive-limit'), /reason/],
+    ['source type', (m) => void (m.files[1]!.source = 3 as never), /source must be a safe path/],
+    ['source root', (m) => void (m.files[1]!.source = '/workspace/.env'), /under \/slicc-fs\//],
+    ['source escape', (m) => void (m.files[1]!.source = '/slicc-fs/../etc/passwd'), /safe path/],
+    ['source sidecar', (m) => void (m.files[1]!.source = '/slicc-fs/.metadata.json'), /safe path/],
+    [
+      'source on a transcript',
+      (m) => void (m.files[0]!.source = '/slicc-fs/workspace/t.json'),
+      /can't stay in place/,
+    ],
+    [
+      'source twice',
+      (m) => void (m.files[3]!.source = '/slicc-fs/workspace/.env'),
+      /moves "\/slicc-fs\/workspace\/\.env" twice/,
+    ],
+  ];
+  it.each(cases)('rejects a bad %s', (_name, mutate, error) => {
+    const m = directory() as SliccProfileManifestV2 & { [key: string]: unknown };
+    mutate(m);
+    const result = validateSliccProfileManifestV2(m);
+    expect(result.ok).toBe(false);
+    expect(result.ok ? '' : result.error).toMatch(error);
+  });
+
+  it('version 1 refuses a source, and the dispatcher picks the validator by version', () => {
+    const zipped = manifest() as SliccProfileManifestV1 & { files: { source?: string }[] };
+    zipped.files[1]!.source = '/slicc-fs/workspace/.env';
+    expect(validateSliccProfileManifestV1(zipped)).toEqual({
+      ok: false,
+      error: 'files[1].source needs version 2',
+    });
+    expect(validateSliccProfileManifest(directory())).toEqual({ ok: true });
+    expect(validateSliccProfileManifest(manifest())).toEqual({ ok: true });
+    expect(validateSliccProfileManifest(zipped).ok).toBe(false);
+    expect(validateSliccProfileManifest(null)).toEqual({
+      ok: false,
+      error: 'manifest must be an object',
+    });
+  });
+
+  it.each([
+    ['/slicc-fs/workspace/a.txt', true],
+    ['/slicc-fs/home/user/.bashrc', true],
+    ['/slicc-fs/', false],
+    ['/slicc-fs/.metadata.json', false],
+    ['/slicc-fs/a/../b', false],
+    ['/slicc-fs//a', false],
+    ['/slicc-fs-global/a', false],
+    ['slicc-fs/a', false],
+    ['/slicc-fs/a\\b', false],
+  ])('isSafeProfileSourcePath(%j) → %s', (path, ok) => {
+    expect(isSafeProfileSourcePath(path)).toBe(ok);
   });
 });
 
