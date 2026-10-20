@@ -192,3 +192,12 @@ describe('openOpfsProfileDirectory', () => {
     expect([...cone.files.keys()].sort()).toEqual(['more.md', 'notes.md']);
   });
 });
+
+describe('upgrade-to-seven.html', () => {
+  it('carries the marker seven checks before it frames the page', async () => {
+    const { readFileSync } = await import('node:fs');
+    const html = readFileSync(new URL('../../upgrade-to-seven.html', import.meta.url), 'utf8');
+    expect(html).toContain('<meta name="slicc-six-upgrade" content="1" />');
+    expect(html).toContain('/packages/webapp/src/ui/upgrade-to-seven/main.ts');
+  });
+});

@@ -3,7 +3,9 @@
  * on www.sliccy.ai (slicc#4051). Seven's BIOS at `/7/` frames it, so unlike
  * every other six page it may be framed, but only by its own origin
  * (`frame-ancestors 'self'`). It is never cached, and it gets no
- * Document-Isolation-Policy: it runs no realms.
+ * Document-Isolation-Policy: it runs no realms. It sends COEP `require-corp`
+ * and CORP `same-origin`, so a cross-origin-isolated parent can frame it as
+ * well as a plain one; it loads only same-origin assets.
  */
 
 /** The exporter's public path. */
@@ -38,6 +40,8 @@ export async function tryHandleUpgradeToSeven(
   headers.set('X-Frame-Options', 'SAMEORIGIN');
   headers.set('Cache-Control', 'no-store');
   headers.delete('Document-Isolation-Policy');
+  headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  headers.set('Cross-Origin-Resource-Policy', 'same-origin');
   return new Response(request.method === 'HEAD' ? null : final.body, {
     status: final.status,
     statusText: final.statusText,

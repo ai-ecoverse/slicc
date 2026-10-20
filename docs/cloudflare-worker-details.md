@@ -317,8 +317,10 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
 - **`/upgrade-to-seven.html`** (`upgrade-to-seven.ts`): six's in-place exporter,
   which seven's BIOS at `/7/` frames (slicc#4051, [`profile-export.md`](profile-export.md)).
   It is the one six page with `frame-ancestors 'self'` (plus `X-Frame-Options:
-SAMEORIGIN`), `Cache-Control: no-store` and no Document-Isolation-Policy. GET/HEAD
-  only.
+SAMEORIGIN`), `Cache-Control: no-store`, no Document-Isolation-Policy, and COEP
+  `require-corp` with CORP `same-origin`, so an isolated parent can frame it too.
+  GET/HEAD only. The page carries `<meta name="slicc-six-upgrade" content="1">`
+  so seven can tell it from the SPA fallback before framing it.
 - **25 MiB per-asset cap:** Cloudflare rejects any `dist/ui/` file over 25 MiB; the CI
   `cloudflare-worker` job runs `npm run build -w @slicc/cloudflare-worker`
   (`wrangler deploy --dry-run`) as a hard gate.

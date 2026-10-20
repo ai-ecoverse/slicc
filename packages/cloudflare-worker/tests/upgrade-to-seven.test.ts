@@ -39,6 +39,9 @@ describe('GET /upgrade-to-seven.html', () => {
     expect(res.headers.get('x-frame-options')).toBe('SAMEORIGIN');
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('document-isolation-policy')).toBeNull();
+    // Framable by a cross-origin-isolated parent too.
+    expect(res.headers.get('cross-origin-embedder-policy')).toBe('require-corp');
+    expect(res.headers.get('cross-origin-resource-policy')).toBe('same-origin');
     expect(seen).toEqual([UPGRADE_TO_SEVEN_PATH, '/upgrade-to-seven']);
   });
 
