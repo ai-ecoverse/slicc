@@ -2,7 +2,7 @@ import { Bash } from 'just-bash';
 import { Bash as BrowserBash } from 'just-bash/browser';
 import { describe, expect, it } from 'vitest';
 
-// Backport of vercel-labs/just-bash#400 (merged, not yet released): an
+// vercel-labs/just-bash#400 (SLICC backported it until it shipped in 3.5.0): an
 // assignment-only command exits 0, or with its last command substitution's
 // status. Upstream 3.4.2 returned the previous command's status, so automake's
 // `(CDPATH=… && cd $subdir && $(MAKE) …)` never ran make after a failed `test`.

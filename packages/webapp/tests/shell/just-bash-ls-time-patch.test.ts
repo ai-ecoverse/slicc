@@ -2,7 +2,8 @@ import { Bash } from 'just-bash';
 import { Bash as BrowserBash } from 'just-bash/browser';
 import { describe, expect, it } from 'vitest';
 
-// Upstream parsed -t but never sorted by mtime, and rejected -L. automake's
+// Upstream parsed -t but never sorted by mtime (fixed in 3.5.0), and still
+// rejects -L, which the patch adds. automake's
 // "build environment is sane" check runs `ls -Lt configure conftest.file`
 // (falling back to `ls -t`) and expects the new file first.
 describe.each([

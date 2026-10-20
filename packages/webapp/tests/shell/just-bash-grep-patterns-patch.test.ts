@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 // Two upstream grep gaps that together made autoconf's AC_PROG_GREP reject
 // grep ("no acceptable grep could be found"), ending every configure:
-// - only the last -e pattern was used (vercel-labs/just-bash#297, fix in #314);
+// - only the last -e pattern was used (vercel-labs/just-bash#297, upstream
+//   since 3.5.0 via #314; the patch still adds -ePATTERN and --regexp);
 // - in a basic regex, `$` before `\|` was a literal, not an anchor (#467).
 describe.each([
   ['node', Bash],
