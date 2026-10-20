@@ -361,6 +361,33 @@ describe('dependencyDrift', () => {
     expect(dependencyDrift(repo, tree)).toEqual(empty);
   });
 
+  it('skips removed platform-native binaries but keeps their bumps', () => {
+    lock(repo, { 'node_modules/@esbuild/linux-x64': { version: '0.29.0', cpu: ['x64'] } });
+    lock(tree, {
+      'node_modules/@img/sharp-linux-x64': { version: '0.35.4', os: ['linux'], cpu: ['x64'] },
+      'node_modules/@img/sharp-webcontainers-wasm32': { version: '0.35.4', cpu: ['wasm32'] },
+      'node_modules/@img/sharp-wasm32': { version: '0.35.4' },
+      'node_modules/@esbuild/linux-x64': { version: '0.28.1', cpu: ['x64'] },
+    });
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.missing).toEqual([
+      {
+        path: 'node_modules/@img/sharp-wasm32',
+        name: '@img/sharp-wasm32',
+        from: '0.35.4',
+        to: null,
+      },
+    ]);
+    expect(drift.changed).toEqual([
+      {
+        path: 'node_modules/@esbuild/linux-x64',
+        name: '@esbuild/linux-x64',
+        from: '0.28.1',
+        to: '0.29.0',
+      },
+    ]);
+  });
+
   it('skips an un-hoisted nested @types copy the change removes', () => {
     lock(repo, {});
     lock(tree, {

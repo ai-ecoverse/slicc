@@ -81,6 +81,10 @@ function isDefinitelyTypedPackage(installName) {
   return lockInstallRegistryName(installName).startsWith('@types/');
 }
 
+function isPlatformBinary(entry) {
+  return Array.isArray(entry.os) || Array.isArray(entry.cpu);
+}
+
 function nestedCopyIsCovered(path, entry, _base, head) {
   if (isDefinitelyTypedPackage(path.slice('node_modules/'.length))) return true;
   const headEntry = head[path];
@@ -92,6 +96,16 @@ function registryName(path, entry) {
   const installName = path.slice('node_modules/'.length);
   const idx = installName.lastIndexOf('/node_modules/');
   return idx === -1 ? installName : installName.slice(idx + '/node_modules/'.length);
+}
+
+function driftNeedsNoRealignment(path, entry, to, { base, head, workspaces }) {
+  if (to === null && isPlatformBinary(entry)) return true;
+  const installName = path.slice('node_modules/'.length);
+  if (installName.includes('/node_modules/')) return nestedCopyIsCovered(path, entry, base, head);
+
+  if (workspaces.has(installName)) return true;
+
+  return isDefinitelyTypedPackage(installName);
 }
 
 export function dependencyDrift(repoRoot, tree) {
@@ -109,18 +123,7 @@ export function dependencyDrift(repoRoot, tree) {
     if (!from) continue;
     const to = head[path]?.version ?? null;
     if (to === from) continue;
-    const installName = path.slice('node_modules/'.length);
-    if (installName.includes('/node_modules/')) {
-      if (nestedCopyIsCovered(path, entry, base, head)) continue;
-
-      const drift = { path, name: registryName(path, entry), from, to };
-      (to === null ? missing : changed).push(drift);
-      continue;
-    }
-
-    if (workspaces.has(installName)) continue;
-
-    if (isDefinitelyTypedPackage(installName)) continue;
+    if (driftNeedsNoRealignment(path, entry, to, { base, head, workspaces })) continue;
 
     const drift = { path, name: registryName(path, entry), from, to };
     (to === null ? missing : changed).push(drift);
