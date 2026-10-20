@@ -366,6 +366,47 @@ describe('OAuth callback relay — opener source (worker-served SPA)', () => {
   });
 });
 
+describe('OAuth callback relay — the opener contract seven relies on', () => {
+  it('broadcasts exactly { type, redirectUrl, nonce } on slicc-oauth-relay, with no opener', async () => {
+    const state = btoa(JSON.stringify({ source: 'opener', nonce: 'seven-nonce-1' }));
+    const search = `?state=${state}&code=c0de`;
+    const hash = '#access_token=t0k';
+    const html = await fetchRelayBody(search);
+    const { replaced, error, broadcasts, postedMessage } = runRelay(html, search, hash, {
+      hasOpener: false,
+    });
+    expect(replaced).toBeUndefined();
+    expect(error).toBeUndefined();
+    expect(postedMessage).toBeUndefined();
+    expect(broadcasts).toStrictEqual([
+      {
+        channel: 'slicc-oauth-relay',
+        message: {
+          type: 'oauth-callback',
+          redirectUrl:
+            'https://www.sliccy.ai/auth/callback?code=c0de&nonce=seven-nonce-1#access_token=t0k',
+          nonce: 'seven-nonce-1',
+        },
+      },
+    ]);
+  });
+
+  it('defaults the path to /auth/callback on the relay origin and posts the opener on that origin only', async () => {
+    const state = btoa(JSON.stringify({ source: 'opener', nonce: 'n2' }));
+    const search = `?state=${state}&code=x`;
+    const html = await fetchRelayBody(search);
+    const { broadcasts, postedMessage, postedTarget } = runRelay(html, search);
+    expect(broadcasts[0]!.message.redirectUrl).toBe(
+      'https://www.sliccy.ai/auth/callback?code=x&nonce=n2'
+    );
+    expect(postedMessage).toStrictEqual({
+      type: 'oauth-callback',
+      redirectUrl: broadcasts[0]!.message.redirectUrl,
+    });
+    expect(postedTarget).toBe('https://www.sliccy.ai');
+  });
+});
+
 describe('OAuth callback relay — self-origin guard for local source', () => {
   it('diverts to opener postMessage when the local target matches the relay origin', async () => {
     const state = btoa(
