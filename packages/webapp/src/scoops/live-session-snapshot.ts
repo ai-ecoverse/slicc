@@ -134,6 +134,8 @@ async function writeSnapshot(
     compactions,
     ...(existing?.curatedThrough ? { curatedThrough: existing.curatedThrough } : {}),
     ...(existing?.memoryFailed ? { memoryFailed: existing.memoryFailed } : {}),
+
+    ...(existing?.memoryCuratedAt ? { memoryCuratedAt: existing.memoryCuratedAt } : {}),
   };
 
   await ensureSessionsDir(deps.vfs, sessionsDir);

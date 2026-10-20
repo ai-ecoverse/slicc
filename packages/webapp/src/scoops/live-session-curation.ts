@@ -210,12 +210,17 @@ export async function advanceCuratedThrough(
     const index = entries.findIndex((entry) => entry.filename === filename);
     if (index === -1) return;
     const current = entries[index].curatedThrough ?? 0;
-    if (through <= current) return;
+    const moves = through > current;
+    if (!moves && entries[index].memoryFailed === undefined) return;
     const { memoryFailed: _failed, ...rest } = entries[index];
     const updated = entries.slice();
-    updated[index] = { ...rest, curatedThrough: through };
+    updated[index] = {
+      ...rest,
+      curatedThrough: Math.max(through, current),
+      memoryCuratedAt: new Date().toISOString(),
+    };
     await writeSessionsIndexUnlocked(asArchive(vfs), updated);
-    await patchCuratedThroughFrontmatter(vfs, `${SESSIONS_DIR}/${filename}`, through);
+    if (moves) await patchCuratedThroughFrontmatter(vfs, `${SESSIONS_DIR}/${filename}`, through);
     await vfs.flush?.();
   });
 }
@@ -390,18 +395,32 @@ async function stampLiveFailure(
   filename: string,
   reason: string
 ): Promise<void> {
+  await stampCurationOutcome(vfs, filename, { ok: false, reason });
+}
+
+export async function stampCurationOutcome(
+  vfs: LiveCurationVfs,
+  filename: string,
+  outcome: { ok: true } | { ok: false; reason: string },
+  coneFolder?: string
+): Promise<void> {
   try {
     await serializeIndexWrite(async () => {
       const entries = await readSessionsIndexForWrite(asArchive(vfs));
       const index = entries.findIndex((entry) => entry.filename === filename);
       if (index === -1) return;
+      const owner = entries[index].cone ?? PRIMARY_CONE_FOLDER;
+      if (coneFolder !== undefined && owner !== coneFolder) return;
+      const { memoryFailed: _failed, ...rest } = entries[index];
       const updated = entries.slice();
-      updated[index] = { ...entries[index], memoryFailed: reason.slice(0, 300) };
+      updated[index] = outcome.ok
+        ? { ...rest, memoryCuratedAt: new Date().toISOString() }
+        : { ...entries[index], memoryFailed: outcome.reason.slice(0, 300) };
       await writeSessionsIndexUnlocked(asArchive(vfs), updated);
       await vfs.flush?.();
     });
   } catch (error) {
-    log.warn('Failed to record live curation failure', {
+    log.warn('Failed to record curation outcome', {
       filename,
       error: errorText(error),
     });

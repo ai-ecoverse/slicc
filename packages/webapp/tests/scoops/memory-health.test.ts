@@ -49,7 +49,7 @@ describe('runMemoryHealthCheck', () => {
       sessions: 3,
       curation: { curated: 1, failed: 0, pending: 1, skipped: 1, none: 0 },
       primaryMemoryChars: memory.length,
-      cones: [{ folder: 'cone', curated: 1, chars: memory.length }],
+      cones: [{ folder: 'cone', curated: 1, failed: 0, chars: memory.length }],
       failures: [],
     });
   });
@@ -73,8 +73,8 @@ describe('runMemoryHealthCheck', () => {
     );
     expect(healthy.failures).toEqual([]);
     expect(healthy.cones).toEqual([
-      { folder: 'cone', curated: 0, chars: null },
-      { folder: 'cone-research', curated: 2, chars: 7 },
+      { folder: 'cone', curated: 0, failed: 0, chars: null },
+      { folder: 'cone-research', curated: 2, failed: 0, chars: 7 },
     ]);
 
     const lying = await runMemoryHealthCheck(
@@ -93,6 +93,30 @@ describe('runMemoryHealthCheck', () => {
     );
     expect(dropped.failures).toEqual([]);
     expect(dropped.cones.map((c) => c.folder)).toEqual(['cone']);
+  });
+
+  it('lists every existing cone with its own curated and failed counts', async () => {
+    const fs = {
+      ...fakeFs({
+        '/sessions/index.json': index([
+          { filename: 'p.md', memoryCuratedAt: '2026-10-08T00:00:00Z' },
+          { filename: 'live-cone-helix-a.md', cone: 'cone-helix', memoryFailed: 'bedrock 400' },
+        ]),
+        '/workspace/CLAUDE.md': 'primary',
+        '/cones/cone-helix/CLAUDE.md': 'helix memory',
+      }),
+      readDir: async () => [
+        { name: 'cone-helix', type: 'directory' },
+        { name: 'cone-idle', type: 'directory' },
+      ],
+    };
+    const report = await runMemoryHealthCheck(fs, NOW);
+    expect(report.primaryMemoryChars).toBe('primary'.length);
+    expect(report.cones).toEqual([
+      { folder: 'cone', curated: 1, failed: 0, chars: 'primary'.length },
+      { folder: 'cone-helix', curated: 0, failed: 1, chars: 'helix memory'.length },
+      { folder: 'cone-idle', curated: 0, failed: 0, chars: null },
+    ]);
   });
 
   it('treats a missing index as a fresh system, not a failure', async () => {

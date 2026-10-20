@@ -24,6 +24,8 @@ export interface ConeMemoryHealth {
 
   curated: number;
 
+  failed: number;
+
   chars: number | null;
 }
 
@@ -101,13 +103,23 @@ function entryState(
   return 'none';
 }
 
-function curatedPerCone(entries: FrozenSessionIndexEntry[]): Map<string, number> {
-  const counts = new Map<string, number>([[PRIMARY_CONE_FOLDER, 0]]);
+function countsPerCone(
+  entries: FrozenSessionIndexEntry[],
+  live: Set<string> | null
+): Map<string, { curated: number; failed: number }> {
+  const counts = new Map<string, { curated: number; failed: number }>([
+    [PRIMARY_CONE_FOLDER, { curated: 0, failed: 0 }],
+  ]);
+
+  for (const folder of live ?? []) counts.set(folder, { curated: 0, failed: 0 });
   for (const entry of entries) {
-    if (entryState(entry) !== 'curated') continue;
+    const state = entryState(entry);
+    if (state !== 'curated' && state !== 'failed') continue;
 
     const folder = entry.cone ?? PRIMARY_CONE_FOLDER;
-    counts.set(folder, (counts.get(folder) ?? 0) + 1);
+    const count = counts.get(folder) ?? { curated: 0, failed: 0 };
+    count[state]++;
+    counts.set(folder, count);
   }
   return counts;
 }
@@ -118,9 +130,9 @@ async function collectConeHealth(
 ): Promise<ConeMemoryHealth[]> {
   const live = await liveExtraCones(fs);
   const cones: ConeMemoryHealth[] = [];
-  for (const [folder, curated] of curatedPerCone(entries)) {
+  for (const [folder, { curated, failed }] of countsPerCone(entries, live)) {
     if (folder !== PRIMARY_CONE_FOLDER && live && !live.has(folder)) continue;
-    cones.push({ folder, curated, chars: await memoryChars(fs, folder) });
+    cones.push({ folder, curated, failed, chars: await memoryChars(fs, folder) });
   }
   return cones;
 }

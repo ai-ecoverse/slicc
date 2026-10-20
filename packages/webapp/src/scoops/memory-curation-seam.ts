@@ -1,12 +1,14 @@
 import type { VirtualFS } from '../fs/index.js';
 import { readSessionsIndex } from '../transcript/frozen-archive-format.js';
-import type { AgentBridge } from './agent-bridge.js';
+import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
+import { AGENT_NAME_IN_USE_PREFIX, type AgentBridge } from './agent-bridge.js';
 import {
   type AgenticMemoryPassResult,
   type CuratorConeRef,
   runAgenticMemoryPass,
   seedMemoryInstructions,
 } from './agentic-memory.js';
+import { stampCurationOutcome } from './live-session-curation.js';
 import { runMemoryDreamPass } from './memory-dreaming.js';
 
 export const MEMORY_SEAM_GLOBAL_KEY = '__slicc_memory';
@@ -44,13 +46,15 @@ export function createMemorySeam(sharedFs: VirtualFS): MemorySeam {
       if (!bridge) {
         return { ok: false, reason: 'agent bridge not published yet', legacyFallbackSafe: false };
       }
-      return runAgenticMemoryPass({
+      const result = await runAgenticMemoryPass({
         spawn: (options) => bridge.spawn(options),
         vfs: sharedFs,
         sessionArchivePath: request.sessionArchivePath,
         sessionCount: request.sessionCount,
         ...(request.cone ? { cone: request.cone } : {}),
       });
+      await recordOutcome(sharedFs, request.sessionArchivePath, request.cone, result);
+      return result;
     },
     async dream(request: MemoryDreamRequest): Promise<AgenticMemoryPassResult> {
       const bridge = (globalThis as unknown as MemorySeamGlobals).__slicc_agent;
@@ -67,6 +71,23 @@ export function createMemorySeam(sharedFs: VirtualFS): MemorySeam {
       });
     },
   };
+}
+
+async function recordOutcome(
+  fs: VirtualFS,
+  sessionArchivePath: string,
+  cone: CuratorConeRef | undefined,
+  result: AgenticMemoryPassResult
+): Promise<void> {
+  const match = /^\/sessions\/([^/]+)$/.exec(sessionArchivePath);
+  if (!match) return;
+  if (!result.ok && result.reason.startsWith(AGENT_NAME_IN_USE_PREFIX)) return;
+  await stampCurationOutcome(
+    fs,
+    match[1],
+    result.ok ? { ok: true } : { ok: false, reason: result.reason },
+    cone?.folder ?? PRIMARY_CONE_FOLDER
+  );
 }
 
 export function publishMemorySeam(seam: MemorySeam): void {
