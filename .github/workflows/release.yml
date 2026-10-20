@@ -151,7 +151,7 @@ jobs:
 
   release:
     needs: analyze
-    if: needs.analyze.outputs.release_required == 'true'
+    if: github.ref == 'refs/heads/main' && needs.analyze.outputs.release_required == 'true'
 
     runs-on: macos-26
 
