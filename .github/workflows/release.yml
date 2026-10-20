@@ -183,7 +183,7 @@ jobs:
 
   release:
     needs: analyze
-    if: needs.analyze.outputs.release_required == 'true'
+    if: github.ref == 'refs/heads/main' && needs.analyze.outputs.release_required == 'true'
     # macos-26 GA'd 2026-02-26 and is the image that ships Xcode 26
     # by default. Apple now rejects App Store submissions built with
     # anything older: "Validation failed (409) SDK version issue.
