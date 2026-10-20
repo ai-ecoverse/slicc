@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { GLOBAL_FS_DB_NAME } from '../../src/fs/global-db.js';
+import { FsError } from '../../src/fs/types.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   GLOBAL_GITCONFIG_PATH,
@@ -66,6 +67,45 @@ describe('git-config helpers', () => {
     it('round-trips a subsection key', async () => {
       await writeGlobalGitConfigValue(fs, 'branch.main.remote', 'origin');
       expect(await readGlobalGitConfigValue(fs, 'branch.main.remote')).toBe('origin');
+    });
+
+    it('rethrows a non-ENOENT read fault instead of clobbering the config', async () => {
+      await fs.writeFile(
+        GLOBAL_GITCONFIG_PATH,
+        '[user]\n\tname = Octocat\n\temail = octo@example.com\n'
+      );
+      const original = await fs.readTextFile(GLOBAL_GITCONFIG_PATH);
+
+      const readFault = new FsError('EIO', 'input/output error', GLOBAL_GITCONFIG_PATH);
+      const faultingFs = {
+        readTextFile: async () => {
+          throw readFault;
+        },
+        writeFile: async () => {
+          throw new Error('writeFile must not run after a non-ENOENT read fault');
+        },
+      } as unknown as VirtualFS;
+
+      await expect(writeGlobalGitConfigValue(faultingFs, 'user.name', 'Clobbered')).rejects.toBe(
+        readFault
+      );
+
+      expect(await fs.readTextFile(GLOBAL_GITCONFIG_PATH)).toBe(original);
+    });
+
+    it('treats an ENOENT read fault as an absent file and creates the config', async () => {
+      const faultingFs = {
+        readTextFile: async () => {
+          throw new FsError('ENOENT', 'no such file or directory', GLOBAL_GITCONFIG_PATH);
+        },
+        written: '',
+        writeFile: async function (this: { written: string }, _path: string, content: string) {
+          this.written = content;
+        },
+      };
+      await writeGlobalGitConfigValue(faultingFs as unknown as VirtualFS, 'user.name', 'Octocat');
+      expect(faultingFs.written).toContain('[user]');
+      expect(faultingFs.written).toContain('name = Octocat');
     });
   });
 

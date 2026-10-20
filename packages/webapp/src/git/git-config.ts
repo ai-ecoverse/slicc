@@ -1,4 +1,4 @@
-import type { VirtualFS } from '../fs/index.js';
+import { FsError, type VirtualFS } from '../fs/index.js';
 
 export const GLOBAL_GITCONFIG_PATH = '/workspace/.gitconfig';
 
@@ -127,7 +127,9 @@ export async function writeGlobalGitConfigValue(
   let content = '';
   try {
     content = await fs.readTextFile(GLOBAL_GITCONFIG_PATH);
-  } catch {}
+  } catch (err) {
+    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
+  }
 
   const { section, configKey } = parseConfigKey(key);
   const lines = content.split('\n');
