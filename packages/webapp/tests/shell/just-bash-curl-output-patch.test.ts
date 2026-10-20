@@ -1,3 +1,5 @@
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Bash, type SecureFetch } from 'just-bash';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,7 +15,7 @@ function fetchStub(): SecureFetch {
   });
 }
 
-describe('just-bash curl output patch (just-bash@3.4.1)', () => {
+describe('just-bash curl output guard', () => {
   const toString = vi.spyOn(Buffer.prototype, 'toString');
   afterEach(() => toString.mockClear());
 
@@ -46,20 +48,22 @@ describe('just-bash curl output patch (just-bash@3.4.1)', () => {
   });
 });
 
-describe('just-bash curl output patch — installed dist', () => {
-  it.each([
-    'dist/bundle/browser.js',
-    'dist/bundle/index.cjs',
-    'dist/bundle/chunks/curl-DEHFBW27.js',
-  ])('%s skips stdout formatting for -o/-O', async (rel) => {
-    const { readFile } = await import('node:fs/promises');
-    const src = await readFile(
-      new URL(`../../../../node_modules/just-bash/${rel}`, import.meta.url),
-      'utf8'
-    );
-    expect(
-      /\.useRemoteName\)&&![a-z]\.verbose\?"":/.test(src),
-      `${rel} lacks the -o/-O stdout guard; patches/just-bash+*.patch is missing or failed to apply`
-    ).toBe(true);
-  });
+describe('just-bash curl output guard — installed dist', () => {
+  const curlChunk = readdirSync(
+    fileURLToPath(new URL('../../../../node_modules/just-bash/dist/bundle/chunks', import.meta.url))
+  ).find((name) => /^curl-[A-Z0-9]+\.js$/.test(name));
+  it.each(['dist/bundle/browser.js', 'dist/bundle/index.cjs', `dist/bundle/chunks/${curlChunk}`])(
+    '%s skips stdout formatting for -o/-O',
+    async (rel) => {
+      const { readFile } = await import('node:fs/promises');
+      const src = await readFile(
+        new URL(`../../../../node_modules/just-bash/${rel}`, import.meta.url),
+        'utf8'
+      );
+      expect(
+        /\.useRemoteName\)(?:,[\w$]+=[\w$]+)?&&![\w$]+\.verbose\?"":/.test(src),
+        `${rel} lacks the -o/-O stdout guard`
+      ).toBe(true);
+    }
+  );
 });

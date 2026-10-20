@@ -29,4 +29,12 @@ describe.each([
     const result = await shell.exec(`/bin/show ${ARGS}; /bin/count one`);
     expect(result.stdout).toBe(`${EXPECTED}1 []\n`);
   });
+
+  it('clears inherited positionals when a long-argument script runs a shorter one', async () => {
+    const shell = new Shell({
+      files: { '/bin/outer': '/bin/count one\n', '/bin/count': 'echo "$# [${10}]"\n' },
+    });
+    await shell.exec('chmod +x /bin/outer /bin/count');
+    expect((await shell.exec(`/bin/outer ${ARGS}`)).stdout).toBe('1 []\n');
+  });
 });

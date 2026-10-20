@@ -83,7 +83,7 @@ describe('process substitution: cone/scoop equivalence', () => {
   });
 
   it('diff exercises the SECOND descriptor, not just /dev/fd/63', async () => {
-    const scoop = await h.scoop.executeCommand('diff <(echo alpha) <(echo beta)');
+    const scoop = await h.scoop.executeCommand('diff -u <(echo alpha) <(echo beta)');
     expect(scoop.stdout).toContain('--- /dev/fd/63');
     expect(scoop.stdout).toContain('+++ /dev/fd/62');
     expect(scoop.stdout).toContain('-alpha');

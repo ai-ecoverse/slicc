@@ -1,21 +1,23 @@
 import { Bash } from 'just-bash';
 import { describe, expect, it } from 'vitest';
+import { VfsAdapter } from '../../../src/shell/vfs-adapter.js';
 
 function builtinsOnly(): Bash {
   return new Bash({ files: { '/tmp/.keep': '' } });
 }
 
 describe('just-bash builtin mktemp tripwire (#2267)', () => {
-  it('has no builtin mktemp — when it does, delete the overlay (see file header)', async () => {
-    const result = await builtinsOnly().exec('mktemp');
-    expect(result.exitCode, 'just-bash now ships mktemp; remove our overlay').toBe(127);
-    expect(result.stderr).toContain('mktemp: command not found');
+  it('just-bash ships a builtin mktemp (since 3.6.0)', async () => {
+    const result = await builtinsOnly().exec('command -v mktemp');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('/usr/bin/mktemp\n');
   });
 
-  it('does not resolve mktemp on the builtin PATH', async () => {
-    const result = await builtinsOnly().exec('command -v mktemp');
-    expect(result.exitCode, 'just-bash now registers mktemp; remove our overlay').toBe(1);
-    expect(result.stdout).toBe('');
+  it('VfsAdapter has no createExclusive — when it does, delete the overlay (see file header)', () => {
+    expect(
+      'createExclusive' in VfsAdapter.prototype,
+      'VfsAdapter now creates atomically; remove our mktemp overlay'
+    ).toBe(false);
   });
 
   it('our overlay is what answers mktemp today', async () => {
