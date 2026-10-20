@@ -34,3 +34,9 @@ flags get no-default-skills
 ```
 
 The override is stored in the page's localStorage (`slicc_feature_flags`). From the kernel worker, `flags set` writes it through the page and mirrors it back, so the worker that seeds the next cone sees it immediately. The benchmark's `none` condition is this flag. See `packages/bench/CLAUDE.md`.
+
+## `seven-banner`
+
+Off by default. While it is on, the leader shell shows the "SLICC 7 is at seven.sliccy.ai. Export your profile." banner between the nav and the shell (`packages/webapp/src/ui/wc/wc-seven-banner.ts`). A dismissal is still remembered per origin. Settings → **Export for SLICC 7…** and the `export-profile` command work whether the flag is on or off.
+
+Try it locally with `flags set seven-banner on` and a reload. To show it to everyone, add `"seven-banner": "on"` to the worker's `FEATURE_FLAGS` `base`.

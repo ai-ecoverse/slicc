@@ -1086,8 +1086,12 @@ function openProfileExportDialog(log: Pick<BootStageLogger, 'error'>): void {
     .catch((err) => log.error('Export for SLICC 7 dialog failed', err));
 }
 
-/** Show the SLICC 7 banner between the nav and the shell. Lazy; never blocks boot. */
-function mountSevenBannerInShell(log: Pick<BootStageLogger, 'error'>): void {
+/**
+ * Show the SLICC 7 banner between the nav and the shell, when the
+ * `seven-banner` flag is on. Lazy; never blocks boot.
+ */
+export function mountSevenBannerInShell(log: Pick<BootStageLogger, 'error'>): void {
+  if (!isFeatureEnabled('seven-banner')) return;
   import('./wc-seven-banner.js')
     .then(({ mountSevenBanner }) => {
       const appCol = document.querySelector<HTMLElement>('.wcui-appcol');

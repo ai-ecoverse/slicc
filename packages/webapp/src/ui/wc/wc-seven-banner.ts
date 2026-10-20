@@ -3,8 +3,9 @@
  *
  * Sits between the nav and the shell in the app column, so it takes real
  * layout space instead of covering the nav. "Export your profile" opens the
- * Export for SLICC 7 dialog. Dismissing it is remembered per origin; the
- * Settings entry stays.
+ * Export for SLICC 7 dialog. Shown only while the `seven-banner` flag is on
+ * (gated by the caller in `wc-live.ts`). Dismissing it is remembered per
+ * origin; the Settings entry stays.
  */
 
 export const SEVEN_BANNER_ID = 'slicc-seven-banner';

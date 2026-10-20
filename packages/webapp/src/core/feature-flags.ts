@@ -16,7 +16,8 @@ export type FeatureFlagId =
   | 'compact-on-idle'
   | 'memory-v2'
   | 'live-model-catalog'
-  | 'no-default-skills';
+  | 'no-default-skills'
+  | 'seven-banner';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -141,6 +142,18 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'off',
     userToggleable: true,
     since: '2026-09-27',
+  }),
+  Object.freeze({
+    id: 'seven-banner',
+    label: 'SLICC 7 banner',
+    description:
+      'Show a banner above the chat saying SLICC 7 is at seven.sliccy.ai, with a button to export your profile.',
+    // Off until SLICC 7 is ready to announce. Settings → Export for SLICC 7
+    // and `export-profile` do not depend on it. Turn it on for everyone with
+    // a `base` entry in the worker's `FEATURE_FLAGS`.
+    defaultValue: 'off',
+    userToggleable: true,
+    since: '2026-10-20',
   }),
 ]);
 

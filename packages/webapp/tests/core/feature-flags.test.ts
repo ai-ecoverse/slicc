@@ -99,6 +99,12 @@ describe('feature flag registry', () => {
         defaultValue: 'off',
         userToggleable: true,
       }),
+      expect.objectContaining({
+        id: 'seven-banner',
+        label: 'SLICC 7 banner',
+        defaultValue: 'off',
+        userToggleable: true,
+      }),
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
     expect(listFlags()[2]).not.toHaveProperty('floatDefaults');
@@ -261,6 +267,7 @@ describe('feature flag registry', () => {
       'memory-v2': 'off',
       'live-model-catalog': 'on',
       'no-default-skills': 'off',
+      'seven-banner': 'off',
     });
     expect(
       resolveFlags(
@@ -277,6 +284,7 @@ describe('feature flag registry', () => {
       'memory-v2': 'off',
       'live-model-catalog': 'on',
       'no-default-skills': 'off',
+      'seven-banner': 'off',
     });
   });
 
