@@ -45,6 +45,7 @@ import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import { createPageProfileExportDeps } from '../profile-export-deps.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
+import { registerSixKernelStop } from '../six-upgrade-stop.js';
 import type { ChatMessage } from '../types.js';
 import { syncRestoringSessionNotice, threadColumnIsEmpty } from './restoring-session-notice.js';
 import type { WcChatAttachment } from './wc-chat.js';
@@ -1828,6 +1829,9 @@ export async function bootLeaderFloat(
           guardedReload();
         },
       });
+      // Seven's upgrade (slicc#4051) terminates this kernel, and with it the
+      // Python realm and process workers, before it reads the profile.
+      registerSixKernelStop(() => kernel.dispose());
       installPageStorageSync({ send: (m) => kernel.client.sendRaw(m) });
       // Extension-leader path only: late-bind the now-minted kernel client into
       // the extension-bridge `onLick` handler so forwarded handoff/upskill licks

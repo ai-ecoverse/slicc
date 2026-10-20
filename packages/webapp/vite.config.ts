@@ -357,6 +357,11 @@ async function buildProductionRuntimeAssets(): Promise<void> {
   if (existsSync(nestedHtml)) {
     copyFileSync(nestedHtml, resolve(uiOutDir, 'index.html'));
   }
+  // The in-place upgrade exporter (slicc#4051) is served at the root too.
+  const nestedUpgradeHtml = resolve(uiOutDir, 'packages/webapp/upgrade-to-seven.html');
+  if (existsSync(nestedUpgradeHtml)) {
+    copyFileSync(nestedUpgradeHtml, resolve(uiOutDir, 'upgrade-to-seven.html'));
+  }
 }
 
 /** Dev middlewares + production bundles for the standalone runtime assets. */
@@ -610,6 +615,7 @@ export default defineConfig(({ mode }) => ({
       input: {
         main: resolve(Dirname, 'index.html'),
         cloud: resolve(Dirname, 'cloud/index.html'),
+        'upgrade-to-seven': resolve(Dirname, 'upgrade-to-seven.html'),
         'slicc-editor': sliccEditorEntry,
         'slicc-diff': sliccDiffEntry,
       },

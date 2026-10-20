@@ -34,6 +34,7 @@ import { setupFeatureFlagsForPage } from './boot/setup-feature-flags.js';
 import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
 import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
 import { setupPreloadErrorReload } from './boot/setup-preload-error-reload.js';
+import { setupSixUpgradeStop } from './boot/setup-six-upgrade-stop.js';
 import { parseExtensionLeaderParams } from './boot/setup-standalone-prelude.js';
 import { setupStoragePersistence } from './boot/setup-storage-persistence.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
@@ -110,6 +111,9 @@ async function main(): Promise<void> {
     mountWcUiPreview(app);
     return;
   }
+
+  // Seven's in-place upgrade (slicc#4051) stops six pages before any SW or kernel.
+  if (!isExtension && (await setupSixUpgradeStop(document))) return;
 
   startFreezeWatchdog();
 

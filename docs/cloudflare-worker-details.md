@@ -314,6 +314,11 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
   `chrome-extension://` origins (CSP `*` does not authorize extension ancestors).
   Every non-cherry response gets `frame-ancestors 'none'`. Cherry responses set
   `Cache-Control: no-store` and `Vary: Sec-Fetch-Dest` to prevent cache mixing.
+- **`/upgrade-to-seven.html`** (`upgrade-to-seven.ts`): six's in-place exporter,
+  which seven's BIOS at `/7/` frames (slicc#4051, [`profile-export.md`](profile-export.md)).
+  It is the one six page with `frame-ancestors 'self'` (plus `X-Frame-Options:
+SAMEORIGIN`), `Cache-Control: no-store` and no Document-Isolation-Policy. GET/HEAD
+  only.
 - **25 MiB per-asset cap:** Cloudflare rejects any `dist/ui/` file over 25 MiB; the CI
   `cloudflare-worker` job runs `npm run build -w @slicc/cloudflare-worker`
   (`wrangler deploy --dry-run`) as a hard gate.

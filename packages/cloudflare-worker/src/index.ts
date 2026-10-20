@@ -64,6 +64,7 @@ import {
   trayTemporarilyUnavailableResponse,
   wantsJSON,
 } from './shared.js';
+import { tryHandleUpgradeToSeven } from './upgrade-to-seven.js';
 import { readBoundedWebhookBody, WebhookBodyError, withWebhookTimeout } from './webhook-body.js';
 import { WebhookHomeDurableObject } from './webhook-home.js';
 import { handleWebhookRevoke } from './webhook-revoke-route.js';
@@ -572,6 +573,9 @@ export async function handleWorkerRequest(
 
   const cloudResponse = await tryHandleCloudRoutes(url, request, env);
   if (cloudResponse) return cloudResponse;
+
+  const upgradeResponse = await tryHandleUpgradeToSeven(url, request, env.ASSETS);
+  if (upgradeResponse) return upgradeResponse;
 
   if (url.pathname === '/tray' && request.method === 'POST') {
     return withCapabilityCors(await createTray(request, env), capabilityCorsHeaders(request, env));

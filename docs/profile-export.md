@@ -17,15 +17,19 @@ Every storage origin (`www.sliccy.ai`, `localhost:5710`, the extension) is its o
 
 ## Code
 
-| Piece                                       | Where                                                                       |
-| ------------------------------------------- | --------------------------------------------------------------------------- |
-| Format types, validator, flag rules, limits | `packages/shared-ts/src/profile-export.ts`                                  |
-| Collector, planner, archive writer          | `packages/webapp/src/transcript/profile-export.ts`                          |
-| Page-secret redactor and text redaction     | `packages/webapp/src/transcript/profile-redact.ts`                          |
-| Page wiring (stores)                        | `packages/webapp/src/ui/profile-export-deps.ts`                             |
-| Dialog, headless run, report                | `packages/webapp/src/ui/wc/wc-profile-export.ts`                            |
-| Banner                                      | `packages/webapp/src/ui/wc/wc-seven-banner.ts`                              |
-| Shell command                               | `packages/webapp/src/shell/supplemental-commands/export-profile-command.ts` |
+| Piece                                       | Where                                                                        |
+| ------------------------------------------- | ---------------------------------------------------------------------------- |
+| Format types, validator, flag rules, limits | `packages/shared-ts/src/profile-export.ts`                                   |
+| Collector, planner, archive writer          | `packages/webapp/src/transcript/profile-export.ts`                           |
+| Page-secret redactor and text redaction     | `packages/webapp/src/transcript/profile-redact.ts`                           |
+| Page wiring (stores)                        | `packages/webapp/src/ui/profile-export-deps.ts`                              |
+| Dialog, headless run, report                | `packages/webapp/src/ui/wc/wc-profile-export.ts`                             |
+| Banner                                      | `packages/webapp/src/ui/wc/wc-seven-banner.ts`                               |
+| Shell command                               | `packages/webapp/src/shell/supplemental-commands/export-profile-command.ts`  |
+| Directory form (v2) planner                 | `planProfileDirectory` in `packages/webapp/src/transcript/profile-export.ts` |
+| Directory writer (OPFS)                     | `packages/webapp/src/transcript/profile-directory-opfs.ts`                   |
+| In-place exporter page                      | `packages/webapp/src/ui/upgrade-to-seven/`, `upgrade-to-seven.html`          |
+| Six's stop for the upgrade                  | `packages/webapp/src/ui/six-upgrade-stop.ts`                                 |
 
 The export reuses the transcript pipeline:
 
@@ -142,7 +146,23 @@ On `www.sliccy.ai`, seven runs next to six (`/7/`, then `/`) and shares six's or
 
 - **Limits:** the zip's limits (ZIP32, 2 GiB and 60,000 entries per archive, parts, `archive-limit`) don't apply. The 256 MiB file limit and the redaction rules do.
 - **After the import:** seven deletes `/slicc-v6-upgrade/<exportId>/` once the import succeeded. When it fails, the moved files go back to their `source` paths, and the directory stays for the next try. What six leaves in `/slicc-fs` (caches, mounts, bundled files, `skipped[]`) is removed by seven's BIOS later.
-- **The exporter:** writing this form, from a page on www that seven's BIOS runs, is slicc#4051.
+- **The exporter:** `/upgrade-to-seven.html` writes this form (slicc#4051). See [the in-place exporter](#the-in-place-exporter).
+
+### The in-place exporter
+
+Seven's BIOS at `www.sliccy.ai/7/` runs `/upgrade-to-seven.html` in a hidden frame. The page does nothing unless every ancestor is on its own origin, and the worker serves it with `frame-ancestors 'self'`. It registers no service worker and boots no kernel. It opens six's stores itself: the `slicc-fs` VFS, `slicc-groups`, the conversation store, `slicc_accounts`, the global VFS and the mount table.
+
+1. **Six stops.** Every six page holds the Web Lock `slicc-six-kernel` in `shared` mode from boot until it has stopped. The exporter posts `{ type: 'stop' }` on `BroadcastChannel('slicc-six-upgrade')`, again every 2 s while it waits. Each page then terminates its kernel worker, which takes the Python realm and the process workers with it. It stops its leader tray, shows _SLICC moved to seven in this browser_ with a link to `/os/`, and releases the lock. The exporter takes the lock `exclusive` and keeps it until its frame goes away. A six page that boots meanwhile can't get the lock, so it shows the same notice and registers no service worker. If some page still holds the lock after 30 s, the export fails.
+2. **It plans** the directory form (`planProfileDirectory`), with the same collection, skip and redaction rules as the zip.
+3. **It writes** every entry without a `source` to `/slicc-v6-upgrade/<exportId>/`, and `manifest.json` last.
+
+It reports to its parent with `postMessage`, using `location.origin` as the target origin, never `*`:
+
+- `{ type: 'slicc-six-upgrade', phase, done, total }`, where `phase` is `stopping`, `reading` or `writing`;
+- `{ type: 'slicc-six-upgrade', done: true, exportId, dir }` when it finishes;
+- `{ type: 'slicc-six-upgrade', error }` when it fails.
+
+**Redaction in the frame:** the frame can't reach six's known-secret redactor (there's no node-server bridge and no extension id), so `secrets.env` and extension-secret values aren't replaced. Everything else still applies: the page-known secrets (`slicc_accounts` keys and tokens, the GitHub token, MCP headers and URL secrets) and the at-rest credential patterns. `secrets[]` doesn't list `secrets-env` or `chrome-storage`. Nothing leaves the origin: the directory sits next to `slicc-fs/`, where the same texts already are.
 
 ## Fixture
 

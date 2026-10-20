@@ -16,19 +16,29 @@
  * 2. {@link ProfileArchivePlan.open} streams one archive. A re-read file whose
  *    hash no longer matches its manifest entry fails the export.
  *
+ * {@link planProfileDirectory} is the version 2 (directory) form for
+ * www.sliccy.ai, where seven shares six's OPFS: the same collection, one
+ * manifest, and every file redaction left unchanged named by its place under
+ * `/slicc-fs/` (`source`) instead of being written.
+ *
  * Never exported (G8): provider keys and tokens, `secrets.env`, the GitHub
  * token, MCP tokens and `/mnt` handles. Only provider ids, MCP server names
  * and URLs, and which secret kinds six had reach the manifest.
  */
 
 import {
+  isSafeProfileSourcePath,
+  PROFILE_DIRECTORY_ROOT,
   PROFILE_FOLDER_PATTERN,
   PROFILE_MANIFEST_PATH,
   PROFILE_MAX_ARCHIVE_BYTES,
   PROFILE_MAX_ARCHIVE_ENTRIES,
   PROFILE_MAX_FILE_BYTES,
   PROFILE_MAX_REDACTED_TEXT_BYTES,
+  PROFILE_SOURCE_PREFIXES,
+  PROFILE_SOURCE_ROOT,
   type ProfileConeEntry,
+  type ProfileFileEntryV2,
   type ProfileFlaggedEntry,
   type ProfileFrozenEntry,
   type ProfileMcpServer,
@@ -37,13 +47,16 @@ import {
   type ProfileSkippedEntry,
   profileArchiveFilename,
   profileFlagRuleFor,
+  SLICC_PROFILE_DIRECTORY_VERSION,
   SLICC_PROFILE_FORMAT,
   SLICC_PROFILE_VERSION,
   type SliccProfileManifestV1,
+  type SliccProfileManifestV2,
   sha256Hex,
   slugify,
   type TranscriptDocumentV1,
   validateSliccProfileManifestV1,
+  validateSliccProfileManifestV2,
   validateTranscriptDocumentV1,
 } from '@slicc/shared-ts';
 import { matchLickTargetAlias } from '../base/lick-target-match.js';
@@ -181,6 +194,8 @@ interface PlannedEntry {
   size: number;
   sha256: string;
   load(): Promise<Uint8Array>;
+  /** The six VFS file whose bytes this entry holds unchanged; absent when redacted or generated. */
+  unchangedFrom?: string;
 }
 
 interface Group {
@@ -309,7 +324,8 @@ class ProfileCollector {
     private readonly redactor: KnownSecretBatchRedactor,
     mounts: readonly string[],
     private readonly signal: AbortSignal | undefined,
-    private readonly literals: readonly string[] = []
+    private readonly literals: readonly string[] = [],
+    private readonly onRead?: ProfileProgress
   ) {
     this.mountPaths = new Set(mounts.map((m) => m.replace(/\/+$/, '') || '/'));
     this.mounts = [...this.mountPaths].sort();
@@ -418,6 +434,7 @@ class ProfileCollector {
   /** Read, classify, redact and hash every queued file, in 1 MiB batches. */
   async drain(): Promise<void> {
     const queue = this.queue.splice(0);
+    let read = 0;
     let batch: { file: QueuedFile; bytes: Uint8Array; text: string }[] = [];
     let batchChars = 0;
     const flush = async (): Promise<void> => {
@@ -447,6 +464,7 @@ class ProfileCollector {
     };
     for (const file of queue) {
       this.checkAbort();
+      this.onRead?.('reading', read++, queue.length);
       const bytes = await this.readBytes(file.vfsPath);
       if (!bytes) {
         file.group.skipped.push({ path: file.vfsPath, reason: 'unreadable' });
@@ -490,6 +508,7 @@ class ProfileCollector {
       batchChars += text.length;
     }
     await flush();
+    this.onRead?.('reading', queue.length, queue.length);
   }
 
   /** A text file over one batch: redact it chunk by chunk, keep it only if it changed. */
@@ -533,6 +552,7 @@ class ProfileCollector {
       size: bytes.byteLength,
       sha256,
       load,
+      ...(keep ? {} : { unchangedFrom: file.vfsPath }),
     });
   }
 
@@ -1053,14 +1073,17 @@ function planArchives(
 // Entry point
 // ---------------------------------------------------------------------------
 
-/**
- * Read, redact and hash the whole profile, and plan its archive(s). Nothing
- * is written; call `open()` on each archive to stream it.
- */
-export async function planProfileExport(
+interface CollectedProfile {
+  header: ManifestHeader;
+  collector: ProfileCollector;
+}
+
+/** Read, redact and hash the whole profile; shared by both forms. */
+async function collectProfile(
   deps: ProfileExportDeps,
-  signal?: AbortSignal
-): Promise<ProfileExportPlan> {
+  signal: AbortSignal | undefined,
+  onProgress?: ProfileProgress
+): Promise<CollectedProfile> {
   const now = deps.now?.() ?? new Date();
   const exportId = deps.randomUUID?.() ?? crypto.randomUUID();
   const page = await collectPageSecrets(deps);
@@ -1071,7 +1094,8 @@ export async function planProfileExport(
     redactor,
     await deps.mounts(),
     signal,
-    page.literals.filter((l) => l.length >= MIN_LITERAL_SECRET_LENGTH)
+    page.literals.filter((l) => l.length >= MIN_LITERAL_SECRET_LENGTH),
+    onProgress
   );
 
   const units = deps.listUnits();
@@ -1096,6 +1120,18 @@ export async function planProfileExport(
     origin: deps.origin,
     page,
   };
+  return { header, collector };
+}
+
+/**
+ * Read, redact and hash the whole profile, and plan its archive(s). Nothing
+ * is written; call `open()` on each archive to stream it.
+ */
+export async function planProfileExport(
+  deps: ProfileExportDeps,
+  signal?: AbortSignal
+): Promise<ProfileExportPlan> {
+  const { header, collector } = await collectProfile(deps, signal);
   const archives = planArchives(header, collector.groups, {
     maxArchiveBytes: deps.limits?.maxArchiveBytes ?? PROFILE_MAX_ARCHIVE_BYTES,
     maxArchiveEntries: deps.limits?.maxArchiveEntries ?? PROFILE_MAX_ARCHIVE_ENTRIES,
@@ -1103,14 +1139,14 @@ export async function planProfileExport(
   const all = collector.groups;
   const count = (pick: (g: Group) => number): number => all.reduce((n, g) => n + pick(g), 0);
   return {
-    exportId,
+    exportId: header.exportId,
     createdAt: header.createdAt,
     archives,
     summary: {
-      providers: page.providers,
+      providers: header.page.providers,
       flagged: all.flatMap((g) => g.flagged),
-      mcp: page.mcp,
-      secrets: page.secrets,
+      mcp: header.page.mcp,
+      secrets: header.page.secrets,
       mounts: collector.mounts,
       cones: count((g) => g.cones.length),
       scoops: count((g) => g.cones.reduce((n, c) => n + c.scoops.length, 0)),
@@ -1120,6 +1156,102 @@ export async function planProfileExport(
       sprinkles: count((g) => g.sprinkles.length),
       bytes: archives.reduce((n, a) => n + a.byteLength, 0),
       archives: archives.map((a) => a.filename),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Version 2: the directory form
+// ---------------------------------------------------------------------------
+
+/** Where the exporter is: reading the profile, then writing the directory. */
+export type ProfileProgress = (phase: 'reading' | 'writing', done: number, total: number) => void;
+
+/** Where a directory export goes; paths are entry names relative to it. */
+export interface ProfileDirectoryWriter {
+  writeFile(path: string, bytes: Uint8Array): Promise<void>;
+}
+
+export interface ProfileDirectoryPlan {
+  exportId: string;
+  /** `/slicc-v6-upgrade/<exportId>/`, in OPFS and in seven's kernel. */
+  dir: string;
+  manifest: SliccProfileManifestV2;
+  /** Entries left in place (`source`); never written. */
+  inPlace: number;
+  /** Write every other entry, then `manifest.json` last. */
+  write(
+    writer: ProfileDirectoryWriter,
+    opts?: { signal?: AbortSignal; onProgress?: ProfileProgress }
+  ): Promise<void>;
+}
+
+/**
+ * The `source` an entry may carry: the file's place in seven's kernel when
+ * redaction left its bytes unchanged and it belongs to a group that can stay
+ * in place (workspaces and homes, skills, sprinkles). Otherwise undefined,
+ * and the entry is written.
+ */
+export function profileSourceFor(entry: {
+  path: string;
+  unchangedFrom?: string;
+}): string | undefined {
+  if (entry.unchangedFrom === undefined) return undefined;
+  if (!PROFILE_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix))) return undefined;
+  const source = `${PROFILE_SOURCE_ROOT}${entry.unchangedFrom.replace(/^\/+/, '')}`;
+  return isSafeProfileSourcePath(source) ? source : undefined;
+}
+
+/**
+ * Read, redact and hash the whole profile, and plan its version 2 directory.
+ * One manifest, no parts: the zip's limits don't apply, the 256 MiB file
+ * limit does (the walk skips bigger files as `too-large`).
+ */
+export async function planProfileDirectory(
+  deps: ProfileExportDeps,
+  opts: { signal?: AbortSignal; onProgress?: ProfileProgress } = {}
+): Promise<ProfileDirectoryPlan> {
+  const { header, collector } = await collectProfile(deps, opts.signal, opts.onProgress);
+  const groups = collector.groups;
+  const v1 = buildManifest(header, { groups });
+  const entries = mergedEntries(groups);
+  const sources = new Set<string>();
+  const files: ProfileFileEntryV2[] = [];
+  const writes: PlannedEntry[] = [];
+  for (const entry of entries) {
+    const source = profileSourceFor(entry);
+    const row = { path: entry.path, size: entry.size, sha256: entry.sha256 };
+    if (source !== undefined && !sources.has(source)) {
+      sources.add(source);
+      files.push({ ...row, source });
+    } else {
+      files.push(row);
+      writes.push(entry);
+    }
+  }
+  const manifest: SliccProfileManifestV2 = {
+    ...v1,
+    version: SLICC_PROFILE_DIRECTORY_VERSION,
+    files,
+  };
+  const validation = validateSliccProfileManifestV2(manifest);
+  if (!validation.ok) {
+    throw new ProfileExportError(`Manifest failed validation: ${validation.error}`);
+  }
+  const manifestBytes = encoder.encode(`${JSON.stringify(manifest, null, 2)}\n`);
+  return {
+    exportId: header.exportId,
+    dir: `${PROFILE_DIRECTORY_ROOT}${header.exportId}/`,
+    manifest,
+    inPlace: sources.size,
+    write: async (writer, { signal, onProgress } = {}) => {
+      for (let i = 0; i < writes.length; i++) {
+        if (signal?.aborted) throw new ProfileExportError('Export cancelled.');
+        onProgress?.('writing', i, writes.length + 1);
+        await writer.writeFile(writes[i]!.path, await writes[i]!.load());
+      }
+      await writer.writeFile(PROFILE_MANIFEST_PATH, manifestBytes);
+      onProgress?.('writing', writes.length + 1, writes.length + 1);
     },
   };
 }
