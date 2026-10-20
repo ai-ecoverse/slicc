@@ -147,7 +147,7 @@
   },
   "overrides": {
     "guarded-fetch": {
-      "undici": "7.29.1"
+      "undici": "8.10.2"
     },
     "kokoro-js": {
       "@huggingface/transformers": {
