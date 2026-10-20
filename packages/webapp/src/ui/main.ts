@@ -37,6 +37,7 @@ import { setupPreloadErrorReload } from './boot/setup-preload-error-reload.js';
 import { parseExtensionLeaderParams } from './boot/setup-standalone-prelude.js';
 import { setupStoragePersistence } from './boot/setup-storage-persistence.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
+import { stepAsideForSeven } from './boot/six-step-aside.js';
 import { applyProviderDefaults } from './provider-settings.js';
 import { releaseTrayLeaderOnFatalBoot } from './tray-leader-fatal.js';
 
@@ -81,6 +82,8 @@ function startLiveModelCatalog(): void {
 }
 
 async function main(): Promise<void> {
+  // Seven took this browser over on www (slicc#4051): hand every six route to /os/.
+  if (stepAsideForSeven(window)) return;
   // Recover a long-lived tab that crashes on a now-gone content-hashed chunk
   // after a deploy (#1330). Installed before any dynamic import() so page-owned
   // lazy-chunk failures are always caught. Harmless on the ?ui-fixture surface.
