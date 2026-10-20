@@ -1,11 +1,14 @@
 /**
- * Guard for `patches/just-bash+3.4.1.patch`: `curl -o`/`-O` must not
+ * Guard for upstream vercel-labs/just-bash#378 (shipped in 3.5.0; SLICC
+ * patched it locally through 3.4.2): `curl -o`/`-O` must not
  * latin1-stringify the response body for a stdout it never prints. In the
  * browser that string (built by the `buffer` polyfill one `+=` per byte) cost
  * ~32 bytes of V8 heap per downloaded byte and crashed the leader tab on a
  * ~250 MB download. In Node the same code path goes through
  * `Buffer.prototype.toString('binary')`, which is what this test watches.
  */
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Bash, type SecureFetch } from 'just-bash';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,7 +24,7 @@ function fetchStub(): SecureFetch {
   });
 }
 
-describe('just-bash curl output patch (just-bash@3.4.1)', () => {
+describe('just-bash curl output guard', () => {
   const toString = vi.spyOn(Buffer.prototype, 'toString');
   afterEach(() => toString.mockClear());
 
@@ -54,25 +57,27 @@ describe('just-bash curl output patch (just-bash@3.4.1)', () => {
   });
 });
 
-describe('just-bash curl output patch — installed dist', () => {
+describe('just-bash curl output guard — installed dist', () => {
   // just-bash ships curl three ways: the ESM chunk (what Node/Vitest load),
   // the self-contained browser bundle (what Vite bundles into the webapp —
   // the copy that actually runs in the leader tab), and the CJS bundle. A
-  // patch that misses the browser bundle passes every Node test and still
+  // build that misses the browser bundle passes every Node test and still
   // crashes the tab, so assert the guard is present in each.
-  it.each([
-    'dist/bundle/browser.js',
-    'dist/bundle/index.cjs',
-    'dist/bundle/chunks/curl-DEHFBW27.js',
-  ])('%s skips stdout formatting for -o/-O', async (rel) => {
-    const { readFile } = await import('node:fs/promises');
-    const src = await readFile(
-      new URL(`../../../../node_modules/just-bash/${rel}`, import.meta.url),
-      'utf8'
-    );
-    expect(
-      /\.useRemoteName\)&&![a-z]\.verbose\?"":/.test(src),
-      `${rel} lacks the -o/-O stdout guard; patches/just-bash+*.patch is missing or failed to apply`
-    ).toBe(true);
-  });
+  const curlChunk = readdirSync(
+    fileURLToPath(new URL('../../../../node_modules/just-bash/dist/bundle/chunks', import.meta.url))
+  ).find((name) => /^curl-[A-Z0-9]+\.js$/.test(name));
+  it.each(['dist/bundle/browser.js', 'dist/bundle/index.cjs', `dist/bundle/chunks/${curlChunk}`])(
+    '%s skips stdout formatting for -o/-O',
+    async (rel) => {
+      const { readFile } = await import('node:fs/promises');
+      const src = await readFile(
+        new URL(`../../../../node_modules/just-bash/${rel}`, import.meta.url),
+        'utf8'
+      );
+      expect(
+        /\.useRemoteName\)(?:,[\w$]+=[\w$]+)?&&![\w$]+\.verbose\?"":/.test(src),
+        `${rel} lacks the -o/-O stdout guard`
+      ).toBe(true);
+    }
+  );
 });
