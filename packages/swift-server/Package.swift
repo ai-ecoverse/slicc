@@ -5,7 +5,7 @@ let package = Package(
     name: "SliccServer",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/hummingbird-project/hummingbird", from: "2.27.1"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird", from: "2.28.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird-websocket", from: "2.8.1"),
         .package(url: "https://github.com/swift-server/async-http-client", from: "1.36.2"),
         .package(url: "https://github.com/vapor/websocket-kit", from: "2.16.2"),
