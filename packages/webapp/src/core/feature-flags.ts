@@ -16,7 +16,8 @@ export type FeatureFlagId =
   | 'compact-on-idle'
   | 'memory-v2'
   | 'live-model-catalog'
-  | 'no-default-skills';
+  | 'no-default-skills'
+  | 'seven-banner';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -142,6 +143,18 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     userToggleable: true,
     since: '2026-09-27',
   }),
+  Object.freeze({
+    id: 'seven-banner',
+    label: 'SLICC 7 banner',
+    description:
+      'Show a banner above the chat saying SLICC 7 is at seven.sliccy.ai, with a button to export your profile.',
+    // Off until SLICC 7 is ready to announce. Settings → Export for SLICC 7
+    // and `export-profile` do not depend on it. Turn it on for everyone with
+    // a `base` entry in the worker's `FEATURE_FLAGS`.
+    defaultValue: 'off',
+    userToggleable: true,
+    since: '2026-10-20',
+  }),
 ]);
 
 const FEATURE_FLAGS_BY_ID = new Map(FEATURE_FLAGS.map((flag) => [flag.id, flag]));
@@ -156,6 +169,8 @@ let remoteValues: FeatureFlagValues = {};
  * shared origin. Reset on every `initFeatureFlags` call (i.e. every boot).
  */
 let hostValues: FeatureFlagValues = {};
+/** Called after every central refresh; see {@link onCentralFlagValuesUpdated}. */
+const centralFlagListeners = new Set<() => void>();
 
 interface FeatureFlagStorage {
   getItem(key: string): string | null;
@@ -275,6 +290,26 @@ export function updateCentralFlagValues(
 ): void {
   activeFloat = float;
   remoteValues = sanitizeValues(centralValues);
+  for (const listener of centralFlagListeners) {
+    try {
+      listener();
+    } catch {
+      // A broken listener must not stop the refresh or the listeners after it.
+    }
+  }
+}
+
+/**
+ * Run `listener` after every {@link updateCentralFlagValues}, i.e. whenever a
+ * refresh of the central values lands in this realm. For UI that was gated
+ * once at boot and has to follow an operator's change in an open tab. Returns
+ * the unsubscribe.
+ */
+export function onCentralFlagValuesUpdated(listener: () => void): () => void {
+  centralFlagListeners.add(listener);
+  return () => {
+    centralFlagListeners.delete(listener);
+  };
 }
 
 /**

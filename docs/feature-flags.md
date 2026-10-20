@@ -6,7 +6,7 @@ Flags live in three places:
 2. The worker's `FEATURE_FLAGS` var in `packages/cloudflare-worker/wrangler.jsonc` (production and staging). Per-float maps overlay `base`. `packages/cloudflare-worker/src/flags.ts` serves `GET /api/flags`.
 3. A Cherry host may push `userToggleable` flags at mount (`mountSlicc({ flags })`). That is session-only and cannot flip a flag the registry did not mark safe for the `cherry` float.
 
-Read a flag with `isFeatureEnabled('…')` or `getFeatureValue('…')`. The Experimental features dialog is generated from `listFlags()`; a new user-toggleable flag needs no extra UI wiring.
+Read a flag with `isFeatureEnabled('…')` or `getFeatureValue('…')`. A gate read once at boot does not see the periodic central refresh; UI that must follow it in an open tab subscribes with `onCentralFlagValuesUpdated(listener)`. The Experimental features dialog is generated from `listFlags()`; a new user-toggleable flag needs no extra UI wiring.
 
 `npm run lint:dead-flags` (`packages/dev-tools/tools/check-dead-flags.mjs`) fails when a registry id has no consumer, and when a consumer names an id the registry does not declare. Worker overlay keys and `FALLBACK_BASE_FLAGS` must also name a registered id — that is the string-boundary drift the `FeatureFlagId` union cannot see. A wrangler entry is not a consumer: a flag that exists only in the registry and wrangler, with no `isFeatureEnabled` / `getFeatureValue` / Cherry host read, is dead.
 
@@ -34,3 +34,9 @@ flags get no-default-skills
 ```
 
 The override is stored in the page's localStorage (`slicc_feature_flags`). From the kernel worker, `flags set` writes it through the page and mirrors it back, so the worker that seeds the next cone sees it immediately. The benchmark's `none` condition is this flag. See `packages/bench/CLAUDE.md`.
+
+## `seven-banner`
+
+Off by default. While it is on, the leader shell shows the "SLICC 7 is at seven.sliccy.ai. Export your profile." banner between the nav and the shell (`packages/webapp/src/ui/wc/wc-seven-banner.ts`). A dismissal is still remembered per origin. Settings → **Export for SLICC 7…** and the `export-profile` command work whether the flag is on or off.
+
+Try it locally with `flags set seven-banner on` and a reload. To show it to everyone, add `"seven-banner": "on"` to the worker's `FEATURE_FLAGS` `base`. Open tabs follow that change at their next central refresh (`FEATURE_FLAGS_REFRESH_INTERVAL_MS`): the banner appears when the flag turns on and goes away when it turns off, without counting as a dismissal.

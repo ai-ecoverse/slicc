@@ -8,10 +8,12 @@ import {
   initFeatureFlags,
   isFeatureEnabled,
   listFlags,
+  onCentralFlagValuesUpdated,
   readFeatureFlagOverrides,
   resolveFlags,
   resolveFlagValue,
   setFeatureFlagOverride,
+  updateCentralFlagValues,
   writeFeatureFlagOverrides,
 } from '../../src/core/feature-flags.js';
 
@@ -96,6 +98,12 @@ describe('feature flag registry', () => {
       expect.objectContaining({
         id: 'no-default-skills',
         label: 'No default skills',
+        defaultValue: 'off',
+        userToggleable: true,
+      }),
+      expect.objectContaining({
+        id: 'seven-banner',
+        label: 'SLICC 7 banner',
         defaultValue: 'off',
         userToggleable: true,
       }),
@@ -261,6 +269,7 @@ describe('feature flag registry', () => {
       'memory-v2': 'off',
       'live-model-catalog': 'on',
       'no-default-skills': 'off',
+      'seven-banner': 'off',
     });
     expect(
       resolveFlags(
@@ -277,6 +286,7 @@ describe('feature flag registry', () => {
       'memory-v2': 'off',
       'live-model-catalog': 'on',
       'no-default-skills': 'off',
+      'seven-banner': 'off',
     });
   });
 
@@ -404,5 +414,30 @@ describe('applyHostFlagOverrides (Cherry-pushed session flags)', () => {
     expect(resolveFlags('cherry', {}, { 'panel-layouts': 'off' })).toEqual(
       expect.objectContaining({ 'panel-layouts': 'off' })
     );
+  });
+});
+
+describe('onCentralFlagValuesUpdated', () => {
+  it('runs after each central refresh, sees the new values, and stops on unsubscribe', () => {
+    const seen: boolean[] = [];
+    const stop = onCentralFlagValuesUpdated(() => seen.push(isFeatureEnabled('seven-banner')));
+    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    updateCentralFlagValues('standalone', {});
+    stop();
+    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    expect(seen).toEqual([true, false]);
+  });
+
+  it('keeps refreshing and notifying when one listener throws', () => {
+    const after = vi.fn();
+    const stopBroken = onCentralFlagValuesUpdated(() => {
+      throw new Error('broken');
+    });
+    const stopAfter = onCentralFlagValuesUpdated(after);
+    expect(() => updateCentralFlagValues('standalone', { 'seven-banner': 'on' })).not.toThrow();
+    expect(after).toHaveBeenCalledOnce();
+    expect(isFeatureEnabled('seven-banner')).toBe(true);
+    stopBroken();
+    stopAfter();
   });
 });

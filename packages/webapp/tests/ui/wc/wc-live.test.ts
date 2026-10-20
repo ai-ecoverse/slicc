@@ -4,17 +4,23 @@
  * callback factory, driven entirely with fakes (no worker, no CDP).
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+import {
+  FEATURE_FLAG_STORAGE_KEY,
+  initFeatureFlags,
+  updateCentralFlagValues,
+} from '../../../src/core/feature-flags.js';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
 import { installStripPublisher } from '../../../src/ui/wc/wc-chat.js';
 import {
   DEFAULT_DOCK_TREE_ON_BOOT,
   DOCK_TREE_STORAGE_KEY,
+  mountSevenBannerInShell,
   prepareWcShell,
   wireDockTreePersistence,
   wireWcChipTips,
@@ -33,6 +39,7 @@ import {
   thinkingLevelForAgent,
 } from '../../../src/ui/wc/wc-live-thinking-hydration.js';
 import { scoopColor } from '../../../src/ui/wc/wc-scoop-color.js';
+import { SEVEN_BANNER_DISMISSED_KEY, SEVEN_BANNER_ID } from '../../../src/ui/wc/wc-seven-banner.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
@@ -1106,5 +1113,71 @@ describe('workspaceForSelection (workbench files, terminal and memory)', () => {
       selectedId: undefined,
     });
     expect(clearSelection).not.toHaveBeenCalled();
+  });
+});
+
+describe('mountSevenBannerInShell', () => {
+  let stop: (() => void) | undefined;
+
+  beforeEach(() => {
+    document.body.replaceChildren();
+    localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
+    localStorage.removeItem(SEVEN_BANNER_DISMISSED_KEY);
+    const appCol = document.createElement('div');
+    appCol.className = 'wcui-appcol';
+    appCol.append(document.createElement('nav'), document.createElement('slicc-shell'));
+    document.body.append(appCol);
+  });
+
+  afterEach(() => {
+    stop?.();
+    stop = undefined;
+    initFeatureFlags('standalone');
+  });
+
+  const settle = async (): Promise<void> => {
+    await import('../../../src/ui/wc/wc-seven-banner.js');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  it('shows nothing while the seven-banner flag is at its default', async () => {
+    initFeatureFlags('standalone');
+    stop = mountSevenBannerInShell(fakeLog());
+    await settle();
+    expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
+  });
+
+  it('mounts the banner before the shell once the flag is on', async () => {
+    initFeatureFlags('standalone', { 'seven-banner': 'on' });
+    stop = mountSevenBannerInShell(fakeLog());
+    await vi.waitFor(() => expect(document.getElementById(SEVEN_BANNER_ID)).not.toBeNull());
+    expect(document.getElementById(SEVEN_BANNER_ID)?.nextElementSibling?.localName).toBe(
+      'slicc-shell'
+    );
+  });
+
+  it('follows a central refresh in an open tab: on mounts it, off removes it', async () => {
+    initFeatureFlags('standalone');
+    stop = mountSevenBannerInShell(fakeLog());
+    await settle();
+    expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
+
+    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    await vi.waitFor(() => expect(document.getElementById(SEVEN_BANNER_ID)).not.toBeNull());
+    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    await settle();
+    expect(document.querySelectorAll(`#${SEVEN_BANNER_ID}`)).toHaveLength(1);
+
+    updateCentralFlagValues('standalone', {});
+    expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
+    expect(localStorage.getItem(SEVEN_BANNER_DISMISSED_KEY)).toBeNull();
+  });
+
+  it('stops following refreshes once unsubscribed', async () => {
+    initFeatureFlags('standalone');
+    mountSevenBannerInShell(fakeLog())();
+    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    await settle();
+    expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
   });
 });
