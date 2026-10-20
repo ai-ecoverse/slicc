@@ -27,6 +27,7 @@ import {
   SW_BRIDGE_CONFIG_MESSAGE,
   SW_EXTENSION_DELEGATE_MESSAGE,
 } from '../llm-proxy-sw-config.js';
+import { shouldStepAsideForSeven } from './six-step-aside.js';
 
 const log = createLogger('boot/sw-registration');
 
@@ -66,6 +67,9 @@ export async function setupSwRegistration(
   bridge: SwRegistrationBridgeConfig | null = null,
   extensionDelegate: SwRegistrationExtensionDelegate | null = null
 ): Promise<'ready' | 'reload-pending'> {
+  // Once seven owns this browser on www (slicc#4051), six neither registers
+  // nor unregisters service workers: `/` and `/preview/` are seven's now.
+  if (shouldStepAsideForSeven(window)) return 'ready';
   const isConnectModeForSw = (() => {
     try {
       return new URL(window.location.href).searchParams.get('connect') === '1';

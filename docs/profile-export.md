@@ -11,7 +11,7 @@ SLICC 6 exports a whole profile for SLICC 7 (seven.sliccy.ai). SLICC 7's `freeze
 - **`export-profile [--dry-run]`** opens the same dialog in the leader tab and saves only once the user confirms there, then prints the same notes, so neither an agent nor a scoop can write the profile to Downloads unattended. In the kernel worker it reaches the leader page over the `profile-export` panel-RPC op. `--dry-run` plans the export and prints the report without opening the dialog or saving.
 - **The banner** "SLICC 7 is at seven.sliccy.ai." sits between the nav and the shell in the leader tab. Dismissing it is remembered per origin (`slicc-seven-banner-dismissed`).
 
-Every storage origin (`www.sliccy.ai`, `localhost:5710`, the extension) is its own profile, so you export once per origin. The export runs in the leader page because only that page can see every store a profile lives in: the kernel VFS, `slicc-groups`, `slicc_accounts`, the global VFS and the mount table.
+Every storage origin (`www.sliccy.ai`, `localhost:5710`, the extension) is its own profile, so you export once per origin. On `www.sliccy.ai`, seven can instead move the profile in place (ai-ecoverse/slicc-bios#648). Once it has, it sets `localStorage['slicc-os.six'] = 'upgraded'`, and six's page on www replaces itself with `/os/` from every route, before it registers or unregisters any service worker (`ui/boot/six-step-aside.ts`). The export runs in the leader page because only that page can see every store a profile lives in: the kernel VFS, `slicc-groups`, `slicc_accounts`, the global VFS and the mount table.
 
 ## Code
 
