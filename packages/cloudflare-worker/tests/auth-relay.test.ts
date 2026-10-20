@@ -408,7 +408,7 @@ describe('OAuth callback relay — the opener contract seven relies on', () => {
     expect(replaced).toBeUndefined();
     expect(error).toBeUndefined();
     expect(postedMessage).toBeUndefined();
-    expect(broadcasts).toEqual([
+    expect(broadcasts).toStrictEqual([
       {
         channel: 'slicc-oauth-relay',
         message: {
@@ -429,7 +429,7 @@ describe('OAuth callback relay — the opener contract seven relies on', () => {
     expect(broadcasts[0]!.message.redirectUrl).toBe(
       'https://www.sliccy.ai/auth/callback?code=x&nonce=n2'
     );
-    expect(postedMessage).toEqual({
+    expect(postedMessage).toStrictEqual({
       type: 'oauth-callback',
       redirectUrl: broadcasts[0]!.message.redirectUrl,
     });
