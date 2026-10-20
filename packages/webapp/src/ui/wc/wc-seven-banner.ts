@@ -36,7 +36,7 @@ a.wcsev__move{color:var(--canvas);text-decoration:none;font-weight:600;}
   width:26px;height:26px;cursor:pointer;flex:0 0 auto;}
 .wcsev__close:hover{background:var(--ghost);color:var(--ink);}
 @media (max-width:560px){.wcsev{margin:6px 8px 0;font-size:12px;flex-wrap:wrap;row-gap:6px;}
-  .wcsev__text{flex-basis:calc(100% - 36px);}.wcsev__export{padding:4px 8px;order:2;}.wcsev__close{order:1;}}
+  .wcsev__text{flex-basis:100%;}.wcsev__export{padding:4px 8px;}.wcsev__close{margin-left:auto;}}
 `;
 
 function ensureStyle(doc: Document): void {

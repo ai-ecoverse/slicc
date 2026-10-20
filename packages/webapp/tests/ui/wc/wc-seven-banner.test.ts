@@ -109,6 +109,25 @@ describe('mountSevenBanner', () => {
     expect(banner?.textContent).toContain('SLICC 7 is at seven.sliccy.ai.');
   });
 
+  it('keeps the visual order the tab order: text, move, export, dismiss', () => {
+    const { appCol, main } = shell();
+    const banner = mountSevenBanner(document, appCol, main, {
+      onExport: vi.fn(),
+      moveHref: SEVEN_IN_PLACE_PATH,
+      storage: memoryStorage(),
+    });
+    expect([...banner!.children].map((c) => c.className)).toEqual([
+      'wcsev__text',
+      'wcsev__export wcsev__move',
+      'wcsev__export wcsev__export--secondary',
+      'wcsev__close',
+    ]);
+    // No CSS `order` anywhere, so narrow layouts can't reorder what Tab visits.
+    expect(document.getElementById('slicc-seven-banner-style')?.textContent).not.toMatch(
+      /\border:/
+    );
+  });
+
   it('has no move action without a move href', () => {
     const { appCol, main } = shell();
     const banner = mountSevenBanner(document, appCol, main, {
