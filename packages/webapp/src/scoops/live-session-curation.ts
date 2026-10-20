@@ -473,18 +473,25 @@ async function stampLiveFailure(
 /**
  * Write one pass's outcome onto the index row for `filename`: a failure
  * note, or `memoryCuratedAt` in place of one. Pending markers are left for
- * the freezer and the boot catch-up that own them. Best-effort; never throws.
+ * the freezer and the boot catch-up that own them. With `coneFolder`, the
+ * row is written only when the archive belongs to that cone: the ledger
+ * credits a row to `entry.cone`, so a pass redirected into another cone's
+ * memory file must not count as this archive's curation. Best-effort;
+ * never throws.
  */
 export async function stampCurationOutcome(
   vfs: LiveCurationVfs,
   filename: string,
-  outcome: { ok: true } | { ok: false; reason: string }
+  outcome: { ok: true } | { ok: false; reason: string },
+  coneFolder?: string
 ): Promise<void> {
   try {
     await serializeIndexWrite(async () => {
       const entries = await readSessionsIndexForWrite(asArchive(vfs));
       const index = entries.findIndex((entry) => entry.filename === filename);
       if (index === -1) return;
+      const owner = entries[index].cone ?? PRIMARY_CONE_FOLDER;
+      if (coneFolder !== undefined && owner !== coneFolder) return;
       const { memoryFailed: _failed, ...rest } = entries[index];
       const updated = entries.slice();
       updated[index] = outcome.ok

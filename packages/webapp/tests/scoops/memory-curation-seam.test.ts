@@ -143,6 +143,38 @@ describe('createMemorySeam', () => {
     });
   });
 
+  // A pass redirected with `memory curate --cone` grew another cone's file;
+  // the ledger credits the row to its own cone, so it must stay untouched.
+  it('curate leaves the row alone when the pass was redirected into another cone', async () => {
+    const spawn = vi.fn(
+      async (_options: AgentSpawnOptions): Promise<AgentSpawnResult> => ({
+        finalText: 'curated',
+        exitCode: 0,
+      })
+    );
+    globals.__slicc_agent = { spawn };
+    const row = {
+      filename: 'a.md',
+      title: 'a',
+      frozenAt: '2026-09-01T00:00:00Z',
+      messageCount: 1,
+      memoryFailed: 'old',
+    };
+    const { vfs, writes } = fakeVfs({
+      '/sessions/index.json': JSON.stringify([row]),
+      '/etc/MEMORY.md': '---\ntimeoutSeconds: 60\n---\nCurate {{MEMORY_PATH}}.',
+    });
+
+    const result = await createMemorySeam(vfs).curate({
+      sessionArchivePath: '/sessions/a.md',
+      sessionCount: 1,
+      cone: { folder: 'cone-helix' },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(writes.has('/sessions/index.json')).toBe(false);
+  });
+
   it('curate records a failure note, but not for a name-in-use rejection', async () => {
     const spawn = vi.fn(
       async (_options: AgentSpawnOptions): Promise<AgentSpawnResult> => ({

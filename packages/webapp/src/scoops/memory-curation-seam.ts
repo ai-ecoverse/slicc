@@ -17,6 +17,7 @@
 
 import type { VirtualFS } from '../fs/index.js';
 import { readSessionsIndex } from '../transcript/frozen-archive-format.js';
+import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import { AGENT_NAME_IN_USE_PREFIX, type AgentBridge } from './agent-bridge.js';
 import {
   type AgenticMemoryPassResult,
@@ -82,7 +83,7 @@ export function createMemorySeam(sharedFs: VirtualFS): MemorySeam {
         sessionCount: request.sessionCount,
         ...(request.cone ? { cone: request.cone } : {}),
       });
-      await recordOutcome(sharedFs, request.sessionArchivePath, result);
+      await recordOutcome(sharedFs, request.sessionArchivePath, request.cone, result);
       return result;
     },
     async dream(request: MemoryDreamRequest): Promise<AgenticMemoryPassResult> {
@@ -105,11 +106,14 @@ export function createMemorySeam(sharedFs: VirtualFS): MemorySeam {
 /**
  * Ledger write for a pass over an archive that has an index row
  * (`/sessions/<file>`). A name-in-use rejection ran nothing, so it records
- * nothing; the running namesake will record its own outcome.
+ * nothing; the running namesake will record its own outcome. A pass
+ * redirected into another cone (`memory curate --cone`) is left to its
+ * `status.json`: the row is credited to the archive's own cone.
  */
 async function recordOutcome(
   fs: VirtualFS,
   sessionArchivePath: string,
+  cone: CuratorConeRef | undefined,
   result: AgenticMemoryPassResult
 ): Promise<void> {
   const match = /^\/sessions\/([^/]+)$/.exec(sessionArchivePath);
@@ -118,7 +122,8 @@ async function recordOutcome(
   await stampCurationOutcome(
     fs,
     match[1],
-    result.ok ? { ok: true } : { ok: false, reason: result.reason }
+    result.ok ? { ok: true } : { ok: false, reason: result.reason },
+    cone?.folder ?? PRIMARY_CONE_FOLDER
   );
 }
 
