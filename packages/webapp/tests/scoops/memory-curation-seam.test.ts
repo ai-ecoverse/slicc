@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VirtualFS } from '../../src/fs/index.js';
-import type { AgentSpawnOptions, AgentSpawnResult } from '../../src/scoops/agent-bridge.js';
+import {
+  AGENT_NAME_IN_USE_PREFIX,
+  type AgentSpawnOptions,
+  type AgentSpawnResult,
+} from '../../src/scoops/agent-bridge.js';
 import {
   createMemorySeam,
   MEMORY_SEAM_GLOBAL_KEY,
@@ -87,6 +91,82 @@ describe('createMemorySeam', () => {
     const options = spawn.mock.calls[0][0];
     expect(options.name).toBe('memory-dreamer');
     expect(options.prompt).toContain('2 sessions');
+  });
+
+  // #3849: a `memory curate` pass that landed left the archive's earlier
+  // failure note in place, so `memory log` / `memory status` kept reporting
+  // it failed — for the primary and for a non-primary cone alike.
+  it.each([
+    ['cone', '/workspace/CLAUDE.md'],
+    ['cone-helix', '/cones/cone-helix/CLAUDE.md'],
+  ])('curate records a success on the archive row (%s)', async (folder, memoryPath) => {
+    const spawn = vi.fn(
+      async (_options: AgentSpawnOptions): Promise<AgentSpawnResult> => ({
+        finalText: 'curated',
+        exitCode: 0,
+      })
+    );
+    globals.__slicc_agent = { spawn };
+    const filename = `live-${folder}-mtt4z0qj-b393.md`;
+    const { vfs, writes } = fakeVfs({
+      '/sessions/index.json': JSON.stringify([
+        { filename: 'other.md', title: 'o', frozenAt: '2026-09-01T00:00:00Z', messageCount: 1 },
+        {
+          filename,
+          title: 't',
+          frozenAt: '2026-09-08T20:42:49.339Z',
+          messageCount: 1,
+          cone: folder,
+          memoryFailed: 'Scoop "agent-memory-curator-cone-helix" failed with …',
+        },
+      ]),
+      '/etc/MEMORY.md': '---\ntimeoutSeconds: 60\n---\nCurate {{MEMORY_PATH}}.',
+      [memoryPath]: '# memories\n',
+    });
+
+    const result = await createMemorySeam(vfs).curate({
+      sessionArchivePath: `/sessions/${filename}`,
+      sessionCount: 2,
+      ...(folder === 'cone' ? {} : { cone: { folder } }),
+    });
+
+    expect(result).toEqual({ ok: true, report: 'curated' });
+    const index = JSON.parse(writes.get('/sessions/index.json') ?? '[]');
+    const row = index.find((entry: { filename: string }) => entry.filename === filename);
+    expect(row.memoryFailed).toBeUndefined();
+    expect(row.memoryCuratedAt).toEqual(expect.any(String));
+    expect(index.find((e: { filename: string }) => e.filename === 'other.md')).toEqual({
+      filename: 'other.md',
+      title: 'o',
+      frozenAt: '2026-09-01T00:00:00Z',
+      messageCount: 1,
+    });
+  });
+
+  it('curate records a failure note, but not for a name-in-use rejection', async () => {
+    const spawn = vi.fn(
+      async (_options: AgentSpawnOptions): Promise<AgentSpawnResult> => ({
+        finalText: 'bedrock returned 400',
+        exitCode: 1,
+      })
+    );
+    globals.__slicc_agent = { spawn };
+    const row = { filename: 'a.md', title: 'a', frozenAt: '2026-09-01T00:00:00Z', messageCount: 1 };
+    const { vfs, writes } = fakeVfs({
+      '/sessions/index.json': JSON.stringify([row]),
+      '/etc/MEMORY.md': '---\ntimeoutSeconds: 60\n---\nCurate {{MEMORY_PATH}}.',
+    });
+    const seam = createMemorySeam(vfs);
+
+    await seam.curate({ sessionArchivePath: '/sessions/a.md', sessionCount: 1 });
+    expect(JSON.parse(writes.get('/sessions/index.json') ?? '[]')[0].memoryFailed).toBe(
+      'bedrock returned 400'
+    );
+
+    writes.set('/sessions/index.json', JSON.stringify([row]));
+    spawn.mockResolvedValueOnce({ finalText: `${AGENT_NAME_IN_USE_PREFIX} x`, exitCode: 1 });
+    await seam.curate({ sessionArchivePath: '/sessions/a.md', sessionCount: 1 });
+    expect(JSON.parse(writes.get('/sessions/index.json') ?? '[]')[0]).toEqual(row);
   });
 
   it('publishMemorySeam exposes the seam on the documented global key', () => {

@@ -258,7 +258,13 @@ export async function curationTargetForFinalize(
   return { kind: 'delta', path, through, messages: [...fresh] };
 }
 
-/** Move `curatedThrough` forward. Never moves it backward. Clears a stale failure note. */
+/**
+ * Record a finished slice: move `curatedThrough` forward (never backward)
+ * and stamp `memoryCuratedAt` in place of any failure note. Every caller
+ * holds proof the pass succeeded (an exit 0 or the bridge's receipt), so a
+ * cursor that is already past `through` still clears a stale failure —
+ * otherwise `memory status` keeps reporting a pass that landed (#3849).
+ */
 export async function advanceCuratedThrough(
   vfs: LiveCurationVfs,
   filename: string,
@@ -270,12 +276,17 @@ export async function advanceCuratedThrough(
     const index = entries.findIndex((entry) => entry.filename === filename);
     if (index === -1) return;
     const current = entries[index].curatedThrough ?? 0;
-    if (through <= current) return;
+    const moves = through > current;
+    if (!moves && entries[index].memoryFailed === undefined) return;
     const { memoryFailed: _failed, ...rest } = entries[index];
     const updated = entries.slice();
-    updated[index] = { ...rest, curatedThrough: through };
+    updated[index] = {
+      ...rest,
+      curatedThrough: Math.max(through, current),
+      memoryCuratedAt: new Date().toISOString(),
+    };
     await writeSessionsIndexUnlocked(asArchive(vfs), updated);
-    await patchCuratedThroughFrontmatter(vfs, `${SESSIONS_DIR}/${filename}`, through);
+    if (moves) await patchCuratedThroughFrontmatter(vfs, `${SESSIONS_DIR}/${filename}`, through);
     await vfs.flush?.();
   });
 }
@@ -456,18 +467,34 @@ async function stampLiveFailure(
   filename: string,
   reason: string
 ): Promise<void> {
+  await stampCurationOutcome(vfs, filename, { ok: false, reason });
+}
+
+/**
+ * Write one pass's outcome onto the index row for `filename`: a failure
+ * note, or `memoryCuratedAt` in place of one. Pending markers are left for
+ * the freezer and the boot catch-up that own them. Best-effort; never throws.
+ */
+export async function stampCurationOutcome(
+  vfs: LiveCurationVfs,
+  filename: string,
+  outcome: { ok: true } | { ok: false; reason: string }
+): Promise<void> {
   try {
     await serializeIndexWrite(async () => {
       const entries = await readSessionsIndexForWrite(asArchive(vfs));
       const index = entries.findIndex((entry) => entry.filename === filename);
       if (index === -1) return;
+      const { memoryFailed: _failed, ...rest } = entries[index];
       const updated = entries.slice();
-      updated[index] = { ...entries[index], memoryFailed: reason.slice(0, 300) };
+      updated[index] = outcome.ok
+        ? { ...rest, memoryCuratedAt: new Date().toISOString() }
+        : { ...entries[index], memoryFailed: outcome.reason.slice(0, 300) };
       await writeSessionsIndexUnlocked(asArchive(vfs), updated);
       await vfs.flush?.();
     });
   } catch (error) {
-    log.warn('Failed to record live curation failure', {
+    log.warn('Failed to record curation outcome', {
       filename,
       error: errorText(error),
     });

@@ -8,22 +8,23 @@
  * `curate` runs exactly the pass the session freezer runs after a chat ends:
  * snapshot → curator scoop → three-way merge onto the cone's memory file,
  * with the bridge writing the per-archive success receipt and status ledger.
- * It does NOT touch the sessions-index bookkeeping (`memoryPending`,
- * `memoryCuratedAt`) — that stays with the freezer and the boot catch-up,
- * which already trusts the bridge's receipt over a stale pending marker
- * (#1989), so a manual pass on a pending archive resolves rather than
- * double-runs.
+ * The pass's outcome lands on the archive's index row (`memoryCuratedAt`, or
+ * a `memoryFailed` note) so `memory status` reflects it (#3849), but the
+ * pending markers stay with the freezer and the boot catch-up, which already
+ * trusts the bridge's receipt over a stale pending marker (#1989) — a manual
+ * pass on a pending archive resolves rather than double-runs.
  */
 
 import type { VirtualFS } from '../fs/index.js';
 import { readSessionsIndex } from '../transcript/frozen-archive-format.js';
-import type { AgentBridge } from './agent-bridge.js';
+import { AGENT_NAME_IN_USE_PREFIX, type AgentBridge } from './agent-bridge.js';
 import {
   type AgenticMemoryPassResult,
   type CuratorConeRef,
   runAgenticMemoryPass,
   seedMemoryInstructions,
 } from './agentic-memory.js';
+import { stampCurationOutcome } from './live-session-curation.js';
 import { runMemoryDreamPass } from './memory-dreaming.js';
 
 export const MEMORY_SEAM_GLOBAL_KEY = '__slicc_memory';
@@ -74,13 +75,15 @@ export function createMemorySeam(sharedFs: VirtualFS): MemorySeam {
       if (!bridge) {
         return { ok: false, reason: 'agent bridge not published yet', legacyFallbackSafe: false };
       }
-      return runAgenticMemoryPass({
+      const result = await runAgenticMemoryPass({
         spawn: (options) => bridge.spawn(options),
         vfs: sharedFs,
         sessionArchivePath: request.sessionArchivePath,
         sessionCount: request.sessionCount,
         ...(request.cone ? { cone: request.cone } : {}),
       });
+      await recordOutcome(sharedFs, request.sessionArchivePath, result);
+      return result;
     },
     async dream(request: MemoryDreamRequest): Promise<AgenticMemoryPassResult> {
       const bridge = (globalThis as unknown as MemorySeamGlobals).__slicc_agent;
@@ -97,6 +100,26 @@ export function createMemorySeam(sharedFs: VirtualFS): MemorySeam {
       });
     },
   };
+}
+
+/**
+ * Ledger write for a pass over an archive that has an index row
+ * (`/sessions/<file>`). A name-in-use rejection ran nothing, so it records
+ * nothing; the running namesake will record its own outcome.
+ */
+async function recordOutcome(
+  fs: VirtualFS,
+  sessionArchivePath: string,
+  result: AgenticMemoryPassResult
+): Promise<void> {
+  const match = /^\/sessions\/([^/]+)$/.exec(sessionArchivePath);
+  if (!match) return;
+  if (!result.ok && result.reason.startsWith(AGENT_NAME_IN_USE_PREFIX)) return;
+  await stampCurationOutcome(
+    fs,
+    match[1],
+    result.ok ? { ok: true } : { ok: false, reason: result.reason }
+  );
 }
 
 export function publishMemorySeam(seam: MemorySeam): void {
