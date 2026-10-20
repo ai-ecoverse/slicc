@@ -70,6 +70,36 @@ describe('stepAsideForSeven', () => {
     }
   );
 
+  it('steps aside later when seven sets the marker from another tab', () => {
+    let marker: string | null = null;
+    let listener: ((event: { key: string | null }) => void) | undefined;
+    const replace = vi.fn();
+    const w = {
+      location: { origin: WWW, replace },
+      localStorage: { getItem: () => marker },
+      addEventListener: (_type: 'storage', l: (event: { key: string | null }) => void) => {
+        listener = l;
+      },
+    };
+    expect(stepAsideForSeven(w)).toBe(false);
+    listener!({ key: 'something-else' });
+    marker = SIX_UPGRADED_VALUE;
+    listener!({ key: 'unrelated' });
+    expect(replace).not.toHaveBeenCalled();
+    listener!({ key: SIX_UPGRADED_KEY });
+    expect(replace).toHaveBeenCalledWith(SEVEN_OS_URL_PATH);
+  });
+
+  it('does not watch off the hosted origin', () => {
+    const addEventListener = vi.fn();
+    stepAsideForSeven({
+      location: { origin: 'http://localhost:5710', replace: vi.fn() },
+      localStorage: { getItem: () => null },
+      addEventListener,
+    });
+    expect(addEventListener).not.toHaveBeenCalled();
+  });
+
   it('leaves the page alone before the upgrade', () => {
     const { win: w, replace } = win(WWW, null);
     expect(stepAsideForSeven(w)).toBe(false);

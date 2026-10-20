@@ -23,6 +23,7 @@ export const SEVEN_OS_URL_PATH = '/os/';
 export interface StepAsideWindow {
   location: { origin: string; replace(url: string): void };
   localStorage?: Pick<Storage, 'getItem'> | null;
+  addEventListener?(type: 'storage', listener: (event: { key: string | null }) => void): void;
 }
 
 function readMarker(win: StepAsideWindow): string | null {
@@ -40,10 +41,21 @@ export function shouldStepAsideForSeven(win: StepAsideWindow): boolean {
 
 /**
  * Replace the page with `/os/` when six must step aside. Returns true when it
- * did; the caller stops booting (no service worker, no kernel).
+ * did; the caller stops booting (no service worker, no kernel). Otherwise,
+ * on the hosted origin, it keeps watching: when seven sets the marker from
+ * another tab, this page steps aside then. (The upgrade has stopped it
+ * already, `six-upgrade-stop.ts`; this covers a page that missed the stop.)
  */
 export function stepAsideForSeven(win: StepAsideWindow): boolean {
-  if (!shouldStepAsideForSeven(win)) return false;
-  win.location.replace(SEVEN_OS_URL_PATH);
-  return true;
+  if (shouldStepAsideForSeven(win)) {
+    win.location.replace(SEVEN_OS_URL_PATH);
+    return true;
+  }
+  if (win.location.origin === SLICC_HOSTED_ORIGIN) {
+    win.addEventListener?.('storage', (event) => {
+      if (event.key !== SIX_UPGRADED_KEY && event.key !== null) return;
+      if (shouldStepAsideForSeven(win)) win.location.replace(SEVEN_OS_URL_PATH);
+    });
+  }
+  return false;
 }
