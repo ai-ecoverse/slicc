@@ -89,7 +89,14 @@ describe('createNodeConsole', () => {
 
   it('trace writes Trace: plus a stack to stderr', () => {
     const { con, out, err } = makeConsole();
-    expect(() => con.trace('here')).not.toThrow();
+
+    const prepare = Error.prepareStackTrace;
+    Reflect.deleteProperty(Error, 'prepareStackTrace');
+    try {
+      expect(() => con.trace('here')).not.toThrow();
+    } finally {
+      Error.prepareStackTrace = prepare;
+    }
     expect(out()).toBe('');
     const stderr = err();
     expect(stderr).toMatch(/^Trace: here\n/);
