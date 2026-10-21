@@ -146,6 +146,9 @@
     "vitest": "4.1.11"
   },
   "overrides": {
+    "e2b": {
+      "undici8": "npm:undici@8.11.2"
+    },
     "guarded-fetch": {
       "undici": "7.29.1"
     },
