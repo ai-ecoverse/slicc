@@ -499,7 +499,7 @@ describe('CI runner routing', () => {
     ];
     for (const step of vitestSteps) {
       const parentHeap = Number(step.match(/NODE_OPTIONS: '--max-old-space-size=(\d+)'/)?.[1] ?? 0);
-      expect(forkCap).toBeLessThan(parentHeap || Infinity);
+      expect(parentHeap, 'step should keep its parent heap').toBeGreaterThan(forkCap);
       expect(forkCap * POOL_CPUS + parentHeap).toBeLessThanOrEqual(POOL_RAM_MIB);
     }
   });
