@@ -352,15 +352,19 @@ export function stringMask(source) {
   return mask;
 }
 
-function eachOutsideString(source, regex, onMatch) {
-  const mask = stringMask(source);
+function eachOutsideString(source, regex, onMatch, getMask) {
   regex.lastIndex = 0;
   let m;
   while ((m = regex.exec(source))) {
-    if (mask[m.index]) continue;
+    if (getMask()[m.index]) continue;
     onMatch(m);
   }
 }
+
+// Every call-site pattern names one of these, so a file without any of them
+// has no hits. Most of the tree takes this exit, which keeps the real-tree
+// scan (and its end-to-end test) cheap as the repo grows.
+const CALL_SITE_NAMES_RE = /isFeatureEnabled|getFeatureValue|mountSlicc|applyHostFlagOverrides/;
 
 function firstArgObject(source, parenIdx) {
   let i = parenIdx + 1;
@@ -396,34 +400,48 @@ function cherryHitsInFlagsProperty(objectText, absStart, sourceForLines) {
  * `mountSlicc({ flags })` and `applyHostFlagOverrides({ … })`.
  */
 export function findFlagCallSites(source) {
+  if (!CALL_SITE_NAMES_RE.test(source)) return [];
   const stripped = stripComments(source);
   const hits = [];
+  let mask = null;
+  const getMask = () => (mask ??= stringMask(stripped));
 
   eachOutsideString(
     stripped,
     /\b(isFeatureEnabled|getFeatureValue)\s*\(\s*(['"])([^'"]+)\2/g,
     (m) => {
       hits.push({ kind: m[1], id: m[3], line: lineAt(source, m.index) });
-    }
+    },
+    getMask
   );
 
-  eachOutsideString(stripped, /\bmountSlicc\s*\(/g, (m) => {
-    const obj = firstArgObject(stripped, stripped.indexOf('(', m.index));
-    if (!obj) return;
-    hits.push(...cherryHitsInFlagsProperty(obj.text, obj.start, source));
-  });
+  eachOutsideString(
+    stripped,
+    /\bmountSlicc\s*\(/g,
+    (m) => {
+      const obj = firstArgObject(stripped, stripped.indexOf('(', m.index));
+      if (!obj) return;
+      hits.push(...cherryHitsInFlagsProperty(obj.text, obj.start, source));
+    },
+    getMask
+  );
 
-  eachOutsideString(stripped, /\bapplyHostFlagOverrides\s*\(/g, (m) => {
-    const obj = firstArgObject(stripped, stripped.indexOf('(', m.index));
-    if (!obj) return;
-    for (const key of objectKeys(obj.text)) {
-      hits.push({
-        kind: 'cherry-host',
-        id: key.id,
-        line: lineAt(source, obj.start + key.index),
-      });
-    }
-  });
+  eachOutsideString(
+    stripped,
+    /\bapplyHostFlagOverrides\s*\(/g,
+    (m) => {
+      const obj = firstArgObject(stripped, stripped.indexOf('(', m.index));
+      if (!obj) return;
+      for (const key of objectKeys(obj.text)) {
+        hits.push({
+          kind: 'cherry-host',
+          id: key.id,
+          line: lineAt(source, obj.start + key.index),
+        });
+      }
+    },
+    getMask
+  );
 
   return hits;
 }
