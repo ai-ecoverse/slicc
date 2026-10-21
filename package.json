@@ -150,7 +150,7 @@
       "undici8": "npm:undici@8.11.2"
     },
     "guarded-fetch": {
-      "undici": "7.29.1"
+      "undici": "7.30.0"
     },
     "kokoro-js": {
       "@huggingface/transformers": {
