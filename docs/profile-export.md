@@ -13,7 +13,7 @@ There are two versions of the format. Version 1 is the zip that Export for SLICC
 - **`export-profile [--dry-run]`** opens the same dialog in the leader tab and saves only once the user confirms there, then prints the same notes, so neither an agent nor a scoop can write the profile to Downloads unattended. In the kernel worker it reaches the leader page over the `profile-export` panel-RPC op. `--dry-run` plans the export and prints the report without opening the dialog or saving.
 - **The banner** "SLICC 7 is at seven.sliccy.ai." sits between the nav and the shell in the leader tab. Dismissing it is remembered per origin (`slicc-seven-banner-dismissed`).
 
-Every storage origin (`www.sliccy.ai`, `localhost:5710`, the extension) is its own profile, so you export once per origin. On `www.sliccy.ai`, seven can instead move the profile in place (ai-ecoverse/slicc-bios#648). Once it has, it sets `localStorage['slicc-os.six'] = 'upgraded'`, and six's page on www replaces itself with `/os/` from every route, before it registers or unregisters any service worker (`ui/boot/six-step-aside.ts`). The export runs in the leader page because only that page can see every store a profile lives in: the kernel VFS, `slicc-groups`, `slicc_accounts`, the global VFS and the mount table.
+Every storage origin (`www.sliccy.ai`, `localhost:5710`) is its own profile, so you export once per origin. The thin extension's profile is www's: its engine is the pinned `www.sliccy.ai/?slicc=leader` tab. On `www.sliccy.ai`, seven can instead move the profile in place (ai-ecoverse/slicc-bios#648). Once it has, it sets `localStorage['slicc-os.six'] = 'upgraded'`, and six's page on www replaces itself with `/os/` from every route, before it registers or unregisters any service worker (`ui/boot/six-step-aside.ts`). The export runs in the leader page because only that page can see every store a profile lives in: the kernel VFS, `slicc-groups`, `slicc_accounts`, the global VFS and the mount table.
 
 ## Code
 
@@ -146,7 +146,7 @@ On `www.sliccy.ai`, seven runs next to six (`/7/`, then `/`) and shares six's or
 
 - **Limits:** the zip's limits (ZIP32, 2 GiB and 60,000 entries per archive, parts, `archive-limit`) don't apply. The 256 MiB file limit and the redaction rules do.
 - **After the import:** seven deletes `/slicc-v6-upgrade/<exportId>/` once the import succeeded. When it fails, the moved files go back to their `source` paths, and the directory stays for the next try. What six leaves in `/slicc-fs` (caches, mounts, bundled files, `skipped[]`) is removed by seven's BIOS later.
-- **The exporter:** `/upgrade-to-seven.html` writes this form (slicc#4051). See [the in-place exporter](#the-in-place-exporter).
+- **The exporter:** `/upgrade-to-seven.html` writes this form (slicc#4051). It doesn't redact known secrets (`secrets.env`, extension secrets) inside text files, and it moves the extension's profile too, since that lives on www. See [the in-place exporter](#the-in-place-exporter).
 
 ### The in-place exporter
 
@@ -162,7 +162,9 @@ It reports to its parent with `postMessage`, using `location.origin` as the targ
 - `{ type: 'slicc-six-upgrade', done: true, exportId, dir }` when it finishes;
 - `{ type: 'slicc-six-upgrade', error }` when it fails.
 
-**Redaction in the frame:** the frame can't reach six's known-secret redactor (there's no node-server bridge and no extension id), so `secrets.env` and extension-secret values aren't replaced. Everything else still applies: the page-known secrets (`slicc_accounts` keys and tokens, the GitHub token, MCP headers and URL secrets) and the at-rest credential patterns. `secrets[]` doesn't list `secrets-env` or `chrome-storage`. Nothing leaves the origin: the directory sits next to `slicc-fs/`, where the same texts already are.
+**Redaction in the frame:** the in-place exporter does **not** redact known secrets inside text files. The frame can't reach six's known-secret redactor (there's no node-server bridge and no extension id), so `secrets.env` and extension-secret values that appear in a file, transcript or memory get no known-secret redaction. Only a value that also matches one of the at-rest credential patterns below is still replaced. Files move as they are, on the same origin: unchanged files never leave `slicc-fs/`, and what is written sits next to it in the same origin's OPFS, where the same texts already are. The rest of the zip's redaction still applies: provider keys and tokens from `slicc_accounts`, the GitHub token, MCP headers and URL secrets are replaced, and the at-rest credential patterns run. `secrets[]` doesn't list `secrets-env` or `chrome-storage`.
+
+**The extension's profile moves too:** the thin Chrome extension runs six in the pinned www tab (`https://www.sliccy.ai/?slicc=leader&ext=<id>`), and its side panel loads www's `?cherry=1&ui-only=1`. Its six profile is therefore www's profile, not one on the extension's own origin. In a browser with the extension, the in-place move stops that tab, moves its profile into seven, and retires it: afterwards the leader tab goes to `/os/` like every other six route on www, and the side panel stops working: it can't show `/os/` in its frame. Only the CLI's browser profile (`localhost:5710`) keeps Export for SLICC 7.
 
 ## Fixture
 
