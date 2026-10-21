@@ -31,6 +31,7 @@ import type {
   FrozenSessionModel,
 } from '../transcript/frozen-archive-format.js';
 import {
+  carryCurationLedger,
   frozenSessionPath,
   readSessionsIndex,
   SESSIONS_DIR,
@@ -372,8 +373,9 @@ async function writeFrozenArchive(
 
     ...(mode === 'quick' || live ? { pendingEnrichment: true } : {}),
     ...(memoryPending ? { memoryPending: true } : {}),
+
+    ...carryCurationLedger(live),
     ...(opts.memory === 'skip' ? { memorySkipped: true } : {}),
-    ...(live?.curatedThrough ? { curatedThrough: live.curatedThrough } : {}),
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
@@ -801,7 +803,9 @@ export async function enrichPendingSession(
     archiveContent,
     calls.newTitle,
     icon,
-    opts.skipMemory === true
+    opts.skipMemory === true,
+
+    effectiveOpts.skipMemory !== true
   );
   if (committed && curatorAlreadyRan) {
     await removeCuratorReceipt(vfs, entry.filename);
@@ -1020,7 +1024,8 @@ function buildEnrichedIndexEntry(
   newFilename: string,
   resolvedTitle: string,
   icon: string | undefined,
-  preserveMemoryPending: boolean
+  preserveMemoryPending: boolean,
+  memoryExtracted: boolean
 ): FrozenSessionIndexEntry {
   const resolvedIcon = icon ?? entry.icon;
   return {
@@ -1035,12 +1040,10 @@ function buildEnrichedIndexEntry(
     ...(entry.coneLabel ? { coneLabel: entry.coneLabel } : {}),
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
 
-    ...(entry.curatedThrough ? { curatedThrough: entry.curatedThrough } : {}),
+    ...carryCurationLedger(entry, { dropFailure: memoryExtracted }),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
     ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
     ...(preserveMemoryPending && entry.memoryPending ? { memoryPending: true } : {}),
-
-    ...(entry.memorySkipped ? { memorySkipped: true } : {}),
   };
 }
 
@@ -1050,7 +1053,8 @@ async function commitEnrichedArchive(
   archiveContent: string,
   newTitle: string,
   icon?: string,
-  preserveMemoryPending = false
+  preserveMemoryPending = false,
+  memoryExtracted = false
 ): Promise<FrozenSessionIndexEntry | null> {
   const oldPath = frozenSessionPath(entry);
 
@@ -1092,7 +1096,8 @@ async function commitEnrichedArchive(
     newFilename,
     resolvedTitle,
     icon,
-    preserveMemoryPending
+    preserveMemoryPending,
+    memoryExtracted
   );
   if (!(await commitIndexSwap(vfs, entry, updatedEntry))) return null;
 

@@ -17,14 +17,20 @@ vi.mock('../../src/core/context-compaction.js', () => ({
   runOneOffCompactionCall: (...args: unknown[]) => mockRunOneOffCompactionCall(...args),
 }));
 
+import type { VirtualFS } from '../../src/fs/index.js';
 import {
   advanceCuratedThrough,
+  curateLiveSessionDelta,
   liveDeltaArchivePath,
 } from '../../src/scoops/live-session-curation.js';
+import { finalizeLiveSnapshot } from '../../src/scoops/live-session-snapshot.js';
+import { runMemoryHealthCheck } from '../../src/scoops/memory-health.js';
+import { createMemoryCommand } from '../../src/shell/supplemental-commands/memory-command.js';
 import {
   curateFrozenSessionMemories,
   enrichPendingSession,
   freezeConeSession,
+  processPendingSessions,
 } from '../../src/ui/session-freezer.js';
 
 function makeFakeVfs() {
@@ -330,5 +336,101 @@ describe('finalize after incremental curation', () => {
     expect(updated?.memoryPending).toBeUndefined();
     expect(updated?.curatedThrough).toBe(5);
     expect(updated?.memoryCuratedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe('curation ledger across finalize and enrichment', () => {
+  const model = { id: 'm', provider: 'anthropic' } as never;
+
+  async function seedCuratedLive(vfs: FakeVfs, outcome: 'curated' | 'failed' = 'curated') {
+    const live = await snapshotLiveSession({
+      vfs,
+      cone: { folder: 'cone', label: 'sliccy' },
+      messages: session.messages.map((message) =>
+        agentText(message.role, message.content, message.timestamp)
+      ),
+      trigger: 'idle',
+    });
+    if (!live) throw new Error('snapshot skipped');
+    const spawn = vi.fn(async (_options: AgentSpawnOptions) =>
+      outcome === 'curated'
+        ? { finalText: 'folded', exitCode: 0 }
+        : { finalText: 'Scoop "agent-memory-curator" failed: expired', exitCode: 1 }
+    );
+    await curateLiveSessionDelta({ vfs, cone: { folder: 'cone' }, spawn, enabled: true });
+    const [row] = await readSessionsIndex(vfs as never);
+    return row;
+  }
+
+  function stubEnrichmentCalls(title: string): void {
+    mockRunOneOffCompactionCall.mockImplementation(async (call?: { instruction?: string }) =>
+      call?.instruction === 'MEMORY' ? 'NONE' : title
+    );
+  }
+
+  async function expectCuratedInLedger(vfs: FakeVfs): Promise<void> {
+    vfs.files.set('/workspace/CLAUDE.md', '- fact\n');
+    const health = await runMemoryHealthCheck(vfs);
+    expect(health.curation).toMatchObject({ curated: 1, failed: 0, none: 0 });
+    const status = await createMemoryCommand({ fs: vfs as unknown as VirtualFS }).execute(
+      ['status', '--json'],
+      { cwd: '/', env: {} } as never
+    );
+    expect(JSON.parse(status.stdout).curation).toMatchObject({ curated: 1, none: 0 });
+  }
+
+  it('keeps memoryCuratedAt when boot catch-up renames a finalized live draft', async () => {
+    const vfs = makeFakeVfs();
+    const curated = await seedCuratedLive(vfs);
+    expect(curated.memoryCuratedAt).toEqual(expect.any(String));
+
+    expect(await finalizeLiveSnapshot(vfs, 'cone')).toBe(true);
+    stubEnrichmentCalls('Ledger Survives Rename');
+    const result = await processPendingSessions({ vfs, model, apiKey: 'k' });
+
+    expect(result).toEqual({ attempted: 1, completed: 1 });
+    const [row] = await readSessionsIndex(vfs as never);
+    expect(row.filename).toMatch(/-ledger-survives-rename\.md$/);
+    expect(row.pendingEnrichment).toBeUndefined();
+    expect(row.curatedThrough).toBe(curated.curatedThrough);
+    expect(row.memoryCuratedAt).toBe(curated.memoryCuratedAt);
+    await expectCuratedInLedger(vfs);
+  });
+
+  it('keeps memoryCuratedAt when a "New chat" freeze completes the live archive', async () => {
+    const vfs = makeFakeVfs();
+    const curated = await seedCuratedLive(vfs);
+
+    const frozen = await freezeConeSession({ sessionStore: store, vfs, mode: 'quick' });
+    expect(frozen?.memoryCuratedAt).toBe(curated.memoryCuratedAt);
+    stubEnrichmentCalls('Ledger Survives Freeze');
+    const updated = await enrichPendingSession(vfs, frozen!, { model, apiKey: 'k' });
+
+    expect(updated?.filename).toMatch(/-ledger-survives-freeze\.md$/);
+    expect(updated?.memoryCuratedAt).toBe(curated.memoryCuratedAt);
+    await expectCuratedInLedger(vfs);
+  });
+
+  it('keeps a failure note through a title-only rename, and drops it once legacy extraction ran', async () => {
+    const vfs = makeFakeVfs();
+    const failed = await seedCuratedLive(vfs, 'failed');
+    expect(failed.memoryFailed).toEqual(expect.any(String));
+    await finalizeLiveSnapshot(vfs, 'cone');
+    const [draft] = await readSessionsIndex(vfs as never);
+    stubEnrichmentCalls('Failure Kept');
+
+    const titleOnly = await enrichPendingSession(vfs, draft, {
+      model,
+      apiKey: 'k',
+      skipMemory: true,
+    });
+    expect(titleOnly?.memoryFailed).toBe(failed.memoryFailed);
+
+    const other = makeFakeVfs();
+    await seedCuratedLive(other, 'failed');
+    await finalizeLiveSnapshot(other, 'cone');
+    const [otherDraft] = await readSessionsIndex(other as never);
+    const legacy = await enrichPendingSession(other, otherDraft, { model, apiKey: 'k' });
+    expect(legacy?.memoryFailed).toBeUndefined();
   });
 });

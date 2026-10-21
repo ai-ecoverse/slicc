@@ -63,6 +63,24 @@ export interface FrozenSessionIndexEntry {
   curatedThrough?: number;
 }
 
+export type CurationLedger = Pick<
+  FrozenSessionIndexEntry,
+  'curatedThrough' | 'memoryCuratedAt' | 'memoryFailed' | 'memorySkipped'
+>;
+
+export function carryCurationLedger(
+  entry: FrozenSessionIndexEntry | undefined,
+  opts: { dropFailure?: boolean } = {}
+): CurationLedger {
+  if (!entry) return {};
+  return {
+    ...(entry.curatedThrough ? { curatedThrough: entry.curatedThrough } : {}),
+    ...(entry.memoryCuratedAt ? { memoryCuratedAt: entry.memoryCuratedAt } : {}),
+    ...(entry.memoryFailed && !opts.dropFailure ? { memoryFailed: entry.memoryFailed } : {}),
+    ...(entry.memorySkipped ? { memorySkipped: true as const } : {}),
+  };
+}
+
 export interface FrozenSessionArchive {
   id: string;
 

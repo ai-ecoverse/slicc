@@ -3,6 +3,7 @@ import { createLogger } from '../base/logger.js';
 import type { CompactionTrigger } from '../core/context-compaction.js';
 import { FsError } from '../fs/types.js';
 import {
+  carryCurationLedger,
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
   parseFrozenArchive,
@@ -132,10 +133,8 @@ async function writeSnapshot(
     live: true,
     liveThrough,
     compactions,
-    ...(existing?.curatedThrough ? { curatedThrough: existing.curatedThrough } : {}),
-    ...(existing?.memoryFailed ? { memoryFailed: existing.memoryFailed } : {}),
 
-    ...(existing?.memoryCuratedAt ? { memoryCuratedAt: existing.memoryCuratedAt } : {}),
+    ...carryCurationLedger(existing),
   };
 
   await ensureSessionsDir(deps.vfs, sessionsDir);
