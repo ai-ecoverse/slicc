@@ -239,6 +239,11 @@ async function buildProductionRuntimeAssets(): Promise<void> {
   if (existsSync(nestedHtml)) {
     copyFileSync(nestedHtml, resolve(uiOutDir, 'index.html'));
   }
+
+  const nestedUpgradeHtml = resolve(uiOutDir, 'packages/webapp/upgrade-to-seven.html');
+  if (existsSync(nestedUpgradeHtml)) {
+    copyFileSync(nestedUpgradeHtml, resolve(uiOutDir, 'upgrade-to-seven.html'));
+  }
 }
 
 function buildWebappRuntimeAssetsPlugin() {
@@ -416,6 +421,7 @@ export default defineConfig(({ mode }) => ({
       input: {
         main: resolve(Dirname, 'index.html'),
         cloud: resolve(Dirname, 'cloud/index.html'),
+        'upgrade-to-seven': resolve(Dirname, 'upgrade-to-seven.html'),
         'slicc-editor': sliccEditorEntry,
         'slicc-diff': sliccDiffEntry,
       },

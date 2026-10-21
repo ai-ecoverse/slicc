@@ -127,6 +127,19 @@ export interface SpawnedKernelHost<TClient> {
   restartReadyDeadline(): void;
 
   dispose(): void;
+
+  drain(timeoutMs?: number): Promise<boolean>;
+}
+
+export const KERNEL_DRAIN_TIMEOUT_MS = 5_000;
+
+export interface KernelWorkerDrainMsg {
+  type: 'kernel-worker-drain';
+}
+
+export interface KernelWorkerDrainedMsg {
+  type: 'kernel-worker-drained';
+  ok: boolean;
 }
 
 function createReadyDeadline(options: {
@@ -341,11 +354,16 @@ export function bootstrapKernelWorker<TClient>(
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
   let disposed = false;
-  return {
+  const host: SpawnedKernelHost<TClient> = {
     client,
     ready,
     pauseReadyDeadline,
     restartReadyDeadline,
+    drain: (timeoutMs = KERNEL_DRAIN_TIMEOUT_MS) =>
+      drainKernelWorker(worker, timeoutMs, disposed).then((flushed) => {
+        host.dispose();
+        return flushed;
+      }),
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -360,6 +378,36 @@ export function bootstrapKernelWorker<TClient>(
       cdpChannel.port1.close();
     },
   };
+  return host;
+}
+
+function drainKernelWorker(
+  worker: WorkerLike,
+  timeoutMs: number,
+  disposed: boolean
+): Promise<boolean> {
+  if (disposed) return Promise.resolve(true);
+  if (typeof MessageChannel !== 'function') return Promise.resolve(false);
+  const reply = new MessageChannel();
+  return new Promise<boolean>((resolve) => {
+    const done = (flushed: boolean): void => {
+      clearTimeout(timer);
+      reply.port1.close();
+      resolve(flushed);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    reply.port1.onmessage = (event: MessageEvent) => {
+      const data = event.data as KernelWorkerDrainedMsg | undefined;
+      if (data?.type === 'kernel-worker-drained') done(data.ok === true);
+    };
+    try {
+      worker.postMessage({ type: 'kernel-worker-drain' } satisfies KernelWorkerDrainMsg, [
+        reply.port2,
+      ]);
+    } catch {
+      done(false);
+    }
+  });
 }
 
 export function spawnKernelWorker<TClient>(

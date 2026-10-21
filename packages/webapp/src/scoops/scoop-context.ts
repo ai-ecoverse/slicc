@@ -771,6 +771,10 @@ export class ScoopContext {
     };
   }
 
+  flushConversation(): Promise<boolean> {
+    return this.sessions.flushChecked();
+  }
+
   dispose(): void {
     this.sessions.persistNow();
 

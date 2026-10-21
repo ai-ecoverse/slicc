@@ -1173,6 +1173,14 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.costTracker.getContextFills();
   }
 
+  async flushConversations(): Promise<boolean> {
+    const contexts = [...this.lifecycle.getContexts().values()];
+    const results = await Promise.allSettled(
+      contexts.map((context) => context.flushConversation())
+    );
+    return results.every((r) => r.status === 'fulfilled' && r.value === true);
+  }
+
   async shutdown(): Promise<void> {
     this.stopMessageLoop();
 

@@ -36,6 +36,7 @@ import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import { createPageProfileExportDeps } from '../profile-export-deps.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
+import { registerSixKernelStop } from '../six-upgrade-stop.js';
 import type { ChatMessage } from '../types.js';
 import { syncRestoringSessionNotice, threadColumnIsEmpty } from './restoring-session-notice.js';
 import type { WcChatAttachment } from './wc-chat.js';
@@ -1331,6 +1332,8 @@ export async function bootLeaderFloat(
           guardedReload();
         },
       });
+
+      registerSixKernelStop({ drain: () => kernel.drain(), terminate: () => kernel.dispose() });
       installPageStorageSync({ send: (m) => kernel.client.sendRaw(m) });
 
       attachLickForwardingClient?.(kernel.client);

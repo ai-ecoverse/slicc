@@ -371,6 +371,17 @@ async function startSpeechAssetsResponder(
 
 self.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as { type?: string };
+  if (data?.type !== 'kernel-worker-drain') return;
+  const reply = event.ports[0];
+
+  const flushed = host ? host.orchestrator.flushConversations() : Promise.resolve(false);
+  void flushed
+    .catch(() => false)
+    .then((ok) => reply?.postMessage({ type: 'kernel-worker-drained', ok }));
+});
+
+self.addEventListener('message', (event: MessageEvent) => {
+  const data = event.data as { type?: string };
   if (data?.type !== 'kernel-worker-shutdown') return;
   stopTerminalHost?.();
   stopTerminalHost = null;
