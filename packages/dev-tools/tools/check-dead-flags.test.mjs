@@ -216,6 +216,17 @@ describe('check-dead-flags: call sites', () => {
     ).toEqual([]);
   });
 
+  it('skips the comment/string walk for a file that names no call-site function', () => {
+    const text = 'const x = 1;\n'.repeat(1000);
+    const source = {
+      toString: () => text,
+      get length() {
+        throw new Error('walked a file with no call-site names');
+      },
+    };
+    expect(findFlagCallSites(source)).toEqual([]);
+  });
+
   it('does not treat comment-stripped strings as code', () => {
     const stripped = stripComments(`const u = 'chrome-extension://x'; // trail`);
     expect(stripped).toContain('chrome-extension://x');
@@ -494,16 +505,19 @@ function writeScratch(root, { registry, worker, wrangler, consumer }) {
 }
 
 describe('check-dead-flags: end-to-end over the real tree', () => {
+  // One real-tree scan, through the CLI: its output carries the counts, and on
+  // failure the `::error` lines land in the assertion diff.
   it('passes (every registered flag has a consumer) and reports the count', () => {
-    const { findings, declared, scanned } = checkRepo(repoRoot, {
-      now: new Date('2026-09-16T00:00:00Z'),
-    });
-    expect(findings.filter((f) => f.severity === 'error')).toEqual([]);
-    expect(declared).toBeGreaterThanOrEqual(6);
-    expect(scanned).toBeGreaterThan(100);
-
     const { code, out } = runGuard(['--now=2026-09-16']);
+    const m = /^ok: (\d+) feature flags, (\d+) src files scanned/m.exec(out);
+    expect(m, out).not.toBeNull();
     expect(code).toBe(0);
-    expect(out).toMatch(/ok: \d+ feature flags, \d+ src files scanned/);
+    expect(Number(m[1])).toBeGreaterThanOrEqual(6);
+    expect(Number(m[2])).toBeGreaterThan(100);
+  });
+
+  it('checkRepo over the real tree reports no errors', () => {
+    const { findings } = checkRepo(repoRoot, { now: new Date('2026-09-16T00:00:00Z') });
+    expect(findings.filter((f) => f.severity === 'error')).toEqual([]);
   });
 });
