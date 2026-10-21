@@ -58,6 +58,8 @@ export default defineConfig({
 
     reporters: isCI ? ['default', 'json'] : ['default'],
     outputFile: { json: TIMING_OUTPUT_FILE },
+
+    execArgv: ['--max-old-space-size=2048'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'html', 'json-summary', 'lcov'],

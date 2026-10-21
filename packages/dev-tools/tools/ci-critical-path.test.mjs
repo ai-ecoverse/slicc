@@ -474,6 +474,28 @@ describe('CI runner routing', () => {
     }
   });
 
+  it('caps each vitest fork so a 6 GiB step heap stays in the parent', () => {
+    const POOL_RAM_MIB = 32768;
+    const POOL_CPUS = 10;
+    const config = readFileSync('vitest.config.ts', 'utf8');
+    const forkCap = Number(
+      config.match(/\n {4}execArgv: \['--max-old-space-size=(\d+)'\]/)?.[1] ?? NaN
+    );
+    expect(forkCap, 'root test.execArgv heap cap').toBeGreaterThan(0);
+    const vitestSteps = [
+      stepBody(jobBody('webapp', 'e2e'), 'Test (with coverage threshold gate)'),
+      stepBody(
+        jobBody('node-matrix-tests', 'webapp'),
+        'Vitest (all projects, no coverage thresholds)'
+      ),
+    ];
+    for (const step of vitestSteps) {
+      const parentHeap = Number(step.match(/NODE_OPTIONS: '--max-old-space-size=(\d+)'/)?.[1] ?? 0);
+      expect(parentHeap, 'step should keep its parent heap').toBeGreaterThan(forkCap);
+      expect(forkCap * POOL_CPUS + parentHeap).toBeLessThanOrEqual(POOL_RAM_MIB);
+    }
+  });
+
   it('guards every root-only step, since the pools have no sudo', () => {
     for (const job of jobs.filter((j) => !(j.name in HOSTED))) {
       for (const line of job.body.split('\n')) {
