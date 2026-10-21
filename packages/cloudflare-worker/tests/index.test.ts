@@ -1626,6 +1626,7 @@ describe('tray worker skeleton', () => {
         'GET /auth/cloud-callback.js',
         'GET /cloud',
         'GET /cloud/*',
+        'GET /upgrade-to-seven.html',
       ],
     });
   });

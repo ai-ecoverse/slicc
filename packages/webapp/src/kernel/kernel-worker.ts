@@ -682,6 +682,20 @@ async function startSpeechAssetsResponder(
   });
 }
 
+// Durability barrier before a stop whose caller reads the stores next
+// (seven's in-place upgrade, slicc#4051): flush every conversation, then
+// answer on the transferred port. The page terminates the worker after.
+self.addEventListener('message', (event: MessageEvent) => {
+  const data = event.data as { type?: string };
+  if (data?.type !== 'kernel-worker-drain') return;
+  const reply = event.ports[0];
+  // A kernel still booting can't vouch for its writes: answer "not flushed".
+  const flushed = host ? host.orchestrator.flushConversations() : Promise.resolve(false);
+  void flushed
+    .catch(() => false)
+    .then((ok) => reply?.postMessage({ type: 'kernel-worker-drained', ok }));
+});
+
 // Tear-down on worker close. DedicatedWorker doesn't fire `beforeunload`,
 // but the page can post a 'kernel-worker-shutdown' message before
 // terminate() so the host gets a chance to dispose cleanly.

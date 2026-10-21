@@ -292,6 +292,28 @@ export interface SpawnedKernelHost<TClient> {
   restartReadyDeadline(): void;
   /** Tear down the worker, the CDP forwarder, and close both ports. */
   dispose(): void;
+  /**
+   * Ask the worker to make every live conversation durable, wait for its
+   * answer (at most `timeoutMs`), then {@link dispose}. Resolves true when
+   * the worker confirmed the flush, false when it didn't answer in time.
+   * For a stop whose caller reads the stores next: seven's in-place upgrade
+   * (slicc#4051), which must not read after a false.
+   */
+  drain(timeoutMs?: number): Promise<boolean>;
+}
+
+/** How long {@link SpawnedKernelHost.drain} waits for the worker's answer. */
+export const KERNEL_DRAIN_TIMEOUT_MS = 5_000;
+
+/** Page → worker: flush every conversation, then answer on the transferred port. */
+export interface KernelWorkerDrainMsg {
+  type: 'kernel-worker-drain';
+}
+
+/** Worker → page, on the drain's port: whether every conversation write landed. */
+export interface KernelWorkerDrainedMsg {
+  type: 'kernel-worker-drained';
+  ok: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -568,11 +590,16 @@ export function bootstrapKernelWorker<TClient>(
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
   let disposed = false;
-  return {
+  const host: SpawnedKernelHost<TClient> = {
     client,
     ready,
     pauseReadyDeadline,
     restartReadyDeadline,
+    drain: (timeoutMs = KERNEL_DRAIN_TIMEOUT_MS) =>
+      drainKernelWorker(worker, timeoutMs, disposed).then((flushed) => {
+        host.dispose();
+        return flushed;
+      }),
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -592,6 +619,41 @@ export function bootstrapKernelWorker<TClient>(
       cdpChannel.port1.close();
     },
   };
+  return host;
+}
+
+/**
+ * Post a drain request with its own reply port and wait for the answer, or
+ * for `timeoutMs`. Resolves true on the answer, false otherwise; never
+ * rejects. An already-disposed worker has nothing left to flush.
+ */
+function drainKernelWorker(
+  worker: WorkerLike,
+  timeoutMs: number,
+  disposed: boolean
+): Promise<boolean> {
+  if (disposed) return Promise.resolve(true);
+  if (typeof MessageChannel !== 'function') return Promise.resolve(false);
+  const reply = new MessageChannel();
+  return new Promise<boolean>((resolve) => {
+    const done = (flushed: boolean): void => {
+      clearTimeout(timer);
+      reply.port1.close();
+      resolve(flushed);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    reply.port1.onmessage = (event: MessageEvent) => {
+      const data = event.data as KernelWorkerDrainedMsg | undefined;
+      if (data?.type === 'kernel-worker-drained') done(data.ok === true);
+    };
+    try {
+      worker.postMessage({ type: 'kernel-worker-drain' } satisfies KernelWorkerDrainMsg, [
+        reply.port2,
+      ]);
+    } catch {
+      done(false);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

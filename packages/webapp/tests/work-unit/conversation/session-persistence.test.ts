@@ -83,6 +83,16 @@ describe('SessionPersistence with a canonical record', () => {
     expect(legacy.store.save).not.toHaveBeenCalled();
   });
 
+  it('flushChecked reports whether the record landed (slicc#4051)', async () => {
+    const { persistence } = build();
+    expect(await persistence.flushChecked()).toBe(true);
+    expect(await canonicalStore.load(identity.key)).not.toBeNull();
+    vi.spyOn(canonicalStore, 'syncAgentMessages').mockResolvedValueOnce(null);
+    expect(await persistence.flushChecked()).toBe(false);
+    vi.spyOn(canonicalStore, 'syncAgentMessages').mockRejectedValueOnce(new Error('quota'));
+    expect(await persistence.flushChecked()).toBe(false);
+  });
+
   it('restores from the canonical record when there is one', async () => {
     const { persistence, legacy, messages } = build();
     persistence.persistNow();
