@@ -22,7 +22,7 @@
     "build-storybook": "storybook build"
   },
   "devDependencies": {
-    "@storybook/web-components-vite": "10.5.10",
+    "@storybook/web-components-vite": "10.6.2",
     "esbuild": "0.28.2",
     "storybook": "10.5.10"
   }
