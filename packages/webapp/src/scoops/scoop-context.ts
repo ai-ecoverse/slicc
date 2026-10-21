@@ -1068,8 +1068,8 @@ export class ScoopContext {
    * failed, which is logged). A durability barrier for a stop whose caller
    * reads the store next, such as seven's in-place upgrade.
    */
-  flushConversation(): Promise<void> {
-    return this.sessions.flush();
+  flushConversation(): Promise<boolean> {
+    return this.sessions.flushChecked();
   }
 
   /** Cleanup */

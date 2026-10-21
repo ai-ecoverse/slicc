@@ -689,8 +689,11 @@ self.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as { type?: string };
   if (data?.type !== 'kernel-worker-drain') return;
   const reply = event.ports[0];
-  const flushed = host?.orchestrator.flushConversations() ?? Promise.resolve();
-  void flushed.catch(() => {}).then(() => reply?.postMessage({ type: 'kernel-worker-drained' }));
+  // A kernel still booting can't vouch for its writes: answer "not flushed".
+  const flushed = host ? host.orchestrator.flushConversations() : Promise.resolve(false);
+  void flushed
+    .catch(() => false)
+    .then((ok) => reply?.postMessage({ type: 'kernel-worker-drained', ok }));
 });
 
 // Tear-down on worker close. DedicatedWorker doesn't fire `beforeunload`,

@@ -9,7 +9,12 @@
 import { NUKE_CONTROL_CHANNEL } from '../../shell/supplemental-commands/nuke-channel.js';
 import { planProfileDirectory } from '../../transcript/profile-export.js';
 import { defaultSixLockManager, openSixUpgradeChannel } from '../six-upgrade-stop.js';
-import { isFramedBySameOrigin, postToSameOriginParent, runSixUpgradeExport } from './exporter.js';
+import {
+  isFramedBySameOrigin,
+  postToSameOriginParent,
+  runSixUpgradeExport,
+  SIX_UPGRADE_MESSAGE_TYPE,
+} from './exporter.js';
 
 function showIdle(): void {
   const p = document.createElement('p');
@@ -22,12 +27,27 @@ async function start(): Promise<void> {
     showIdle();
     return;
   }
-  const [{ openUpgradeExportDeps }, { openOpfsProfileDirectory }] = await Promise.all([
-    import('./exporter-deps.js'),
-    import('../../transcript/profile-directory-opfs.js'),
-  ]);
+  const post = postToSameOriginParent(window);
+  let modules: [
+    typeof import('./exporter-deps.js'),
+    typeof import('../../transcript/profile-directory-opfs.js'),
+  ];
+  try {
+    modules = await Promise.all([
+      import('./exporter-deps.js'),
+      import('../../transcript/profile-directory-opfs.js'),
+    ]);
+  } catch (err) {
+    // A chunk that won't load (offline, a deploy in between) still gets reported.
+    post({
+      type: SIX_UPGRADE_MESSAGE_TYPE,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+  const [{ openUpgradeExportDeps }, { openOpfsProfileDirectory }] = modules;
   await runSixUpgradeExport({
-    post: postToSameOriginParent(window),
+    post,
     channel: openSixUpgradeChannel(),
     legacyReloadChannel: new BroadcastChannel(NUKE_CONTROL_CHANNEL),
     locks: defaultSixLockManager(),

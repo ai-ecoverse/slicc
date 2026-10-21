@@ -310,9 +310,10 @@ export interface KernelWorkerDrainMsg {
   type: 'kernel-worker-drain';
 }
 
-/** Worker → page, on the drain's port: the flush finished (or gave up). */
+/** Worker → page, on the drain's port: whether every conversation write landed. */
 export interface KernelWorkerDrainedMsg {
   type: 'kernel-worker-drained';
+  ok: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -642,9 +643,8 @@ function drainKernelWorker(
     };
     const timer = setTimeout(() => done(false), timeoutMs);
     reply.port1.onmessage = (event: MessageEvent) => {
-      if ((event.data as KernelWorkerDrainedMsg | undefined)?.type === 'kernel-worker-drained') {
-        done(true);
-      }
+      const data = event.data as KernelWorkerDrainedMsg | undefined;
+      if (data?.type === 'kernel-worker-drained') done(data.ok === true);
     };
     try {
       worker.postMessage({ type: 'kernel-worker-drain' } satisfies KernelWorkerDrainMsg, [

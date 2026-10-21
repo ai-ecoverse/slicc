@@ -115,16 +115,21 @@ export function isSixStoppedForUpgrade(): boolean {
 }
 
 /**
- * Register how this page terminates its kernel: flush its conversations,
- * then terminate it (`SpawnedKernelHost.drain`). A page that has already
- * stopped runs it at once, so a kernel spawned after the stop never runs.
+ * Register how this page stops its kernel: `drain` flushes its
+ * conversations, then terminates it (`SpawnedKernelHost.drain`). A page that
+ * has already stopped calls `terminate` at once instead, synchronously, in
+ * the same task as the spawn, so the new worker never runs a line.
  */
-export function registerSixKernelStop(stop: KernelStop): void {
+export function registerSixKernelStop(stop: { drain: KernelStop; terminate(): void }): void {
   if (stopped) {
-    void runQuietly(stop);
+    try {
+      stop.terminate();
+    } catch (err) {
+      log.error('Stopping for the upgrade threw', err);
+    }
     return;
   }
-  kernelStop = stop;
+  kernelStop = stop.drain;
 }
 
 /** Run a stop step; false when it threw or reported false. */
@@ -152,6 +157,8 @@ export function renderSixMovedNotice(doc: Document): void {
   link.href = SEVEN_OS_PATH;
   link.textContent = 'Open SLICC 7';
   link.style.cssText = 'font-weight:600;';
+  link.id = 'slicc-six-moved-link';
+  link.hidden = true;
   box.append(title, link);
   doc.body.replaceChildren(box);
   doc.title = 'SLICC moved to seven';
@@ -174,8 +181,15 @@ export async function stopSixPageForUpgrade(): Promise<void> {
   await runQuietly(releaseTrayLeaderOnFatalBoot);
   const release = lockRelease;
   lockRelease = null;
-  if (flushed) release?.();
-  else log.error('The kernel did not confirm its flush; keeping the upgrade waiting.');
+  if (!flushed) {
+    log.error('The kernel did not confirm its flush; keeping the upgrade waiting.');
+    return;
+  }
+  release?.();
+  // Only now offer the way out: leaving the page earlier would drop the lock
+  // before the flush landed.
+  const link = noticeDoc?.getElementById('slicc-six-moved-link');
+  if (link) link.hidden = false;
 }
 
 /**

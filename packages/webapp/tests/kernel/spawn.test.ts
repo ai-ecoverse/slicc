@@ -236,10 +236,31 @@ describe('bootstrapKernelWorker', () => {
     expect(worker.terminateCalls).toBe(0);
 
     const reply = request!.transfer![0] as MessagePort;
-    reply.postMessage({ type: 'kernel-worker-drained' });
+    reply.postMessage({ type: 'kernel-worker-drained', ok: true });
     await draining;
     expect(worker.terminateCalls).toBe(1);
     expect(await host.drain(10)).toBe(true);
+  });
+
+  it('drain reports a failed flush as unflushed', async () => {
+    const worker = makeMockWorker({ autoReady: true });
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+      readyTimeoutMs: 1_000,
+    });
+    await host.ready;
+    const draining = host.drain(1_000);
+    const request = worker.posted.find(
+      (p) => (p.message as { type?: string })?.type === 'kernel-worker-drain'
+    );
+    (request!.transfer![0] as MessagePort).postMessage({
+      type: 'kernel-worker-drained',
+      ok: false,
+    });
+    expect(await draining).toBe(false);
+    expect(worker.terminateCalls).toBe(1);
   });
 
   it('drain gives up after its timeout and terminates anyway', async () => {

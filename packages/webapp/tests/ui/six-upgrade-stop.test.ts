@@ -83,8 +83,11 @@ describe('a six page on the stop broadcast', () => {
     const locks = new FakeWebLocks();
     const order: string[] = [];
     expect(await setupSixUpgradeStop(document, { locks, channel: bus.open() })).toBe(false);
-    registerSixKernelStop(() => {
-      order.push('kernel');
+    registerSixKernelStop({
+      drain: () => {
+        order.push('kernel');
+      },
+      terminate: () => order.push('terminate'),
     });
     registerTrayLeaderFatalCleanup(() => {
       order.push('tray');
@@ -107,7 +110,7 @@ describe('a six page on the stop broadcast', () => {
     const locks = new FakeWebLocks();
     const kernel = vi.fn();
     await setupSixUpgradeStop(document, { locks, channel: bus.open() });
-    registerSixKernelStop(kernel);
+    registerSixKernelStop({ drain: kernel, terminate: vi.fn() });
     bus.open().postMessage({ type: 'slicc-six-upgrade', phase: 'reading' });
     await flush();
     expect(kernel).not.toHaveBeenCalled();
@@ -119,27 +122,31 @@ describe('a six page on the stop broadcast', () => {
     const locks = new FakeWebLocks();
     let flushed!: () => void;
     await setupSixUpgradeStop(document, { locks, channel: bus.open() });
-    registerSixKernelStop(
-      () =>
+    registerSixKernelStop({
+      drain: () =>
         new Promise<void>((resolve) => {
           flushed = resolve;
-        })
-    );
+        }),
+      terminate: vi.fn(),
+    });
     bus.open().postMessage({ type: 'stop' });
     await flush();
-    // The notice is up at once, but the exporter must still wait.
+    // The notice is up at once, but the exporter must still wait, and the
+    // way out stays hidden: leaving now would drop the lock early.
     expect(document.getElementById('slicc-six-moved')).not.toBeNull();
+    expect(document.getElementById('slicc-six-moved-link')!.hidden).toBe(true);
     expect(locks.heldModes(SIX_KERNEL_LOCK)).toEqual(['shared']);
     flushed();
     await flush();
     expect(locks.heldModes(SIX_KERNEL_LOCK)).toEqual([]);
+    expect(document.getElementById('slicc-six-moved-link')!.hidden).toBe(false);
   });
 
   it('keeps the lock when the kernel could not confirm its flush', async () => {
     const bus = new FakeChannelBus();
     const locks = new FakeWebLocks();
     await setupSixUpgradeStop(document, { locks, channel: bus.open() });
-    registerSixKernelStop(async () => false);
+    registerSixKernelStop({ drain: async () => false, terminate: vi.fn() });
     bus.open().postMessage({ type: 'stop' });
     await flush();
     await flush();
@@ -151,9 +158,12 @@ describe('a six page on the stop broadcast', () => {
   it('terminates a kernel spawned after the stop at once', async () => {
     installSixUpgradeStopListener(document, null);
     await stopSixPageForUpgrade();
-    const kernel = vi.fn();
-    registerSixKernelStop(kernel);
-    expect(kernel).toHaveBeenCalledOnce();
+    const drain = vi.fn();
+    const terminate = vi.fn();
+    registerSixKernelStop({ drain, terminate });
+    // Synchronously, in the spawn's own task: the worker never runs.
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(drain).not.toHaveBeenCalled();
   });
 
   it('releases a lock it is handed after the stop', async () => {
@@ -179,7 +189,7 @@ describe('stopSixPages (the exporter)', () => {
     const locks = new FakeWebLocks();
     const kernel = vi.fn();
     await setupSixUpgradeStop(document, { locks, channel: bus.open() });
-    registerSixKernelStop(kernel);
+    registerSixKernelStop({ drain: kernel, terminate: vi.fn() });
 
     let acquired = false;
     const stopping = stopSixPages({

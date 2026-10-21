@@ -50,7 +50,9 @@ describe('ui/main.ts six-upgrade stop wiring', () => {
 describe('ui/wc/wc-live.ts kernel teardown', () => {
   it('registers kernel.drain for the stop right after spawning the kernel', () => {
     const spawn = live.indexOf('kernel = spawnKernelWorker({');
-    const register = live.indexOf('registerSixKernelStop(() => kernel.drain());');
+    const register = live.indexOf(
+      'registerSixKernelStop({ drain: () => kernel.drain(), terminate: () => kernel.dispose() });'
+    );
     expect(spawn).toBeGreaterThan(-1);
     expect(register).toBeGreaterThan(spawn);
     expect(register).toBeLessThan(live.indexOf('installPageStorageSync(', spawn));
