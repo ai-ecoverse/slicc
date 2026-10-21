@@ -53,6 +53,7 @@ import type {
   FrozenSessionModel,
 } from '../transcript/frozen-archive-format.js';
 import {
+  carryCurationLedger,
   frozenSessionPath,
   readSessionsIndex,
   SESSIONS_DIR,
@@ -511,8 +512,10 @@ async function writeFrozenArchive(
     // enrichment pass renames exactly like a `pending-…` draft.
     ...(mode === 'quick' || live ? { pendingEnrichment: true } : {}),
     ...(memoryPending ? { memoryPending: true } : {}),
+    // A reused live snapshot's ledger (cursor, curated stamp, failure note)
+    // carries over: its slices were already mined before this freeze.
+    ...carryCurationLedger(live),
     ...(opts.memory === 'skip' ? { memorySkipped: true } : {}),
-    ...(live?.curatedThrough ? { curatedThrough: live.curatedThrough } : {}),
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
@@ -1046,7 +1049,9 @@ export async function enrichPendingSession(
     archiveContent,
     calls.newTitle,
     icon,
-    opts.skipMemory === true
+    opts.skipMemory === true,
+    // The legacy memory half just ran — it supersedes an earlier failure note.
+    effectiveOpts.skipMemory !== true
   );
   if (committed && curatorAlreadyRan) {
     await removeCuratorReceipt(vfs, entry.filename);
@@ -1331,7 +1336,8 @@ function buildEnrichedIndexEntry(
   newFilename: string,
   resolvedTitle: string,
   icon: string | undefined,
-  preserveMemoryPending: boolean
+  preserveMemoryPending: boolean,
+  memoryExtracted: boolean
 ): FrozenSessionIndexEntry {
   const resolvedIcon = icon ?? entry.icon;
   return {
@@ -1346,15 +1352,15 @@ function buildEnrichedIndexEntry(
     ...(entry.cone ? { cone: entry.cone } : {}),
     ...(entry.coneLabel ? { coneLabel: entry.coneLabel } : {}),
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
-    // The live curator cursor has to survive the title rename. The agentic
-    // New Chat path enriches first and then curates the updated entry; dropping
-    // the cursor here makes that pass mine the whole transcript again.
-    ...(entry.curatedThrough ? { curatedThrough: entry.curatedThrough } : {}),
+    // The curation ledger has to survive the title rename. The agentic New
+    // Chat path enriches first and then curates the updated entry; dropping
+    // the cursor makes that pass mine the whole transcript again, and
+    // dropping `memoryCuratedAt` re-marks a curated archive "unmarked"
+    // (#4073). A legacy pass that just extracted memory supersedes a failure.
+    ...carryCurationLedger(entry, { dropFailure: memoryExtracted }),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
     ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
     ...(preserveMemoryPending && entry.memoryPending ? { memoryPending: true } : {}),
-    // A dropped cone's archive stays memory-free after the rename too.
-    ...(entry.memorySkipped ? { memorySkipped: true } : {}),
   };
 }
 
@@ -1364,7 +1370,8 @@ async function commitEnrichedArchive(
   archiveContent: string,
   newTitle: string,
   icon?: string,
-  preserveMemoryPending = false
+  preserveMemoryPending = false,
+  memoryExtracted = false
 ): Promise<FrozenSessionIndexEntry | null> {
   const oldPath = frozenSessionPath(entry);
   // Only a quick-mode `pending-…md` draft carries a placeholder title and a
@@ -1413,7 +1420,8 @@ async function commitEnrichedArchive(
     newFilename,
     resolvedTitle,
     icon,
-    preserveMemoryPending
+    preserveMemoryPending,
+    memoryExtracted
   );
   if (!(await commitIndexSwap(vfs, entry, updatedEntry))) return null;
 

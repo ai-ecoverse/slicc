@@ -148,6 +148,32 @@ export interface FrozenSessionIndexEntry {
   curatedThrough?: number;
 }
 
+/** The durable curation ledger of one index row (#3849, #4064, #4073). */
+export type CurationLedger = Pick<
+  FrozenSessionIndexEntry,
+  'curatedThrough' | 'memoryCuratedAt' | 'memoryFailed' | 'memorySkipped'
+>;
+
+/**
+ * The curation fields a rebuilt index row must carry over from the row it
+ * replaces. Every writer that rebuilds a row by enumerating fields spreads
+ * this instead of listing the ledger by hand — a forgotten field silently
+ * re-marks a curated archive "unmarked" in `memory status` and health.
+ * `dropFailure` is for a writer whose own pass just superseded the failure.
+ */
+export function carryCurationLedger(
+  entry: FrozenSessionIndexEntry | undefined,
+  opts: { dropFailure?: boolean } = {}
+): CurationLedger {
+  if (!entry) return {};
+  return {
+    ...(entry.curatedThrough ? { curatedThrough: entry.curatedThrough } : {}),
+    ...(entry.memoryCuratedAt ? { memoryCuratedAt: entry.memoryCuratedAt } : {}),
+    ...(entry.memoryFailed && !opts.dropFailure ? { memoryFailed: entry.memoryFailed } : {}),
+    ...(entry.memorySkipped ? { memorySkipped: true as const } : {}),
+  };
+}
+
 export interface FrozenSessionArchive {
   /** Live chat key (`session-<folder>`). Not the per-freeze UUID. */
   id: string;

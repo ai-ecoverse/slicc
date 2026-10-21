@@ -47,6 +47,7 @@ import { createLogger } from '../base/logger.js';
 import type { CompactionTrigger } from '../core/context-compaction.js';
 import { FsError } from '../fs/types.js';
 import {
+  carryCurationLedger,
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
   parseFrozenArchive,
@@ -207,11 +208,9 @@ async function writeSnapshot(
     live: true,
     liveThrough,
     compactions,
-    ...(existing?.curatedThrough ? { curatedThrough: existing.curatedThrough } : {}),
-    ...(existing?.memoryFailed ? { memoryFailed: existing.memoryFailed } : {}),
-    // The success half of the ledger survives the rewrite too, or a
-    // curated live archive reads as "unmarked" after one more round.
-    ...(existing?.memoryCuratedAt ? { memoryCuratedAt: existing.memoryCuratedAt } : {}),
+    // The whole curation ledger survives the rewrite, or a curated live
+    // archive reads as "unmarked" after one more round.
+    ...carryCurationLedger(existing),
   };
 
   await ensureSessionsDir(deps.vfs, sessionsDir);
