@@ -321,7 +321,10 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
 SAMEORIGIN`), `Cache-Control: no-store`, no Document-Isolation-Policy, and COEP
   `require-corp` with CORP `same-origin`, so an isolated parent can frame it too.
   GET/HEAD only. The page carries `<meta name="slicc-six-upgrade" content="1">`
-  so seven can tell it from the SPA fallback before framing it.
+  so seven can tell it from the SPA fallback before framing it. It doesn't redact
+  known secrets (`secrets.env`, extension secrets) inside text files: files move as
+  they are, on the same origin. It also moves and retires the thin extension's
+  profile, which lives on www. Details: [`profile-export.md`](profile-export.md#the-in-place-exporter).
 - **25 MiB per-asset cap:** Cloudflare rejects any `dist/ui/` file over 25 MiB; the CI
   `cloudflare-worker` job runs `npm run build -w @slicc/cloudflare-worker`
   (`wrangler deploy --dry-run`) as a hard gate.
