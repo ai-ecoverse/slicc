@@ -79,6 +79,13 @@ export default defineConfig({
     // a developer's working tree.
     reporters: isCI ? ['default', 'json'] : ['default'],
     outputFile: { json: TIMING_OUTPUT_FILE },
+    // Per-fork heap cap, inherited by every project. CI's vitest steps set
+    // NODE_OPTIONS=--max-old-space-size=6144 for the parent (coverage merge),
+    // and NODE_OPTIONS reaches every fork too: ~9 forks x 6 GiB oversubscribes
+    // the 32 GiB pool runner, whose filesystem also lives in RAM. A command-line
+    // flag beats NODE_OPTIONS, so this caps the forks only. Measured on the
+    // pool (#4083): fork peak RSS p99 ~0.4 GiB, max ~1.4 GiB.
+    execArgv: ['--max-old-space-size=2048'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'html', 'json-summary', 'lcov'],
