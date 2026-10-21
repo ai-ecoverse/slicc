@@ -755,6 +755,7 @@ export function mountSevenBannerInShell(log: Pick<BootStageLogger, 'error'>): ()
         if (!appCol || !isFeatureEnabled('seven-banner')) return;
         mod.mountSevenBanner(document, appCol, appCol.querySelector(':scope > slicc-shell'), {
           onExport: () => openProfileExportDialog(log),
+          moveHref: mod.sevenInPlaceHref(location.origin),
         });
       })
       .catch((err) => log.error('SLICC 7 banner failed', err));

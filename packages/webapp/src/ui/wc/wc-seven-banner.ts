@@ -1,4 +1,8 @@
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+
 export const SEVEN_BANNER_ID = 'slicc-seven-banner';
+
+export const SEVEN_IN_PLACE_PATH = '/7/';
 export const SEVEN_BANNER_DISMISSED_KEY = 'slicc-seven-banner-dismissed';
 
 const STYLE_ID = 'slicc-seven-banner-style';
@@ -12,10 +16,14 @@ const CSS = `
 .wcsev__export{font:600 12px var(--ui);color:var(--canvas);background:var(--ink);border:1px solid var(--ink);
   border-radius:8px;padding:4px 10px;cursor:pointer;white-space:nowrap;}
 .wcsev__export:hover{background:color-mix(in srgb,var(--ink) 85%,var(--canvas));}
+.wcsev__export--secondary{color:var(--ink);background:transparent;border-color:color-mix(in srgb,var(--ink) 30%,var(--line));}
+.wcsev__export--secondary:hover{background:var(--ghost);}
+a.wcsev__move{color:var(--canvas);text-decoration:none;font-weight:600;}
 .wcsev__close{font:500 16px/1 var(--ui);color:var(--txt-2);background:transparent;border:0;border-radius:6px;
   width:26px;height:26px;cursor:pointer;flex:0 0 auto;}
 .wcsev__close:hover{background:var(--ghost);color:var(--ink);}
-@media (max-width:560px){.wcsev{margin:6px 8px 0;font-size:12px;}.wcsev__export{padding:4px 8px;}}
+@media (max-width:560px){.wcsev{margin:6px 8px 0;font-size:12px;flex-wrap:wrap;row-gap:6px;}
+  .wcsev__text{flex-basis:100%;}.wcsev__export{padding:4px 8px;}.wcsev__close{margin-left:auto;}}
 `;
 
 function ensureStyle(doc: Document): void {
@@ -34,8 +42,14 @@ function isDismissed(storage: Pick<Storage, 'getItem'> | null): boolean {
   }
 }
 
+export function sevenInPlaceHref(origin: string): string | null {
+  return origin === SLICC_HOSTED_ORIGIN ? SEVEN_IN_PLACE_PATH : null;
+}
+
 export interface SevenBannerOptions {
   onExport(): void;
+
+  moveHref?: string | null;
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
 }
 
@@ -68,6 +82,16 @@ export function mountSevenBanner(
   exportBtn.textContent = 'Export your profile';
   exportBtn.addEventListener('click', () => opts.onExport());
 
+  const actions: HTMLElement[] = [exportBtn];
+  if (opts.moveHref) {
+    const move = doc.createElement('a');
+    move.className = 'wcsev__export wcsev__move';
+    move.href = opts.moveHref;
+    move.textContent = 'Move to seven in this browser';
+    exportBtn.classList.add('wcsev__export--secondary');
+    actions.unshift(move);
+  }
+
   const close = doc.createElement('button');
   close.type = 'button';
   close.className = 'wcsev__close';
@@ -80,7 +104,7 @@ export function mountSevenBanner(
     banner.remove();
   });
 
-  banner.append(text, exportBtn, close);
+  banner.append(text, ...actions, close);
   host.insertBefore(banner, before && before.parentNode === host ? before : null);
   return banner;
 }
