@@ -85,6 +85,30 @@ function isPlatformBinary(entry) {
   return Array.isArray(entry.os) || Array.isArray(entry.cpu);
 }
 
+export function hostPlatform() {
+  let libc = null;
+  if (process.platform === 'linux') {
+    const header = process.report?.getReport()?.header ?? {};
+    libc = header.glibcVersionRuntime ? 'glibc' : 'musl';
+  }
+  return { os: process.platform, cpu: process.arch, libc };
+}
+
+function platformListAllows(value, list) {
+  const values = typeof list === 'string' ? [list] : list;
+  if (values.length === 1 && values[0] === 'any') return true;
+  const positives = values.filter((v) => !v.startsWith('!'));
+  if (values.some((v) => v.startsWith('!') && v.slice(1) === value)) return false;
+  return positives.length === 0 || positives.includes(value);
+}
+
+function skippedOnHost(entry, host) {
+  if (entry.os && !platformListAllows(host.os, entry.os)) return true;
+  if (entry.cpu && !platformListAllows(host.cpu, entry.cpu)) return true;
+  if (!entry.libc) return false;
+  return host.libc === null || !platformListAllows(host.libc, entry.libc);
+}
+
 function nestedCopyIsCovered(path, entry, _base, head) {
   if (isDefinitelyTypedPackage(path.slice('node_modules/'.length))) return true;
   const headEntry = head[path];
@@ -98,8 +122,9 @@ function registryName(path, entry) {
   return idx === -1 ? installName : installName.slice(idx + '/node_modules/'.length);
 }
 
-function driftNeedsNoRealignment(path, entry, to, { base, head, workspaces }) {
+function driftNeedsNoRealignment(path, entry, to, { base, head, workspaces, host }) {
   if (to === null && isPlatformBinary(entry)) return true;
+  if (isPlatformBinary(entry) && skippedOnHost(entry, host)) return true;
   const installName = path.slice('node_modules/'.length);
   if (installName.includes('/node_modules/')) return nestedCopyIsCovered(path, entry, base, head);
 
@@ -108,7 +133,7 @@ function driftNeedsNoRealignment(path, entry, to, { base, head, workspaces }) {
   return isDefinitelyTypedPackage(installName);
 }
 
-export function dependencyDrift(repoRoot, tree) {
+export function dependencyDrift(repoRoot, tree, host = hostPlatform()) {
   const head = readLockPackages(repoRoot);
   const base = readLockPackages(tree);
   if (!head || !base) return null;
@@ -123,7 +148,7 @@ export function dependencyDrift(repoRoot, tree) {
     if (!from) continue;
     const to = head[path]?.version ?? null;
     if (to === from) continue;
-    if (driftNeedsNoRealignment(path, entry, to, { base, head, workspaces })) continue;
+    if (driftNeedsNoRealignment(path, entry, to, { base, head, workspaces, host })) continue;
 
     const drift = { path, name: registryName(path, entry), from, to };
     (to === null ? missing : changed).push(drift);
