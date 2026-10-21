@@ -95,7 +95,17 @@ describe('createNodeConsole', () => {
 
   it('trace writes Trace: plus a stack to stderr', () => {
     const { con, out, err } = makeConsole();
-    expect(() => con.trace('here')).not.toThrow();
+    // The realm worker formats stacks with plain V8. Vite's test-only
+    // source-map interceptor (`Error.prepareStackTrace`) decodes this file's
+    // map on the first stack: ~85% of this call's cold cost, and the reason
+    // it was the slowest test in the file in CI (7-17 ms).
+    const prepare = Error.prepareStackTrace;
+    Reflect.deleteProperty(Error, 'prepareStackTrace');
+    try {
+      expect(() => con.trace('here')).not.toThrow();
+    } finally {
+      Error.prepareStackTrace = prepare;
+    }
     expect(out()).toBe('');
     const stderr = err();
     expect(stderr).toMatch(/^Trace: here\n/);
