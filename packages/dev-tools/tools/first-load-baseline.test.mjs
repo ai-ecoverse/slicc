@@ -253,6 +253,7 @@ describe('dependencyDrift', () => {
     writeFileSync(join(dir, 'package-lock.json'), JSON.stringify({ packages: entries }));
 
   const empty = { changed: [], missing: [], unrealignable: [] };
+  const linuxGlibcX64 = { os: 'linux', cpu: 'x64', libc: 'glibc' };
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'first-load-drift-'));
@@ -417,7 +418,7 @@ describe('dependencyDrift', () => {
       'node_modules/@img/sharp-wasm32': { version: '0.35.4' },
       'node_modules/@esbuild/linux-x64': { version: '0.28.1', cpu: ['x64'] },
     });
-    const drift = dependencyDrift(repo, tree);
+    const drift = dependencyDrift(repo, tree, linuxGlibcX64);
     expect(drift.missing).toEqual([
       {
         path: 'node_modules/@img/sharp-wasm32',
@@ -433,6 +434,46 @@ describe('dependencyDrift', () => {
         from: '0.28.1',
         to: '0.29.0',
       },
+    ]);
+  });
+
+  /**
+   * npm never installs a binary for another os/cpu/libc, so neither HEAD's
+   * tree nor the baseline worktree has one to realign. knip 6.39 -> 6.41
+   * (Renovate PR #4070) bumped 19 `@oxc-parser/binding-*` packages and the
+   * drift limit refused the baseline.
+   */
+  it('skips bumped platform-native binaries this host does not install', () => {
+    const bindings = {
+      'node_modules/@oxc-parser/binding-linux-x64-gnu': {
+        os: ['linux'],
+        cpu: ['x64'],
+        libc: ['glibc'],
+      },
+      'node_modules/@oxc-parser/binding-linux-x64-musl': {
+        os: ['linux'],
+        cpu: ['x64'],
+        libc: ['musl'],
+      },
+      'node_modules/@oxc-parser/binding-darwin-arm64': { os: ['darwin'], cpu: ['arm64'] },
+      'node_modules/@oxc-parser/binding-not-win32': { os: ['!win32'] },
+      'node_modules/@oxc-parser/binding-win32-x64-msvc': { os: ['win32'], cpu: ['x64'] },
+    };
+    const at = (version) =>
+      Object.fromEntries(Object.entries(bindings).map(([k, v]) => [k, { ...v, version }]));
+    lock(repo, at('0.153.0'));
+    lock(tree, at('0.150.0'));
+    const changedOn = (host) => dependencyDrift(repo, tree, host).changed.map((d) => d.name);
+    expect(changedOn(linuxGlibcX64)).toEqual([
+      '@oxc-parser/binding-linux-x64-gnu',
+      '@oxc-parser/binding-not-win32',
+    ]);
+    expect(changedOn({ os: 'darwin', cpu: 'arm64', libc: null })).toEqual([
+      '@oxc-parser/binding-darwin-arm64',
+      '@oxc-parser/binding-not-win32',
+    ]);
+    expect(changedOn({ os: 'win32', cpu: 'x64', libc: null })).toEqual([
+      '@oxc-parser/binding-win32-x64-msvc',
     ]);
   });
 

@@ -1,8 +1,8 @@
 diff --git a/node_modules/@zenfs/core/dist/backends/store/fs.js b/node_modules/@zenfs/core/dist/backends/store/fs.js
-index 1e20478..51f47b7 100644
+index 307f801..f52c867 100644
 --- a/node_modules/@zenfs/core/dist/backends/store/fs.js
 +++ b/node_modules/@zenfs/core/dist/backends/store/fs.js
-@@ -442,7 +442,9 @@ export class StoreFS extends FileSystem {
+@@ -440,7 +440,9 @@ export class StoreFS extends FileSystem {
          try {
              const tx = __addDisposableResource(env_10, this.transaction(), false);
              const inode = this.findInodeSync(tx, path);
@@ -14,7 +14,7 @@ index 1e20478..51f47b7 100644
                  if (metadata.size < data.byteLength)
                      data.fill(0, metadata.size);
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 26aaf3a..3d85fc1 100644
+index 50520e8..b073ce5 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
 @@ -54,7 +54,10 @@ var __disposeResources = (this && this.__disposeResources) || (function (Suppres
@@ -29,25 +29,7 @@ index 26aaf3a..3d85fc1 100644
  import { join } from '../path.js';
  import { _asyncFSKeys } from './shared.js';
  /**
-@@ -85,6 +88,17 @@ export function Async(FS) {
-         _async(thunk) {
-             this._promise = this._promise.finally(() => thunk());
-         }
-+        /**
-+         * PATCH(slicc#3783, upstream zen-fs/core#325): a `*Sync` method has already updated the mirror, so
-+         * the queued async call it schedules runs the backend's own method
-+         * (against the unmirrored view), not the mirroring wrapper, which
-+         * would apply the change to the mirror a second time.
-+         * @internal
-+         */
-+        _replay(key, ...args) {
-+            const original = this._zenfsOriginals?.[key] ?? this[key].bind(this);
-+            return original(...args);
-+        }
-         _isInitialized = false;
-         /** Tracks how many updates to the sync. cache we skipped during initialization */
-         _skippedCacheUpdates = 0;
-@@ -129,10 +143,164 @@ export function Async(FS) {
+@@ -137,9 +140,163 @@ export function Async(FS) {
                  throw crit(withErrno('ENOTSUP', 'No sync cache is attached to this async file system'));
              }
          }
@@ -207,58 +189,25 @@ index 26aaf3a..3d85fc1 100644
          renameSync(oldPath, newPath) {
              this.checkSync();
              this._sync.renameSync(oldPath, newPath);
--            this._async(() => this.rename(oldPath, newPath));
 +            this._moveMetaOnly(oldPath, newPath);
-+            this._async(() => this._replay('rename', oldPath, newPath));
+             this._async(() => this._unpatched.rename(oldPath, newPath));
          }
          statSync(path) {
-             this.checkSync();
-@@ -141,28 +309,30 @@ export function Async(FS) {
-         touchSync(path, metadata) {
-             this.checkSync();
-             this._sync.touchSync(path, metadata);
--            this._async(() => this.touch(path, metadata));
-+            this._async(() => this._replay('touch', path, metadata));
-         }
-         createFileSync(path, options) {
-             this.checkSync();
-             const result = this._sync.createFileSync(path, options);
--            this._async(() => this.createFile(path, options));
-+            this._async(() => this._replay('createFile', path, options));
-             return result;
-         }
+@@ -160,11 +317,13 @@ export function Async(FS) {
          unlinkSync(path) {
              this.checkSync();
              this._sync.unlinkSync(path);
--            this._async(() => this.unlink(path));
 +            this._metaOnly?.delete(path);
-+            this._async(() => this._replay('unlink', path));
+             this._async(() => this._unpatched.unlink(path));
          }
          rmdirSync(path) {
              this.checkSync();
              this._sync.rmdirSync(path);
--            this._async(() => this.rmdir(path));
 +            this._forgetMetaOnly(path);
-+            this._async(() => this._replay('rmdir', path));
+             this._async(() => this._unpatched.rmdir(path));
          }
          mkdirSync(path, options) {
-             this.checkSync();
-             const result = this._sync.mkdirSync(path, options);
--            this._async(() => this.mkdir(path, options));
-+            this._async(() => this._replay('mkdir', path, options));
-             return result;
-         }
-         readdirSync(path) {
-@@ -172,7 +342,7 @@ export function Async(FS) {
-         linkSync(srcpath, dstpath) {
-             this.checkSync();
-             this._sync.linkSync(srcpath, dstpath);
--            this._async(() => this.link(srcpath, dstpath));
-+            this._async(() => this._replay('link', srcpath, dstpath));
-         }
-         async sync() {
-             if (!this.attributes.has('no_async_preload') && this._sync)
-@@ -189,12 +359,17 @@ export function Async(FS) {
+@@ -197,10 +356,15 @@ export function Async(FS) {
          }
          readSync(path, buffer, offset, end) {
              this.checkSync();
@@ -272,12 +221,9 @@ index 26aaf3a..3d85fc1 100644
              this.checkSync();
 +            this._prepareMetaWrite(path, offset);
              this._sync.writeSync(path, buffer, offset);
--            this._async(() => this.write(path, buffer, offset));
-+            this._async(() => this._replay('write', path, buffer, offset));
+             this._async(() => this._unpatched.write(path, buffer, offset));
          }
-         ioctlSync(context, command, ...args) {
-             this.checkSync();
-@@ -219,37 +394,76 @@ export function Async(FS) {
+@@ -227,37 +391,76 @@ export function Async(FS) {
          /** @internal @protected */
          _crossCopySemaphore;
          /** @internal */
@@ -367,24 +313,24 @@ index 26aaf3a..3d85fc1 100644
 -            if (path !== '/') {
 -                this._sync.mkdirSync(path, stats);
 -                this._sync.touchSync(path, stats);
+-            }
+-            const promises = [];
+-            for (const file of await this.readdir(path)) {
+-                promises.push(this.crossCopy(join(path, file)));
 +            catch (error) {
 +                preload.failure ??= { error };
 +                throw preload.failure.error;
              }
--            const promises = [];
--            for (const file of await this.readdir(path)) {
--                promises.push(this.crossCopy(join(path, file)));
--            }
 -            await Promise.all(promises);
          }
          /**
           * @internal
-@@ -258,37 +472,65 @@ export function Async(FS) {
+@@ -266,32 +469,74 @@ export function Async(FS) {
          _patchAsync() {
              const noPatch = ['read', 'readdir', 'stat', 'exists'];
              const toPatch = _asyncFSKeys.filter(key => !noPatch.includes(key));
-+            // PATCH(slicc#3783, upstream zen-fs/core#325): upstream decided from stack traces
-+            // whether a call was nested in another mirrored call ("in the loop"),
++            // PATCH(slicc#3783, upstream zen-fs/core#325): upstream decides from stack traces
++            // whether a call was nested in another mirrored call (`isInLoop`),
 +            // which depends on the engine's frame format and on async frames
 +            // being captured at all (JavaScriptCore names no arrow wrapper;
 +            // release Firefox records no async frames unless DevTools is
@@ -401,6 +347,10 @@ index 26aaf3a..3d85fc1 100644
 +            // mirrors what it can, such as the bytes a replayed rename copies to
 +            // a path the mirror keeps as metadata only. A top-level call's
 +            // update must succeed; a failure is thrown, out of sync.
++            //
++            // The sync-queue replay (renameSync etc. call `this._unpatched.X`)
++            // runs the same backend-against-unmirrored original, so a replayed
++            // rename's nested writes update the mirror best-effort too.
 +            const originals = {};
 +            const nested = {};
 +            const unmirrored = new Proxy(this, {
@@ -408,7 +358,6 @@ index 26aaf3a..3d85fc1 100644
 +                    ? nested[prop]
 +                    : Reflect.get(target, prop, target),
 +            });
-+            this._zenfsOriginals = originals;
 +            const updateMirror = (key, args) => {
 +                if (!this._isInitialized) {
 +                    this._skippedCacheUpdates++;
@@ -425,32 +374,21 @@ index 26aaf3a..3d85fc1 100644
              for (const key of toPatch) {
                  // TS does not narrow the union based on the key
 -                const originalMethod = this[key].bind(this);
--                function isInLoop(depth, error) {
--                    if (!error) {
--                        error = new Error();
--                        Error.captureStackTrace(error, isInLoop);
-+                const method = this[key];
-+                originals[key] = (...args) => method.apply(unmirrored, args);
-+                nested[key] = async (...args) => {
-+                    const result = await originals[key](...args);
-+                    try {
-+                        updateMirror(key, args);
-                     }
--                    if (!error.stack)
--                        return false;
--                    const stack = error.stack.split('\n').slice(depth).join('\n');
--                    // From the async queue
--                    return (stack.includes(`at <computed> [as ${key}]`)
--                        || stack.includes(`at async <computed> [as ${key}]`)
--                        || stack.includes(`${key}Sync `));
--                }
--                this[key] = async (...args) => {
+-                const fn = async function __patched__(...args) {
 -                    const result = await originalMethod(...args);
--                    if (isInLoop(2))
+-                    if (isInLoop(key))
 -                        return result;
 -                    if (!this._isInitialized) {
 -                        this._skippedCacheUpdates++;
 -                        return result;
++                const method = this[key];
++                originals[key] = (...args) => method.apply(unmirrored, args);
++                this._unpatched[key] = originals[key];
++                nested[key] = async (...args) => {
++                    const result = await originals[key](...args);
++                    try {
++                        updateMirror(key, args);
++                    }
 +                    catch {
 +                        // The outer call mirrors the whole change.
                      }
@@ -464,16 +402,24 @@ index 26aaf3a..3d85fc1 100644
 +                        updateMirror(key, args);
                      }
                      catch (e) {
--                        if (isInLoop(3, e))
+-                        if (isInLoop(key, e))
 -                            return result;
                          e.message += ' (Out of sync!)';
                          throw err(e);
                      }
+                     return result;
+                 };
+-                Object.defineProperty(fn, 'name', { get: () => key });
+-                this._unpatched[key] = originalMethod;
+-                this[key] = fn;
+             }
+             debug(`Async: patched ${toPatch.length} methods`);
+         }
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
-index 44f7ed2..faea5dc 100644
+index 45fa76a..9c05e10 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js
 +++ b/node_modules/@zenfs/core/dist/vfs/vcache.js
-@@ -79,6 +79,30 @@ export class VCache {
+@@ -82,6 +82,30 @@ export class VCache {
          let node = this.byIno.get(inode.ino);
          if (node && node.inode.nlink === node.paths.size && !node.paths.has(path))
              err(`vcache.ref: vnode for ${this.fs.label || this.fs.uuid}:${inode.ino} has an nlink of ${node.inode.nlink} but referenced by more paths [#314]`);
@@ -487,7 +433,7 @@ index 44f7ed2..faea5dc 100644
 +        // same bytes (#2034): the second open found the first file's vnode
 +        // and its cached regions, while sequential reads evicted the vnode
 +        // between calls and never collided.
-+        // 2.7.6 (zen-fs/core#314) only logs the nlink/path mismatch above;
++        // 2.7.7 (zen-fs/core#314) only logs the nlink/path mismatch above;
 +        // it still returns the shared vnode, so the refuse-to-coalesce
 +        // guard stays until upstream actually isolates non-hardlink paths.
 +        if (node && !node.paths.has(path)

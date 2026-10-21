@@ -162,7 +162,7 @@ export function linkNodeModules(repoRoot, tree) {
  * Read a `package-lock.json`'s `packages` map, or null when unreadable.
  *
  * @param {string} tree
- * @returns {Record<string, {version?: string, name?: string, dev?: boolean, os?: string[], cpu?: string[]}> | null}
+ * @returns {Record<string, {version?: string, name?: string, dev?: boolean, os?: string[], cpu?: string[], libc?: string[]}> | null}
  */
 function readLockPackages(tree) {
   try {
@@ -199,7 +199,8 @@ function isDefinitelyTypedPackage(installName) {
  * A lock entry constrained by `os` or `cpu` is a prebuilt native binary
  * (`@img/sharp-linux-x64`, `@esbuild/darwin-arm64`, ...). It cannot appear in
  * `dist/ui`, so when the change REMOVES one there is nothing to restore.
- * Bumps are still realigned: the binary must match its JS parent's version.
+ * Bumps are still realigned when this host installs the binary (it must match
+ * its JS parent's version); see skippedOnHost for the rest.
  * Specimen: wrangler 4.148 -> 4.150 (Renovate PR #4006) dropped miniflare's
  * sharp and its 26 platform packages, pushing the drift past the limit.
  *
@@ -207,6 +208,49 @@ function isDefinitelyTypedPackage(installName) {
  */
 function isPlatformBinary(entry) {
   return Array.isArray(entry.os) || Array.isArray(entry.cpu);
+}
+
+/**
+ * The host as npm's `os`/`cpu`/`libc` install checks see it. `libc` is only
+ * known on Linux; elsewhere a `libc`-constrained package never installs.
+ *
+ * @returns {{os: string, cpu: string, libc: string | null}}
+ */
+export function hostPlatform() {
+  let libc = null;
+  if (process.platform === 'linux') {
+    const header = /** @type {{glibcVersionRuntime?: string}} */ (
+      process.report?.getReport()?.header ?? {}
+    );
+    libc = header.glibcVersionRuntime ? 'glibc' : 'musl';
+  }
+  return { os: process.platform, cpu: process.arch, libc };
+}
+
+/** npm's `checkList`: no negated value matches, and a positive one does if any exist. */
+function platformListAllows(value, list) {
+  const values = typeof list === 'string' ? [list] : list;
+  if (values.length === 1 && values[0] === 'any') return true;
+  const positives = values.filter((v) => !v.startsWith('!'));
+  if (values.some((v) => v.startsWith('!') && v.slice(1) === value)) return false;
+  return positives.length === 0 || positives.includes(value);
+}
+
+/**
+ * True when npm would skip this platform binary on `host`. Neither the HEAD
+ * install nor the mirrored baseline worktree contains it, so a bump has
+ * nothing to realign. Specimen: knip 6.39 -> 6.41 (Renovate PR #4070) bumped
+ * oxc-parser and its 19 `@oxc-parser/binding-*` packages, 18 of which no
+ * single host installs, pushing the drift past the limit.
+ *
+ * @param {{os?: string[], cpu?: string[], libc?: string[]}} entry base lock entry
+ * @param {{os: string, cpu: string, libc: string | null}} host
+ */
+function skippedOnHost(entry, host) {
+  if (entry.os && !platformListAllows(host.os, entry.os)) return true;
+  if (entry.cpu && !platformListAllows(host.cpu, entry.cpu)) return true;
+  if (!entry.libc) return false;
+  return host.libc === null || !platformListAllows(host.libc, entry.libc);
 }
 
 /**
@@ -255,13 +299,14 @@ function registryName(path, entry) {
  * baseline may keep HEAD's copy (or none) without hiding a regression.
  *
  * @param {string} path lock `packages` key under `node_modules/`
- * @param {{os?: string[], cpu?: string[], dev?: boolean}} entry base lock entry
+ * @param {{os?: string[], cpu?: string[], libc?: string[], dev?: boolean}} entry base lock entry
  * @param {string | null} to HEAD version, null when removed
- * @param {{ base: object, head: object, workspaces: Set<string> }} ctx
+ * @param {{ base: object, head: object, workspaces: Set<string>, host: ReturnType<typeof hostPlatform> }} ctx
  */
-function driftNeedsNoRealignment(path, entry, to, { base, head, workspaces }) {
+function driftNeedsNoRealignment(path, entry, to, { base, head, workspaces, host }) {
   // A removed native binary cannot be imported by dist/ui — see isPlatformBinary.
   if (to === null && isPlatformBinary(entry)) return true;
+  if (isPlatformBinary(entry) && skippedOnHost(entry, host)) return true;
   const installName = path.slice('node_modules/'.length);
   if (installName.includes('/node_modules/')) return nestedCopyIsCovered(path, entry, base, head);
   // A workspace package linked into node_modules carries the root version;
@@ -322,10 +367,11 @@ function driftNeedsNoRealignment(path, entry, to, { base, head, workspaces }) {
  *
  * @param {string} repoRoot
  * @param {string} tree base checkout
+ * @param {ReturnType<typeof hostPlatform>} [host] platform npm installed for
  * @returns {{ changed: Drift[], missing: Drift[], unrealignable: string[] } | null}
  *   null when either lockfile is unreadable
  */
-export function dependencyDrift(repoRoot, tree) {
+export function dependencyDrift(repoRoot, tree, host = hostPlatform()) {
   const head = readLockPackages(repoRoot);
   const base = readLockPackages(tree);
   if (!head || !base) return null;
@@ -342,7 +388,7 @@ export function dependencyDrift(repoRoot, tree) {
     if (!from) continue;
     const to = head[path]?.version ?? null;
     if (to === from) continue;
-    if (driftNeedsNoRealignment(path, entry, to, { base, head, workspaces })) continue;
+    if (driftNeedsNoRealignment(path, entry, to, { base, head, workspaces, host })) continue;
     // An aliased install directory is not the registry name: npm records
     // `node_modules/undici8` with `name: "undici"`. Fetching `undici8` would
     // request a DIFFERENT package that may well exist on the registry, so
