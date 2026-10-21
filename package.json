@@ -118,7 +118,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "@playwright/test": "1.64.0",
+    "@playwright/test": "1.64.1",
     "@semantic-release/exec": "7.1.0",
     "@semantic-release/git": "11.0.1",
     "@size-limit/file": "13.0.3",
@@ -134,7 +134,7 @@
     "knip": "6.41.0",
     "lint-staged": "17.6.0",
     "patch-package": "8.0.1",
-    "playwright": "1.64.0",
+    "playwright": "1.64.1",
     "prettier": "3.9.10",
     "semantic-release": "25.0.9",
     "sharp": "0.35.5",
