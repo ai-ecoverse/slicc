@@ -105,6 +105,23 @@ describe('ipk mamba install reads back what it wrote', () => {
     expect((await mamba('list')).stdout).toContain('(empty)');
   });
 
+  it('re-extracts a planned file that a write left as a symlink', async () => {
+    const write = fs.writeFile.bind(fs);
+    let writes = 0;
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (target, content, options) => {
+      if (target !== LIBZ || ++writes > 1) return write(target, content, options);
+      // Same bytes, but through a link: a read-back that follows it matches.
+      await write('/workspace/elsewhere.a', content, options);
+      await fs.symlink('/workspace/elsewhere.a', LIBZ);
+    });
+
+    const result = await mamba('install', 'zlib');
+
+    expect(result.exitCode).toBe(0);
+    expect(writes).toBe(2);
+    expect((await fs.lstat(LIBZ)).type).toBe('file');
+  });
+
   it('rewrites a conda-meta record that read back corrupt once', async () => {
     const writes = nulWrites(META, 1);
 
@@ -176,5 +193,22 @@ describe('ipk mamba with an unparseable conda-meta record', () => {
 
     expect((await mamba('uninstall', 'zlib')).exitCode).toBe(0);
     expect(await fs.exists(LIBZ)).toBe(false);
+  });
+
+  it('a reinstall over a broken record replaces a leftover link with the planned file', async () => {
+    expect((await mamba('install', 'zlib')).exitCode).toBe(0);
+    await fs.writeFile(META, new Uint8Array(32));
+    // An older tree had a link where this build ships a regular file.
+    await fs.writeFile('/workspace/outside.a', 'not zlib');
+    await fs.rm(LIBZ);
+    await fs.symlink('/workspace/outside.a', LIBZ);
+
+    const reinstall = await mamba('install', 'zlib');
+
+    expect(reinstall.exitCode).toBe(0);
+    expect((await fs.lstat(LIBZ)).type).toBe('file');
+    const libz = (await fs.readFile(LIBZ, { encoding: 'binary' })) as Uint8Array;
+    expect(new Uint8Array(libz)).toEqual(LIBZ_BYTES);
+    expect(await fs.readFile('/workspace/outside.a')).toBe('not zlib');
   });
 });

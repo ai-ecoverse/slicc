@@ -7,7 +7,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
-import { FsError, type MetadataUpdate, type VirtualFS } from '../../fs/index.js';
+import { type EntryType, FsError, type MetadataUpdate, type VirtualFS } from '../../fs/index.js';
 import { joinPath } from '../../fs/path-utils.js';
 import { normalizeFileMode } from './file-modes.js';
 import { type ExtractedCondaEntry, extractCondaArchive } from './mamba-extract.js';
@@ -231,6 +231,15 @@ function plannedPaths(plan: WritePlan): string[] {
   return [...plan.files.map((f) => f.rel), ...plan.links.map((l) => l.rel)];
 }
 
+/** What `path` itself is, without following a final symlink; null when absent. */
+async function entryKind(fs: VirtualFS, path: string): Promise<EntryType | null> {
+  try {
+    return (await fs.lstat(path)).type;
+  } catch {
+    return null;
+  }
+}
+
 async function writePlan(fs: VirtualFS, plan: WritePlan): Promise<void> {
   // Files first so symlink targets exist when possible.
   for (const file of plan.files) {
@@ -238,6 +247,9 @@ async function writePlan(fs: VirtualFS, plan: WritePlan): Promise<void> {
     if (lastSlash > 0) {
       await ensureDir(fs, file.target.slice(0, lastSlash));
     }
+    // A link or directory left by an older tree would redirect the write.
+    const kind = await entryKind(fs, file.target);
+    if (kind !== null && kind !== 'file') await removeIfExists(fs, file.target);
     await fs.writeFile(file.target, file.bytes);
   }
   // One metadata batch per package, as for symlinks below: keep executables
@@ -264,6 +276,12 @@ async function removePlan(fs: VirtualFS, plan: WritePlan): Promise<void> {
 async function findWriteFaults(fs: VirtualFS, plan: WritePlan): Promise<string[]> {
   const faults: string[] = [];
   for (const file of plan.files) {
+    // readFile follows links, so a link here would read back its target's bytes.
+    const kind = await entryKind(fs, file.target);
+    if (kind !== 'file' && kind !== null) {
+      faults.push(`${file.target}: a ${kind}, not a regular file`);
+      continue;
+    }
     const fault = await readBackFault(fs, file.target, file.bytes);
     if (fault !== null) faults.push(`${file.target}: ${fault}`);
   }
