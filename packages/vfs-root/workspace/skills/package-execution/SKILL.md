@@ -58,7 +58,7 @@ Keep using `ipk install` / `ipk add -g` for the **npm** packages that power thes
 ```bash
 ipk mamba install zlib          # newest indexed build → /shared/lib/conda
 ipk mamba install zlib=1.3.1    # exact version
-ipk mamba list                  # conda-meta inventory
+ipk mamba list                  # conda-meta inventory (warns about unreadable records)
 ipk mamba uninstall zlib
 ipk mamba --help                # channels, prefix, and thin-installer limits
 ```

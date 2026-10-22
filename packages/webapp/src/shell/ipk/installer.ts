@@ -38,6 +38,7 @@ import {
   resolveDependencyTree,
 } from './install-plan.js';
 import { verifyTarballIntegrity } from './integrity.js';
+import { readBackFault } from './read-back.js';
 import { fetchPackument, fetchTarball, type Packument, resolveVersion } from './registry.js';
 import { gunzip, readTar, type TarEntry } from './tar.js';
 
@@ -550,36 +551,6 @@ async function materializePlan(
   if (ctx.reextractMatching) await fs.writeFile(markerPath, '');
 }
 
-function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.byteLength !== b.byteLength) return false;
-  for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
-/** Why the JSON file at `path` does not hold `expected`, or null when it does. */
-async function manifestFault(
-  fs: VirtualFS,
-  path: string,
-  expected: Uint8Array
-): Promise<string | null> {
-  let actual: Uint8Array;
-  try {
-    actual = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
-  } catch (err) {
-    return toError(err).message;
-  }
-  if (sameBytes(actual, expected)) return null;
-  if (actual.byteLength > 0 && actual.every((b) => b === 0)) {
-    return `${actual.byteLength} NUL bytes`;
-  }
-  try {
-    JSON.parse(new TextDecoder().decode(actual));
-  } catch (err) {
-    return toError(err).message;
-  }
-  return `${actual.byteLength} bytes that differ from the tarball's ${expected.byteLength}`;
-}
-
 async function findManifestFaults(
   ctx: MaterializeContext,
   installDirs: Iterable<string>
@@ -588,7 +559,7 @@ async function findManifestFaults(
     ctx.limit(async () => {
       const expected = ctx.written.get(installDir)?.manifest;
       const path = joinPath(installDir, 'package.json');
-      const fault = expected ? await manifestFault(ctx.fs, path, expected) : null;
+      const fault = expected ? await readBackFault(ctx.fs, path, expected) : null;
       return fault === null ? null : { installDir, fault };
     })
   );
@@ -1105,7 +1076,7 @@ async function writeManifest(
   const expected = new TextEncoder().encode(text);
   for (let attempt = 1; ; attempt++) {
     await fs.writeFile(manifestPath, text);
-    const fault = await manifestFault(fs, manifestPath, expected);
+    const fault = await readBackFault(fs, manifestPath, expected);
     if (fault === null) return;
     if (attempt === 2) {
       throw new Error(

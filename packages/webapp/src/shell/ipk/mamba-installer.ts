@@ -7,7 +7,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
-import { FsError, type MetadataUpdate, type VirtualFS } from '../../fs/index.js';
+import { type EntryType, FsError, type MetadataUpdate, type VirtualFS } from '../../fs/index.js';
 import { joinPath } from '../../fs/path-utils.js';
 import { normalizeFileMode } from './file-modes.js';
 import { type ExtractedCondaEntry, extractCondaArchive } from './mamba-extract.js';
@@ -19,6 +19,7 @@ import {
   type ResolveCondaPackageOptions,
   resolveCondaPackage,
 } from './mamba-repodata.js';
+import { readBackFault } from './read-back.js';
 
 export { CONDA_META_DIR, CONDA_PREFIX, DEFAULT_CONDA_CHANNELS };
 
@@ -68,9 +69,12 @@ async function ensureDir(fs: VirtualFS, path: string): Promise<void> {
 }
 
 async function removeIfExists(fs: VirtualFS, path: string): Promise<void> {
-  if (await fs.exists(path)) {
-    await fs.rm(path, { recursive: true });
+  try {
+    await fs.lstat(path);
+  } catch {
+    return;
   }
+  await fs.rm(path, { recursive: true });
 }
 
 function metaFilename(rec: Pick<CondaPackageRecord, 'name' | 'version' | 'build'>): string {
@@ -162,11 +166,26 @@ export function relocatePrefixBytes(
   return out;
 }
 
-async function writeEntries(
-  fs: VirtualFS,
-  prefix: string,
-  entries: ExtractedCondaEntry[]
-): Promise<string[]> {
+interface PlannedFile {
+  rel: string;
+  target: string;
+  bytes: Uint8Array;
+  mode: number;
+}
+
+interface PlannedLink {
+  rel: string;
+  path: string;
+  target: string;
+}
+
+/** What one package writes: relocated file bytes and symlinks, `info/` excluded. */
+interface WritePlan {
+  files: PlannedFile[];
+  links: PlannedLink[];
+}
+
+function planEntries(prefix: string, entries: ExtractedCondaEntry[]): WritePlan {
   const placeholders = prefixPlaceholdersFromEntries(entries);
   const pathsMeta = new Map<string, PathsJsonPath>();
   const info = entries.find((e) => e.path === 'info/paths.json' && !e.symlink);
@@ -183,56 +202,103 @@ async function writeEntries(
     }
   }
 
-  const written: string[] = [];
-  const modes: MetadataUpdate[] = [];
-  // Files first so symlink targets exist when possible.
-  const files = entries.filter((e) => !e.symlink && !e.directory);
-  const links = entries.filter((e) => e.symlink);
-
-  for (const entry of files) {
-    // Skip info/ metadata from the archive root; conda-meta JSON is enough.
-    if (entry.path === 'info' || entry.path.startsWith('info/')) continue;
-    const target = joinPath(prefix, entry.path);
-    const lastSlash = target.lastIndexOf('/');
-    if (lastSlash > 0) {
-      await ensureDir(fs, target.slice(0, lastSlash));
+  // Skip info/ metadata from the archive root; conda-meta JSON is enough.
+  const isInfo = (e: ExtractedCondaEntry) => e.path === 'info' || e.path.startsWith('info/');
+  const files: PlannedFile[] = [];
+  const links: PlannedLink[] = [];
+  for (const entry of entries) {
+    if (entry.directory || isInfo(entry)) continue;
+    if (entry.symlink) {
+      links.push({ rel: entry.path, path: joinPath(prefix, entry.path), target: entry.symlink });
+      continue;
     }
-    let bytes = entry.bytes;
     const placeholder = placeholders.get(entry.path);
-    if (placeholder) {
-      bytes = relocatePrefixBytes(bytes, placeholder, prefix, pathsMeta.get(entry.path)?.file_mode);
+    const bytes = placeholder
+      ? relocatePrefixBytes(entry.bytes, placeholder, prefix, pathsMeta.get(entry.path)?.file_mode)
+      : entry.bytes;
+    files.push({
+      rel: entry.path,
+      target: joinPath(prefix, entry.path),
+      bytes,
+      mode: normalizeFileMode(entry.mode),
+    });
+  }
+  return { files, links };
+}
+
+/** Package-relative paths in conda-meta order: files, then symlinks. */
+function plannedPaths(plan: WritePlan): string[] {
+  return [...plan.files.map((f) => f.rel), ...plan.links.map((l) => l.rel)];
+}
+
+/** What `path` itself is, without following a final symlink; null when absent. */
+async function entryKind(fs: VirtualFS, path: string): Promise<EntryType | null> {
+  try {
+    return (await fs.lstat(path)).type;
+  } catch {
+    return null;
+  }
+}
+
+async function writePlan(fs: VirtualFS, plan: WritePlan): Promise<void> {
+  // Files first so symlink targets exist when possible.
+  for (const file of plan.files) {
+    const lastSlash = file.target.lastIndexOf('/');
+    if (lastSlash > 0) {
+      await ensureDir(fs, file.target.slice(0, lastSlash));
     }
-    await fs.writeFile(target, bytes);
-    modes.push({ path: target, mode: normalizeFileMode(entry.mode) });
-    written.push(entry.path);
+    // A link or directory left by an older tree would redirect the write.
+    const kind = await entryKind(fs, file.target);
+    if (kind !== null && kind !== 'file') await removeIfExists(fs, file.target);
+    await fs.writeFile(file.target, file.bytes);
   }
   // One metadata batch per package, as for symlinks below: keep executables
   // (shared objects, scripts) executable, normalized as npm does.
+  const modes: MetadataUpdate[] = plan.files.map((f) => ({ path: f.target, mode: f.mode }));
   await fs.updateMetadataBatch(modes);
 
   // Batch symlink creation so OPFS rewrites /.metadata.json once per package
   // (not once per link) — same quadratic shape #3507 fixed for tar chmod/utimes.
-  const symlinkBatch: Array<{ target: string; path: string }> = [];
-  for (const entry of links) {
-    if (entry.path === 'info' || entry.path.startsWith('info/')) continue;
-    const linkPath = joinPath(prefix, entry.path);
-    symlinkBatch.push({ target: entry.symlink!, path: linkPath });
-    written.push(entry.path);
+  if (plan.links.length > 0) {
+    // Links left by an install whose record no longer lists them would EEXIST.
+    for (const link of plan.links) await removeIfExists(fs, link.path);
+    await fs.symlinkBatch(plan.links.map((l) => ({ target: l.target, path: l.path })));
   }
-  if (symlinkBatch.length > 0) {
-    await fs.symlinkBatch(symlinkBatch);
-  }
-
-  return written;
 }
 
-async function writeCondaMeta(
-  fs: VirtualFS,
-  prefix: string,
-  record: CondaPackageRecord,
-  files: string[]
-): Promise<void> {
-  await ensureDir(fs, joinPath(prefix, 'conda-meta'));
+async function removePlan(fs: VirtualFS, plan: WritePlan): Promise<void> {
+  for (const path of [...plan.files.map((f) => f.target), ...plan.links.map((l) => l.path)]) {
+    await removeIfExists(fs, path);
+  }
+}
+
+/** Every planned path that does not read back as written, with why. */
+async function findWriteFaults(fs: VirtualFS, plan: WritePlan): Promise<string[]> {
+  const faults: string[] = [];
+  for (const file of plan.files) {
+    // readFile follows links, so a link here would read back its target's bytes.
+    const kind = await entryKind(fs, file.target);
+    if (kind !== 'file' && kind !== null) {
+      faults.push(`${file.target}: a ${kind}, not a regular file`);
+      continue;
+    }
+    const fault = await readBackFault(fs, file.target, file.bytes);
+    if (fault !== null) faults.push(`${file.target}: ${fault}`);
+  }
+  for (const link of plan.links) {
+    let actual: string;
+    try {
+      actual = await fs.readlink(link.path);
+    } catch (err) {
+      faults.push(`${link.path}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    if (actual !== link.target) faults.push(`${link.path}: links to ${actual}, not ${link.target}`);
+  }
+  return faults;
+}
+
+function condaMetaText(record: CondaPackageRecord, files: string[]): string {
   const body = {
     name: record.name,
     version: record.version,
@@ -246,7 +312,48 @@ async function writeCondaMeta(
     extracted_package_dir: '',
     requested_spec: `${record.name}=${record.version}=${record.build}`,
   };
-  await fs.writeFile(metaPath(prefix, record), `${JSON.stringify(body, null, 2)}\n`);
+  return `${JSON.stringify(body, null, 2)}\n`;
+}
+
+/**
+ * Extract a package and read back every file and symlink (#4101, the conda
+ * sibling of #4097): a broken write is extracted once more; still broken,
+ * the install throws. Returns the package-relative paths written.
+ */
+async function extractVerified(fs: VirtualFS, plan: WritePlan, label: string): Promise<string[]> {
+  await writePlan(fs, plan);
+  if ((await findWriteFaults(fs, plan)).length === 0) return plannedPaths(plan);
+  await removePlan(fs, plan);
+  await writePlan(fs, plan);
+  const faults = await findWriteFaults(fs, plan);
+  if (faults.length === 0) return plannedPaths(plan);
+  // No conda-meta record will name these files, so do not leave them behind.
+  await removePlan(fs, plan);
+  throw new Error(
+    `mamba: ${label} does not match its archive after re-extracting: ${faults.join('; ')}`
+  );
+}
+
+/** Write the conda-meta record and read it back: one rewrite on a mismatch, then fail. */
+async function writeCondaMeta(
+  fs: VirtualFS,
+  prefix: string,
+  record: CondaPackageRecord,
+  files: string[]
+): Promise<void> {
+  await ensureDir(fs, joinPath(prefix, 'conda-meta'));
+  const path = metaPath(prefix, record);
+  const text = condaMetaText(record, files);
+  const expected = new TextEncoder().encode(text);
+  for (let attempt = 1; ; attempt++) {
+    await fs.writeFile(path, text);
+    const fault = await readBackFault(fs, path, expected);
+    if (fault === null) return;
+    if (attempt === 2) {
+      await removeIfExists(fs, path);
+      throw new Error(`mamba: ${path} does not read back after writing it twice (${fault})`);
+    }
+  }
 }
 
 export async function installCondaPackage(
@@ -268,14 +375,23 @@ export async function installCondaPackage(
   const entries = extractCondaArchive(archive, record.filename);
 
   await ensureDir(options.fs, prefix);
-  // Replace prior install of the same name (any version/build).
-  const existing = await listInstalledCondaPackages(options.fs, prefix);
-  for (const prev of existing.filter((p) => p.name === record.name)) {
-    await uninstallCondaPackage(prev.name, { fs: options.fs, prefix });
+  // Replace prior install of the same name (any version/build), including a
+  // record that no longer parses.
+  const existing = await readCondaMeta(options.fs, prefix);
+  const prior = [...existing.packages, ...existing.broken].filter((p) => p.name === record.name);
+  for (let i = 0; i < prior.length; i++) {
+    await uninstallCondaPackage(record.name, { fs: options.fs, prefix });
   }
 
-  const files = await writeEntries(options.fs, prefix, entries);
-  await writeCondaMeta(options.fs, prefix, record, files);
+  const plan = planEntries(prefix, entries);
+  const label = `${record.name}-${record.version}-${record.build}`;
+  const files = await extractVerified(options.fs, plan, label);
+  try {
+    await writeCondaMeta(options.fs, prefix, record, files);
+  } catch (err) {
+    await removePlan(options.fs, plan);
+    throw err;
+  }
 
   return {
     ok: true,
@@ -312,43 +428,75 @@ export async function installCondaPackages(
   return { results, errors };
 }
 
-async function readJsonOrNull<T>(fs: VirtualFS, path: string): Promise<T | null> {
-  try {
-    const raw = await fs.readFile(path, { encoding: 'utf-8' });
-    return JSON.parse(raw as string) as T;
-  } catch (err) {
-    if (err instanceof FsError && err.code === 'ENOENT') return null;
-    if (err instanceof Error && /ENOENT/.test(err.message)) return null;
-    throw err;
-  }
+/** A conda-meta record that is unreadable or lacks name/version/build. */
+export interface BrokenCondaRecord {
+  /** Package name from the record's filename (`<name>-<version>-<build>.json`). */
+  name: string;
+  path: string;
+  error: string;
 }
 
-export async function listInstalledCondaPackages(
+export interface CondaMetaListing {
+  packages: InstalledCondaPackage[];
+  broken: BrokenCondaRecord[];
+}
+
+/** conda versions and build strings hold no `-`, so the name is what precedes them. */
+function nameFromMetaFilename(filename: string): string {
+  return (
+    filename
+      .replace(/\.json$/, '')
+      .split('-')
+      .slice(0, -2)
+      .join('-') || filename
+  );
+}
+
+function isMissing(err: unknown): boolean {
+  if (err instanceof FsError && err.code === 'ENOENT') return true;
+  return err instanceof Error && /ENOENT/.test(err.message);
+}
+
+/** Every conda-meta record, the ones that do not parse reported rather than dropped. */
+export async function readCondaMeta(
   fs: VirtualFS,
   prefix: string = CONDA_PREFIX
-): Promise<InstalledCondaPackage[]> {
+): Promise<CondaMetaListing> {
   const metaDir = joinPath(prefix, 'conda-meta');
-  if (!(await fs.exists(metaDir))) return [];
+  const listing: CondaMetaListing = { packages: [], broken: [] };
+  if (!(await fs.exists(metaDir))) return listing;
   let names: string[];
   try {
     const entries = await fs.readDir(metaDir);
     names = entries.map((e) => e.name).filter((n) => n.endsWith('.json'));
   } catch {
-    return [];
+    return listing;
   }
 
-  const packages: InstalledCondaPackage[] = [];
   for (const name of names.sort()) {
-    const meta = await readJsonOrNull<{
+    const path = joinPath(metaDir, name);
+    let meta: {
       name?: string;
       version?: string;
       build?: string;
       channel?: string;
       filename?: string;
       files?: string[];
-    }>(fs, joinPath(metaDir, name));
-    if (!meta?.name || !meta.version || !meta.build) continue;
-    packages.push({
+    } | null;
+    try {
+      meta = JSON.parse((await fs.readFile(path, { encoding: 'utf-8' })) as string);
+    } catch (err) {
+      if (isMissing(err)) continue;
+      const error = err instanceof Error ? err.message : String(err);
+      listing.broken.push({ name: nameFromMetaFilename(name), path, error });
+      continue;
+    }
+    if (!meta?.name || !meta.version || !meta.build) {
+      const error = 'missing name, version or build';
+      listing.broken.push({ name: nameFromMetaFilename(name), path, error });
+      continue;
+    }
+    listing.packages.push({
       name: meta.name,
       version: meta.version,
       build: meta.build,
@@ -357,7 +505,14 @@ export async function listInstalledCondaPackages(
       files: Array.isArray(meta.files) ? meta.files : [],
     });
   }
-  return packages;
+  return listing;
+}
+
+export async function listInstalledCondaPackages(
+  fs: VirtualFS,
+  prefix: string = CONDA_PREFIX
+): Promise<InstalledCondaPackage[]> {
+  return (await readCondaMeta(fs, prefix)).packages;
 }
 
 export interface MambaUninstallOptions {
@@ -370,6 +525,8 @@ export interface MambaUninstallResult {
   removed: boolean;
   version?: string;
   build?: string;
+  /** Set when only an unreadable conda-meta record was removed; its files were not. */
+  brokenRecord?: string;
 }
 
 export async function uninstallCondaPackage(
@@ -377,9 +534,16 @@ export async function uninstallCondaPackage(
   options: MambaUninstallOptions
 ): Promise<MambaUninstallResult> {
   const prefix = options.prefix ?? CONDA_PREFIX;
-  const installed = await listInstalledCondaPackages(options.fs, prefix);
-  const match = installed.find((p) => p.name === name);
-  if (!match) return { name, removed: false };
+  const { packages, broken } = await readCondaMeta(options.fs, prefix);
+  const match = packages.find((p) => p.name === name);
+  if (!match) {
+    // The record no longer lists its files; removing it lets a reinstall
+    // write a fresh record that does.
+    const record = broken.find((b) => b.name === name);
+    if (!record) return { name, removed: false };
+    await removeIfExists(options.fs, record.path);
+    return { name, removed: true, brokenRecord: record.path };
+  }
 
   for (const rel of match.files) {
     await removeIfExists(options.fs, joinPath(prefix, rel));
