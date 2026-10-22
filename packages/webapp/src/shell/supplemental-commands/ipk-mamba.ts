@@ -13,7 +13,7 @@ import {
   CONDA_PREFIX,
   DEFAULT_CONDA_CHANNELS,
   installCondaPackages,
-  listInstalledCondaPackages,
+  readCondaMeta,
   uninstallCondaPackages,
 } from '../ipk/mamba-installer.js';
 import { isHelpRequest, subcommandHelpText } from './subcommand-help.js';
@@ -137,10 +137,15 @@ async function runMambaInstall(
 
 async function runMambaList(parent: string, deps: IpkMambaDeps): Promise<ExecResult> {
   try {
-    const packages = await listInstalledCondaPackages(deps.fs);
+    const { packages, broken } = await readCondaMeta(deps.fs);
+    const warnings = broken.map(
+      (b) =>
+        `${parent} mamba: warning: unreadable conda-meta record ${b.path} (${b.error}); ` +
+        `reinstall ${b.name} to track its files again, or uninstall ${b.name} to drop the record\n`
+    );
     return {
       stdout: formatCondaList(CONDA_PREFIX, packages),
-      stderr: '',
+      stderr: warnings.join(''),
       exitCode: 0,
     };
   } catch (err) {
@@ -188,6 +193,14 @@ async function runMambaUninstall(
   const stderrParts = outcome.errors.map(
     (e) => `${parent} mamba: failed to uninstall ${e.spec}: ${describeError(e.error)}`
   );
+  for (const r of outcome.results) {
+    if (r.brokenRecord) {
+      stderrParts.push(
+        `${parent} mamba: warning: ${r.brokenRecord} was unreadable, so only the record was ` +
+          `removed; reinstall then uninstall ${r.name} to reclaim its files`
+      );
+    }
+  }
   if (skipped.length > 0) {
     stderrParts.push(`${parent} mamba: ${skipped.join(', ')} not installed`);
   }

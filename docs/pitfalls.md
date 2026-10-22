@@ -721,7 +721,8 @@ trigger there: the harness re-sends a command whose connection dropped, so two
 `ipk add` runs overlapped, and one re-extracted a package while the other's
 bin walk had its manifest open.
 The patch drops a vnode's pending changes once no path names it, and
-`ipk install` now reads back what it wrote (`docs/shell-reference.md`).
+`ipk install` and `ipk mamba install` (#4101) now read back what they wrote
+(`docs/shell-reference.md`).
 
 ## OPFS Sync Mirror: Never Read Stack Traces
 

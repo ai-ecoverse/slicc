@@ -949,6 +949,15 @@ conda channels into the shared prefix `/shared/lib/conda` (alongside npm's
 read and remove them. Symlink members in a package are created through
 `VirtualFS.symlinkBatch` (one OPFS sidecar persist per package).
 
+After extracting, `ipk mamba install` reads back every file and symlink it wrote
+and compares them with the archive (#4101). A mismatch is extracted once more; if
+it still mismatches, the install removes the package's files, writes no
+conda-meta record, and exits 1. The conda-meta record is read back too: one
+rewrite, then the install fails. `ipk mamba list` warns about a conda-meta record
+it cannot parse instead of failing; `ipk mamba uninstall <pkg>` removes such a
+record (its files are untracked, so reinstall then uninstall to reclaim them),
+and `ipk mamba install <pkg>` replaces it.
+
 This is a **thin** installer (repodata lookup → download `.tar.bz2` → extract), not
 a full mamba/rattler SAT solve: virtual packages such as `emscripten-abi` are
 skipped, and hard depends are not auto-installed. See `ipk mamba --help` for the
