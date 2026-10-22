@@ -375,3 +375,106 @@ export function createCountingDirectoryHandle(
 
   return { handle: wrapDir(handle), counts };
 }
+
+export type GatedFileOp = 'getFile' | 'createWritable' | 'close';
+
+export interface HeldFileOp {
+  reached: Promise<void>;
+  release(): void;
+}
+
+export function createGatedDirectoryHandle(handle: FileSystemDirectoryHandle): {
+  handle: FileSystemDirectoryHandle;
+  hold(op: GatedFileOp, path: string): HeldFileOp;
+} {
+  const pending = new Map<string, { reach: () => void; held: Promise<void> }>();
+  const gateFor = async (op: GatedFileOp, path: string): Promise<void> => {
+    const entry = pending.get(`${op}:${path}`);
+    if (!entry) return;
+    pending.delete(`${op}:${path}`);
+    entry.reach();
+    await entry.held;
+  };
+
+  const wrapWritable = (stream: FileSystemWritableFileStream, path: string) =>
+    new Proxy(stream, {
+      get(target, prop) {
+        if (prop === 'close') {
+          return async () => {
+            await gateFor('close', path);
+            return target.close();
+          };
+        }
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+  const wrapFile = (fh: FileSystemFileHandle, path: string): FileSystemFileHandle =>
+    new Proxy(fh, {
+      get(target, prop) {
+        if (prop === 'getFile') {
+          return async () => {
+            const file = await target.getFile();
+            await gateFor('getFile', path);
+            return file;
+          };
+        }
+        if (prop === 'createWritable') {
+          return async (options?: { keepExistingData?: boolean }) => {
+            await gateFor('createWritable', path);
+            return wrapWritable(await target.createWritable(options), path);
+          };
+        }
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+  const wrapDir = (dh: FileSystemDirectoryHandle, path: string): FileSystemDirectoryHandle => {
+    const child = (name: string) => (path ? `${path}/${name}` : name);
+    return new Proxy(dh, {
+      get(target, prop) {
+        if (prop === 'getDirectoryHandle') {
+          return async (name: string, options?: { create?: boolean }) =>
+            wrapDir(await target.getDirectoryHandle(name, options), child(name));
+        }
+        if (prop === 'getFileHandle') {
+          return async (name: string, options?: { create?: boolean }) =>
+            wrapFile(await target.getFileHandle(name, options), child(name));
+        }
+        if (prop === 'entries' || prop === Symbol.asyncIterator) {
+          return async function* () {
+            const iterable = target as unknown as AsyncIterable<[string, FileSystemHandle]>;
+            for await (const [name, entry] of iterable) {
+              yield [
+                name,
+                entry.kind === 'file'
+                  ? wrapFile(entry as FileSystemFileHandle, child(name))
+                  : wrapDir(entry as FileSystemDirectoryHandle, child(name)),
+              ] as [string, FileSystemHandle];
+            }
+          };
+        }
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  };
+
+  return {
+    handle: wrapDir(handle, ''),
+    hold(op, path) {
+      let reach!: () => void;
+      let release!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        reach = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      pending.set(`${op}:${path}`, { reach, held });
+      return { reached, release };
+    },
+  };
+}
