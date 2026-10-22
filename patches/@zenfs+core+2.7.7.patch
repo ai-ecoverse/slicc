@@ -416,7 +416,7 @@ index 50520e8..b073ce5 100644
              debug(`Async: patched ${toPatch.length} methods`);
          }
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
-index 45fa76a..9c05e10 100644
+index 45fa76a..321fb14 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js
 +++ b/node_modules/@zenfs/core/dist/vfs/vcache.js
 @@ -82,6 +82,30 @@ export class VCache {
@@ -450,3 +450,72 @@ index 45fa76a..9c05e10 100644
          if (!node) {
              node = new VNode(this.fs, path, inode);
              this.byIno.set(inode.ino, node);
+@@ -103,12 +127,25 @@ export class VCache {
+         this.evict(node);
+     }
+     evict(node) {
+-        this.byIno.delete(node.ino);
++        // PATCH(slicc#4097): an orphaned vnode can share its ino with the
++        // newer vnode that replaced it; evicting the old one must not unmap
++        // the new one.
++        if (this.byIno.get(node.ino) === node)
++            this.byIno.delete(node.ino);
+         for (const path of node.paths)
+-            this.byPath.delete(path);
++            if (this.byPath.get(path) === node)
++                this.byPath.delete(path);
+     }
+     /** Update cached paths for a rename. Handles directories, whose descendants' paths change too */
+     rename(oldPath, newPath) {
++        // PATCH(slicc#4097): the vnode the rename replaces no longer owns
++        // `newPath`. Left there, it would flush its stale inode onto the
++        // renamed file when its last handle closes.
++        const replaced = this.byPath.get(newPath);
++        if (replaced && !replaced.paths.has(oldPath)) {
++            replaced.paths.delete(newPath);
++            this.byPath.delete(newPath);
++        }
+         for (const [path, node] of this.byPath) {
+             if (path != oldPath && !path.startsWith(oldPath + '/'))
+                 continue;
+diff --git a/node_modules/@zenfs/core/dist/vfs/vnode.js b/node_modules/@zenfs/core/dist/vfs/vnode.js
+index beaa8d0..f2a5446 100644
+--- a/node_modules/@zenfs/core/dist/vfs/vnode.js
++++ b/node_modules/@zenfs/core/dist/vfs/vnode.js
+@@ -157,8 +157,27 @@ export class VNode extends RwLockable {
+     get needsPreTruncate() {
+         return !this.bypassCache && this.truncatedTo !== undefined && this.truncatedTo < this.inode.size && !this.fs.attributes.has('no_write');
+     }
++    /**
++     * PATCH(slicc#4097): no path names this vnode any more (unlinked, or a
++     * rename replaced it). `path` still answers its last path, which may name
++     * a NEW file now, so a flush would stamp this inode's size onto it: an
++     * atime-dirty read open across `rm` + rewrite left the new file truncated,
++     * NUL-padded, or all NUL bytes. An unlinked file's pending changes have
++     * nowhere to go, so drop them.
++     * @returns whether the vnode was orphaned (and is now clean)
++     */
++    _dropIfOrphaned() {
++        if (this.paths.size > 0)
++            return false;
++        this.truncatedTo = undefined;
++        this.dirtyRanges = [];
++        this.metadataDirty = false;
++        return true;
++    }
+     /** Write all unsynced data to the backend, then metadata */
+     async sync() {
++        if (this._dropIfOrphaned())
++            return;
+         if (this.needsPreTruncate)
+             await this.fs.touch(this.path, { size: this.truncatedTo });
+         this.truncatedTo = undefined;
+@@ -180,6 +199,8 @@ export class VNode extends RwLockable {
+         this.metadataDirty = false;
+     }
+     syncSync() {
++        if (this._dropIfOrphaned())
++            return;
+         if (this.needsPreTruncate)
+             this.fs.touchSync(this.path, { size: this.truncatedTo });
+         this.truncatedTo = undefined;
