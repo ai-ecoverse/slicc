@@ -204,6 +204,8 @@ describe('ipk add verifies every package.json it wrote', () => {
     const result = await ipk.execute(['add', '-g', 'balanced-match'], ctxOf());
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain(`${GLOBAL_PACKAGE_JSON} unreadable after writing it twice`);
+    expect(result.stderr).toContain(
+      `${GLOBAL_PACKAGE_JSON} does not read back after writing it twice`
+    );
   });
 });

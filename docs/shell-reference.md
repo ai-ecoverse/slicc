@@ -756,8 +756,8 @@ After extracting, `ipk install` reads back the `package.json` of every package
 it extracted and compares it with the tarball's bytes (`verifyWrittenManifests`
 in `shell/ipk/installer.ts`). A package that doesn't match is extracted once
 more, with its nested dependencies. If it still doesn't match, the install fails
-with `installer: package.json still unreadable after re-extracting:
-<name>@<version> (<path>: <fault>)`, exits 1, and the project `package.json` is
+with `installer: package.json still does not match its tarball after
+re-extracting: <name>@<version> (<path>: <fault>)`, exits 1, and the project `package.json` is
 not updated. ipk reads back the project `package.json` it records the same
 way, and fails after a second bad write. This is how #4097 surfaced: `ipk add -g`
 exited 0 with a dependency's manifest left as NUL bytes (cause: the ZenFS

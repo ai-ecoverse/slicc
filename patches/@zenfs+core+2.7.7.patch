@@ -479,10 +479,10 @@ index 45fa76a..321fb14 100644
              if (path != oldPath && !path.startsWith(oldPath + '/'))
                  continue;
 diff --git a/node_modules/@zenfs/core/dist/vfs/vnode.js b/node_modules/@zenfs/core/dist/vfs/vnode.js
-index beaa8d0..f2a5446 100644
+index beaa8d0..70657b0 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vnode.js
 +++ b/node_modules/@zenfs/core/dist/vfs/vnode.js
-@@ -157,8 +157,27 @@ export class VNode extends RwLockable {
+@@ -157,8 +157,29 @@ export class VNode extends RwLockable {
      get needsPreTruncate() {
          return !this.bypassCache && this.truncatedTo !== undefined && this.truncatedTo < this.inode.size && !this.fs.attributes.has('no_write');
      }
@@ -505,12 +505,30 @@ index beaa8d0..f2a5446 100644
 +    }
      /** Write all unsynced data to the backend, then metadata */
      async sync() {
++        // Checked again before every backend call: an unlink or rename can
++        // orphan the vnode while an earlier write is awaited.
 +        if (this._dropIfOrphaned())
 +            return;
          if (this.needsPreTruncate)
              await this.fs.touch(this.path, { size: this.truncatedTo });
          this.truncatedTo = undefined;
-@@ -180,6 +199,8 @@ export class VNode extends RwLockable {
+@@ -168,6 +189,8 @@ export class VNode extends RwLockable {
+                 if (!region)
+                     break; // should not happen since dirty ranges are always cached
+                 const end = Math.min(range.end, region.offset + region.data.byteLength);
++                if (this._dropIfOrphaned())
++                    return;
+                 await this.fs.write(this.path, region.data.subarray(pos - region.offset, end - region.offset), pos);
+                 pos = end;
+             }
+@@ -175,11 +198,15 @@ export class VNode extends RwLockable {
+         this.dirtyRanges = [];
+         if (!this.metadataDirty)
+             return;
++        if (this._dropIfOrphaned())
++            return;
+         if (!this.fs.attributes.has('no_write'))
+             await this.fs.touch(this.path, this.inode);
          this.metadataDirty = false;
      }
      syncSync() {

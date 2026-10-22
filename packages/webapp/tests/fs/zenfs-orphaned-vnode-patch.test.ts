@@ -13,6 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { VNode } from '@zenfs/core/vfs/vnode.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
@@ -32,6 +33,39 @@ describe('@zenfs/core orphaned-vnode patch (#4097)', () => {
       readFileSync(resolve(repoRoot, `node_modules/@zenfs/core/dist/vfs/${file}`), 'utf8');
     expect(dist('vnode.js')).toContain('_dropIfOrphaned()');
     expect(dist('vcache.js')).toContain('replaced.paths.delete(newPath)');
+  });
+});
+
+describe('VNode.sync on a vnode orphaned mid-flush', () => {
+  it('stops before its next backend call', async () => {
+    let releaseWrite!: () => void;
+    const writeHeld = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const calls: string[] = [];
+    const backend = {
+      attributes: new Map(),
+      write: async (path: string) => {
+        calls.push(`write ${path}`);
+        await writeHeld;
+      },
+      touch: async (path: string) => {
+        calls.push(`touch ${path}`);
+      },
+    };
+    const inode = { ino: 7, size: 0, mode: 0o100644, flags: 0, mtimeMs: 0, ctimeMs: 0 };
+    const node = new VNode(backend as never, '/f', inode as never);
+    await node.write(new Uint8Array([1, 2, 3]), 0);
+
+    const syncing = node.sync();
+    await Promise.resolve();
+    node.paths.delete('/f'); // what VCache.remove does on unlink
+    releaseWrite();
+    await syncing;
+
+    // Unpatched mid-flush: the trailing touch stamped size 3 onto '/f'.
+    expect(calls).toEqual(['write /f']);
+    expect(node.dirty).toBe(false);
   });
 });
 

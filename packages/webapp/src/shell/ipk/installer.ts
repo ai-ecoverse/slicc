@@ -449,7 +449,8 @@ const MODES_MARKER = '.ipk-modes-v1';
 
 /**
  * Fetch, verify and extract `node` into `installDir` unless that version is
- * already there (`force` extracts it anyway).
+ * already there (`force` extracts it anyway, e.g. over a copy a parent's
+ * tarball bundled).
  */
 async function installNodeFiles(
   ctx: MaterializeContext,
@@ -516,7 +517,7 @@ async function materializeNode(
   await ensureDir(ctx.fs, childModulesDir);
   await allSettledOrThrow(
     nestedNames.map((childName) =>
-      materializeNode(ctx, childModulesDir, node.dependencies[childName])
+      materializeNode(ctx, childModulesDir, node.dependencies[childName], force)
     )
   );
 }
@@ -622,7 +623,7 @@ async function verifyWrittenManifests(ctx: MaterializeContext): Promise<void> {
     return `${node.name}@${node.version} (${joinPath(installDir, 'package.json')}: ${fault})`;
   });
   throw new Error(
-    `installer: package.json still unreadable after re-extracting: ${detail.join('; ')}`
+    `installer: package.json still does not match its tarball after re-extracting: ${detail.join('; ')}`
   );
 }
 
@@ -1107,7 +1108,9 @@ async function writeManifest(
     const fault = await manifestFault(fs, manifestPath, expected);
     if (fault === null) return;
     if (attempt === 2) {
-      throw new Error(`installer: ${manifestPath} unreadable after writing it twice (${fault})`);
+      throw new Error(
+        `installer: ${manifestPath} does not read back after writing it twice (${fault})`
+      );
     }
   }
 }
