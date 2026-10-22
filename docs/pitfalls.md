@@ -703,6 +703,26 @@ interrupted download fetches the file again instead of skipping it. Tests: `test
 `tests/fs/zenfs-opfs-read-retry.test.ts`, and
 `tests/shell/supplemental-commands/hf-download.test.ts`.
 
+## OPFS Reads Flush Metadata: an Unlinked Vnode Must Not
+
+**Files**: `patches/@zenfs+core+*.patch` (`VNode._dropIfOrphaned`,
+`VCache.rename`/`evict`), `packages/webapp/tests/fs/zenfs-orphaned-vnode-patch.test.ts`.
+
+A ZenFS read is not read-only. It marks the vnode's metadata dirty (atime), and
+closing the handle flushes the vnode's inode through `touch`. On WebAccess,
+`touch` sets the OPFS file's length to the inode's size. Once no path names a
+vnode, `VNode.path` still answers its last path. So a read that was open while
+its path was removed and written again (or renamed over) flushed the old inode
+onto the new file. A shorter old file truncated the new one. A longer one padded
+it with NUL bytes. A flush that checked the size while the new file was still
+empty and committed after its data left only NUL bytes, which is what
+`ipk add -g` left in `brace-expansion/package.json` in CI (#4097). The likely
+trigger there: the harness re-sends a command whose connection dropped, so two
+`ipk add` runs overlapped, and one re-extracted a package while the other's
+bin walk had its manifest open.
+The patch drops a vnode's pending changes once no path names it, and
+`ipk install` now reads back what it wrote (`docs/shell-reference.md`).
+
 ## OPFS Sync Mirror: Never Read Stack Traces
 
 **Files**: `patches/@zenfs+core+*.patch` (`Async._patchAsync`),

@@ -428,6 +428,15 @@ interface MaterializeContext {
    * executable bits are repaired.
    */
   reextractMatching: boolean;
+  /** Every package extracted by this run, keyed by its install directory. */
+  written: Map<string, WrittenPackage>;
+}
+
+interface WrittenPackage {
+  node: InstallNode;
+  parentModulesDir: string;
+  /** The tarball's `package.json` bytes, the reference the read-back must match. */
+  manifest: Uint8Array | undefined;
 }
 
 /**
@@ -438,15 +447,21 @@ interface MaterializeContext {
  */
 const MODES_MARKER = '.ipk-modes-v1';
 
-/** Fetch, verify and extract `node` into `installDir` unless that version is already there. */
+/**
+ * Fetch, verify and extract `node` into `installDir` unless that version is
+ * already there (`force` extracts it anyway, e.g. over a copy a parent's
+ * tarball bundled).
+ */
 async function installNodeFiles(
   ctx: MaterializeContext,
+  parentModulesDir: string,
   installDir: string,
-  node: InstallNode
+  node: InstallNode,
+  force: boolean
 ): Promise<void> {
   const { fs } = ctx;
   const installedManifestPath = joinPath(installDir, 'package.json');
-  if (await fs.exists(installedManifestPath)) {
+  if (!force && (await fs.exists(installedManifestPath))) {
     const installed = await readInstalledJsonOr<InstalledPackageManifest | null>(
       fs,
       installedManifestPath,
@@ -467,6 +482,11 @@ async function installNodeFiles(
     await removeIfExists(fs, installDir);
     throw err;
   }
+  ctx.written.set(installDir, {
+    node,
+    parentModulesDir,
+    manifest: entries.find((e) => e.path === 'package.json')?.bytes,
+  });
 }
 
 /**
@@ -477,13 +497,14 @@ async function installNodeFiles(
 async function materializeNode(
   ctx: MaterializeContext,
   parentModulesDir: string,
-  node: InstallNode
+  node: InstallNode,
+  force = false
 ): Promise<void> {
   const installDir = packageDirIn(parentModulesDir, node.name);
   await ctx.limit(async () => {
     if (ctx.failed) return;
     try {
-      await installNodeFiles(ctx, installDir, node);
+      await installNodeFiles(ctx, parentModulesDir, installDir, node, force);
     } catch (err) {
       ctx.failed = true;
       throw err;
@@ -496,7 +517,7 @@ async function materializeNode(
   await ensureDir(ctx.fs, childModulesDir);
   await allSettledOrThrow(
     nestedNames.map((childName) =>
-      materializeNode(ctx, childModulesDir, node.dependencies[childName])
+      materializeNode(ctx, childModulesDir, node.dependencies[childName], force)
     )
   );
 }
@@ -520,11 +541,90 @@ async function materializePlan(
     limit: createLimiter(concurrency ?? DEFAULT_FETCH_CONCURRENCY),
     failed: false,
     reextractMatching: !(await fs.exists(markerPath)),
+    written: new Map(),
   };
   await allSettledOrThrow(
     topNames.map((name) => materializeNode(ctx, modulesDir, plan.root[name]))
   );
+  await verifyWrittenManifests(ctx);
   if (ctx.reextractMatching) await fs.writeFile(markerPath, '');
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** Why the JSON file at `path` does not hold `expected`, or null when it does. */
+async function manifestFault(
+  fs: VirtualFS,
+  path: string,
+  expected: Uint8Array
+): Promise<string | null> {
+  let actual: Uint8Array;
+  try {
+    actual = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+  } catch (err) {
+    return toError(err).message;
+  }
+  if (sameBytes(actual, expected)) return null;
+  if (actual.byteLength > 0 && actual.every((b) => b === 0)) {
+    return `${actual.byteLength} NUL bytes`;
+  }
+  try {
+    JSON.parse(new TextDecoder().decode(actual));
+  } catch (err) {
+    return toError(err).message;
+  }
+  return `${actual.byteLength} bytes that differ from the tarball's ${expected.byteLength}`;
+}
+
+async function findManifestFaults(
+  ctx: MaterializeContext,
+  installDirs: Iterable<string>
+): Promise<Array<{ installDir: string; fault: string }>> {
+  const checks = [...installDirs].map((installDir) =>
+    ctx.limit(async () => {
+      const expected = ctx.written.get(installDir)?.manifest;
+      const path = joinPath(installDir, 'package.json');
+      const fault = expected ? await manifestFault(ctx.fs, path, expected) : null;
+      return fault === null ? null : { installDir, fault };
+    })
+  );
+  return (await Promise.all(checks)).filter((f) => f !== null);
+}
+
+/**
+ * Read back every package this run extracted and compare its `package.json`
+ * with the tarball's (#4097: an install reported success over a manifest of
+ * NUL bytes). A broken package is extracted once more, nested dependencies
+ * included, since that replaces its directory; still broken, the install
+ * fails rather than report success.
+ */
+async function verifyWrittenManifests(ctx: MaterializeContext): Promise<void> {
+  const faults = await findManifestFaults(ctx, ctx.written.keys());
+  if (faults.length === 0) return;
+  const broken = faults.map((f) => f.installDir);
+  const retried = broken.filter(
+    (dir) => !broken.some((other) => other !== dir && dir.startsWith(`${other}/`))
+  );
+  for (const installDir of retried) {
+    const { node, parentModulesDir } = ctx.written.get(installDir)!;
+    await materializeNode(ctx, parentModulesDir, node, true);
+  }
+  const replaced = [...ctx.written.keys()].filter((dir) =>
+    retried.some((root) => dir === root || dir.startsWith(`${root}/`))
+  );
+  const remaining = await findManifestFaults(ctx, replaced);
+  if (remaining.length === 0) return;
+  const detail = remaining.map(({ installDir, fault }) => {
+    const { node } = ctx.written.get(installDir)!;
+    return `${node.name}@${node.version} (${joinPath(installDir, 'package.json')}: ${fault})`;
+  });
+  throw new Error(
+    `installer: package.json still does not match its tarball after re-extracting: ${detail.join('; ')}`
+  );
 }
 
 function unscopedName(pkgName: string): string {
@@ -722,8 +822,7 @@ async function recordDirectDependencies(
 ): Promise<string> {
   const manifestPath = joinPath(cwd, 'package.json');
   const existing = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
-  const next = writeDirectDependencies(existing, entries);
-  await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`);
+  await writeManifest(fs, manifestPath, writeDirectDependencies(existing, entries));
   return manifestPath;
 }
 
@@ -996,12 +1095,24 @@ function manifestWithoutPackages(
   return next;
 }
 
+/** Write a project manifest and read it back: one rewrite on a mismatch, then fail. */
 async function writeManifest(
   fs: VirtualFS,
   manifestPath: string,
   manifest: ProjectManifest
 ): Promise<void> {
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const text = `${JSON.stringify(manifest, null, 2)}\n`;
+  const expected = new TextEncoder().encode(text);
+  for (let attempt = 1; ; attempt++) {
+    await fs.writeFile(manifestPath, text);
+    const fault = await manifestFault(fs, manifestPath, expected);
+    if (fault === null) return;
+    if (attempt === 2) {
+      throw new Error(
+        `installer: ${manifestPath} does not read back after writing it twice (${fault})`
+      );
+    }
+  }
 }
 
 async function pruneTopLevelPackages(
