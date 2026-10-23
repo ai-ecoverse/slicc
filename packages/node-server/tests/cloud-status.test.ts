@@ -10,9 +10,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Request as ExpressRequest, Response as ExpressResponse, NextFunction } from 'express';
 import express from 'express';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_JOIN_FILE_PATH,
+  joinErrorFilePath,
   registerCloudStatusEndpoint,
   requireLoopback,
   resolveJoinFilePath,
@@ -124,6 +125,73 @@ describe('POST /api/cloud-status', () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe('invalid cloud-status payload');
+  });
+
+  it('POST /error records a failed mint beside the join file and logs the cause', async () => {
+    const app = express();
+    registerCloudStatusEndpoint(app, { joinFilePath: tmpFile });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await makeRequest(app, 'POST', '/api/cloud-status/error', {
+        error: 'POST /tray failed after 11 attempts in 86s: HTTP 503',
+        sliccVersion: '6.256.1',
+      });
+      expect(res.status).toBe(200);
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[cloud-status] leader failed to mint a tray: POST /tray failed after 11 attempts in 86s: HTTP 503'
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+    const payload = JSON.parse(await fs.readFile(joinErrorFilePath(tmpFile), 'utf-8')) as Record<
+      string,
+      unknown
+    >;
+    expect(payload).toMatchObject({
+      error: 'POST /tray failed after 11 attempts in 86s: HTTP 503',
+      sliccVersion: '6.256.1',
+    });
+    expect(new Date(payload.updatedAt as string).toISOString()).toBe(payload.updatedAt);
+    // The join file itself is untouched: its consumers keep their joinUrl contract.
+    await expect(fs.readFile(tmpFile, 'utf-8')).rejects.toThrow();
+  });
+
+  it('POST /error without an error string returns 400', async () => {
+    const app = express();
+    registerCloudStatusEndpoint(app, { joinFilePath: tmpFile });
+    const res = await makeRequest(app, 'POST', '/api/cloud-status/error', { error: 42 });
+    expect(res.status).toBe(400);
+    await expect(fs.readFile(joinErrorFilePath(tmpFile), 'utf-8')).rejects.toThrow();
+  });
+
+  it('POST /error answers 500 when the file cannot be written, after logging the cause', async () => {
+    const app = express();
+    // The parent directory does not exist, so the write fails.
+    registerCloudStatusEndpoint(app, { joinFilePath: join(tmpDir, 'missing', 'join.json') });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await makeRequest(app, 'POST', '/api/cloud-status/error', {
+        error: 'HTTP 503\nsecond line',
+      });
+      expect(res.status).toBe(500);
+      // One line, so start-leader's log fallback reads the whole cause.
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[cloud-status] leader failed to mint a tray: HTTP 503 second line'
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('a later successful POST clears a recorded failure', async () => {
+    const app = express();
+    registerCloudStatusEndpoint(app, { joinFilePath: tmpFile });
+    await fs.writeFile(joinErrorFilePath(tmpFile), '{"error":"old"}');
+    const res = await makeRequest(app, 'POST', '/api/cloud-status', {
+      joinUrl: 'https://example.com/join/abc',
+    });
+    expect(res.status).toBe(200);
+    await expect(fs.readFile(joinErrorFilePath(tmpFile), 'utf-8')).rejects.toThrow();
   });
 
   it('requireLoopback rejects non-loopback remoteAddress with 403', () => {

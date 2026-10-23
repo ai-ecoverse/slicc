@@ -47,6 +47,7 @@ import {
 } from '../scoops/tray-leader.js';
 import type { LeaderSyncManagerOptions } from '../scoops/tray-leader-sync.js';
 import { deriveFloatType, type FloatType, LeaderSyncManager } from '../scoops/tray-leader-sync.js';
+import type { TrayRequestRetryOptions } from '../scoops/tray-request-retry.js';
 import { buildTrayLaunchUrl } from '../scoops/tray-runtime-config.js';
 import type {
   RemoteTargetInfo,
@@ -107,6 +108,12 @@ export interface StartPageLeaderTrayOptions {
    * Used by hosted-leader mode to POST `/api/cloud-status`.
    */
   onLeaderReady?: (session: LeaderTraySession) => void;
+  /**
+   * Invoked once when the initial `leader.start()` fails for good (its retry
+   * budget is spent). Hosted-leader mode reports it to node-server so a
+   * launcher waiting for the join URL fails fast with the cause (#4112).
+   */
+  onLeaderStartFailed?: (error: string) => void;
 
   // --- LeaderSyncManager dependencies (flat callbacks) ---
   getMessages: LeaderSyncManagerOptions['getMessages'];
@@ -187,6 +194,8 @@ export interface StartPageLeaderTrayOptions {
   _webSocketFactory?: (url: string) => LeaderTrayWebSocket;
   /** @internal Override fetch (defaults to plain `fetch`). */
   _fetchImpl?: typeof fetch;
+  /** @internal Override the tray-creation retry budget (defaults to the manager's). */
+  _requestRetry?: TrayRequestRetryOptions | false;
   /** @internal Override `window` for URL bar updates (defaults to global `window`, no-op when absent). */
   _historyOverride?: {
     href: string;
@@ -402,6 +411,7 @@ function buildLeaderManager(
     fetchImpl,
     ...(options._storeOverride ? { store: options._storeOverride } : {}),
     ...(options._webSocketFactory ? { webSocketFactory: options._webSocketFactory } : {}),
+    ...(options._requestRetry !== undefined ? { requestRetry: options._requestRetry } : {}),
     onControlMessage: (message) => {
       if (dispatchMcpServeControl(message)) return;
       if (message.type === 'webhook.event') {
@@ -659,9 +669,13 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     // multi-browser sync never came up at all. Prod log gate is ERROR,
     // so a `warn` here would leave operators with no signal that the
     // user's tray-leader configuration silently failed to activate.
-    log.error('Leader tray start failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    const error = err instanceof Error ? err.message : String(err);
+    log.error('Leader tray start failed', { error });
+    try {
+      options.onLeaderStartFailed?.(error);
+    } catch (callbackError) {
+      log.warn('onLeaderStartFailed callback threw', { error: String(callbackError) });
+    }
   });
 
   let stopped = false;

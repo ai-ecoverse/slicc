@@ -22,7 +22,7 @@
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,9 +49,12 @@ import {
   buildConeConfigFiles,
   buildLeaderArgs,
   buildLeaderEnv,
+  findMintFailureInLog,
+  joinErrorFilePath,
   PRODUCTION_TRAY_ORIGIN,
   parseBoolean,
   parseDuration,
+  parseJoinErrorFile,
   parseJoinFile,
   parseMountLines,
   parsePort,
@@ -147,7 +150,10 @@ export function resolveNodeServer(home, exec = execFileSync) {
 export function removeCredentialFiles(secretsFile, joinFile = joinFilePath()) {
   rmSync(coneConfigPath(), { force: true });
   if (secretsFile) rmSync(secretsFile, { force: true });
-  if (joinFile) rmSync(joinFile, { force: true });
+  if (joinFile) {
+    rmSync(joinFile, { force: true });
+    rmSync(joinErrorFilePath(joinFile), { force: true });
+  }
 }
 
 export function writeCredentialFiles(home) {
@@ -185,8 +191,23 @@ export function writeCredentialFiles(home) {
   return { secretsFile, coneConfigWritten: Boolean(coneConfigJson), summary };
 }
 
+/** This boot's part of the append-only leader log. */
+function readLogFrom(path, offset) {
+  const text = readOptional(path);
+  return text === null ? null : Buffer.from(text).subarray(offset).toString('utf8');
+}
+
+function readOptional(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Poll the join file until node-server has minted a tray. Fails fast if the
+ * Poll the join file until node-server has minted a tray. Also fails fast when
+ * node-server records that the leader gave up minting one (#4112). Fails fast if the
  * child exits first; kills it if the boot timeout elapses.
  */
 export async function pollJoinFile({
@@ -196,6 +217,7 @@ export async function pollJoinFile({
   timeoutMs,
   pollMs = 1000,
   file = joinFilePath(),
+  logOffset = null,
 }) {
   const deadline = Date.now() + timeoutMs;
   let exited = null;
@@ -217,6 +239,15 @@ export async function pollJoinFile({
     }
     const parsed = parseJoinFile(text, startedAt);
     if (parsed) return parsed;
+    // The file is the record; the log line covers a node-server whose write failed.
+    const failure =
+      parseJoinErrorFile(readOptional(joinErrorFilePath(file)), startedAt)?.error ??
+      (logOffset === null ? null : findMintFailureInLog(readLogFrom(logPath, logOffset)));
+    if (failure) {
+      group('leader log (tail)', logTail(logPath, 80));
+      await terminate(child.pid, 5_000);
+      throw new Error(`leader failed to mint a join URL: ${failure}`);
+    }
     await sleep(pollMs);
   }
   group('leader log (tail)', logTail(logPath, 80));
@@ -350,6 +381,7 @@ export async function bootLeader(opts) {
   const args = [entry, ...buildLeaderArgs({ mounts })];
   for (const m of mounts) console.log(`[start-leader] mount ${m.hostPath} → ${m.path}`);
 
+  const logOffset = existsSync(logPath) ? statSync(logPath).size : 0;
   const logFd = openSync(logPath, 'a');
   const startedAt = Date.now();
   const child = spawn(process.execPath, args, {
@@ -369,6 +401,7 @@ export async function bootLeader(opts) {
     timeoutMs: bootTimeoutMs,
     pollMs: opts.pollMs,
     file,
+    logOffset,
   });
   if (maskJoinUrl) addMask(joinInfo.joinUrl);
 

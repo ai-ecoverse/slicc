@@ -61,6 +61,8 @@ function fixture() {
       identityStore,
       store,
       fetchImpl,
+      // Model one attempt per call; the replay across calls is what is under test.
+      requestRetry: false,
     }) as unknown as {
       createTraySession(): Promise<LeaderTraySession>;
       finishPendingCreate(session: LeaderTraySession | null): Promise<void>;

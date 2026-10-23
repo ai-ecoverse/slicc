@@ -1412,6 +1412,7 @@ describe('LeaderTrayManager — onLeaderReady callback', () => {
       webSocketFactory: () => socket,
       pingIntervalMs: 60_000,
       reconnect: false,
+      requestRetry: false,
       onLeaderReady,
     });
 

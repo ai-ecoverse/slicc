@@ -13,7 +13,7 @@ SLICC runs in multiple runtime environments ("floats"):
   - `runtime=hosted-leader` URL query → `slicc-hosted-leader` tray attach runtime
   - `kind: 'hosted'` in `POST /tray` body (worker reclaim TTL → 30 days)
   - Unconditional leader auto-start in `main.ts` (does not depend on stored localStorage)
-  - `onLeaderReady` callback POSTs join info to localhost `/api/cloud-status`
+  - `onLeaderReady` callback POSTs join info to localhost `/api/cloud-status`; `onLeaderStartFailed` POSTs the cause to `/api/cloud-status/error` once tray creation's retry budget is spent
   - `/api/leader-restart` recovers a stuck leader via CDP `Page.reload()`
   - `SLICC_TRAY_WORKER_BASE_URL` env drives `/api/runtime-config`
   - Substrate abstraction: `SandboxSubstrate` interface lives in `@slicc/cloud-core` (`packages/cloud-core/src/substrate.ts`); MVP impl at `packages/cloud-core/src/substrates/e2b.ts`. Node-server and the worker both consume cloud-core; `packages/node-server/src/cloud/` is thin adapter glue.
