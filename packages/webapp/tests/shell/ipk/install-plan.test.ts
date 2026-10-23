@@ -743,3 +743,142 @@ describe('resolveDependencyTree: optional dependencies on the wasm host', () => 
     expect(Object.keys(asRequired.root)).toEqual(['nat']);
   });
 });
+
+describe('resolveDependencyTree: required peer dependencies', () => {
+  it('hoists a missing peer of a nested dependent to the top level', async () => {
+    const supplier = makeSupplier([
+      { name: 'a', versions: ['1.0.0'], deps: { '1.0.0': { lib: '^1.0.0' } } },
+      { name: 'b', versions: ['1.0.0'], deps: { '1.0.0': { lib: '^2.0.0' } } },
+      {
+        name: 'lib',
+        versions: ['1.0.0', '2.0.0'],
+        extra: { '2.0.0': { peerDependencies: { peer: '*' } } },
+      },
+      { name: 'peer', versions: ['3.0.0'] },
+    ]);
+    const plan = await resolveDependencyTree({
+      rootDependencies: { a: '1.0.0', b: '1.0.0' },
+      fetchPackument: supplier,
+    });
+    expect(plan.root.lib?.version).toBe('1.0.0');
+    expect(plan.root.b?.dependencies.lib?.version).toBe('2.0.0');
+    expect(plan.root.peer?.version).toBe('3.0.0');
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('warns about a peer that conflicts with a copy in the dependent scope', async () => {
+    const supplier = makeSupplier([
+      {
+        name: 'x',
+        versions: ['1.0.0'],
+        deps: { '1.0.0': { lib: '^1.0.0', plug: '1.0.0' } },
+      },
+      { name: 'lib', versions: ['1.0.0', '2.0.0'] },
+      {
+        name: 'plug',
+        versions: ['1.0.0'],
+        extra: { '1.0.0': { peerDependencies: { lib: '^2.0.0' } } },
+      },
+    ]);
+    const plan = await resolveDependencyTree({
+      rootDependencies: { x: '1.0.0', lib: '1.0.0' },
+      fetchPackument: supplier,
+    });
+    expect(plan.root.lib?.version).toBe('1.0.0');
+    expect(plan.warnings).toHaveLength(1);
+    expect(plan.warnings[0]).toContain('peer lib@"^2.0.0" from plug@1.0.0');
+    expect(plan.warnings[0]).toContain('Conflicting peer dependency: lib@2.0.0');
+  });
+
+  it('resolves past a conflicting installed peer that is about to be pruned', async () => {
+    const supplier = makeSupplier([
+      { name: 'lib', versions: ['1.0.0', '2.0.0'] },
+      {
+        name: 'plug',
+        versions: ['1.0.0'],
+        extra: { '1.0.0': { peerDependencies: { lib: '^2.0.0' } } },
+      },
+    ]);
+    const plan = await resolveDependencyTree({
+      rootDependencies: { plug: '1.0.0' },
+      fetchPackument: supplier,
+      installedVersion: (name) => (name === 'lib' ? '1.0.0' : undefined),
+    });
+    expect(plan.root.lib?.version).toBe('2.0.0');
+    expect(plan.warnings).toHaveLength(1);
+    expect(plan.warnings[0]).toContain('warn ERESOLVE replacing peer dependency');
+    expect(plan.warnings[0]).toContain('Found: lib@1.0.0');
+    expect(plan.warnings[0]).toContain('replacing it with lib@2.0.0');
+  });
+
+  it('leaves an installed peer the registry no longer lists when it stays on disk', async () => {
+    const supplier = makeSupplier([
+      { name: 'lib', versions: ['2.0.0'] },
+      {
+        name: 'plug',
+        versions: ['1.0.0'],
+        extra: { '1.0.0': { peerDependencies: { lib: '*' } } },
+      },
+    ]);
+    const kept = await resolveDependencyTree({
+      rootDependencies: { plug: '1.0.0' },
+      fetchPackument: supplier,
+      installedVersion: () => '1.5.0',
+      installedStays: true,
+    });
+    expect(kept.root.lib).toBeUndefined();
+    const pruned = await resolveDependencyTree({
+      rootDependencies: { plug: '1.0.0' },
+      fetchPackument: supplier,
+      installedVersion: (name) => (name === 'lib' ? '1.5.0' : undefined),
+    });
+    expect(pruned.root.lib?.version).toBe('2.0.0');
+  });
+
+  it('follows a name listed as both a dependency and a peer as a dependency', async () => {
+    const supplier = makeSupplier([
+      { name: 'lib', versions: ['1.0.0', '2.0.0'] },
+      {
+        name: 'plug',
+        versions: ['1.0.0'],
+        deps: { '1.0.0': { lib: '^1.0.0' } },
+        extra: { '1.0.0': { peerDependencies: { lib: '*' } } },
+      },
+    ]);
+    const plan = await resolveDependencyTree({
+      rootDependencies: { plug: '1.0.0' },
+      fetchPackument: supplier,
+    });
+    expect(plan.root.lib?.version).toBe('1.0.0');
+  });
+
+  it('fails like a dependency when a required peer cannot be resolved', async () => {
+    const supplier = makeSupplier([
+      {
+        name: 'plug',
+        versions: ['1.0.0'],
+        extra: { '1.0.0': { peerDependencies: { ghost: '*' } } },
+      },
+    ]);
+    await expect(
+      resolveDependencyTree({ rootDependencies: { plug: '1.0.0' }, fetchPackument: supplier })
+    ).rejects.toThrow(/failed to resolve ghost@\*/);
+  });
+
+  it('names the range alone when a conflicting peer has no matching version', async () => {
+    const supplier = makeSupplier([
+      { name: 'lib', versions: ['1.0.0'] },
+      {
+        name: 'plug',
+        versions: ['1.0.0'],
+        extra: { '1.0.0': { peerDependencies: { lib: '^9.0.0' } } },
+      },
+    ]);
+    const plan = await resolveDependencyTree({
+      rootDependencies: { plug: '1.0.0', lib: '1.0.0' },
+      fetchPackument: supplier,
+    });
+    expect(plan.warnings[0]).toContain('Could not resolve dependency: peer lib@"^9.0.0"');
+    expect(plan.warnings[0]).not.toContain('Conflicting peer dependency');
+  });
+});

@@ -56,6 +56,8 @@ export interface PackumentVersion {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+  /** Per-peer flags; `optional: true` peers are not installed. */
+  peerDependenciesMeta?: Record<string, { optional?: boolean } | undefined>;
   optionalDependencies?: Record<string, string>;
   bundleDependencies?: string[] | boolean;
   main?: string;
