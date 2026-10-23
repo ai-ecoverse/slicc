@@ -23,6 +23,9 @@ export function joinErrorFilePath(joinFilePath: string): string {
   return `${joinFilePath}.error.json`;
 }
 
+/** Leader-log prefix for a failed mint. Mirrored by start-leader's lib.mjs. */
+export const MINT_FAILURE_LOG_PREFIX = '[cloud-status] leader failed to mint a tray: ';
+
 /** Longest error string persisted; the webapp's messages are far shorter. */
 const MAX_ERROR_LENGTH = 2000;
 
@@ -109,14 +112,21 @@ export function registerCloudStatusEndpoint(
       return;
     }
     const error = body.error.slice(0, MAX_ERROR_LENGTH);
-    // stdout is the leader log; the line names the cause even without the file.
-    console.error(`[cloud-status] leader failed to mint a tray: ${error}`);
+    // The leader log line names the cause even when the file write fails;
+    // start-leader reads it as a fallback (`MINT_FAILURE_LOG_PREFIX`).
+    console.error(`${MINT_FAILURE_LOG_PREFIX}${error.replace(/\s+/g, ' ')}`);
     const payload = {
       error,
       sliccVersion: typeof body.sliccVersion === 'string' ? body.sliccVersion : null,
       updatedAt: new Date().toISOString(),
     };
-    await fs.writeFile(joinErrorFilePath(options.joinFilePath), JSON.stringify(payload, null, 2));
+    try {
+      await fs.writeFile(joinErrorFilePath(options.joinFilePath), JSON.stringify(payload, null, 2));
+    } catch (writeError) {
+      console.error('[cloud-status] could not write the join error file', String(writeError));
+      res.status(500).json({ error: 'could not record the leader failure' });
+      return;
+    }
     res.json({ ok: true });
   });
 }

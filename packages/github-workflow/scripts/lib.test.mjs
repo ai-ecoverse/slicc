@@ -10,6 +10,7 @@ import {
   buildWriteCommand,
   checkWatchedProcesses,
   cliAssetName,
+  findMintFailureInLog,
   formatGithubOutput,
   MAX_DURATION_MS,
   parseBoolean,
@@ -34,6 +35,19 @@ import {
   truncateForOutput,
   validateSecretEntry,
 } from './lib.mjs';
+
+describe('findMintFailureInLog', () => {
+  it('returns the last finished mint-failure line', () => {
+    const line = (cause) => `[cloud-status] leader failed to mint a tray: ${cause}\n`;
+    expect(findMintFailureInLog(`noise\n${line('first')}more\n${line('HTTP 503')}`)).toBe(
+      'HTTP 503'
+    );
+    expect(findMintFailureInLog('[cloud-status] leader failed to mint a tray: partial')).toBeNull();
+    expect(findMintFailureInLog(line(' '))).toBeNull();
+    expect(findMintFailureInLog('nothing here\n')).toBeNull();
+    expect(findMintFailureInLog(null)).toBeNull();
+  });
+});
 
 describe('parseJoinErrorFile', () => {
   it('returns a fresh error and rejects stale, malformed or empty ones', () => {

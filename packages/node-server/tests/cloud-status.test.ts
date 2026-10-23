@@ -164,6 +164,25 @@ describe('POST /api/cloud-status', () => {
     await expect(fs.readFile(joinErrorFilePath(tmpFile), 'utf-8')).rejects.toThrow();
   });
 
+  it('POST /error answers 500 when the file cannot be written, after logging the cause', async () => {
+    const app = express();
+    // The parent directory does not exist, so the write fails.
+    registerCloudStatusEndpoint(app, { joinFilePath: join(tmpDir, 'missing', 'join.json') });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await makeRequest(app, 'POST', '/api/cloud-status/error', {
+        error: 'HTTP 503\nsecond line',
+      });
+      expect(res.status).toBe(500);
+      // One line, so start-leader's log fallback reads the whole cause.
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[cloud-status] leader failed to mint a tray: HTTP 503 second line'
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('a later successful POST clears a recorded failure', async () => {
     const app = express();
     registerCloudStatusEndpoint(app, { joinFilePath: tmpFile });

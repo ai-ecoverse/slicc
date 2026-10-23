@@ -1268,19 +1268,47 @@ function hostedLeaderExtras(deps: WcTrayDeps): Partial<StartPageLeaderTrayOption
         deps.log.error('failed to POST /api/cloud-status', { error: String(err) });
       });
     },
-    // A launcher polling for the join file reads this and fails fast with the
-    // cause instead of its generic boot timeout (#4112). Older node-servers 404.
     onLeaderStartFailed: (error) => {
-      void fetch(resolveApiUrl('/api/cloud-status/error'), {
+      void reportHostedLeaderStartFailure(deps, error);
+    },
+  };
+}
+
+const START_FAILURE_REPORT_DELAYS_MS = [500, 2000];
+
+/**
+ * Tell node-server the leader gave up minting a tray, so a launcher polling
+ * for the join file fails fast with the cause instead of its boot timeout
+ * (#4112). Retries 5xx and network errors; node-server also logs the cause
+ * before writing its file, which start-leader reads if the write fails.
+ */
+async function reportHostedLeaderStartFailure(deps: WcTrayDeps, error: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    let failure: string;
+    let retryable: boolean;
+    try {
+      const response = await fetch(resolveApiUrl('/api/cloud-status/error'), {
         method: 'POST',
         headers: apiHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({ error, sliccVersion: __SLICC_VERSION__ }),
         signal: AbortSignal.timeout(10000),
-      }).catch((err) => {
-        deps.log.error('failed to POST /api/cloud-status/error', { error: String(err) });
       });
-    },
-  };
+      if (response.ok) return;
+      // An older node-server answers 404: it has no endpoint to record the cause.
+      const body = (await response.text().catch(() => '')).slice(0, 200);
+      failure = `HTTP ${response.status}${body ? `: ${body}` : ''}`;
+      retryable = response.status >= 500;
+    } catch (err) {
+      failure = String(err);
+      retryable = true;
+    }
+    const delay = START_FAILURE_REPORT_DELAYS_MS[attempt];
+    if (!retryable || delay === undefined) {
+      deps.log.error('failed to POST /api/cloud-status/error', { error: failure });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 }
 
 /** Boot-time role selection — mirrors the legacy tray-init order. */

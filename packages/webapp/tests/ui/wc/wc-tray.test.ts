@@ -201,15 +201,60 @@ describe('wireWcTray hosted leader start failure (#4112)', () => {
       expect(JSON.parse(String(init.body))).toMatchObject({
         error: 'POST /tray failed after 11 attempts in 86s: HTTP 503',
       });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 
-      // A node-server that predates the endpoint (or is gone) only logs.
-      fetchSpy.mockRejectedValueOnce(new Error('connection refused'));
-      onLeaderStartFailed('again');
+  async function startFailureHook(fetchSpy: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal('fetch', fetchSpy);
+    const { deps } = makeDeps();
+    await wireWcTray(deps as never);
+    return { deps, report: trayMocks.options?.onLeaderStartFailed as (e: string) => void };
+  }
+
+  it('retries a 5xx or network failure of the report, then gives up with the status', async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('disk full', { status: 500 }))
+      .mockRejectedValueOnce(new Error('connection refused'))
+      .mockResolvedValueOnce(new Response('{"ok":true}'));
+    try {
+      const { deps, report } = await startFailureHook(fetchSpy);
+      report('HTTP 503');
+      await vi.runAllTimersAsync();
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      expect(deps.log.error).not.toHaveBeenCalledWith(
+        'failed to POST /api/cloud-status/error',
+        expect.anything()
+      );
+
+      fetchSpy.mockImplementation(async () => new Response('still broken', { status: 503 }));
+      fetchSpy.mockClear();
+      report('HTTP 503');
+      await vi.runAllTimersAsync();
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      expect(deps.log.error).toHaveBeenCalledWith('failed to POST /api/cloud-status/error', {
+        error: 'HTTP 503: still broken',
+      });
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('logs a 404 from an older node-server once, without retrying', async () => {
+    const fetchSpy = vi.fn(async () => new Response('Not Found', { status: 404 }));
+    try {
+      const { deps, report } = await startFailureHook(fetchSpy);
+      report('HTTP 503');
       await vi.waitFor(() =>
         expect(deps.log.error).toHaveBeenCalledWith('failed to POST /api/cloud-status/error', {
-          error: 'Error: connection refused',
+          error: 'HTTP 404: Not Found',
         })
       );
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
     }

@@ -674,6 +674,26 @@ export function parseJoinErrorFile(text, minUpdatedAtMs = 0) {
   return { error: parsed.error, updatedAt };
 }
 
+/** Mirrors `MINT_FAILURE_LOG_PREFIX` in `packages/node-server/src/cloud-status.ts`. */
+export const MINT_FAILURE_LOG_PREFIX = '[cloud-status] leader failed to mint a tray: ';
+
+/**
+ * The cause from the last mint-failure line node-server logged, or null.
+ * Fallback for when node-server could not write the join-error file.
+ * @param {string | null | undefined} text
+ * @returns {string | null}
+ */
+export function findMintFailureInLog(text) {
+  if (!text) return null;
+  const at = text.lastIndexOf(MINT_FAILURE_LOG_PREFIX);
+  if (at === -1) return null;
+  const rest = text.slice(at + MINT_FAILURE_LOG_PREFIX.length);
+  // Only a finished line: a partial write would truncate the cause.
+  const end = rest.indexOf('\n');
+  if (end === -1) return null;
+  return rest.slice(0, end).trim() || null;
+}
+
 const GO_OS = { darwin: 'darwin', linux: 'linux', win32: 'windows' };
 const GO_ARCH = { x64: 'amd64', arm64: 'arm64' };
 
