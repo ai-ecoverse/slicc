@@ -4,6 +4,18 @@ import { VirtualFS } from '../../../src/fs/index.js';
 import { AlmostBashShellHeadless } from '../../../src/shell/almost-bash-shell-headless.js';
 import { writeTar } from '../../../src/shell/ipk/tar.js';
 
+/** Rewrite the empty `writeTar` member at header `block` into a link entry (typeflag `1`/`2`). */
+function asLinkEntry(archive: Uint8Array, block: number, type: '1' | '2', target: string) {
+  const header = archive.subarray(block * 512, block * 512 + 512);
+  header[156] = type.charCodeAt(0);
+  header.fill(0, 157, 257);
+  header.set(new TextEncoder().encode(target), 157);
+  header.fill(0x20, 148, 156);
+  const sum = header.reduce((total, byte) => total + byte, 0);
+  header.set(new TextEncoder().encode(`${sum.toString(8).padStart(6, '0')}\0 `), 148);
+  return archive;
+}
+
 describe('tar command', () => {
   let fs: VirtualFS;
   let shell: AlmostBashShellHeadless;
@@ -279,6 +291,101 @@ describe('tar command', () => {
     const missingArchive = await shell.executeCommand('tar -c /workspace/source');
     expect(missingArchive.exitCode).toBe(1);
     expect(missingArchive.stderr).toContain('-f requires an archive path');
+  });
+
+  describe('symlinks at or above an extract destination', () => {
+    const encode = (text: string) => new TextEncoder().encode(text);
+
+    beforeEach(async () => {
+      await fs.mkdir('/tmp/link-out', { recursive: true });
+      await fs.mkdir('/tmp/outside', { recursive: true });
+      await fs.writeFile('/tmp/outside/victim', 'original');
+    });
+
+    it('replaces a symlink at a file entry with a regular file, leaving the target alone', async () => {
+      await fs.writeFile('/tmp/link-out/keep.txt', 'kept');
+      await fs.symlink('/tmp/link-out/keep.txt', '/tmp/link-out/foo');
+      await fs.writeFile('/tmp/a.tar', writeTar([{ path: 'foo', bytes: encode('new') }]));
+      expect((await shell.executeCommand('tar -xf /tmp/a.tar -C /tmp/link-out')).exitCode).toBe(0);
+      expect((await fs.lstat('/tmp/link-out/foo')).type).toBe('file');
+      expect(await fs.readFile('/tmp/link-out/foo')).toBe('new');
+      expect(await fs.readFile('/tmp/link-out/keep.txt')).toBe('kept');
+    });
+
+    it('writes nothing outside the root through a symlink at the destination', async () => {
+      await fs.symlink('/tmp/outside/victim', '/tmp/link-out/foo');
+      await fs.symlink('/tmp/outside/fresh', '/tmp/link-out/dangling');
+      await fs.writeFile(
+        '/tmp/b.tar',
+        writeTar([
+          { path: 'foo', bytes: encode('pwned') },
+          { path: 'dangling', bytes: encode('pwned') },
+        ])
+      );
+      expect((await shell.executeCommand('tar -xf /tmp/b.tar -C /tmp/link-out')).exitCode).toBe(0);
+      expect(await fs.readFile('/tmp/outside/victim')).toBe('original');
+      expect(await fs.exists('/tmp/outside/fresh')).toBe(false);
+      expect(await fs.readFile('/tmp/link-out/dangling')).toBe('pwned');
+    });
+
+    it('replaces a symlinked directory entry instead of chmodding its target', async () => {
+      await fs.symlink('/tmp/outside', '/tmp/link-out/d');
+      const before = (await fs.stat('/tmp/outside')).mode;
+      await fs.writeFile(
+        '/tmp/d.tar',
+        writeTar([{ path: 'd/', bytes: new Uint8Array(0), directory: true, mode: 0o700 }])
+      );
+      expect((await shell.executeCommand('tar -xf /tmp/d.tar -C /tmp/link-out')).exitCode).toBe(0);
+      expect((await fs.lstat('/tmp/link-out/d')).type).toBe('directory');
+      expect((await fs.stat('/tmp/outside')).mode).toBe(before);
+    });
+
+    it('refuses an entry under a symlinked parent that leaves the root', async () => {
+      await fs.symlink('/tmp/outside', '/tmp/link-out/dir');
+      await fs.writeFile(
+        '/tmp/c.tar',
+        writeTar([
+          { path: 'dir/victim', bytes: encode('pwned') },
+          { path: 'dir/new', bytes: encode('pwned') },
+        ])
+      );
+      const result = await shell.executeCommand('tar -xf /tmp/c.tar -C /tmp/link-out');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('blocked path through symlink dir/victim');
+      expect(await fs.readFile('/tmp/outside/victim')).toBe('original');
+      expect(await fs.exists('/tmp/outside/new')).toBe(false);
+    });
+
+    it('still extracts under a symlinked parent that stays inside the root', async () => {
+      await fs.mkdir('/tmp/link-out/real', { recursive: true });
+      await fs.symlink('/tmp/link-out/real', '/tmp/link-out/alias');
+      await fs.writeFile('/tmp/e.tar', writeTar([{ path: 'alias/f', bytes: encode('ok') }]));
+      expect((await shell.executeCommand('tar -xf /tmp/e.tar -C /tmp/link-out')).exitCode).toBe(0);
+      expect(await fs.readFile('/tmp/link-out/real/f')).toBe('ok');
+    });
+
+    it('keeps an in-archive symlink or hardlink from redirecting a later entry', async () => {
+      const archive = writeTar([
+        { path: 'link', bytes: new Uint8Array(0) },
+        { path: 'hard', bytes: new Uint8Array(0) },
+        { path: 'link/victim', bytes: encode('pwned') },
+        { path: 'hard', bytes: encode('pwned') },
+      ]);
+      asLinkEntry(archive, 0, '2', '/tmp/outside');
+      asLinkEntry(archive, 1, '1', '/tmp/outside/victim');
+      await fs.writeFile('/tmp/f.tar', archive);
+      await shell.executeCommand('tar -xf /tmp/f.tar -C /tmp/link-out');
+      expect(await fs.readFile('/tmp/outside/victim')).toBe('original');
+      expect((await fs.lstat('/tmp/link-out/link')).type).not.toBe('symlink');
+      expect((await fs.lstat('/tmp/link-out/hard')).type).toBe('file');
+    });
+
+    it('replaces a directory where the archive has a file', async () => {
+      await fs.mkdir('/tmp/link-out/x/sub', { recursive: true });
+      await fs.writeFile('/tmp/g.tar', writeTar([{ path: 'x', bytes: encode('file') }]));
+      expect((await shell.executeCommand('tar -xf /tmp/g.tar -C /tmp/link-out')).exitCode).toBe(0);
+      expect(await fs.readFile('/tmp/link-out/x')).toBe('file');
+    });
   });
 
   it('is discoverable through which and commands', async () => {
