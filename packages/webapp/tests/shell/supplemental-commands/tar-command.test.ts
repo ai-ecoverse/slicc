@@ -356,6 +356,15 @@ describe('tar command', () => {
       expect(await fs.exists('/tmp/outside/new')).toBe(false);
     });
 
+    it('refuses an entry under a dangling symlinked parent', async () => {
+      await fs.symlink('/tmp/outside/missing', '/tmp/link-out/gone');
+      await fs.writeFile('/tmp/h.tar', writeTar([{ path: 'gone/f', bytes: encode('pwned') }]));
+      const result = await shell.executeCommand('tar -xf /tmp/h.tar -C /tmp/link-out');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('blocked path through symlink gone/f');
+      expect(await fs.exists('/tmp/outside/missing')).toBe(false);
+    });
+
     it('still extracts under a symlinked parent that stays inside the root', async () => {
       await fs.mkdir('/tmp/link-out/real', { recursive: true });
       await fs.symlink('/tmp/link-out/real', '/tmp/link-out/alias');
