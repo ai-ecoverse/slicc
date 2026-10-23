@@ -44,6 +44,8 @@ export interface PackumentVersion {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+
+  peerDependenciesMeta?: Record<string, { optional?: boolean } | undefined>;
   optionalDependencies?: Record<string, string>;
   bundleDependencies?: string[] | boolean;
   main?: string;

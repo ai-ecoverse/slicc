@@ -197,7 +197,21 @@ function optionalRootNames(
 }
 
 function skipNotes(plan: InstallPlan): string[] {
-  return plan.skippedOptional.map((s) => s.note);
+  return [...plan.skippedOptional.map((s) => s.note), ...plan.warnings];
+}
+
+function installedVersionIn(
+  fs: VirtualFS,
+  modulesDir: string
+): (name: string) => Promise<string | undefined> {
+  return async (name) => {
+    const installed = await readInstalledJsonOr<{ version?: unknown } | null>(
+      fs,
+      joinPath(packageDirIn(modulesDir, name), 'package.json'),
+      null
+    );
+    return typeof installed?.version === 'string' ? installed.version : undefined;
+  };
 }
 
 interface ProjectManifest {
@@ -763,6 +777,7 @@ export async function installPackages(
     rootDependencies[direct.parsed.name] = direct.parsed.range;
   }
 
+  const modulesDir = globalInstall ? GLOBAL_NODE_MODULES : joinPath(cwd, 'node_modules');
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
@@ -771,9 +786,10 @@ export async function installPackages(
       existingManifest,
       directs.map((d) => d.parsed.name)
     ),
-  });
+    installedVersion: installedVersionIn(fs, modulesDir),
 
-  const modulesDir = globalInstall ? GLOBAL_NODE_MODULES : joinPath(cwd, 'node_modules');
+    installedStays: !globalInstall,
+  });
   if (globalInstall) {
     await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));
     await preflightGlobalBinDelegators(fs, predictGlobalBinNames(plan, modulesDir));
@@ -927,14 +943,15 @@ export async function installFromManifest(
     rootDependencies[entry.name] = entry.range;
   }
 
+  const modulesDir = joinPath(cwd, 'node_modules');
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
     concurrency,
     optionalRoots,
+    installedVersion: installedVersionIn(fs, modulesDir),
+    installedStays: true,
   });
-
-  const modulesDir = joinPath(cwd, 'node_modules');
   await materializePlan(fs, modulesDir, plan, fetch, timeoutMs, concurrency);
   await reconcileRootBinShims(fs, modulesDir);
 
@@ -1039,7 +1056,7 @@ export async function syncGlobalInstallTree(
   fetch: SecureFetch,
   timeoutMs?: number,
   manifestOverride?: ProjectManifest
-): Promise<void> {
+): Promise<string[]> {
   const manifest =
     manifestOverride ?? (await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {}));
   const entries = collectManagedEntries(manifest);
@@ -1047,7 +1064,7 @@ export async function syncGlobalInstallTree(
   if (entries.length === 0) {
     await removeIfExists(fs, GLOBAL_NODE_MODULES);
     await reconcileGlobalBinDelegators(fs, new Set());
-    return;
+    return [];
   }
 
   const supplier = buildPackumentSupplier(fetch, timeoutMs);
@@ -1060,6 +1077,7 @@ export async function syncGlobalInstallTree(
     rootDependencies,
     fetchPackument: supplier,
     optionalRoots: optionalRootNames(manifest),
+    installedVersion: installedVersionIn(fs, GLOBAL_NODE_MODULES),
   });
 
   await pruneTopLevelPackages(fs, GLOBAL_NODE_MODULES, new Set(Object.keys(plan.root)));
@@ -1069,6 +1087,7 @@ export async function syncGlobalInstallTree(
   const installed = await collectInstalledBins(fs, GLOBAL_NODE_MODULES);
   const chosen = chooseRootBins(installed);
   await reconcileGlobalBinDelegators(fs, new Set(chosen.keys()));
+  return skipNotes(plan);
 }
 
 export interface UninstallResult {
@@ -1079,6 +1098,8 @@ export interface UninstallResult {
 export interface UninstallPackagesResult {
   results: UninstallResult[];
   errors: InstallFailure[];
+
+  notes?: string[];
 }
 
 export async function uninstallPackages(
@@ -1123,12 +1144,11 @@ export async function uninstallPackages(
 
   const nextManifest = manifestWithoutPackages(before, names);
 
+  let notes: string[];
   try {
-    if (globalUninstall) {
-      await syncGlobalInstallTree(fs, fetch, timeoutMs, nextManifest);
-    } else {
-      await syncLocalInstallTree(fs, fetch, cwd, timeoutMs, nextManifest);
-    }
+    notes = globalUninstall
+      ? await syncGlobalInstallTree(fs, fetch, timeoutMs, nextManifest)
+      : await syncLocalInstallTree(fs, fetch, cwd, timeoutMs, nextManifest);
   } catch (err) {
     errors.push({ spec: specs.join(' '), error: toError(err) });
     return { results, errors };
@@ -1136,7 +1156,7 @@ export async function uninstallPackages(
 
   await writeManifest(fs, manifestPath, nextManifest);
 
-  return { results, errors };
+  return { results, errors, notes };
 }
 
 async function syncLocalInstallTree(
@@ -1145,7 +1165,7 @@ async function syncLocalInstallTree(
   cwd: string,
   timeoutMs?: number,
   manifestOverride?: ProjectManifest
-): Promise<void> {
+): Promise<string[]> {
   const manifestPath = joinPath(cwd, 'package.json');
   const manifest = manifestOverride ?? (await readJsonOr<ProjectManifest>(fs, manifestPath, {}));
   const entries = collectManagedEntries(manifest);
@@ -1153,7 +1173,7 @@ async function syncLocalInstallTree(
 
   if (entries.length === 0) {
     await removeIfExists(fs, modulesDir);
-    return;
+    return [];
   }
 
   const supplier = buildPackumentSupplier(fetch, timeoutMs);
@@ -1166,11 +1186,13 @@ async function syncLocalInstallTree(
     rootDependencies,
     fetchPackument: supplier,
     optionalRoots: optionalRootNames(manifest),
+    installedVersion: installedVersionIn(fs, modulesDir),
   });
 
   await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));
   await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
   await reconcileRootBinShims(fs, modulesDir);
+  return skipNotes(plan);
 }
 
 export interface GlobalPackageListing {

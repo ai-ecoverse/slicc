@@ -20,6 +20,8 @@ export interface InstallPlan {
   root: Record<string, InstallNode>;
 
   skippedOptional: SkippedOptional[];
+
+  warnings: string[];
 }
 
 export interface SkippedOptional {
@@ -40,6 +42,10 @@ export interface ResolveDependencyTreeOptions {
   concurrency?: number;
 
   optionalRoots?: ReadonlySet<string>;
+
+  installedVersion?: (name: string) => Promise<string | undefined> | string | undefined;
+
+  installedStays?: boolean;
 }
 
 export async function resolveDependencyTree(
@@ -50,6 +56,10 @@ export async function resolveDependencyTree(
   const limit = createLimiter(options.concurrency ?? DEFAULT_FETCH_CONCURRENCY);
   const prefetched = new Set<string>();
   const skipped = new Map<string, SkippedOptional>();
+  const warnings: string[] = [];
+
+  const scopeOf = new WeakMap<InstallNode, InstallNode[]>();
+  const pendingPeers: PendingPeer[] = [];
   let settled = false;
 
   function skip(entry: SkippedOptional): void {
@@ -83,6 +93,7 @@ export async function resolveDependencyTree(
         }
         if (!entry || (edge.optional && !isPlatformSupported(entry))) return;
         for (const child of edgesOf(entry)) prefetch(child);
+        for (const peer of peerEdgesOf(entry)) prefetch(peer);
       },
       () => undefined
     );
@@ -132,14 +143,62 @@ export async function resolveDependencyTree(
     }
 
     const node = buildNode(name, resolved.version, resolved.entry);
-    attachNode(top, node, nearest, ancestors);
+    const nested = attachNode(top, node, nearest, ancestors);
+    await placeChildren(node, resolved.entry, ancestors, nested ? ancestors : []);
+  }
 
-    const childAncestors: InstallNode[] = [node, ...ancestors];
-    const children = edgesOf(resolved.entry);
+  async function placeChildren(
+    node: InstallNode,
+    entry: PackumentVersion,
+    ancestors: InstallNode[],
+    scope: InstallNode[]
+  ): Promise<void> {
+    scopeOf.set(node, scope);
+    const children = edgesOf(entry);
+    const peers = peerEdgesOf(entry);
     for (const child of children) prefetch(child);
+    for (const peer of peers) prefetch(peer);
+    for (const peer of peers) pendingPeers.push({ dependent: node, edge: peer });
+    const childAncestors: InstallNode[] = [node, ...ancestors];
     for (const child of children) {
       await place(child, childAncestors);
     }
+  }
+
+  async function placePeer({ dependent, edge }: PendingPeer): Promise<void> {
+    const { name, range } = edge;
+    const scope = scopeOf.get(dependent) ?? [];
+    const from = `${dependent.name}@${dependent.version}`;
+    const nearest = findNearest(name, scope, top);
+    if (nearest) {
+      if (!satisfies(nearest.version, range)) {
+        warnings.push(await peerConflict(getPackument, name, range, from, nearest.version));
+      }
+      return;
+    }
+
+    const installed = await options.installedVersion?.(name);
+    let resolved: ResolvedEdge | null = null;
+    let replacing = false;
+    if (installed !== undefined) {
+      if (satisfies(installed, range)) {
+        resolved = await installedEdge(name, installed, getPackument);
+
+        if (!resolved && options.installedStays) return;
+      } else if (options.installedStays) {
+        warnings.push(await peerConflict(getPackument, name, range, from, installed));
+        return;
+      } else {
+        replacing = true;
+      }
+    }
+    resolved ??= await resolveEdge(name, range, getPackument);
+
+    if (replacing) warnings.push(peerReplaced(name, range, from, `${installed}`, resolved.version));
+
+    const node = buildNode(name, resolved.version, resolved.entry);
+    top[name] = node;
+    await placeChildren(node, resolved.entry, [], []);
   }
 
   const roots: Edge[] = Object.entries(options.rootDependencies).map(([name, range]) => ({
@@ -152,11 +211,15 @@ export async function resolveDependencyTree(
     for (const root of roots) {
       await place(root, []);
     }
+
+    for (let i = 0; i < pendingPeers.length; i++) {
+      await placePeer(pendingPeers[i]);
+    }
   } finally {
     settled = true;
   }
 
-  return { root: top, skippedOptional: [...skipped.values()] };
+  return { root: top, skippedOptional: [...skipped.values()], warnings };
 }
 
 interface Edge {
@@ -175,6 +238,63 @@ function edgesOf(entry: PackumentVersion): Edge[] {
     edges.set(name, { name, range, optional: true });
   }
   return [...edges.values()];
+}
+
+interface PendingPeer {
+  dependent: InstallNode;
+  edge: Edge;
+}
+
+function peerEdgesOf(entry: PackumentVersion): Edge[] {
+  const peers = entry.peerDependencies;
+  if (!peers || typeof peers !== 'object') return [];
+  const meta = entry.peerDependenciesMeta;
+  const edges: Edge[] = [];
+  for (const [name, range] of Object.entries(peers)) {
+    if (typeof range !== 'string') continue;
+    if (meta?.[name]?.optional === true) continue;
+    if (entry.dependencies?.[name] !== undefined) continue;
+    if (entry.optionalDependencies?.[name] !== undefined) continue;
+    edges.push({ name, range, optional: false });
+  }
+  return edges;
+}
+
+async function installedEdge(
+  name: string,
+  version: string,
+  getPackument: (name: string) => Promise<Packument>
+): Promise<ResolvedEdge | null> {
+  try {
+    const entry = (await getPackument(name)).versions[version];
+    return entry?.dist?.tarball ? { version, entry } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function peerConflict(
+  getPackument: (name: string) => Promise<Packument>,
+  name: string,
+  range: string,
+  from: string,
+  found: string
+): Promise<string> {
+  let wanted = '';
+  try {
+    wanted = `; Conflicting peer dependency: ${name}@${resolveVersion(await getPackument(name), range)}`;
+  } catch {}
+  return `warn ERESOLVE overriding peer dependency: While resolving: ${from}; Found: ${name}@${found}; Could not resolve dependency: peer ${name}@"${range}" from ${from}${wanted}; keeping ${name}@${found}`;
+}
+
+function peerReplaced(
+  name: string,
+  range: string,
+  from: string,
+  found: string,
+  version: string
+): string {
+  return `warn ERESOLVE replacing peer dependency: While resolving: ${from}; Found: ${name}@${found}; Could not resolve dependency: peer ${name}@"${range}" from ${from}; nothing else keeps ${name}@${found}, replacing it with ${name}@${version}`;
 }
 
 function findNearest(
@@ -249,11 +369,12 @@ function attachNode(
   node: InstallNode,
   nearest: InstallNode | null,
   ancestors: InstallNode[]
-): void {
+): boolean {
   const parent = nearest ? ancestors[0] : null;
   if (parent) {
     parent.dependencies[node.name] = node;
-  } else {
-    top[node.name] = node;
+    return true;
   }
+  top[node.name] = node;
+  return false;
 }
