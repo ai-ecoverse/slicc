@@ -100,12 +100,16 @@ function fakeClock() {
   };
 }
 
-function makeManager(fetchImpl: typeof fetch, clock: ReturnType<typeof fakeClock>) {
+function makeManager(
+  fetchImpl: typeof fetch,
+  clock: ReturnType<typeof fakeClock>,
+  store: LeaderTraySessionStore = new MemorySessionStore()
+) {
   return new LeaderTrayManager({
     workerBaseUrl: BASE,
     runtime: 'slicc-hosted-leader',
     kind: 'hosted',
-    store: new MemorySessionStore(),
+    store,
     identityStore: {
       load: async () => null,
       save: async () => {},
@@ -224,6 +228,39 @@ describe('LeaderTrayManager tray creation retry (#4112)', () => {
     await expect(manager.start()).resolves.toMatchObject({ trayId: 'tray-1' });
     expect(trayPosts(fetchImpl)).toBe(1);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries the attach to the tray minted after a stale stored session', async () => {
+    const clock = fakeClock();
+    const store = new MemorySessionStore();
+    store.value = {
+      workerBaseUrl: BASE,
+      trayId: 'tray-old',
+      createdAt: '2026-10-22T00:00:00.000Z',
+      controllerId: 'controller-old',
+      controllerUrl: `${BASE}/controller/tray-old.ct`,
+      joinUrl: `${BASE}/join/tray-old.jt`,
+      webhookUrl: `${BASE}/webhook/tray-old.wt`,
+      runtime: 'slicc-hosted-leader',
+    };
+    let freshAttaches = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/controller/tray-old.ct') return new Response(null, { status: 404 });
+      if (path === '/tray') return created();
+      if (path === '/controller/tray-1.ct') {
+        freshAttaches++;
+        return freshAttaches === 1 ? unavailable('1') : attached();
+      }
+      if (path.endsWith('/supersede')) return Response.json({ ok: true });
+      throw new Error(`unexpected ${path}`);
+    });
+    const manager = makeManager(fetchImpl, clock, store);
+    managers.push(manager);
+
+    await expect(manager.start()).resolves.toMatchObject({ trayId: 'tray-1' });
+    expect(freshAttaches).toBe(2);
+    expect(clock.sleeps).toEqual([1000]);
   });
 
   it('stops retrying once the manager is stopped', async () => {

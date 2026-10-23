@@ -739,7 +739,10 @@ export class LeaderTrayManager {
     target: LeaderTraySession | null,
     recoverExpiredOwner = true
   ): Promise<LeaderTraySession> {
-    let next = target && target.trayId !== source.trayId ? target : await this.createTraySession();
+    const reuseTarget = target !== null && target.trayId !== source.trayId;
+    let next = reuseTarget ? target : await this.createTraySession();
+    // A tray minted here gets the fresh-tray attach retry; a stored target does not.
+    let minted = !reuseTarget;
     try {
       await this.transferPreviousSession(source, next);
     } catch (error) {
@@ -751,11 +754,12 @@ export class LeaderTrayManager {
       await this.finishPendingCreate(await this.store.load());
       await this.store.clear();
       next = await this.createTraySession();
+      minted = true;
       await this.transferPreviousSession(source, next);
     }
     let claimed: LeaderTraySession;
     try {
-      claimed = await this.claimLeaderSession(next);
+      claimed = await this.claimLeaderSession(next, minted);
     } catch (error) {
       if (error instanceof LeaderTrayHttpError && [403, 404, 410].includes(error.status)) {
         // Transfer completed even if its target expired while we were offline.
@@ -1089,9 +1093,13 @@ export class LeaderTrayManager {
     }
   }
 
-  private async claimLeaderSession(session: LeaderTraySession | null): Promise<LeaderTraySession> {
-    // One budget covers minting and the first attach. A stored session gets a
-    // single attach: its 5xx is the signal to recreate (see shouldRecreateTray).
+  private async claimLeaderSession(
+    session: LeaderTraySession | null,
+    justMinted = false
+  ): Promise<LeaderTraySession> {
+    // One budget covers minting and the first attach to a fresh tray. A stored
+    // session gets a single attach: its 5xx is the signal to recreate (see
+    // shouldRecreateTray).
     const deadlineAt = this.retryDeadline();
     const activeSession = session ?? (await this.createTraySession(deadlineAt));
     const attachInit: RequestInit = {
@@ -1103,14 +1111,15 @@ export class LeaderTrayManager {
         runtime: this.options.runtime,
       }),
     };
-    const attach = session
-      ? await this.fetchJson<ControllerAttachResponse>(activeSession.controllerUrl, attachInit)
-      : await this.fetchJsonWithRetry<ControllerAttachResponse>(
-          'tray attach',
-          activeSession.controllerUrl,
-          attachInit,
-          deadlineAt
-        );
+    const attach =
+      session && !justMinted
+        ? await this.fetchJson<ControllerAttachResponse>(activeSession.controllerUrl, attachInit)
+        : await this.fetchJsonWithRetry<ControllerAttachResponse>(
+            'tray attach',
+            activeSession.controllerUrl,
+            attachInit,
+            deadlineAt
+          );
 
     if (attach.role !== 'leader' || !attach.leaderKey || !attach.websocket?.url) {
       throw new Error(
