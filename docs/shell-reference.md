@@ -818,6 +818,29 @@ without any `@esbuild/*` binary. The matching follows npm: `!x` entries exclude
 its `os`/`cpu` say. Root packages declared under `optionalDependencies` follow
 the same rule; a package named on the command line is always installed.
 
+### `ipk install`: peer dependencies
+
+Required `peerDependencies` are installed as npm 7+ and pnpm install them, so
+`ipk install @ai-ecoverse/wasm-xz` also brings the command packages it lists as
+`"*"` peers. A peer resolves in its dependent's parent scope, not under the
+dependent: ipk looks for a copy reachable from the dependent's siblings up to the
+top of `node_modules`, then for one already installed there (`-g`:
+`/shared/lib/node_modules`). A copy whose version satisfies the peer range is
+reused, not reinstalled, even when a newer match exists (`*` matches any
+version). A missing peer gets the best match, hoisted to the top level next to
+its dependent; peers of peers follow the same way, and peer cycles end at the
+first copy already placed. Peers are resolved after every requested package and
+regular dependency, so a version named in the same install is the one a peer
+range is checked against. A peer marked `peerDependenciesMeta.<name>.optional`
+is not installed, and a name also listed in `dependencies` is followed as a
+dependency. A conflicting copy (version outside the peer range) is kept, not
+replaced, and the install still exits 0 with npm's warning on stderr:
+`ipk: warn ERESOLVE overriding peer dependency: While resolving: <dependent>; Found: <name>@<version>; Could not resolve dependency: peer <name>@"<range>" from <dependent>; Conflicting peer dependency: <name>@<best match>; keeping <name>@<version>`.
+A global install prunes top-level packages the plan does not keep, so there an
+orphaned conflicting copy is replaced by the best match instead. Auto-installed
+peers are not recorded in `package.json`. A required peer that cannot be
+resolved at all fails the install, as a dependency does.
+
 ### `ipk install -g` / `npm install -g`
 
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared

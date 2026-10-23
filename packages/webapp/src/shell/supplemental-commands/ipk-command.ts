@@ -126,8 +126,10 @@ under dependencies, or under devDependencies with -D / --save-dev. A bare
 name that is already declared is resolved against that existing range, not
 latest. Unknown install flags are rejected. The no-arg form reads the
 manifest without rewriting it. With -g, packages go to /shared/lib/node_modules
-and deps are recorded in /shared/lib/package.json. Existing fields are
-preserved. Idempotent: re-installing an already-satisfied package is a clean
+and deps are recorded in /shared/lib/package.json. Required peerDependencies
+are installed as npm 7+ does: an installed copy in range is kept, a missing
+one is hoisted, and a conflicting one is kept with an ERESOLVE warning.
+Existing fields are preserved. Idempotent: re-installing an already-satisfied package is a clean
 no-op.
 `;
 }

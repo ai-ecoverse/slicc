@@ -231,7 +231,22 @@ function optionalRootNames(
 }
 
 function skipNotes(plan: InstallPlan): string[] {
-  return plan.skippedOptional.map((s) => s.note);
+  return [...plan.skippedOptional.map((s) => s.note), ...plan.warnings];
+}
+
+/** Reads the version installed at the top of `modulesDir`, for peer reuse. */
+function installedVersionIn(
+  fs: VirtualFS,
+  modulesDir: string
+): (name: string) => Promise<string | undefined> {
+  return async (name) => {
+    const installed = await readInstalledJsonOr<{ version?: unknown } | null>(
+      fs,
+      joinPath(packageDirIn(modulesDir, name), 'package.json'),
+      null
+    );
+    return typeof installed?.version === 'string' ? installed.version : undefined;
+  };
 }
 
 interface ProjectManifest {
@@ -842,6 +857,7 @@ export async function installPackages(
     rootDependencies[direct.parsed.name] = direct.parsed.range;
   }
 
+  const modulesDir = globalInstall ? GLOBAL_NODE_MODULES : joinPath(cwd, 'node_modules');
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
@@ -850,9 +866,10 @@ export async function installPackages(
       existingManifest,
       directs.map((d) => d.parsed.name)
     ),
+    installedVersion: installedVersionIn(fs, modulesDir),
+    // A global install prunes top-level packages the plan leaves out.
+    installedStays: !globalInstall,
   });
-
-  const modulesDir = globalInstall ? GLOBAL_NODE_MODULES : joinPath(cwd, 'node_modules');
   if (globalInstall) {
     await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));
     await preflightGlobalBinDelegators(fs, predictGlobalBinNames(plan, modulesDir));
@@ -1016,14 +1033,15 @@ export async function installFromManifest(
     rootDependencies[entry.name] = entry.range;
   }
 
+  const modulesDir = joinPath(cwd, 'node_modules');
   const plan = await resolveDependencyTree({
     rootDependencies,
     fetchPackument: supplier,
     concurrency,
     optionalRoots,
+    installedVersion: installedVersionIn(fs, modulesDir),
+    installedStays: true,
   });
-
-  const modulesDir = joinPath(cwd, 'node_modules');
   await materializePlan(fs, modulesDir, plan, fetch, timeoutMs, concurrency);
   await reconcileRootBinShims(fs, modulesDir);
 
@@ -1155,6 +1173,7 @@ export async function syncGlobalInstallTree(
     rootDependencies,
     fetchPackument: supplier,
     optionalRoots: optionalRootNames(manifest),
+    installedVersion: installedVersionIn(fs, GLOBAL_NODE_MODULES),
   });
 
   await pruneTopLevelPackages(fs, GLOBAL_NODE_MODULES, new Set(Object.keys(plan.root)));
@@ -1261,6 +1280,7 @@ async function syncLocalInstallTree(
     rootDependencies,
     fetchPackument: supplier,
     optionalRoots: optionalRootNames(manifest),
+    installedVersion: installedVersionIn(fs, modulesDir),
   });
 
   await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));
