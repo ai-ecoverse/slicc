@@ -1,4 +1,4 @@
-import type { Command, CommandContext } from 'just-bash';
+import type { Command, CommandContext, FsStat } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { MetadataUpdate, VirtualFS } from '../../fs/index.js';
 import { gunzip, gzip, readTar, type TarEntry, writeTar } from '../ipk/tar.js';
@@ -249,6 +249,50 @@ async function applyMetadataBatch(
   }
 }
 
+async function lstatOrNull(ctx: CommandContext, path: string): Promise<FsStat | null> {
+  try {
+    return await ctx.fs.lstat(path);
+  } catch {
+    return null;
+  }
+}
+
+async function replaceMismatchedNode(
+  ctx: CommandContext,
+  outputPath: string,
+  directory: boolean
+): Promise<void> {
+  const stat = await lstatOrNull(ctx, outputPath);
+  if (!stat) return;
+  if (stat.isSymbolicLink) await ctx.fs.rm(outputPath);
+  else if (!directory && stat.isDirectory) await ctx.fs.rm(outputPath, { recursive: true });
+}
+
+async function parentLeavesRoot(
+  ctx: CommandContext,
+  root: string,
+  rootReal: string,
+  outputPath: string
+): Promise<boolean> {
+  if (outputPath === root) return false;
+  const rel = outputPath.slice(root === '/' ? 1 : root.length + 1);
+  let current = root;
+  for (const part of rel.split('/').slice(0, -1)) {
+    current = joinPath(current, part);
+    const stat = await lstatOrNull(ctx, current);
+    if (!stat) return false;
+    if (!stat.isSymbolicLink) continue;
+    let real: string;
+    try {
+      real = await ctx.fs.realpath(current);
+    } catch {
+      return true;
+    }
+    if (!ensureWithinRoot(rootReal, real)) return true;
+  }
+  return false;
+}
+
 async function extractEntry(
   ctx: CommandContext,
   outputPath: string,
@@ -257,6 +301,7 @@ async function extractEntry(
   fileModes: Array<[string, number]>
 ): Promise<void> {
   const defaultMode = entry.directory ? 0o755 : 0o644;
+  await replaceMismatchedNode(ctx, outputPath, entry.directory === true);
 
   const resetsDefault = entry.mode === defaultMode && (await ctx.fs.exists(outputPath));
   const needsMode = entry.mode !== undefined && (entry.mode !== defaultMode || resetsDefault);
@@ -316,6 +361,7 @@ async function readArchiveCommand(
 
   const outputRoot = ctx.fs.resolvePath(ctx.cwd, options.directory);
   await ctx.fs.mkdir(outputRoot, { recursive: true });
+  const rootReal = await ctx.fs.realpath(outputRoot);
   const extracted: string[] = [];
   const fileModes: Array<[string, number]> = [];
   const dirModes: Array<[string, number]> = [];
@@ -323,6 +369,9 @@ async function readArchiveCommand(
   for (const entry of entries) {
     const outputPath = safeOutputPath(ctx, outputRoot, entry.path);
     if (!outputPath) return tarError(`blocked suspicious path ${entry.path}`);
+    if (await parentLeavesRoot(ctx, outputRoot, rootReal, outputPath)) {
+      return tarError(`blocked path through symlink ${entry.path}`);
+    }
     await extractEntry(ctx, outputPath, entry, dirModes, fileModes);
     if (entry.mtime !== undefined) mtimes.push([outputPath, entry.mtime]);
     extracted.push(entry.path);
