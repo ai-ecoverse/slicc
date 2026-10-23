@@ -10,10 +10,12 @@ import {
   buildWriteCommand,
   checkWatchedProcesses,
   cliAssetName,
+  findMintFailureInLog,
   formatGithubOutput,
   MAX_DURATION_MS,
   parseBoolean,
   parseDuration,
+  parseJoinErrorFile,
   parseJoinFile,
   parseMountLines,
   parseMountMapping,
@@ -33,6 +35,36 @@ import {
   truncateForOutput,
   validateSecretEntry,
 } from './lib.mjs';
+
+describe('findMintFailureInLog', () => {
+  it('returns the last finished mint-failure line', () => {
+    const line = (cause) => `[cloud-status] leader failed to mint a tray: ${cause}\n`;
+    expect(findMintFailureInLog(`noise\n${line('first')}more\n${line('HTTP 503')}`)).toBe(
+      'HTTP 503'
+    );
+    expect(findMintFailureInLog('[cloud-status] leader failed to mint a tray: partial')).toBeNull();
+    expect(findMintFailureInLog(line(' '))).toBeNull();
+    expect(findMintFailureInLog('nothing here\n')).toBeNull();
+    expect(findMintFailureInLog(null)).toBeNull();
+  });
+});
+
+describe('parseJoinErrorFile', () => {
+  it('returns a fresh error and rejects stale, malformed or empty ones', () => {
+    const at = '2026-10-23T15:40:00.000Z';
+    const ms = Date.parse(at);
+    expect(parseJoinErrorFile(JSON.stringify({ error: 'boom', updatedAt: at }), ms)).toEqual({
+      error: 'boom',
+      updatedAt: ms,
+    });
+    expect(parseJoinErrorFile(JSON.stringify({ error: 'boom', updatedAt: at }), ms + 1)).toBeNull();
+    expect(parseJoinErrorFile(JSON.stringify({ error: '', updatedAt: at }))).toBeNull();
+    expect(parseJoinErrorFile(JSON.stringify({ error: 'boom' }))).toBeNull();
+    expect(parseJoinErrorFile('null')).toBeNull();
+    expect(parseJoinErrorFile('{')).toBeNull();
+    expect(parseJoinErrorFile(null)).toBeNull();
+  });
+});
 
 describe('parseDuration', () => {
   it('parses units and compounds', () => {

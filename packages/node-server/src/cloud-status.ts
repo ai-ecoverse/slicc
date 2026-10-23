@@ -9,6 +9,14 @@ export function resolveJoinFilePath(env: NodeJS.ProcessEnv = process.env): strin
   return configured || DEFAULT_JOIN_FILE_PATH;
 }
 
+export function joinErrorFilePath(joinFilePath: string): string {
+  return `${joinFilePath}.error.json`;
+}
+
+export const MINT_FAILURE_LOG_PREFIX = '[cloud-status] leader failed to mint a tray: ';
+
+const MAX_ERROR_LENGTH = 2000;
+
 export interface CloudStatusEndpointOptions {
   joinFilePath: string;
 }
@@ -71,6 +79,31 @@ export function registerCloudStatusEndpoint(
       updatedAt: new Date().toISOString(),
     };
     await fs.writeFile(options.joinFilePath, JSON.stringify(payload, null, 2));
+    await fs.rm(joinErrorFilePath(options.joinFilePath), { force: true });
+    res.json({ ok: true });
+  });
+
+  app.post('/api/cloud-status/error', requireLoopback, express.json(), async (req, res) => {
+    const body = req.body as { error?: unknown; sliccVersion?: unknown } | undefined;
+    if (typeof body?.error !== 'string' || body.error.length === 0) {
+      res.status(400).json({ error: 'invalid cloud-status error payload' });
+      return;
+    }
+    const error = body.error.slice(0, MAX_ERROR_LENGTH);
+
+    console.error(`${MINT_FAILURE_LOG_PREFIX}${error.replace(/\s+/g, ' ')}`);
+    const payload = {
+      error,
+      sliccVersion: typeof body.sliccVersion === 'string' ? body.sliccVersion : null,
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      await fs.writeFile(joinErrorFilePath(options.joinFilePath), JSON.stringify(payload, null, 2));
+    } catch (writeError) {
+      console.error('[cloud-status] could not write the join error file', String(writeError));
+      res.status(500).json({ error: 'could not record the leader failure' });
+      return;
+    }
     res.json({ ok: true });
   });
 }

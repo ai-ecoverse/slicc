@@ -1,5 +1,12 @@
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -440,6 +447,55 @@ describe('start-leader', () => {
     );
     await expect(p).resolves.toMatchObject({ joinUrl: 'https://x/join/a.b' });
     child.kill();
+  });
+
+  it('pollJoinFile fails fast with the cause node-server recorded (#4112)', async () => {
+    const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 5000)']);
+    const logPath = join(t.root, 'l.log');
+    writeFileSync(logPath, '');
+    const startedAt = Date.now() - 1000;
+
+    writeFileSync(
+      `${t.joinFile}.error.json`,
+      JSON.stringify({ error: 'old', updatedAt: new Date(startedAt - 60_000).toISOString() })
+    );
+    const p = pollJoinFile({ child, logPath, startedAt, timeoutMs: 5000, pollMs: 20 });
+    await new Promise((r) => setTimeout(r, 60));
+    writeFileSync(
+      `${t.joinFile}.error.json`,
+      JSON.stringify({
+        error: 'POST /tray failed after 11 attempts in 86s: HTTP 503',
+        updatedAt: new Date().toISOString(),
+      })
+    );
+    await expect(p).rejects.toThrow(
+      'leader failed to mint a join URL: POST /tray failed after 11 attempts in 86s: HTTP 503'
+    );
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+  });
+
+  it('pollJoinFile falls back to the leader log when node-server could not write the file', async () => {
+    const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 5000)']);
+    const logPath = join(t.root, 'l.log');
+
+    const earlier = '[cloud-status] leader failed to mint a tray: old boot\n';
+    writeFileSync(logPath, earlier);
+    const p = pollJoinFile({
+      child,
+      logPath,
+      startedAt: Date.now() - 1000,
+      timeoutMs: 5000,
+      pollMs: 20,
+      logOffset: Buffer.byteLength(earlier),
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    appendFileSync(
+      logPath,
+      '[cloud-status] leader failed to mint a tray: POST /tray failed after 11 attempts in 86s: HTTP 503\n'
+    );
+    await expect(p).rejects.toThrow(
+      'leader failed to mint a join URL: POST /tray failed after 11 attempts in 86s: HTTP 503'
+    );
   });
 
   it('bootLeader can be driven directly', async () => {

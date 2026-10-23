@@ -61,6 +61,8 @@ function fixture() {
       identityStore,
       store,
       fetchImpl,
+
+      requestRetry: false,
     }) as unknown as {
       createTraySession(): Promise<LeaderTraySession>;
       finishPendingCreate(session: LeaderTraySession | null): Promise<void>;

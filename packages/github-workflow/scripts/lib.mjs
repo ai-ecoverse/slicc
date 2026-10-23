@@ -429,6 +429,38 @@ export function parseJoinFile(text, minUpdatedAtMs = 0) {
   };
 }
 
+export function joinErrorFilePath(joinFile) {
+  return `${joinFile}.error.json`;
+}
+
+export function parseJoinErrorFile(text, minUpdatedAtMs = 0) {
+  if (!text) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  if (!isStr(parsed.error) || !parsed.error) return null;
+  const updatedAt = Date.parse(parsed.updatedAt ?? '');
+  if (!Number.isFinite(updatedAt) || updatedAt < minUpdatedAtMs) return null;
+  return { error: parsed.error, updatedAt };
+}
+
+export const MINT_FAILURE_LOG_PREFIX = '[cloud-status] leader failed to mint a tray: ';
+
+export function findMintFailureInLog(text) {
+  if (!text) return null;
+  const at = text.lastIndexOf(MINT_FAILURE_LOG_PREFIX);
+  if (at === -1) return null;
+  const rest = text.slice(at + MINT_FAILURE_LOG_PREFIX.length);
+
+  const end = rest.indexOf('\n');
+  if (end === -1) return null;
+  return rest.slice(0, end).trim() || null;
+}
+
 const GO_OS = { darwin: 'darwin', linux: 'linux', win32: 'windows' };
 const GO_ARCH = { x64: 'amd64', arm64: 'arm64' };
 

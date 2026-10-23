@@ -119,6 +119,8 @@ describe('durable leader-session webhook management identity', () => {
       fetchImpl,
       webSocketFactory: () => new ReadySocket(),
       reconnect: false,
+
+      requestRetry: false,
       ...options,
     });
     managers.push(result);

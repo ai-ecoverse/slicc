@@ -23,6 +23,7 @@ import {
 } from '../scoops/tray-leader.js';
 import type { LeaderSyncManagerOptions } from '../scoops/tray-leader-sync.js';
 import { deriveFloatType, type FloatType, LeaderSyncManager } from '../scoops/tray-leader-sync.js';
+import type { TrayRequestRetryOptions } from '../scoops/tray-request-retry.js';
 import { buildTrayLaunchUrl } from '../scoops/tray-runtime-config.js';
 import type {
   RemoteTargetInfo,
@@ -64,6 +65,8 @@ export interface StartPageLeaderTrayOptions {
   kind?: TrayKind;
 
   onLeaderReady?: (session: LeaderTraySession) => void;
+
+  onLeaderStartFailed?: (error: string) => void;
 
   getMessages: LeaderSyncManagerOptions['getMessages'];
   getMessagesForScoop?: LeaderSyncManagerOptions['getMessagesForScoop'];
@@ -115,6 +118,8 @@ export interface StartPageLeaderTrayOptions {
   _webSocketFactory?: (url: string) => LeaderTrayWebSocket;
 
   _fetchImpl?: typeof fetch;
+
+  _requestRetry?: TrayRequestRetryOptions | false;
 
   _historyOverride?: {
     href: string;
@@ -293,6 +298,7 @@ function buildLeaderManager(
     fetchImpl,
     ...(options._storeOverride ? { store: options._storeOverride } : {}),
     ...(options._webSocketFactory ? { webSocketFactory: options._webSocketFactory } : {}),
+    ...(options._requestRetry !== undefined ? { requestRetry: options._requestRetry } : {}),
     onControlMessage: (message) => {
       if (dispatchMcpServeControl(message)) return;
       if (message.type === 'webhook.event') {
@@ -486,9 +492,13 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
 
   const startResult = leader.start();
   void startResult.then(updateUrlBar).catch((err) => {
-    log.error('Leader tray start failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    const error = err instanceof Error ? err.message : String(err);
+    log.error('Leader tray start failed', { error });
+    try {
+      options.onLeaderStartFailed?.(error);
+    } catch (callbackError) {
+      log.warn('onLeaderStartFailed callback threw', { error: String(callbackError) });
+    }
   });
 
   let stopped = false;
