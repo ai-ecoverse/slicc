@@ -147,7 +147,7 @@
   },
   "overrides": {
     "e2b": {
-      "undici8": "npm:undici@8.11.2"
+      "undici8": "npm:undici@8.12.2"
     },
     "guarded-fetch": {
       "undici": "7.30.0"
