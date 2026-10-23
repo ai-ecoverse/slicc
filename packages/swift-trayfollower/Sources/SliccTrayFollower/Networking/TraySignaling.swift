@@ -7,6 +7,9 @@ enum TraySignalingError: Error, LocalizedError {
     case invalidAttachResponse(statusCode: Int, body: String)
     case invalidBootstrapResponse(statusCode: Int, body: String)
     case networkError(underlying: Error)
+    /// The hub kept answering with a transient fault until the retry budget ran
+    /// out; `last` is the final attempt's `invalidResponse` or `networkError`.
+    indirect case retriesExhausted(attempts: Int, last: TraySignalingError)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +21,9 @@ enum TraySignalingError: Error, LocalizedError {
             return "Tray follower bootstrap returned invalid response (\(code)): \(body.prefix(200))"
         case .networkError(let underlying):
             return "Tray signaling network error: \(underlying.localizedDescription)"
+        case .retriesExhausted(let attempts, let last):
+            let noun = attempts == 1 ? "attempt" : "attempts"
+            return "Tray hub unavailable after \(attempts) \(noun): \(last.errorDescription ?? "\(last)")"
         }
     }
 }
@@ -98,6 +104,7 @@ public actor TraySignalingClient {
 
     public let joinUrl: URL
     private let transport: Transport
+    private let retry: TraySignalingRetry
 
     /// A session that reports the hub's supersede 308 instead of following it
     /// (#1957). `SupersedeRedirect` owns the five-hop bound and the consumer
@@ -118,7 +125,12 @@ public actor TraySignalingClient {
     }
 
     public init(joinUrl: URL, transport: @escaping Transport) {
+        self.init(joinUrl: joinUrl, retry: .standard, transport: transport)
+    }
+
+    init(joinUrl: URL, retry: TraySignalingRetry, transport: @escaping Transport) {
         self.joinUrl = joinUrl
+        self.retry = retry
         self.transport = transport
     }
 
@@ -241,23 +253,58 @@ public actor TraySignalingClient {
 
     // MARK: - Private helpers
 
+    /// One hub POST, repeated on a transient fault (5xx, 429, a non-JSON body,
+    /// a network error) inside `TraySignalingRetry`'s budget. Anything else —
+    /// success, another 4xx, a supersede hop — returns on the first reply.
     private func post(body: [String: Any]) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: joinUrl)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let payload = try JSONSerialization.data(withJSONObject: body)
+        let deadline = retry.now().addingTimeInterval(retry.budget)
+        var backoff = retry.baseDelay
+        var attempt = 0
 
-        let (data, urlResponse): (Data, URLResponse)
-        do {
-            (data, urlResponse) = try await transport(request)
-        } catch {
-            throw TraySignalingError.networkError(underlying: error)
-        }
+        while true {
+            attempt += 1
+            var request = URLRequest(url: joinUrl)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = payload
+            // Like the Go twin's per-attempt bound: a stalled request must not
+            // run on long after the budget that admitted it is spent.
+            request.timeoutInterval = max(1, deadline.timeIntervalSince(retry.now()))
 
-        guard let httpResponse = urlResponse as? HTTPURLResponse else {
-            throw TraySignalingError.invalidResponse(statusCode: 0, body: "(not HTTP)")
+            let last: TraySignalingError
+            var retryAfter: TimeInterval?
+            do {
+                let (data, urlResponse) = try await transport(request)
+                guard let httpResponse = urlResponse as? HTTPURLResponse else {
+                    throw TraySignalingError.invalidResponse(statusCode: 0, body: "(not HTTP)")
+                }
+                guard TraySignalingRetry.isTransient(data: data, response: httpResponse) else {
+                    return (data, httpResponse)
+                }
+                last = .invalidResponse(
+                    statusCode: httpResponse.statusCode,
+                    body: String(data: data, encoding: .utf8) ?? "(empty)")
+                retryAfter = TraySignalingRetry.retryAfter(in: httpResponse, now: retry.now())
+            } catch let error as TraySignalingError {
+                throw error
+            } catch {
+                guard !TraySignalingRetry.isCancellation(error), !Task.isCancelled else {
+                    throw TraySignalingError.networkError(underlying: error)
+                }
+                last = .networkError(underlying: error)
+            }
+
+            // The next attempt has to fit its wait and still have time to run;
+            // a `Retry-After` past the deadline means the hub will not be back
+            // in time, so give up now instead of sleeping into the budget.
+            let delay = retryAfter ?? retry.jitter(backoff)
+            if attempt >= retry.maxAttempts || deadline.timeIntervalSince(retry.now()) <= delay {
+                throw TraySignalingError.retriesExhausted(attempts: attempt, last: last)
+            }
+            try await retry.sleep(delay)
+            backoff = min(backoff * 2, retry.maxDelay)
         }
-        return (data, httpResponse)
     }
 
     private func postBootstrapRequest(body: [String: Any]) async throws -> FollowerBootstrapPlan {
