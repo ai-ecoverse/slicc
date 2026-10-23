@@ -12,6 +12,14 @@ import {
 import { createTrayFetch, TrayProxyFetchError } from '../shell/tray-fetch.js';
 import * as db from './db.js';
 import {
+  parseRetryAfterMs,
+  type ResolvedTrayRequestRetry,
+  resolveTrayRequestRetry,
+  retryTrayRequest,
+  type TrayRequestFailure,
+  type TrayRequestRetryOptions,
+} from './tray-request-retry.js';
+import {
   buildTrayWorkerUrl,
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
   TRAY_WORKER_STORAGE_KEY,
@@ -33,6 +41,7 @@ const LEADER_TRAY_RECONNECT_BACKOFF_MULTIPLIER = 2;
 const LEADER_TRAY_RECONNECT_MAX_ATTEMPTS = 20;
 const LEADER_TRAY_RECONNECT_SLOW_DELAY_MS = 60_000;
 const NOTIFY_SUPERSEDED_TIMEOUT_MS = 10_000;
+const TRAY_REQUEST_TIMEOUT_MS = 20_000;
 
 interface CreateTrayResponse {
   trayId: string;
@@ -154,6 +163,12 @@ export interface LeaderTrayManagerOptions {
   onLeaderReady?: (session: LeaderTraySession) => void;
   /** Persisted on the tray; controls reclaim TTL on the worker. */
   kind?: TrayKind;
+  /**
+   * Retry budget for minting a tray (`POST /tray`) and attaching to the fresh
+   * one. Retries 5xx, 429 and transport failures; never other 4xx. Pass
+   * `false` for a single attempt.
+   */
+  requestRetry?: TrayRequestRetryOptions | false;
 }
 
 export class IndexedDbLeaderTraySessionStore implements LeaderTraySessionStore {
@@ -421,6 +436,7 @@ export class LeaderTrayManager {
   private readonly reconnectMaxAttempts: number;
   private readonly reconnectSlowDelayMs: number;
   private readonly reconnectSleep: (ms: number) => Promise<void>;
+  private readonly requestRetry: ResolvedTrayRequestRetry | null;
   private socket: LeaderTrayWebSocket | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private currentSession: LeaderTraySession | null = null;
@@ -451,6 +467,8 @@ export class LeaderTrayManager {
     this.reconnectSlowDelayMs = cfg.slowDelayMs ?? LEADER_TRAY_RECONNECT_SLOW_DELAY_MS;
     this.reconnectSleep =
       cfg.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.requestRetry =
+      options.requestRetry === false ? null : resolveTrayRequestRetry(options.requestRetry);
   }
 
   async start(): Promise<LeaderTraySession> {
@@ -1072,8 +1090,11 @@ export class LeaderTrayManager {
   }
 
   private async claimLeaderSession(session: LeaderTraySession | null): Promise<LeaderTraySession> {
-    const activeSession = session ?? (await this.createTraySession());
-    const attach = await this.fetchJson<ControllerAttachResponse>(activeSession.controllerUrl, {
+    // One budget covers minting and the first attach. A stored session gets a
+    // single attach: its 5xx is the signal to recreate (see shouldRecreateTray).
+    const deadlineAt = this.retryDeadline();
+    const activeSession = session ?? (await this.createTraySession(deadlineAt));
+    const attachInit: RequestInit = {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1081,7 +1102,15 @@ export class LeaderTrayManager {
         leaderKey: activeSession.leaderKey,
         runtime: this.options.runtime,
       }),
-    });
+    };
+    const attach = session
+      ? await this.fetchJson<ControllerAttachResponse>(activeSession.controllerUrl, attachInit)
+      : await this.fetchJsonWithRetry<ControllerAttachResponse>(
+          'tray attach',
+          activeSession.controllerUrl,
+          attachInit,
+          deadlineAt
+        );
 
     if (attach.role !== 'leader' || !attach.leaderKey || !attach.websocket?.url) {
       throw new Error(
@@ -1145,7 +1174,9 @@ export class LeaderTrayManager {
     throw new Error('Webhook identity changed while preparing tray creation');
   }
 
-  private async createTraySession(): Promise<LeaderTraySession> {
+  private async createTraySession(
+    deadlineAt: number | null = this.retryDeadline()
+  ): Promise<LeaderTraySession> {
     // Persist one authenticated attempt before POST. Replays recover the same
     // tray, but a later deliberate replacement gets an independent attempt.
     const carry = await this.prepareCreateIdentity();
@@ -1157,13 +1188,16 @@ export class LeaderTrayManager {
       rebindSecret: carry.rebindSecret,
       createAttemptId: carry.pendingCreateAttemptId,
     });
-    const created = await this.fetchJson<CreateTrayResponse>(
+    // Every retry sends the same createAttemptId, so the hub replays the same tray.
+    const created = await this.fetchJsonWithRetry<CreateTrayResponse>(
+      'POST /tray',
       buildTrayWorkerUrl(this.options.workerBaseUrl, 'tray'),
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body,
-      }
+      },
+      deadlineAt
     );
 
     const coneIdentity = parseConeWebhookIdentity(
@@ -1296,15 +1330,43 @@ export class LeaderTrayManager {
     socket.addEventListener('error', () => onSocketDown('Leader WebSocket errored'));
   }
 
-  private async fetchJson<T>(url: string, init: RequestInit): Promise<T> {
+  private retryDeadline(): number | null {
+    return this.requestRetry ? this.requestRetry.now() + this.requestRetry.deadlineMs : null;
+  }
+
+  /** {@link fetchJson} under the request-retry budget; a single attempt when retry is off. */
+  private async fetchJsonWithRetry<T>(
+    label: string,
+    url: string,
+    init: RequestInit,
+    deadlineAt: number | null
+  ): Promise<T> {
+    const retry = this.requestRetry;
+    if (!retry || deadlineAt === null) return this.fetchJson<T>(url, init);
+    return retryTrayRequest({
+      label,
+      deadlineAt,
+      retry,
+      attempt: (remainingMs) =>
+        this.fetchJson<T>(url, init, Math.min(TRAY_REQUEST_TIMEOUT_MS, remainingMs)),
+      classify: classifyTrayRequestFailure,
+      cancelled: () => this.stopped,
+    });
+  }
+
+  private async fetchJson<T>(
+    url: string,
+    init: RequestInit,
+    timeoutMs = TRAY_REQUEST_TIMEOUT_MS
+  ): Promise<T> {
     const response = await this.fetchImpl(url, {
       ...init,
-      signal: init.signal ?? AbortSignal.timeout(20_000),
+      signal: init.signal ?? AbortSignal.timeout(timeoutMs),
     }).catch((error: unknown) => {
       if (error instanceof TrayProxyFetchError) {
         throw new TrayProxyFetchError('Tray proxy transport unavailable');
       }
-      throw new Error('Tray request failed (transport unavailable)');
+      throw new LeaderTrayTransportError();
     });
     if (!response.ok) {
       throw await LeaderTrayHttpError.fromResponse(response);
@@ -1321,28 +1383,50 @@ class LeaderTrayHttpError extends Error {
   constructor(
     readonly status: number,
     readonly code: string | null,
-    message: string
+    message: string,
+    readonly retryAfterMs: number | null = null
   ) {
     super(message);
     this.name = 'LeaderTrayHttpError';
   }
 
   static async fromResponse(response: Response): Promise<LeaderTrayHttpError> {
+    const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+    let code: string | null = null;
     try {
       const payload = (await response.json()) as { error?: string; code?: string };
-      return new LeaderTrayHttpError(
-        response.status,
-        payload.code ?? null,
-        `Tray request failed (${response.status})`
-      );
+      code = typeof payload.code === 'string' ? payload.code : null;
     } catch {
-      return new LeaderTrayHttpError(
-        response.status,
-        null,
-        `Tray request failed (${response.status})`
-      );
+      // Non-JSON error body: status alone classifies it.
     }
+    return new LeaderTrayHttpError(
+      response.status,
+      code,
+      `Tray request failed (${response.status})`,
+      retryAfterMs
+    );
   }
+}
+
+/** The request never produced a response (network error, abort, timeout). */
+class LeaderTrayTransportError extends Error {
+  constructor() {
+    super('Tray request failed (transport unavailable)');
+    this.name = 'LeaderTrayTransportError';
+  }
+}
+
+/** 5xx, 429 and transport failures are transient; every other 4xx is final. */
+function classifyTrayRequestFailure(error: unknown): TrayRequestFailure {
+  if (error instanceof LeaderTrayHttpError) {
+    const detail = `HTTP ${error.status}${error.code ? ` ${error.code}` : ''}`;
+    const retryable = error.status >= 500 || error.status === 429;
+    return { retryable, detail, retryAfterMs: error.retryAfterMs ?? undefined };
+  }
+  if (error instanceof TrayProxyFetchError || error instanceof LeaderTrayTransportError) {
+    return { retryable: true, detail: error.message };
+  }
+  return { retryable: false, detail: error instanceof Error ? error.message : String(error) };
 }
 
 function isDefinitiveRotationRefusal(error: unknown): boolean {

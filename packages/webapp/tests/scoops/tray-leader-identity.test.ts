@@ -119,6 +119,8 @@ describe('durable leader-session webhook management identity', () => {
       fetchImpl,
       webSocketFactory: () => new ReadySocket(),
       reconnect: false,
+      // These tests replay single failed attempts across reloads.
+      requestRetry: false,
       ...options,
     });
     managers.push(result);
