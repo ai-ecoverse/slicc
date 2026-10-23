@@ -836,8 +836,10 @@ is not installed, and a name also listed in `dependencies` is followed as a
 dependency. A conflicting copy (version outside the peer range) is kept, not
 replaced, and the install still exits 0 with npm's warning on stderr:
 `ipk: warn ERESOLVE overriding peer dependency: While resolving: <dependent>; Found: <name>@<version>; Could not resolve dependency: peer <name>@"<range>" from <dependent>; Conflicting peer dependency: <name>@<best match>; keeping <name>@<version>`.
-A global install prunes top-level packages the plan does not keep, so there an
-orphaned conflicting copy is replaced by the best match instead. Auto-installed
+A global install (and the tree sync after `ipk uninstall`) prunes top-level
+packages the plan does not keep, so there an orphaned conflicting copy is
+replaced by the best match instead, with a warning:
+`ipk: warn ERESOLVE replacing peer dependency: While resolving: <dependent>; Found: <name>@<version>; Could not resolve dependency: peer <name>@"<range>" from <dependent>; nothing else keeps <name>@<version>, replacing it with <name>@<best match>`. Auto-installed
 peers are not recorded in `package.json`. A required peer that cannot be
 resolved at all fails the install, as a dependency does.
 

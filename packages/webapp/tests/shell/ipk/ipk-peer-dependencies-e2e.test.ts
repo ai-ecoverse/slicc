@@ -281,6 +281,51 @@ describe('ipk install: required peerDependencies (npm 7+)', () => {
     });
   }
 
+  it('-g replaces an orphaned conflicting peer it would prune, with a warning', async () => {
+    shared.registry = buildRegistry([
+      { name: 'sed', version: '1.0.0' },
+      { name: 'sed', version: '2.1.0' },
+      { name: 'tool', version: '1.0.0', peerDependencies: { sed: '^2.0.0' } },
+    ]);
+    const { shell, fs } = await newShell();
+    // A leftover top-level copy that no manifest entry keeps.
+    await fs.mkdir(`${GLOBAL}/sed`, { recursive: true });
+    await fs.writeFile(`${GLOBAL}/sed/package.json`, '{"name":"sed","version":"1.0.0"}');
+
+    const r = await shell.executeCommand('ipk install -g tool');
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain('warn ERESOLVE replacing peer dependency');
+    expect(r.stderr).toContain('Found: sed@1.0.0');
+    expect(r.stderr).toContain('replacing it with sed@2.1.0');
+    expect(await installedVersion(fs, `${GLOBAL}/sed`)).toBe('2.1.0');
+    await fs.dispose();
+  });
+
+  it('warns when an uninstall sync replaces a peer only the removed package kept', async () => {
+    shared.registry = buildRegistry([
+      { name: 'sed', version: '1.0.0' },
+      { name: '@ai/wasm-xz', version: '8.0.0', peerDependencies: { sed: '*' } },
+    ]);
+    const { shell, fs } = await newShell();
+    expect((await shell.executeCommand('ipk install -g @ai/wasm-xz')).exitCode).toBe(0);
+    shared.registry = buildRegistry([
+      { name: 'sed', version: '1.0.0' },
+      { name: 'sed', version: '2.1.0' },
+      { name: '@ai/wasm-xz', version: '8.0.0', peerDependencies: { sed: '*' } },
+      { name: 'tool', version: '1.0.0', peerDependencies: { sed: '^2.0.0' } },
+    ]);
+    const kept = await shell.executeCommand('ipk install -g tool');
+    expect(kept.stderr).toContain('warn ERESOLVE overriding peer dependency');
+    expect(await installedVersion(fs, `${GLOBAL}/sed`)).toBe('1.0.0');
+
+    const r = await shell.executeCommand('ipk uninstall -g @ai/wasm-xz');
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain('warn ERESOLVE replacing peer dependency');
+    expect(r.stderr).toContain('replacing it with sed@2.1.0');
+    expect(await installedVersion(fs, `${GLOBAL}/sed`)).toBe('2.1.0');
+    await fs.dispose();
+  });
+
   it('installs peers of peers, and their dependencies, without looping on a peer cycle', async () => {
     shared.registry = buildRegistry([
       { name: 'coreutils', version: '1.0.0', peerDependencies: { bash: '*' } },

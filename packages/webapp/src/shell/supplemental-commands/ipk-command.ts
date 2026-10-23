@@ -128,7 +128,10 @@ latest. Unknown install flags are rejected. The no-arg form reads the
 manifest without rewriting it. With -g, packages go to /shared/lib/node_modules
 and deps are recorded in /shared/lib/package.json. Required peerDependencies
 are installed as npm 7+ does: an installed copy in range is kept, a missing
-one is hoisted, and a conflicting one is kept with an ERESOLVE warning.
+one is hoisted, and a conflicting one is kept with an ERESOLVE warning. With
+-g (and on uninstall), a conflicting top-level copy nothing else keeps would
+be pruned, so it is replaced by the best match, with an ERESOLVE "replacing
+peer dependency" warning.
 Existing fields are preserved. Idempotent: re-installing an already-satisfied package is a clean
 no-op.
 `;
@@ -417,9 +420,12 @@ async function runUninstall(
 
   const stdout = outcome.results.filter((r) => r.removed).map((r) => `${name}: removed ${r.name}`);
   const skipped = outcome.results.filter((r) => !r.removed).map((r) => r.name);
-  const stderrParts = outcome.errors.map(
-    (e) => `${name}: failed to uninstall ${e.spec}: ${describeError(e.error)}`
-  );
+  const stderrParts = [
+    ...(outcome.notes ?? []).map((note) => `${name}: ${note}`),
+    ...outcome.errors.map(
+      (e) => `${name}: failed to uninstall ${e.spec}: ${describeError(e.error)}`
+    ),
+  ];
   if (skipped.length > 0) {
     stderrParts.push(`${name}: ${skipped.join(', ')} not installed${global ? ' globally' : ''}`);
   }

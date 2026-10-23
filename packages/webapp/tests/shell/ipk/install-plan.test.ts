@@ -805,7 +805,10 @@ describe('resolveDependencyTree: required peer dependencies', () => {
       installedVersion: (name) => (name === 'lib' ? '1.0.0' : undefined),
     });
     expect(plan.root.lib?.version).toBe('2.0.0');
-    expect(plan.warnings).toEqual([]);
+    expect(plan.warnings).toHaveLength(1);
+    expect(plan.warnings[0]).toContain('warn ERESOLVE replacing peer dependency');
+    expect(plan.warnings[0]).toContain('Found: lib@1.0.0');
+    expect(plan.warnings[0]).toContain('replacing it with lib@2.0.0');
   });
 
   it('leaves an installed peer the registry no longer lists when it stays on disk', async () => {

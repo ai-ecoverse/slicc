@@ -1145,14 +1145,15 @@ async function pruneTopLevelPackages(
 /**
  * Reconcile the global install tree with `/shared/lib/package.json` direct
  * dependencies: resolve the merged graph, prune orphaned top-level packages,
- * materialize, and refresh bin shims + PATH delegators.
+ * materialize, and refresh bin shims + PATH delegators. Returns the plan's
+ * non-fatal notes (e.g. peer dependency warnings).
  */
 export async function syncGlobalInstallTree(
   fs: VirtualFS,
   fetch: SecureFetch,
   timeoutMs?: number,
   manifestOverride?: ProjectManifest
-): Promise<void> {
+): Promise<string[]> {
   const manifest =
     manifestOverride ?? (await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {}));
   const entries = collectManagedEntries(manifest);
@@ -1160,7 +1161,7 @@ export async function syncGlobalInstallTree(
   if (entries.length === 0) {
     await removeIfExists(fs, GLOBAL_NODE_MODULES);
     await reconcileGlobalBinDelegators(fs, new Set());
-    return;
+    return [];
   }
 
   const supplier = buildPackumentSupplier(fetch, timeoutMs);
@@ -1183,6 +1184,7 @@ export async function syncGlobalInstallTree(
   const installed = await collectInstalledBins(fs, GLOBAL_NODE_MODULES);
   const chosen = chooseRootBins(installed);
   await reconcileGlobalBinDelegators(fs, new Set(chosen.keys()));
+  return skipNotes(plan);
 }
 
 export interface UninstallResult {
@@ -1193,6 +1195,8 @@ export interface UninstallResult {
 export interface UninstallPackagesResult {
   results: UninstallResult[];
   errors: InstallFailure[];
+  /** Non-fatal messages from re-planning the remaining tree. */
+  notes?: string[];
 }
 
 export async function uninstallPackages(
@@ -1237,12 +1241,11 @@ export async function uninstallPackages(
 
   const nextManifest = manifestWithoutPackages(before, names);
 
+  let notes: string[];
   try {
-    if (globalUninstall) {
-      await syncGlobalInstallTree(fs, fetch, timeoutMs, nextManifest);
-    } else {
-      await syncLocalInstallTree(fs, fetch, cwd, timeoutMs, nextManifest);
-    }
+    notes = globalUninstall
+      ? await syncGlobalInstallTree(fs, fetch, timeoutMs, nextManifest)
+      : await syncLocalInstallTree(fs, fetch, cwd, timeoutMs, nextManifest);
   } catch (err) {
     errors.push({ spec: specs.join(' '), error: toError(err) });
     return { results, errors };
@@ -1250,7 +1253,7 @@ export async function uninstallPackages(
 
   await writeManifest(fs, manifestPath, nextManifest);
 
-  return { results, errors };
+  return { results, errors, notes };
 }
 
 async function syncLocalInstallTree(
@@ -1259,7 +1262,7 @@ async function syncLocalInstallTree(
   cwd: string,
   timeoutMs?: number,
   manifestOverride?: ProjectManifest
-): Promise<void> {
+): Promise<string[]> {
   const manifestPath = joinPath(cwd, 'package.json');
   const manifest = manifestOverride ?? (await readJsonOr<ProjectManifest>(fs, manifestPath, {}));
   const entries = collectManagedEntries(manifest);
@@ -1267,7 +1270,7 @@ async function syncLocalInstallTree(
 
   if (entries.length === 0) {
     await removeIfExists(fs, modulesDir);
-    return;
+    return [];
   }
 
   const supplier = buildPackumentSupplier(fetch, timeoutMs);
@@ -1286,6 +1289,7 @@ async function syncLocalInstallTree(
   await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));
   await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
   await reconcileRootBinShims(fs, modulesDir);
+  return skipNotes(plan);
 }
 
 export interface GlobalPackageListing {

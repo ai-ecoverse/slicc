@@ -273,6 +273,7 @@ export async function resolveDependencyTree(
 
     const installed = await options.installedVersion?.(name);
     let resolved: ResolvedEdge | null = null;
+    let replacing = false;
     if (installed !== undefined) {
       if (satisfies(installed, range)) {
         resolved = await installedEdge(name, installed, getPackument);
@@ -281,9 +282,13 @@ export async function resolveDependencyTree(
       } else if (options.installedStays) {
         warnings.push(await peerConflict(getPackument, name, range, from, installed));
         return;
+      } else {
+        replacing = true;
       }
     }
     resolved ??= await resolveEdge(name, range, getPackument);
+    // The plan leaves the conflicting copy out, so pruning removes it anyway.
+    if (replacing) warnings.push(peerReplaced(name, range, from, `${installed}`, resolved.version));
 
     const node = buildNode(name, resolved.version, resolved.entry);
     top[name] = node;
@@ -390,6 +395,17 @@ async function peerConflict(
     // The warning still names the range; the best match is a courtesy.
   }
   return `warn ERESOLVE overriding peer dependency: While resolving: ${from}; Found: ${name}@${found}; Could not resolve dependency: peer ${name}@"${range}" from ${from}${wanted}; keeping ${name}@${found}`;
+}
+
+/** npm-style ERESOLVE warning for a conflicting copy the install replaces. */
+function peerReplaced(
+  name: string,
+  range: string,
+  from: string,
+  found: string,
+  version: string
+): string {
+  return `warn ERESOLVE replacing peer dependency: While resolving: ${from}; Found: ${name}@${found}; Could not resolve dependency: peer ${name}@"${range}" from ${from}; nothing else keeps ${name}@${found}, replacing it with ${name}@${version}`;
 }
 
 function findNearest(
