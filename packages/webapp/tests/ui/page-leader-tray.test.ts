@@ -650,7 +650,12 @@ describe('startPageLeaderTray', () => {
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('network down'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const handle = startPageLeaderTray(makeBaseOptions({ fetchImpl, store }));
+      const onLeaderStartFailed = vi.fn();
+      const handle = startPageLeaderTray({
+        ...makeBaseOptions({ fetchImpl, store }),
+        _requestRetry: false,
+        onLeaderStartFailed,
+      });
 
       // ready should reject
       await expect(handle.ready).rejects.toThrow(/transport unavailable/);
@@ -662,6 +667,10 @@ describe('startPageLeaderTray', () => {
             String(args[1] ?? '').includes('Leader tray start failed')
           )
         ).toBe(true)
+      );
+      // Hosted mode reports the cause to node-server through this hook (#4112).
+      expect(onLeaderStartFailed).toHaveBeenCalledWith(
+        expect.stringContaining('transport unavailable')
       );
 
       handle.stop();

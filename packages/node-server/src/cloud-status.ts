@@ -14,6 +14,18 @@ export function resolveJoinFilePath(env: NodeJS.ProcessEnv = process.env): strin
   return configured || DEFAULT_JOIN_FILE_PATH;
 }
 
+/**
+ * Sibling of the join file for a leader that could not mint a tray (#4112).
+ * start-leader polls it so a failed boot reports the cause, not a timeout.
+ * A separate file keeps the join file's `joinUrl` contract untouched.
+ */
+export function joinErrorFilePath(joinFilePath: string): string {
+  return `${joinFilePath}.error.json`;
+}
+
+/** Longest error string persisted; the webapp's messages are far shorter. */
+const MAX_ERROR_LENGTH = 2000;
+
 export interface CloudStatusEndpointOptions {
   joinFilePath: string;
 }
@@ -86,6 +98,25 @@ export function registerCloudStatusEndpoint(
       updatedAt: new Date().toISOString(),
     };
     await fs.writeFile(options.joinFilePath, JSON.stringify(payload, null, 2));
+    await fs.rm(joinErrorFilePath(options.joinFilePath), { force: true });
+    res.json({ ok: true });
+  });
+
+  app.post('/api/cloud-status/error', requireLoopback, express.json(), async (req, res) => {
+    const body = req.body as { error?: unknown; sliccVersion?: unknown } | undefined;
+    if (typeof body?.error !== 'string' || body.error.length === 0) {
+      res.status(400).json({ error: 'invalid cloud-status error payload' });
+      return;
+    }
+    const error = body.error.slice(0, MAX_ERROR_LENGTH);
+    // stdout is the leader log; the line names the cause even without the file.
+    console.error(`[cloud-status] leader failed to mint a tray: ${error}`);
+    const payload = {
+      error,
+      sliccVersion: typeof body.sliccVersion === 'string' ? body.sliccVersion : null,
+      updatedAt: new Date().toISOString(),
+    };
+    await fs.writeFile(joinErrorFilePath(options.joinFilePath), JSON.stringify(payload, null, 2));
     res.json({ ok: true });
   });
 }

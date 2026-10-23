@@ -14,6 +14,7 @@ import {
   MAX_DURATION_MS,
   parseBoolean,
   parseDuration,
+  parseJoinErrorFile,
   parseJoinFile,
   parseMountLines,
   parseMountMapping,
@@ -33,6 +34,23 @@ import {
   truncateForOutput,
   validateSecretEntry,
 } from './lib.mjs';
+
+describe('parseJoinErrorFile', () => {
+  it('returns a fresh error and rejects stale, malformed or empty ones', () => {
+    const at = '2026-10-23T15:40:00.000Z';
+    const ms = Date.parse(at);
+    expect(parseJoinErrorFile(JSON.stringify({ error: 'boom', updatedAt: at }), ms)).toEqual({
+      error: 'boom',
+      updatedAt: ms,
+    });
+    expect(parseJoinErrorFile(JSON.stringify({ error: 'boom', updatedAt: at }), ms + 1)).toBeNull();
+    expect(parseJoinErrorFile(JSON.stringify({ error: '', updatedAt: at }))).toBeNull();
+    expect(parseJoinErrorFile(JSON.stringify({ error: 'boom' }))).toBeNull();
+    expect(parseJoinErrorFile('null')).toBeNull();
+    expect(parseJoinErrorFile('{')).toBeNull();
+    expect(parseJoinErrorFile(null)).toBeNull();
+  });
+});
 
 describe('parseDuration', () => {
   it('parses units and compounds', () => {

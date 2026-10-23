@@ -49,9 +49,11 @@ import {
   buildConeConfigFiles,
   buildLeaderArgs,
   buildLeaderEnv,
+  joinErrorFilePath,
   PRODUCTION_TRAY_ORIGIN,
   parseBoolean,
   parseDuration,
+  parseJoinErrorFile,
   parseJoinFile,
   parseMountLines,
   parsePort,
@@ -147,7 +149,10 @@ export function resolveNodeServer(home, exec = execFileSync) {
 export function removeCredentialFiles(secretsFile, joinFile = joinFilePath()) {
   rmSync(coneConfigPath(), { force: true });
   if (secretsFile) rmSync(secretsFile, { force: true });
-  if (joinFile) rmSync(joinFile, { force: true });
+  if (joinFile) {
+    rmSync(joinFile, { force: true });
+    rmSync(joinErrorFilePath(joinFile), { force: true });
+  }
 }
 
 export function writeCredentialFiles(home) {
@@ -185,8 +190,17 @@ export function writeCredentialFiles(home) {
   return { secretsFile, coneConfigWritten: Boolean(coneConfigJson), summary };
 }
 
+function readOptional(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Poll the join file until node-server has minted a tray. Fails fast if the
+ * Poll the join file until node-server has minted a tray. Also fails fast when
+ * node-server records that the leader gave up minting one (#4112). Fails fast if the
  * child exits first; kills it if the boot timeout elapses.
  */
 export async function pollJoinFile({
@@ -217,6 +231,12 @@ export async function pollJoinFile({
     }
     const parsed = parseJoinFile(text, startedAt);
     if (parsed) return parsed;
+    const failure = parseJoinErrorFile(readOptional(joinErrorFilePath(file)), startedAt);
+    if (failure) {
+      group('leader log (tail)', logTail(logPath, 80));
+      await terminate(child.pid, 5_000);
+      throw new Error(`leader failed to mint a join URL: ${failure.error}`);
+    }
     await sleep(pollMs);
   }
   group('leader log (tail)', logTail(logPath, 80));

@@ -1268,6 +1268,18 @@ function hostedLeaderExtras(deps: WcTrayDeps): Partial<StartPageLeaderTrayOption
         deps.log.error('failed to POST /api/cloud-status', { error: String(err) });
       });
     },
+    // A launcher polling for the join file reads this and fails fast with the
+    // cause instead of its generic boot timeout (#4112). Older node-servers 404.
+    onLeaderStartFailed: (error) => {
+      void fetch(resolveApiUrl('/api/cloud-status/error'), {
+        method: 'POST',
+        headers: apiHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ error, sliccVersion: __SLICC_VERSION__ }),
+        signal: AbortSignal.timeout(10000),
+      }).catch((err) => {
+        deps.log.error('failed to POST /api/cloud-status/error', { error: String(err) });
+      });
+    },
   };
 }
 

@@ -178,6 +178,44 @@ describe('wireWcTray tab persistence guard', () => {
   });
 });
 
+describe('wireWcTray hosted leader start failure (#4112)', () => {
+  beforeEach(() => {
+    trayMocks.options = null;
+  });
+
+  it('reports the cause to node-server so start-leader fails fast', async () => {
+    const fetchSpy = vi.fn(async () => new Response('{"ok":true}'));
+    vi.stubGlobal('fetch', fetchSpy);
+    try {
+      const { deps } = makeDeps();
+      await wireWcTray(deps as never);
+      const onLeaderStartFailed = trayMocks.options?.onLeaderStartFailed as (e: string) => void;
+      expect(trayMocks.options?.runtime).toBe('slicc-hosted-leader');
+
+      onLeaderStartFailed('POST /tray failed after 11 attempts in 86s: HTTP 503');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+      expect(String(url)).toMatch(/\/api\/cloud-status\/error$/);
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        error: 'POST /tray failed after 11 attempts in 86s: HTTP 503',
+      });
+
+      // A node-server that predates the endpoint (or is gone) only logs.
+      fetchSpy.mockRejectedValueOnce(new Error('connection refused'));
+      onLeaderStartFailed('again');
+      await vi.waitFor(() =>
+        expect(deps.log.error).toHaveBeenCalledWith('failed to POST /api/cloud-status/error', {
+          error: 'Error: connection refused',
+        })
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('wireWcTray fatal boot', () => {
   beforeEach(() => {
     guardMocks.instances.length = 0;

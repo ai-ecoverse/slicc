@@ -641,6 +641,39 @@ export function parseJoinFile(text, minUpdatedAtMs = 0) {
   };
 }
 
+/**
+ * Sibling of the join file where node-server records a leader that could not
+ * mint a tray (`POST /api/cloud-status/error`, #4112). Mirrors
+ * `joinErrorFilePath` in `packages/node-server/src/cloud-status.ts`.
+ * @param {string} joinFile
+ */
+export function joinErrorFilePath(joinFile) {
+  return `${joinFile}.error.json`;
+}
+
+/**
+ * Parse the join-error file. Same freshness rule as {@link parseJoinFile}: a
+ * failure a previous leader on this runner recorded is not this boot's cause.
+ *
+ * @param {string | null | undefined} text
+ * @param {number} minUpdatedAtMs
+ * @returns {{ error: string; updatedAt: number } | null}
+ */
+export function parseJoinErrorFile(text, minUpdatedAtMs = 0) {
+  if (!text) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  if (!isStr(parsed.error) || !parsed.error) return null;
+  const updatedAt = Date.parse(parsed.updatedAt ?? '');
+  if (!Number.isFinite(updatedAt) || updatedAt < minUpdatedAtMs) return null;
+  return { error: parsed.error, updatedAt };
+}
+
 const GO_OS = { darwin: 'darwin', linux: 'linux', win32: 'windows' };
 const GO_ARCH = { x64: 'amd64', arm64: 'arm64' };
 
