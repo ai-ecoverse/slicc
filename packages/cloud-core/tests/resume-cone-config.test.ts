@@ -104,4 +104,17 @@ describe('applyConeConfigDelta (read-modify-write of both files)', () => {
     );
     expect(out.index.secretNames).toEqual(['s3.r2.access_key_id', 'NEW']);
   });
+
+  // Deliberate: the stricter account rules apply to the persisted base too. An
+  // empty credential (only a raw-API start under the old rules could store one)
+  // fails the resume with the entry named instead of booting a dead account.
+  it('rejects a persisted account with an empty credential on resume', () => {
+    const existing = JSON.stringify({
+      model: 'adobe:claude-opus-4-6',
+      accounts: [{ providerId: 'adobe', kind: 'oauth', accessToken: '' }],
+    });
+    expect(() => applyConeConfigDelta(existing, '', {})).toThrow(
+      /accounts\[0\]: oauth account requires accessToken/
+    );
+  });
 });
