@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
 vi.mock('isomorphic-git', async (importOriginal) => ({ ...(await importOriginal()) }));
@@ -29,6 +29,16 @@ describe('GitCommands', () => {
       authorEmail: 'test@example.com',
       globalDbName,
     });
+  });
+
+  afterEach(async () => {
+    await vfs.dispose();
+    const globalFs = (
+      GitCommands as unknown as { globalFsByDbName: Map<string, Promise<VirtualFS>> }
+    ).globalFsByDbName;
+    const pending = globalFs.get(globalDbName);
+    globalFs.delete(globalDbName);
+    await (await pending)?.dispose();
   });
 
   it('shows help', async () => {
@@ -3656,21 +3666,104 @@ EOF`);
     const subjects = async (cwd: string): Promise<string[]> =>
       (await git.execute(['log', '--format', '%s'], cwd)).stdout.trim().split('\n');
 
-    it('cleanly replays a linear branch onto an advanced upstream', async () => {
+    type Files = Record<string, string>;
+    type CommitSpec = [message: string, files: Files];
+    let clock = 1_700_000_000;
+
+    const seedCommit = async (
+      message: string,
+      files: Files,
+      parents: string[] = []
+    ): Promise<string> => {
+      const fs = createIsomorphicGitFs(vfs);
+      const dir = '/project';
+      const tree = await isoGit.writeTree({
+        fs,
+        dir,
+        tree: await Promise.all(
+          Object.keys(files)
+            .sort()
+            .map(async (path) => ({
+              mode: '100644',
+              path,
+              type: 'blob' as const,
+              oid: await isoGit.writeBlob({
+                fs,
+                dir,
+                blob: new TextEncoder().encode(files[path]),
+              }),
+            }))
+        ),
+      });
+      const sig = {
+        name: 'Test User',
+        email: 'test@example.com',
+        timestamp: clock++,
+        timezoneOffset: 0,
+      };
+      return isoGit.writeCommit({
+        fs,
+        dir,
+        commit: { message: `${message}\n`, tree, parent: parents, author: sig, committer: sig },
+      });
+    };
+
+    const chain = async (tip: string, commits: CommitSpec[]): Promise<string> => {
+      for (const [message, files] of commits) tip = await seedCommit(message, files, [tip]);
+      return tip;
+    };
+
+    const seedBranches = async (branches: Record<string, string>, head: string): Promise<void> => {
+      const fs = createIsomorphicGitFs(vfs);
+      const dir = '/project';
+      for (const [name, oid] of Object.entries(branches)) {
+        await isoGit.writeRef({ fs, dir, ref: `refs/heads/${name}`, value: oid, force: true });
+      }
+      await isoGit.writeRef({
+        fs,
+        dir,
+        ref: 'HEAD',
+        value: `refs/heads/${head}`,
+        symbolic: true,
+        force: true,
+      });
+      await isoGit.checkout({ fs, dir, ref: head, force: true });
+    };
+
+    const seedDiverged = async (
+      base: Files,
+      main: CommitSpec[],
+      feature: CommitSpec[]
+    ): Promise<void> => {
       await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/base.txt', 'base\n');
-      await git.execute(['add', 'base.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
+      const baseOid = await seedCommit('base', base);
+      await seedBranches(
+        { main: await chain(baseOid, main), feature: await chain(baseOid, feature) },
+        'feature'
+      );
+    };
 
-      await vfs.writeFile('/project/main.txt', 'main\n');
-      await git.execute(['add', 'main.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-work'], '/project');
+    const BASE = { 'base.txt': 'base\n' };
 
-      await git.execute(['checkout', 'feature'], '/project');
-      await vfs.writeFile('/project/feat.txt', 'feat\n');
-      await git.execute(['add', 'feat.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-work'], '/project');
+    const seedLinear = () =>
+      seedDiverged(
+        BASE,
+        [['main-work', { ...BASE, 'main.txt': 'main\n' }]],
+        [['feat-work', { ...BASE, 'feat.txt': 'feat\n' }]]
+      );
+
+    const seedConflict = () =>
+      seedDiverged(
+        { 'conflict.txt': 'line1\nline2\nline3\n' },
+        [['main-change', { 'conflict.txt': 'line1\nMAIN\nline3\n' }]],
+        [['feat-change', { 'conflict.txt': 'line1\nFEATURE\nline3\n' }]]
+      );
+
+    const seedBehind = () =>
+      seedDiverged(BASE, [['main-work', { ...BASE, 'main.txt': 'main\n' }]], []);
+
+    it('cleanly replays a linear branch onto an advanced upstream', async () => {
+      await seedLinear();
 
       const result = await git.execute(['rebase', 'main'], '/project');
       expect(result.exitCode).toBe(0);
@@ -3687,20 +3780,7 @@ EOF`);
     });
 
     it('stops on a conflicting commit and finishes after --continue', async () => {
-      await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
-      await git.execute(['add', 'conflict.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
-
-      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
-      await git.execute(['add', 'conflict.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-change'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
-      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
-      await git.execute(['add', 'conflict.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-change'], '/project');
+      await seedConflict();
 
       const result = await git.execute(['rebase', 'main'], '/project');
       expect(result.exitCode).toBe(1);
@@ -3723,20 +3803,7 @@ EOF`);
     });
 
     it('--abort restores the original branch tip exactly', async () => {
-      await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
-      await git.execute(['add', 'conflict.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
-
-      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
-      await git.execute(['add', 'conflict.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-change'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
-      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
-      await git.execute(['add', 'conflict.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-change'], '/project');
+      await seedConflict();
 
       const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
       const conflict = await git.execute(['rebase', 'main'], '/project');
@@ -3751,23 +3818,14 @@ EOF`);
     });
 
     it('--skip drops the conflicting commit and applies the rest', async () => {
-      await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/a.txt', 'base\n');
-      await git.execute(['add', 'a.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
-
-      await vfs.writeFile('/project/a.txt', 'MAIN\n');
-      await git.execute(['add', 'a.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-change'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
-      await vfs.writeFile('/project/a.txt', 'FEATURE1\n');
-      await git.execute(['add', 'a.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-1'], '/project');
-      await vfs.writeFile('/project/b.txt', 'feature2\n');
-      await git.execute(['add', 'b.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-2'], '/project');
+      await seedDiverged(
+        { 'a.txt': 'base\n' },
+        [['main-change', { 'a.txt': 'MAIN\n' }]],
+        [
+          ['feat-1', { 'a.txt': 'FEATURE1\n' }],
+          ['feat-2', { 'a.txt': 'FEATURE1\n', 'b.txt': 'feature2\n' }],
+        ]
+      );
 
       const result = await git.execute(['rebase', 'main'], '/project');
       expect(result.exitCode).toBe(1);
@@ -3782,17 +3840,8 @@ EOF`);
     });
 
     it('fast-forwards when the branch is behind the upstream', async () => {
-      await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/base.txt', 'base\n');
-      await git.execute(['add', 'base.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
+      await seedBehind();
 
-      await vfs.writeFile('/project/main.txt', 'main\n');
-      await git.execute(['add', 'main.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-work'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
       const result = await git.execute(['rebase', 'main'], '/project');
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Fast-forwarded');
@@ -3801,15 +3850,7 @@ EOF`);
     });
 
     it('reports up to date when the upstream is already an ancestor', async () => {
-      await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/base.txt', 'base\n');
-      await git.execute(['add', 'base.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-
-      await git.execute(['checkout', '-b', 'feature'], '/project');
-      await vfs.writeFile('/project/x.txt', 'x\n');
-      await git.execute(['add', 'x.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-work'], '/project');
+      await seedDiverged(BASE, [], [['feat-work', { ...BASE, 'x.txt': 'x\n' }]]);
 
       const result = await git.execute(['rebase', 'main'], '/project');
       expect(result.exitCode).toBe(0);
@@ -3818,38 +3859,23 @@ EOF`);
 
     it('rejects rebasing a range that contains a merge commit', async () => {
       await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/base.txt', 'base\n');
-      await git.execute(['add', 'base.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
-
-      await vfs.writeFile('/project/main.txt', 'main\n');
-      await git.execute(['add', 'main.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-work'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
-      await vfs.writeFile('/project/feat.txt', 'feat\n');
-      await git.execute(['add', 'feat.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-work'], '/project');
-      await git.execute(['branch', 'side'], '/project');
-
-      await vfs.writeFile('/project/feat2.txt', 'feat2\n');
-      await git.execute(['add', 'feat2.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-2'], '/project');
-
-      await git.execute(['checkout', 'side'], '/project');
-      await vfs.writeFile('/project/side.txt', 'side\n');
-      await git.execute(['add', 'side.txt'], '/project');
-      await git.execute(['commit', '-m', 'side-work'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
-      const mergeResult = await git.execute(['merge', 'side'], '/project');
-      expect(mergeResult.exitCode).toBe(0);
+      const base = await seedCommit('base', BASE);
+      const main = await seedCommit('main-work', { ...BASE, 'main.txt': 'main\n' }, [base]);
+      const featFiles = { ...BASE, 'feat.txt': 'feat\n' };
+      const feat = await seedCommit('feat-work', featFiles, [base]);
+      const feat2 = await seedCommit('feat-2', { ...featFiles, 'feat2.txt': 'feat2\n' }, [feat]);
+      const side = await seedCommit('side-work', { ...featFiles, 'side.txt': 'side\n' }, [feat]);
+      const merge = await seedCommit(
+        "Merge branch 'side' into feature",
+        { ...featFiles, 'feat2.txt': 'feat2\n', 'side.txt': 'side\n' },
+        [feat2, side]
+      );
+      await seedBranches({ main, side, feature: merge }, 'feature');
 
       const result = await git.execute(['rebase', 'main'], '/project');
       expect(result.exitCode).toBe(128);
       expect(result.stderr).toContain('is a merge');
-    }, 30_000);
+    });
 
     it('rejects unsupported interactive rebase', async () => {
       await git.execute(['init'], '/project');
@@ -3874,20 +3900,7 @@ EOF`);
     });
 
     it('refuses to rebase (replay path) when the working tree has tracked changes', async () => {
-      await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/base.txt', 'base\n');
-      await git.execute(['add', 'base.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
-
-      await vfs.writeFile('/project/main.txt', 'main\n');
-      await git.execute(['add', 'main.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-work'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
-      await vfs.writeFile('/project/feat.txt', 'feat\n');
-      await git.execute(['add', 'feat.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-work'], '/project');
+      await seedLinear();
 
       await vfs.writeFile('/project/feat.txt', 'dirty edit\n');
       const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
@@ -3904,17 +3917,7 @@ EOF`);
     });
 
     it('refuses to fast-forward over a dirty working tree', async () => {
-      await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/base.txt', 'base\n');
-      await git.execute(['add', 'base.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
-
-      await vfs.writeFile('/project/main.txt', 'main\n');
-      await git.execute(['add', 'main.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-work'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
+      await seedBehind();
       await vfs.writeFile('/project/base.txt', 'dirty\n');
       const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
 
@@ -3928,20 +3931,7 @@ EOF`);
     });
 
     it('allows a rebase when only untracked files are present', async () => {
-      await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/base.txt', 'base\n');
-      await git.execute(['add', 'base.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
-
-      await vfs.writeFile('/project/main.txt', 'main\n');
-      await git.execute(['add', 'main.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-work'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
-      await vfs.writeFile('/project/feat.txt', 'feat\n');
-      await git.execute(['add', 'feat.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-work'], '/project');
+      await seedLinear();
 
       await vfs.writeFile('/project/untracked.txt', 'scratch\n');
 
@@ -3953,20 +3943,7 @@ EOF`);
     });
 
     it('resolves conflicts toward the upstream with -X ours (no stop)', async () => {
-      await git.execute(['init'], '/project');
-      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
-      await git.execute(['add', 'conflict.txt'], '/project');
-      await git.execute(['commit', '-m', 'base'], '/project');
-      await git.execute(['branch', 'feature'], '/project');
-
-      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
-      await git.execute(['add', 'conflict.txt'], '/project');
-      await git.execute(['commit', '-m', 'main-change'], '/project');
-
-      await git.execute(['checkout', 'feature'], '/project');
-      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
-      await git.execute(['add', 'conflict.txt'], '/project');
-      await git.execute(['commit', '-m', 'feat-change'], '/project');
+      await seedConflict();
 
       const result = await git.execute(['rebase', '-X', 'ours', 'main'], '/project');
       expect(result.exitCode).toBe(0);

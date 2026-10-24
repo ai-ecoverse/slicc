@@ -10,6 +10,7 @@ import {
 } from '../../src/scoops/db.js';
 import type { OrchestratorCallbacks } from '../../src/scoops/orchestrator.js';
 import { Orchestrator, SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
+import { ScoopLifecycleManager } from '../../src/scoops/scoop-lifecycle-manager.js';
 import {
   type ChannelMessage,
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -75,6 +76,36 @@ async function settleAndDisposeSharedFs(
 
   await sharedFs.dispose();
 }
+
+beforeAll(async () => {
+  const shimmed = typeof (globalThis as any).window === 'undefined';
+  if (shimmed) (globalThis as any).window = globalThis;
+  const warmCone: RegisteredScoop = { ...cone, jid: 'cone_warmup', folder: 'warmup' };
+  let warm: Orchestrator | undefined;
+  try {
+    await initDB();
+    await saveScoop(warmCone);
+    warm = new Orchestrator({ appendChild: () => {} } as unknown as HTMLElement, {
+      onResponse: () => {},
+      onResponseDone: () => {},
+      onSendMessage: () => {},
+      onStatusChange: () => {},
+      onError: () => {},
+      getBrowserAPI: () => ({}) as any,
+    });
+    await warm.init();
+  } finally {
+    if (warm) {
+      const sharedFs = warm.getSharedFS();
+      await warm.shutdown();
+      await settleAndDisposeSharedFs(sharedFs);
+    }
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    await deleteScoop(warmCone.jid);
+    await clearAllMessages();
+    if (shimmed) delete (globalThis as any).window;
+  }
+}, 60_000);
 
 describe('Orchestrator Message Routing (DB-level)', () => {
   beforeAll(async () => {
@@ -435,6 +466,8 @@ describe('Orchestrator session-restore compat for path config', () => {
   });
 
   beforeEach(async () => {
+    vi.spyOn(ScoopLifecycleManager.prototype, 'createTab').mockResolvedValue(undefined);
+
     await initDB();
     const existing = await getAllScoops();
     const { deleteScoop } = await import('../../src/scoops/db.js');
@@ -447,6 +480,7 @@ describe('Orchestrator session-restore compat for path config', () => {
     const sharedFs = orch?.getSharedFS();
     await orch?.shutdown();
     await settleAndDisposeSharedFs(sharedFs);
+    vi.restoreAllMocks();
   });
 
   function noopCallbacks() {

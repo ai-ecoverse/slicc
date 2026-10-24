@@ -7,6 +7,9 @@ enum TraySignalingError: Error, LocalizedError {
     case invalidAttachResponse(statusCode: Int, body: String)
     case invalidBootstrapResponse(statusCode: Int, body: String)
     case networkError(underlying: Error)
+    
+    
+    indirect case retriesExhausted(attempts: Int, last: TraySignalingError)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +21,9 @@ enum TraySignalingError: Error, LocalizedError {
             return "Tray follower bootstrap returned invalid response (\(code)): \(body.prefix(200))"
         case .networkError(let underlying):
             return "Tray signaling network error: \(underlying.localizedDescription)"
+        case .retriesExhausted(let attempts, let last):
+            let noun = attempts == 1 ? "attempt" : "attempts"
+            return "Tray hub unavailable after \(attempts) \(noun): \(last.errorDescription ?? "\(last)")"
         }
     }
 }
@@ -98,6 +104,7 @@ public actor TraySignalingClient {
 
     public let joinUrl: URL
     private let transport: Transport
+    private let retry: TraySignalingRetry
 
     
     
@@ -118,7 +125,12 @@ public actor TraySignalingClient {
     }
 
     public init(joinUrl: URL, transport: @escaping Transport) {
+        self.init(joinUrl: joinUrl, retry: .standard, transport: transport)
+    }
+
+    init(joinUrl: URL, retry: TraySignalingRetry, transport: @escaping Transport) {
         self.joinUrl = joinUrl
+        self.retry = retry
         self.transport = transport
     }
 
@@ -241,23 +253,85 @@ public actor TraySignalingClient {
 
     
 
+    
+    
+    
     private func post(body: [String: Any]) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: joinUrl)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let payload = try JSONSerialization.data(withJSONObject: body)
+        let deadline = retry.now().addingTimeInterval(retry.budget)
+        var backoff = retry.baseDelay
+        var attempt = 0
+        var last: TraySignalingError?
 
-        let (data, urlResponse): (Data, URLResponse)
-        do {
-            (data, urlResponse) = try await transport(request)
-        } catch {
-            throw TraySignalingError.networkError(underlying: error)
-        }
+        while true {
+            
+            
+            
+            let remaining = deadline.timeIntervalSince(retry.now())
+            if let last, remaining <= 0 {
+                throw TraySignalingError.retriesExhausted(attempts: attempt, last: last)
+            }
+            attempt += 1
+            var request = URLRequest(url: joinUrl)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = payload
+            request.timeoutInterval = max(remaining, 0.001)
 
-        guard let httpResponse = urlResponse as? HTTPURLResponse else {
-            throw TraySignalingError.invalidResponse(statusCode: 0, body: "(not HTTP)")
+            var retryAfter: TimeInterval?
+            do {
+                let (data, urlResponse) = try await send(request, within: remaining)
+                guard let httpResponse = urlResponse as? HTTPURLResponse else {
+                    throw TraySignalingError.invalidResponse(statusCode: 0, body: "(not HTTP)")
+                }
+                guard TraySignalingRetry.isTransient(data: data, response: httpResponse) else {
+                    return (data, httpResponse)
+                }
+                last = .invalidResponse(
+                    statusCode: httpResponse.statusCode,
+                    body: String(data: data, encoding: .utf8) ?? "(empty)")
+                retryAfter = TraySignalingRetry.retryAfter(in: httpResponse, now: retry.now())
+            } catch let error as TraySignalingError {
+                throw error
+            } catch {
+                guard !TraySignalingRetry.isCancellation(error), !Task.isCancelled else {
+                    throw TraySignalingError.networkError(underlying: error)
+                }
+                last = .networkError(underlying: error)
+            }
+            let failure = last ?? .invalidResponse(statusCode: 0, body: "(no reply)")
+
+            
+            
+            
+            let delay = retryAfter ?? retry.jitter(backoff)
+            let leftAfterWait = deadline.timeIntervalSince(retry.now()) - delay
+            if attempt >= retry.maxAttempts || leftAfterWait < retry.minAttemptTime {
+                throw TraySignalingError.retriesExhausted(attempts: attempt, last: failure)
+            }
+            try await retry.sleep(delay)
+            backoff = min(backoff * 2, retry.maxDelay)
         }
-        return (data, httpResponse)
+    }
+
+    
+    
+    
+    private func send(_ request: URLRequest, within seconds: TimeInterval) async throws -> (
+        Data, URLResponse
+    ) {
+        try await withThrowingTaskGroup(of: (Data, URLResponse)?.self) { group in
+            group.addTask { [transport] in try await transport(request) }
+            group.addTask { [retry] in
+                try await retry.attemptTimer(seconds)
+                return nil
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next(), let reply = first else {
+                throw URLError(.timedOut)
+            }
+            return reply
+        }
     }
 
     private func postBootstrapRequest(body: [String: Any]) async throws -> FollowerBootstrapPlan {
