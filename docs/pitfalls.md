@@ -1114,7 +1114,10 @@ not retried.
 `503` `TRAY_TEMPORARILY_UNAVAILABLE`. The CLI repeats a non-JSON body, any
 HTTP 5xx, or a network error with backoff, and the error it finally returns
 includes the status and the body it saw. A redirect that names a successor is
-still returned immediately.
+still returned immediately. The Swift follower (`TraySignalingClient` in
+`packages/swift-trayfollower`, used by the iOS app and swift-server) does the
+same inside the same 8 s budget, and also repeats a `429`, waiting for its
+`Retry-After`; other 4xx replies are never repeated.
 
 ## Leader Tray WebSocket: Extension Mode
 
