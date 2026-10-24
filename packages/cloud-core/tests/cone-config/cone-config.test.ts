@@ -61,17 +61,17 @@ describe('validateConeConfig', () => {
   });
   it('rejects an account with a missing/invalid kind', () => {
     expect(() => validateConeConfig({ ...base, accounts: [{ providerId: 'x' }] })).toThrow(
-      /kind required/
+      /kind must be/
     );
   });
-  it('rejects a secret name that is not an env-var identifier', () => {
+  it('rejects a secret name that is not an identifier', () => {
     expect(() =>
-      validateConeConfig({ ...base, secrets: [{ name: 'FOO=BAR', value: 'v', domains: [] }] })
+      validateConeConfig({ ...base, secrets: [{ name: 'FOO=BAR', value: 'v', domains: ['d'] }] })
     ).toThrow(/identifier/);
   });
   it('rejects a secret value or domain with a newline (secrets.env is line-based)', () => {
     expect(() =>
-      validateConeConfig({ ...base, secrets: [{ name: 'X', value: 'a\nb', domains: [] }] })
+      validateConeConfig({ ...base, secrets: [{ name: 'X', value: 'a\nb', domains: ['d'] }] })
     ).toThrow(/single-line/);
     expect(() =>
       validateConeConfig({ ...base, secrets: [{ name: 'X', value: 'v', domains: ['a,b'] }] })
@@ -108,7 +108,9 @@ describe('validateConeConfigDelta', () => {
   });
   it('rejects a nested secret that would inject a newline', () => {
     expect(() =>
-      validateConeConfigDelta({ upsert: { secrets: [{ name: 'X', value: 'a\nb', domains: [] }] } })
+      validateConeConfigDelta({
+        upsert: { secrets: [{ name: 'X', value: 'a\nb', domains: ['d'] }] },
+      })
     ).toThrow(/single-line/);
   });
   it('rejects a non-string delete.secretNames entry', () => {

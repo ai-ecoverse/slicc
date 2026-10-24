@@ -1,4 +1,11 @@
 import { dirname, join } from 'node:path';
+import {
+  EFFORT_LEVELS,
+  isEffortLevel,
+  serializeSecretsEnv as serializeSecretLines,
+  validateAccount as validateAccountRule,
+  validateSecret,
+} from './cone-config-rules.mjs';
 
 export const MAX_DURATION_MS = 350 * 60 * 1000;
 
@@ -204,10 +211,6 @@ export function resolvePinnedWebapp(options) {
   };
 }
 
-const VALID_EFFORT_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
-
-const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
-
 function isStr(v) {
   return typeof v === 'string';
 }
@@ -216,65 +219,12 @@ function hasNewline(v) {
   return /[\r\n]/.test(v);
 }
 
-function optionalStr(obj, key) {
-  return isStr(obj[key]) ? { [key]: obj[key] } : {};
-}
-
-function validateOAuthAccount(a, where) {
-  if (!isStr(a.accessToken) || !a.accessToken) {
-    throw new Error(`${where}: oauth account requires accessToken`);
-  }
-  return {
-    providerId: a.providerId,
-    kind: 'oauth',
-    accessToken: a.accessToken,
-    ...optionalStr(a, 'refreshToken'),
-    ...(typeof a.tokenExpiresAt === 'number' ? { tokenExpiresAt: a.tokenExpiresAt } : {}),
-    ...optionalStr(a, 'userName'),
-    ...optionalStr(a, 'baseUrl'),
-  };
-}
-
-function validateApiKeyAccount(a, where) {
-  if (!isStr(a.apiKey) || !a.apiKey) throw new Error(`${where}: apikey account requires apiKey`);
-  return {
-    providerId: a.providerId,
-    kind: 'apikey',
-    apiKey: a.apiKey,
-    ...optionalStr(a, 'baseUrl'),
-    ...optionalStr(a, 'deployment'),
-    ...optionalStr(a, 'apiVersion'),
-  };
-}
-
 function validateAccount(a, index) {
-  const where = `cone-config: accounts[${index}]`;
-  if (a === null || typeof a !== 'object') throw new Error(`${where} is not an object`);
-  if (!isStr(a.providerId) || !a.providerId) throw new Error(`${where}.providerId required`);
-  if (a.kind === 'oauth') return validateOAuthAccount(a, where);
-  if (a.kind === 'apikey') return validateApiKeyAccount(a, where);
-  throw new Error(`${where}.kind must be 'oauth' | 'apikey'`);
+  return validateAccountRule(a, `cone-config: accounts[${index}]`);
 }
 
 export function validateSecretEntry(s, where = 'secret') {
-  if (s === null || typeof s !== 'object') throw new Error(`${where} is not an object`);
-  if (!isStr(s.name) || !SECRET_NAME_RE.test(s.name)) {
-    throw new Error(`${where}: name must match ${SECRET_NAME_RE}`);
-  }
-  if (s.name.startsWith('oauth.')) {
-    throw new Error(`${where}: the oauth.* namespace is reserved for OAuth replicas`);
-  }
-  if (!isStr(s.value) || hasNewline(s.value)) {
-    throw new Error(`${where} ${s.name}: value must be a single-line string`);
-  }
-  if (!Array.isArray(s.domains) || s.domains.length === 0 || !s.domains.every(isStr)) {
-    throw new Error(`${where} ${s.name}: domains must be a non-empty string[]`);
-  }
-  const domains = s.domains.map((d) => d.trim());
-  if (domains.some((d) => !d || hasNewline(d) || d.includes(','))) {
-    throw new Error(`${where} ${s.name}: domains must be single-line and comma-free`);
-  }
-  return { name: s.name, value: s.value, domains };
+  return validateSecret(s, where);
 }
 
 export function parseSecretsEnv(text) {
@@ -315,12 +265,7 @@ export function parseSecretsEnv(text) {
 }
 
 export function serializeSecretsEnv(secrets) {
-  const lines = [];
-  for (const s of secrets) {
-    lines.push(`${s.name}=${s.value}`);
-    lines.push(`${s.name}_DOMAINS=${s.domains.join(',')}`);
-  }
-  return lines.length ? `${lines.join('\n')}\n` : '';
+  return serializeSecretLines(secrets);
 }
 
 function parseBundle(coneConfigJson) {
@@ -370,8 +315,8 @@ function mergeApiKeyAccount(accounts, shortcut) {
 
 function resolveEffortLevel(explicit, bundle) {
   const effort = (explicit ?? '').trim() || bundle.effortLevel || null;
-  if (effort !== null && !VALID_EFFORT_LEVELS.has(effort)) {
-    throw new Error(`effort-level must be one of ${[...VALID_EFFORT_LEVELS].join('|')}`);
+  if (effort !== null && !isEffortLevel(effort)) {
+    throw new Error(`effort-level must be one of ${EFFORT_LEVELS.join('|')}`);
   }
   return effort;
 }

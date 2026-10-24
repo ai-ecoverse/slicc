@@ -90,4 +90,26 @@ describe('applyConeConfigDelta (read-modify-write of both files)', () => {
   it('surfaces a clear error for a corrupt cone-config.json', () => {
     expect(() => applyConeConfigDelta('{not json', '', {})).toThrow(/corrupt/);
   });
+
+  it('resumes a cone whose secrets.env holds dotted mount secrets', () => {
+    const out = applyConeConfigDelta(
+      JSON.stringify({ model: 'adobe:claude-opus-4-6', accounts: [] }),
+      's3.r2.access_key_id=AK\ns3.r2.access_key_id_DOMAINS=*.r2.cloudflarestorage.com\n',
+      { upsert: { secrets: [{ name: 'NEW', value: 'n', domains: ['x.com'] }] } }
+    );
+    expect(out.secretsEnv).toContain(
+      's3.r2.access_key_id=AK\ns3.r2.access_key_id_DOMAINS=*.r2.cloudflarestorage.com\n'
+    );
+    expect(out.index.secretNames).toEqual(['s3.r2.access_key_id', 'NEW']);
+  });
+
+  it('rejects a persisted account with an empty credential on resume', () => {
+    const existing = JSON.stringify({
+      model: 'adobe:claude-opus-4-6',
+      accounts: [{ providerId: 'adobe', kind: 'oauth', accessToken: '' }],
+    });
+    expect(() => applyConeConfigDelta(existing, '', {})).toThrow(
+      /accounts\[0\]: oauth account requires accessToken/
+    );
+  });
 });

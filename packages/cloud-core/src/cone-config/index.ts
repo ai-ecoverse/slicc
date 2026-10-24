@@ -1,3 +1,10 @@
+import {
+  isEffortLevel,
+  serializeSecretsEnv as serializeSecretLines,
+  validateAccount,
+  validateSecret,
+} from './cone-config-rules.mjs';
+
 export interface OAuthAccount {
   providerId: string;
   kind: 'oauth';
@@ -56,25 +63,6 @@ interface UntrustedConeConfig {
   readonly secrets?: unknown;
 }
 
-interface UntrustedAccount {
-  readonly providerId?: unknown;
-  readonly kind?: unknown;
-  readonly accessToken?: unknown;
-  readonly refreshToken?: unknown;
-  readonly tokenExpiresAt?: unknown;
-  readonly userName?: unknown;
-  readonly baseUrl?: unknown;
-  readonly apiKey?: unknown;
-  readonly deployment?: unknown;
-  readonly apiVersion?: unknown;
-}
-
-interface UntrustedSecretEntry {
-  readonly name?: unknown;
-  readonly value?: unknown;
-  readonly domains?: unknown;
-}
-
 interface UntrustedConeConfigDeltaUpsert {
   readonly accounts?: unknown;
   readonly secrets?: unknown;
@@ -105,80 +93,22 @@ function isStr(v: unknown): v is string {
   return typeof v === 'string';
 }
 
-const VALID_EFFORT_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
-
 export function validateConeConfig(input: unknown): ConeConfig {
   if (!isUntrustedObject(input)) throw new Error('cone-config: not an object');
   const cfg = input as UntrustedConeConfig;
   if (!isStr(cfg.model)) throw new Error('cone-config: model must be a string');
   if (!Array.isArray(cfg.accounts)) throw new Error('cone-config: accounts must be an array');
   if (!Array.isArray(cfg.secrets)) throw new Error('cone-config: secrets must be an array');
-  const accounts = cfg.accounts.map((a) => validateAccount(a));
-  const secrets = cfg.secrets.map((s) => validateSecret(s));
+  const accounts = cfg.accounts.map((a, i) => validateAccount(a, `cone-config: accounts[${i}]`));
+  const secrets = cfg.secrets.map((s, i) => validateSecret(s, `cone-config: secrets[${i}]`));
   const result: ConeConfig = { model: cfg.model, accounts, secrets };
   if (cfg.effortLevel !== undefined) {
-    if (!isStr(cfg.effortLevel) || !VALID_EFFORT_LEVELS.has(cfg.effortLevel)) {
+    if (!isEffortLevel(cfg.effortLevel)) {
       throw new Error('cone-config: effortLevel must be one of off|minimal|low|medium|high|xhigh');
     }
-    result.effortLevel = cfg.effortLevel as ConeConfig['effortLevel'];
+    result.effortLevel = cfg.effortLevel;
   }
   return result;
-}
-
-function validateAccount(a: unknown): Account {
-  if (!isUntrustedObject(a)) throw new Error('cone-config: account not an object');
-  const acc = a as UntrustedAccount;
-  if (!isStr(acc.providerId)) throw new Error('cone-config: account.providerId required');
-  if (!isStr(acc.kind)) throw new Error('cone-config: account.kind required');
-  if (acc.kind === 'oauth') {
-    if (!isStr(acc.accessToken)) throw new Error('cone-config: oauth account requires accessToken');
-    return {
-      providerId: acc.providerId,
-      kind: 'oauth',
-      accessToken: acc.accessToken,
-      ...(isStr(acc.refreshToken) ? { refreshToken: acc.refreshToken } : {}),
-      ...(typeof acc.tokenExpiresAt === 'number' ? { tokenExpiresAt: acc.tokenExpiresAt } : {}),
-      ...(isStr(acc.userName) ? { userName: acc.userName } : {}),
-      ...(isStr(acc.baseUrl) ? { baseUrl: acc.baseUrl } : {}),
-    };
-  }
-  if (acc.kind === 'apikey') {
-    if (!isStr(acc.apiKey)) throw new Error('cone-config: apikey account requires apiKey');
-    return {
-      providerId: acc.providerId,
-      kind: 'apikey',
-      apiKey: acc.apiKey,
-      ...(isStr(acc.baseUrl) ? { baseUrl: acc.baseUrl } : {}),
-      ...(isStr(acc.deployment) ? { deployment: acc.deployment } : {}),
-      ...(isStr(acc.apiVersion) ? { apiVersion: acc.apiVersion } : {}),
-    };
-  }
-  throw new Error(`cone-config: account.kind must be 'oauth' | 'apikey'`);
-}
-
-const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-function hasNewline(v: string): boolean {
-  return /[\r\n]/.test(v);
-}
-
-function validateSecret(s: unknown): SecretEntry {
-  if (!isUntrustedObject(s)) throw new Error('cone-config: secret not an object');
-  const sec = s as UntrustedSecretEntry;
-  if (!isStr(sec.name)) throw new Error('cone-config: secret.name required');
-  if (!ENV_NAME_RE.test(sec.name)) {
-    throw new Error(
-      'cone-config: secret.name must be an env-var identifier ([A-Za-z_][A-Za-z0-9_]*)'
-    );
-  }
-  if (!isStr(sec.value)) throw new Error('cone-config: secret.value required');
-  if (hasNewline(sec.value)) throw new Error('cone-config: secret.value must be single-line');
-  if (!Array.isArray(sec.domains) || !sec.domains.every(isStr)) {
-    throw new Error('cone-config: secret.domains must be string[]');
-  }
-  if ((sec.domains as string[]).some((d) => hasNewline(d) || d.includes(','))) {
-    throw new Error('cone-config: secret.domains entries must be single-line and comma-free');
-  }
-  return { name: sec.name, value: sec.value, domains: sec.domains as string[] };
 }
 
 function validateDeltaUpsert(input: unknown): { accounts?: Account[]; secrets?: SecretEntry[] } {
@@ -191,13 +121,17 @@ function validateDeltaUpsert(input: unknown): { accounts?: Account[]; secrets?: 
     if (!Array.isArray(up.accounts)) {
       throw new Error('cone-config: delta.upsert.accounts must be an array');
     }
-    upsert.accounts = up.accounts.map((a) => validateAccount(a));
+    upsert.accounts = up.accounts.map((a, i) =>
+      validateAccount(a, `cone-config: delta.upsert.accounts[${i}]`)
+    );
   }
   if (up.secrets !== undefined) {
     if (!Array.isArray(up.secrets)) {
       throw new Error('cone-config: delta.upsert.secrets must be an array');
     }
-    upsert.secrets = up.secrets.map((s) => validateSecret(s));
+    upsert.secrets = up.secrets.map((s, i) =>
+      validateSecret(s, `cone-config: delta.upsert.secrets[${i}]`)
+    );
   }
   return upsert;
 }
@@ -234,12 +168,12 @@ export function validateConeConfigDelta(input: unknown): ConeConfigDelta {
   if (d.effortLevel !== undefined) {
     if (d.effortLevel === null) {
       out.effortLevel = null;
-    } else if (!isStr(d.effortLevel) || !VALID_EFFORT_LEVELS.has(d.effortLevel)) {
+    } else if (!isEffortLevel(d.effortLevel)) {
       throw new Error(
         'cone-config: delta.effortLevel must be one of off|minimal|low|medium|high|xhigh or null'
       );
     } else {
-      out.effortLevel = d.effortLevel as ConeConfig['effortLevel'];
+      out.effortLevel = d.effortLevel;
     }
   }
   if (d.upsert !== undefined) out.upsert = validateDeltaUpsert(d.upsert);
@@ -268,12 +202,7 @@ export function mergeConeConfig(base: ConeConfig, delta: ConeConfigDelta): ConeC
 }
 
 export function serializeSecretsEnv(secrets: SecretEntry[]): string {
-  const lines: string[] = [];
-  for (const s of secrets) {
-    lines.push(`${s.name}=${s.value}`);
-    lines.push(`${s.name}_DOMAINS=${s.domains.join(',')}`);
-  }
-  return lines.length ? lines.join('\n') + '\n' : '';
+  return serializeSecretLines(secrets);
 }
 
 export function bundleToFiles(cfg: ConeConfig): { coneConfigJson: string; secretsEnv: string } {
