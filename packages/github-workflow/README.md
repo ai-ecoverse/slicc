@@ -189,8 +189,9 @@ The bundle is the same `ConeConfig` shape `packages/cloud-core/src/cone-config/i
   // requests whose hostname matches one of `domains`. Names must be
   // identifiers ([A-Za-z_][A-Za-z0-9_.-]*) — identifier-shaped ones also
   // surface as $NAME in the agent shell — and values single-line. The
-  // `oauth.` prefix is reserved. A `secrets-env` entry with the same name
-  // wins over one listed here.
+  // `oauth.` prefix and the `_DOMAINS` suffix are reserved, and `domains`
+  // must list at least one host. Same rules as the cloud float. A
+  // `secrets-env` entry with the same name wins over one listed here.
   "secrets": [
     {
       "name": "GITHUB_TOKEN",

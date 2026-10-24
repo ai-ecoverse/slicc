@@ -47,22 +47,23 @@ npm run typecheck                    # included in root pipeline
 
 ## Key Files
 
-| Path                       | Purpose                                                                                                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/index.ts`             | Public re-exports — the only surface consumers should import from                                                                                                  |
-| `src/types.ts`             | `ConeEntry`, `CloudStatus` (`/tmp/slicc-join.json` shape), `StartResult`, `ResumeResult`, `SandboxSummary`                                                         |
-| `src/errors.ts`            | `CloudError` + `CloudErrorCode` union. Workers map codes to HTTP; CLI prints them. Stable contract — renaming/removing breaks                                      |
-| `src/substrate.ts`         | `SandboxSubstrate` (`create`, `connect`, `list`, `extendTimeout`) + `SandboxHandle` (`pause`, `kill`, `getInfo`, `writeFile`, `readFile`, `run`)                   |
-| `src/substrate-factory.ts` | `createSubstrate(id, cfg)` — sole `SubstrateId` → impl dispatch. `SubstrateId = 'e2b'` today; widen when a real second lands                                       |
-| `src/substrates/e2b.ts`    | The e2b implementation — see [details](../../docs/cloud-core-details.md#e2b-substrate) for the 120s `requestTimeoutMs` pin and the `isSliccTemplate` prefix filter |
-| `src/registry.ts`          | `Registry` interface. `FileRegistry` lives in node-server (`~/.slicc/cloud-sessions.json`); `LocalRegistry` in the worker (DO storage)                             |
-| `src/polling.ts`           | `pollCloudStatus` (start — `minUpdatedAt` ignores the template-baked file) and `pollForRefreshedStatus` (resume — strictly newer `updatedAt`)                      |
-| `src/secrets-filter.ts`    | `filterSecretsEnv` — strips `E2B_API_KEY` / `E2B_API_KEY_DOMAINS` before upload. The cone never sees the user's substrate credential                               |
-| `src/operations/start.ts`  | `startCone` + `reserveSlot` (worker uses reserve-then-start under `blockConcurrencyWhile`)                                                                         |
-| `src/operations/list.ts`   | `listCones` — reconciles registry against `substrate.list`, GCs stale `reserved` entries (10-minute TTL)                                                           |
-| `src/operations/pause.ts`  | `pauseCone` — **preserves** `trayId` + `lastJoinUpdatedAt` (resume freshness baseline)                                                                             |
-| `src/operations/resume.ts` | `resumeCone` — reconnects, posts `/api/leader-restart`, polls until `updatedAt > baseline`                                                                         |
-| `src/operations/kill.ts`   | `killCone` — idempotent removal                                                                                                                                    |
+| Path                                    | Purpose                                                                                                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/index.ts`                          | Public re-exports — the only surface consumers should import from                                                                                                  |
+| `src/types.ts`                          | `ConeEntry`, `CloudStatus` (`/tmp/slicc-join.json` shape), `StartResult`, `ResumeResult`, `SandboxSummary`                                                         |
+| `src/errors.ts`                         | `CloudError` + `CloudErrorCode` union. Workers map codes to HTTP; CLI prints them. Stable contract — renaming/removing breaks                                      |
+| `src/substrate.ts`                      | `SandboxSubstrate` (`create`, `connect`, `list`, `extendTimeout`) + `SandboxHandle` (`pause`, `kill`, `getInfo`, `writeFile`, `readFile`, `run`)                   |
+| `src/substrate-factory.ts`              | `createSubstrate(id, cfg)` — sole `SubstrateId` → impl dispatch. `SubstrateId = 'e2b'` today; widen when a real second lands                                       |
+| `src/substrates/e2b.ts`                 | The e2b implementation — see [details](../../docs/cloud-core-details.md#e2b-substrate) for the 120s `requestTimeoutMs` pin and the `isSliccTemplate` prefix filter |
+| `src/registry.ts`                       | `Registry` interface. `FileRegistry` lives in node-server (`~/.slicc/cloud-sessions.json`); `LocalRegistry` in the worker (DO storage)                             |
+| `src/polling.ts`                        | `pollCloudStatus` (start — `minUpdatedAt` ignores the template-baked file) and `pollForRefreshedStatus` (resume — strictly newer `updatedAt`)                      |
+| `src/cone-config/cone-config-rules.mjs` | Zero-dependency account/secret/effort rules + `secrets.env` serializer (`allowJs`); vendored byte-identical into `github-workflow/scripts/`                        |
+| `src/secrets-filter.ts`                 | `filterSecretsEnv` — strips `E2B_API_KEY` / `E2B_API_KEY_DOMAINS` before upload. The cone never sees the user's substrate credential                               |
+| `src/operations/start.ts`               | `startCone` + `reserveSlot` (worker uses reserve-then-start under `blockConcurrencyWhile`)                                                                         |
+| `src/operations/list.ts`                | `listCones` — reconciles registry against `substrate.list`, GCs stale `reserved` entries (10-minute TTL)                                                           |
+| `src/operations/pause.ts`               | `pauseCone` — **preserves** `trayId` + `lastJoinUpdatedAt` (resume freshness baseline)                                                                             |
+| `src/operations/resume.ts`              | `resumeCone` — reconnects, posts `/api/leader-restart`, polls until `updatedAt > baseline`                                                                         |
+| `src/operations/kill.ts`                | `killCone` — idempotent removal                                                                                                                                    |
 
 ## Stable Contracts
 

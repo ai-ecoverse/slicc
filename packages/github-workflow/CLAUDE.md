@@ -18,6 +18,7 @@ Two surfaces:
 | Path                                    | Purpose                                                                                             |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `scripts/lib.mjs`                       | Pure helpers: duration/port/mount parsing, cone-config + `secrets.env` validation, command builders |
+| `scripts/cone-config-rules.mjs`         | Vendored copy of cloud-core's bundle rules; edit the canonical file, its test pins the bytes        |
 | `scripts/gh-io.mjs`                     | Runner I/O: `INPUT_*`, `$GITHUB_OUTPUT`/`_ENV`/`_PATH`, masks, state file, liveness, `execOnLeader` |
 | `scripts/start-leader.mjs`              | Install `sliccy`, write credential files, spawn `node-server --hosted`, poll join file, save state  |
 | `scripts/serve-webapp.mjs`              | Opt-in loopback server for a built `dist/ui` (`pin-webapp`); else leaders load production sliccy.ai |
@@ -68,7 +69,7 @@ Live gate `.github/workflows/github-workflow-smoke.yml`: boots a real leader fro
 
 - [`README.md`](./README.md) — consumer-facing input reference and recipes
 - `packages/node-server/CLAUDE.md` — hosted mode, `--mount`, secrets architecture
-- `packages/cloud-core/CLAUDE.md` — the e2b float this mirrors; `cone-config/index.ts` is the bundle contract
+- `packages/cloud-core/CLAUDE.md` — the e2b float this mirrors; `cone-config/index.ts` is the bundle contract, `cone-config-rules.mjs` its shared rules (one case table runs both floats' entry points)
 - `packages/slicc-cli/CLAUDE.md` — `prompt` / `exec` / `follow` semantics, exit codes, plain-mode output
 - `packages/dev-tools/e2b-template/start.sh` — sandbox boot script whose env discipline `start-leader.mjs` follows
 - `docs/transcript-export.md` — what `export-session` produces

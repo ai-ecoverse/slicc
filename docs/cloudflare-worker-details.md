@@ -64,6 +64,11 @@ operation may still complete and identical retries are idempotent.
 secrets, and provision provider logins. `src/cloud/cone-config-bridge.ts` handles the
 start/resume flows:
 
+- **validation:** account/secret rules live in the zero-dependency
+  `cone-config-rules.mjs` (byte-identical in `packages/github-workflow`): secret
+  names match `[A-Za-z_][A-Za-z0-9_.-]*`, not `oauth.*` (OAuth replicas) or
+  `*_DOMAINS`; values single-line; `domains` a non-empty list of trimmed,
+  comma-free entries. Accounts need a non-empty `providerId` and credential.
 - **start:** validates config, splits into `/slicc/secrets.env` and
   `/slicc/cone-config.json`. No config ⇒ synthesizes an Adobe default from the cloud
   bearer.

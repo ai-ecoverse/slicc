@@ -24,6 +24,7 @@
     "packages/webapp/src/ui/lucide-icons.ts",
     "packages/webapp/src/kernel/rum.js",
     "packages/webapp/src/scoops/tray-sync-protocol-corpus.ts",
-    "packages/cloudflare-worker/src/preview-bridge-assets.ts"
+    "packages/cloudflare-worker/src/preview-bridge-assets.ts",
+    "packages/github-workflow/scripts/cone-config-rules.mjs"
   ]
 }
