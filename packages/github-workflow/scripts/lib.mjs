@@ -8,6 +8,13 @@
  * monorepo's `node_modules` does not exist. Node built-ins only.
  */
 import { dirname, join } from 'node:path';
+import {
+  EFFORT_LEVELS,
+  isEffortLevel,
+  serializeSecretsEnv as serializeSecretLines,
+  validateAccount as validateAccountRule,
+  validateSecret,
+} from './cone-config-rules.mjs';
 
 /**
  * GitHub-hosted runners cap a job at 360 minutes. Leave the wrapping
@@ -349,15 +356,6 @@ export function resolvePinnedWebapp(options) {
   };
 }
 
-const VALID_EFFORT_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
-
-/**
- * Names accepted in `secrets.env`. node-server's `EnvSecretStore` reads
- * dotted names (`s3.r2.access_key_id`) as well as plain identifiers; only the
- * identifier-shaped ones surface as `$NAME` in the agent shell.
- */
-const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
-
 function isStr(v) {
   return typeof v === 'string';
 }
@@ -366,73 +364,26 @@ function hasNewline(v) {
   return /[\r\n]/.test(v);
 }
 
-function optionalStr(obj, key) {
-  return isStr(obj[key]) ? { [key]: obj[key] } : {};
-}
-
-function validateOAuthAccount(a, where) {
-  if (!isStr(a.accessToken) || !a.accessToken) {
-    throw new Error(`${where}: oauth account requires accessToken`);
-  }
-  return {
-    providerId: a.providerId,
-    kind: 'oauth',
-    accessToken: a.accessToken,
-    ...optionalStr(a, 'refreshToken'),
-    ...(typeof a.tokenExpiresAt === 'number' ? { tokenExpiresAt: a.tokenExpiresAt } : {}),
-    ...optionalStr(a, 'userName'),
-    ...optionalStr(a, 'baseUrl'),
-  };
-}
-
-function validateApiKeyAccount(a, where) {
-  if (!isStr(a.apiKey) || !a.apiKey) throw new Error(`${where}: apikey account requires apiKey`);
-  return {
-    providerId: a.providerId,
-    kind: 'apikey',
-    apiKey: a.apiKey,
-    ...optionalStr(a, 'baseUrl'),
-    ...optionalStr(a, 'deployment'),
-    ...optionalStr(a, 'apiVersion'),
-  };
-}
-
+/**
+ * Account rules are shared with `@slicc/cloud-core` (vendored
+ * `cone-config-rules.mjs`); only the error prefix is ours.
+ */
 function validateAccount(a, index) {
-  const where = `cone-config: accounts[${index}]`;
-  if (a === null || typeof a !== 'object') throw new Error(`${where} is not an object`);
-  if (!isStr(a.providerId) || !a.providerId) throw new Error(`${where}.providerId required`);
-  if (a.kind === 'oauth') return validateOAuthAccount(a, where);
-  if (a.kind === 'apikey') return validateApiKeyAccount(a, where);
-  throw new Error(`${where}.kind must be 'oauth' | 'apikey'`);
+  return validateAccountRule(a, `cone-config: accounts[${index}]`);
 }
 
 /**
- * Validate one secret entry against the line-oriented `secrets.env` schema:
- * identifier-ish name, single-line value, comma-free single-line domains,
- * at least one domain, and never the reserved `oauth.` namespace.
+ * Validate one secret entry against the line-oriented `secrets.env` schema.
+ * Same rules as `@slicc/cloud-core`'s bundle validator (vendored
+ * `cone-config-rules.mjs`): identifier-ish name (dots/hyphens allowed) outside
+ * the reserved `oauth.` namespace and not ending in `_DOMAINS`, single-line
+ * value, at least one trimmed, comma-free single-line domain.
  * @param {{ name?: unknown; value?: unknown; domains?: unknown }} s
  * @param {string} where
  * @returns {{ name: string; value: string; domains: string[] }}
  */
 export function validateSecretEntry(s, where = 'secret') {
-  if (s === null || typeof s !== 'object') throw new Error(`${where} is not an object`);
-  if (!isStr(s.name) || !SECRET_NAME_RE.test(s.name)) {
-    throw new Error(`${where}: name must match ${SECRET_NAME_RE}`);
-  }
-  if (s.name.startsWith('oauth.')) {
-    throw new Error(`${where}: the oauth.* namespace is reserved for OAuth replicas`);
-  }
-  if (!isStr(s.value) || hasNewline(s.value)) {
-    throw new Error(`${where} ${s.name}: value must be a single-line string`);
-  }
-  if (!Array.isArray(s.domains) || s.domains.length === 0 || !s.domains.every(isStr)) {
-    throw new Error(`${where} ${s.name}: domains must be a non-empty string[]`);
-  }
-  const domains = s.domains.map((d) => d.trim());
-  if (domains.some((d) => !d || hasNewline(d) || d.includes(','))) {
-    throw new Error(`${where} ${s.name}: domains must be single-line and comma-free`);
-  }
-  return { name: s.name, value: s.value, domains };
+  return validateSecret(s, where);
 }
 
 /**
@@ -487,12 +438,7 @@ export function parseSecretsEnv(text) {
  * @returns {string}
  */
 export function serializeSecretsEnv(secrets) {
-  const lines = [];
-  for (const s of secrets) {
-    lines.push(`${s.name}=${s.value}`);
-    lines.push(`${s.name}_DOMAINS=${s.domains.join(',')}`);
-  }
-  return lines.length ? `${lines.join('\n')}\n` : '';
+  return serializeSecretLines(secrets);
 }
 
 /**
@@ -572,8 +518,8 @@ function mergeApiKeyAccount(accounts, shortcut) {
 
 function resolveEffortLevel(explicit, bundle) {
   const effort = (explicit ?? '').trim() || bundle.effortLevel || null;
-  if (effort !== null && !VALID_EFFORT_LEVELS.has(effort)) {
-    throw new Error(`effort-level must be one of ${[...VALID_EFFORT_LEVELS].join('|')}`);
+  if (effort !== null && !isEffortLevel(effort)) {
+    throw new Error(`effort-level must be one of ${EFFORT_LEVELS.join('|')}`);
   }
   return effort;
 }

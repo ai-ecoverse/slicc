@@ -90,4 +90,18 @@ describe('applyConeConfigDelta (read-modify-write of both files)', () => {
   it('surfaces a clear error for a corrupt cone-config.json', () => {
     expect(() => applyConeConfigDelta('{not json', '', {})).toThrow(/corrupt/);
   });
+
+  // #4129: the agent can persist dotted names (S3 mount profiles) into the
+  // cone's secrets.env; the identifier-only rule used to fail every resume.
+  it('resumes a cone whose secrets.env holds dotted mount secrets', () => {
+    const out = applyConeConfigDelta(
+      JSON.stringify({ model: 'adobe:claude-opus-4-6', accounts: [] }),
+      's3.r2.access_key_id=AK\ns3.r2.access_key_id_DOMAINS=*.r2.cloudflarestorage.com\n',
+      { upsert: { secrets: [{ name: 'NEW', value: 'n', domains: ['x.com'] }] } }
+    );
+    expect(out.secretsEnv).toContain(
+      's3.r2.access_key_id=AK\ns3.r2.access_key_id_DOMAINS=*.r2.cloudflarestorage.com\n'
+    );
+    expect(out.index.secretNames).toEqual(['s3.r2.access_key_id', 'NEW']);
+  });
 });
