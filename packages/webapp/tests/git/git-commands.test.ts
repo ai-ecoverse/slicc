@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
 // Wrap isomorphic-git in a mutable object so vi.spyOn can redefine exports.
@@ -32,6 +32,21 @@ describe('GitCommands', () => {
       authorEmail: 'test@example.com',
       globalDbName,
     });
+  });
+
+  // Every live VirtualFS keeps a ZenFS mount, and ZenFS copies and sorts the
+  // whole mount table on each path resolution. Leaking two mounts per test
+  // made each fs op slower as the suite went on, so the tail of this file
+  // (the rebase block) ran several times slower than the same work at the
+  // head and timed out under coverage.
+  afterEach(async () => {
+    await vfs.dispose();
+    const globalFs = (
+      GitCommands as unknown as { globalFsByDbName: Map<string, Promise<VirtualFS>> }
+    ).globalFsByDbName;
+    const pending = globalFs.get(globalDbName);
+    globalFs.delete(globalDbName);
+    await (await pending)?.dispose();
   });
 
   it('shows help', async () => {
