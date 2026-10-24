@@ -11,14 +11,21 @@ import Foundation
 /// 1 s → 4 s backoff, everything inside an 8 s budget — plus 429 with
 /// `Retry-After`, which the Go twin does not special-case.
 ///
-/// The clock, sleep and jitter are seams so tests run without waiting.
+/// The clock, sleep, attempt timer and jitter are seams so tests run without waiting.
 struct TraySignalingRetry: Sendable {
     var maxAttempts = 4
     var baseDelay: TimeInterval = 1
     var maxDelay: TimeInterval = 4
     var budget: TimeInterval = 8
+    /// The least budget worth starting another attempt with.
+    var minAttemptTime: TimeInterval = 0.5
     var now: @Sendable () -> Date = { Date() }
     var sleep: @Sendable (TimeInterval) async throws -> Void = { seconds in
+        try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+    }
+    /// Fires when an attempt's share of the budget is spent; the attempt is
+    /// then cancelled and counts as a timed-out network error.
+    var attemptTimer: @Sendable (TimeInterval) async throws -> Void = { seconds in
         try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
     }
     /// Spreads followers that hit the same reset so they do not return in step.

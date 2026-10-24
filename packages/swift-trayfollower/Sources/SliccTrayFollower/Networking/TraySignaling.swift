@@ -261,21 +261,26 @@ public actor TraySignalingClient {
         let deadline = retry.now().addingTimeInterval(retry.budget)
         var backoff = retry.baseDelay
         var attempt = 0
+        var last: TraySignalingError?
 
         while true {
+            // Like Go's `postBounded`: never start an attempt once the budget is
+            // spent (a sleep can overshoot), and give the one that starts only
+            // what is left. A zero `timeoutInterval` would mean URLSession's 60 s.
+            let remaining = deadline.timeIntervalSince(retry.now())
+            if let last, remaining <= 0 {
+                throw TraySignalingError.retriesExhausted(attempts: attempt, last: last)
+            }
             attempt += 1
             var request = URLRequest(url: joinUrl)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = payload
-            // Like the Go twin's per-attempt bound: a stalled request must not
-            // run on long after the budget that admitted it is spent.
-            request.timeoutInterval = max(1, deadline.timeIntervalSince(retry.now()))
+            request.timeoutInterval = max(remaining, 0.001)
 
-            let last: TraySignalingError
             var retryAfter: TimeInterval?
             do {
-                let (data, urlResponse) = try await transport(request)
+                let (data, urlResponse) = try await send(request, within: remaining)
                 guard let httpResponse = urlResponse as? HTTPURLResponse else {
                     throw TraySignalingError.invalidResponse(statusCode: 0, body: "(not HTTP)")
                 }
@@ -294,16 +299,38 @@ public actor TraySignalingClient {
                 }
                 last = .networkError(underlying: error)
             }
+            let failure = last ?? .invalidResponse(statusCode: 0, body: "(no reply)")
 
-            // The next attempt has to fit its wait and still have time to run;
-            // a `Retry-After` past the deadline means the hub will not be back
-            // in time, so give up now instead of sleeping into the budget.
+            // The next attempt has to fit its wait and still have a useful slice
+            // of the budget to run in; a `Retry-After` past that means the hub
+            // will not be back in time, so give up now instead of sleeping.
             let delay = retryAfter ?? retry.jitter(backoff)
-            if attempt >= retry.maxAttempts || deadline.timeIntervalSince(retry.now()) <= delay {
-                throw TraySignalingError.retriesExhausted(attempts: attempt, last: last)
+            let leftAfterWait = deadline.timeIntervalSince(retry.now()) - delay
+            if attempt >= retry.maxAttempts || leftAfterWait < retry.minAttemptTime {
+                throw TraySignalingError.retriesExhausted(attempts: attempt, last: failure)
             }
             try await retry.sleep(delay)
             backoff = min(backoff * 2, retry.maxDelay)
+        }
+    }
+
+    /// One attempt, cancelled at the budget's deadline the way Go's request
+    /// context is. `timeoutInterval` alone is an idle timer: a body that
+    /// trickles in a byte at a time would never trip it.
+    private func send(_ request: URLRequest, within seconds: TimeInterval) async throws -> (
+        Data, URLResponse
+    ) {
+        try await withThrowingTaskGroup(of: (Data, URLResponse)?.self) { group in
+            group.addTask { [transport] in try await transport(request) }
+            group.addTask { [retry] in
+                try await retry.attemptTimer(seconds)
+                return nil
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next(), let reply = first else {
+                throw URLError(.timedOut)
+            }
+            return reply
         }
     }
 

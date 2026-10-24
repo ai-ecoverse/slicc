@@ -18,6 +18,9 @@ final class TraySignalingRetryTests: XCTestCase {
     private enum Step {
         case reply(Reply)
         case fail(Error)
+        /// A hub that holds the request open: answers only after `seconds` of
+        /// real time, unless the attempt is cancelled first.
+        case stall(seconds: TimeInterval, then: Reply)
     }
 
     /// Plays `steps` in order and advances a fake clock on every sleep.
@@ -26,12 +29,16 @@ final class TraySignalingRetryTests: XCTestCase {
         private var steps: [Step]
         private(set) var requests = 0
         private(set) var sleeps: [TimeInterval] = []
+        /// When each request started, against the fake clock, and the
+        /// `timeoutInterval` it was sent with.
+        private(set) var attempts: [(start: TimeInterval, timeout: TimeInterval)] = []
         private var elapsed: TimeInterval = 0
         private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
         init(_ steps: [Step]) { self.steps = steps }
 
         var now: Date { lock.withLock { start.addingTimeInterval(elapsed) } }
+        var elapsedSeconds: TimeInterval { lock.withLock { elapsed } }
 
         func sleep(_ seconds: TimeInterval) {
             lock.withLock {
@@ -40,30 +47,57 @@ final class TraySignalingRetryTests: XCTestCase {
             }
         }
 
-        func next(url: URL) throws -> (Data, URLResponse) {
+        func next(_ request: URLRequest, url: URL) async throws -> (Data, URLResponse) {
             let step: Step = lock.withLock {
                 requests += 1
+                attempts.append((elapsed, request.timeoutInterval))
                 return steps.count > 1 ? steps.removeFirst() : steps[0]
             }
+            let reply: Reply
             switch step {
             case .fail(let error):
                 throw error
-            case .reply(let reply):
-                let response = HTTPURLResponse(
-                    url: url, statusCode: reply.status, httpVersion: "HTTP/1.1",
-                    headerFields: reply.headers)!
-                return (Data(reply.body.utf8), response)
+            case .stall(let seconds, let then):
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                reply = then
+            case .reply(let answer):
+                reply = answer
             }
+            let response = HTTPURLResponse(
+                url: url, statusCode: reply.status, httpVersion: "HTTP/1.1",
+                headerFields: reply.headers)!
+            return (Data(reply.body.utf8), response)
         }
     }
 
-    private func client(_ hub: FakeHub) -> TraySignalingClient {
+    /// `attemptTimer` defaults to one that never fires inside a test; the stall
+    /// test swaps in one that spends the fake clock and fires at once.
+    private func client(
+        _ hub: FakeHub,
+        attemptTimer: @escaping @Sendable (TimeInterval) async throws -> Void = { _ in
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+        }
+    ) -> TraySignalingClient {
         var retry = TraySignalingRetry()
         retry.now = { hub.now }
         retry.sleep = { hub.sleep($0) }
+        retry.attemptTimer = attemptTimer
         retry.jitter = { $0 }
         return TraySignalingClient(joinUrl: joinUrl, retry: retry) { [joinUrl] request in
-            try hub.next(url: request.url ?? joinUrl)
+            try await hub.next(request, url: request.url ?? joinUrl)
+        }
+    }
+
+    /// Every request must be able to finish by the deadline it was admitted under.
+    private func assertAttemptsFitTheBudget(
+        _ hub: FakeHub, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        for attempt in hub.attempts {
+            XCTAssertGreaterThan(attempt.timeout, 0, file: file, line: line)
+            XCTAssertLessThanOrEqual(
+                attempt.start + attempt.timeout, 8 + 1e-9,
+                "attempt at \(attempt.start)s may run to \(attempt.start + attempt.timeout)s",
+                file: file, line: line)
         }
     }
 
@@ -140,6 +174,56 @@ final class TraySignalingRetryTests: XCTestCase {
         XCTAssertEqual(hub.sleeps, [1, 2, 4])
         XCTAssertEqual(hub.requests, 4)
         XCTAssertLessThanOrEqual(hub.sleeps.reduce(0, +), 8)
+        assertAttemptsFitTheBudget(hub)
+    }
+
+    /// A `Retry-After` that leaves half a second gives the last attempt half a
+    /// second, not a one-second floor that runs past the budget.
+    func testTheLastAttemptsTimeoutIsCappedAtTheTimeLeft() async throws {
+        let limited = Reply(
+            status: 503, body: unavailableBody, headers: ["Retry-After": "7.5"])
+        let hub = FakeHub([.reply(limited), signal])
+        let plan = try await client(hub).attach(controllerId: "c1")
+        XCTAssertEqual(plan.action, .signal)
+        XCTAssertEqual(hub.sleeps, [7.5])
+        XCTAssertEqual(hub.attempts.last?.timeout ?? 0, 0.5, accuracy: 1e-9)
+        assertAttemptsFitTheBudget(hub)
+    }
+
+    /// Too little left after the wait to be worth a request: stop instead.
+    func testNoAttemptStartsWithTooLittleBudgetLeft() async {
+        let limited = Reply(
+            status: 503, body: unavailableBody, headers: ["Retry-After": "7.8"])
+        let hub = FakeHub([.reply(limited), signal])
+        do {
+            _ = try await client(hub).attach(controllerId: "c1")
+            XCTFail("expected the retry to give up")
+        } catch TraySignalingError.retriesExhausted(let attempts, _) {
+            XCTAssertEqual(attempts, 1)
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+        XCTAssertEqual(hub.requests, 1)
+        XCTAssertEqual(hub.sleeps, [])
+    }
+
+    /// A hub that holds the request open is cut off at the deadline, the way
+    /// Go's request context is, instead of answering whenever it likes.
+    func testAStalledAttemptIsCancelledAtTheDeadline() async {
+        let hub = FakeHub([.stall(seconds: 2, then: Reply(status: 200, body: signalBody))])
+        let timer: @Sendable (TimeInterval) async throws -> Void = { hub.sleep($0) }
+        do {
+            let plan = try await client(hub, attemptTimer: timer).attach(controllerId: "c1")
+            XCTFail("expected the stalled attempt to time out, got \(plan.code)")
+        } catch TraySignalingError.retriesExhausted(let attempts, .networkError(let underlying)) {
+            XCTAssertEqual(attempts, 1)
+            XCTAssertEqual((underlying as? URLError)?.code, .timedOut)
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+        XCTAssertEqual(hub.requests, 1)
+        XCTAssertLessThanOrEqual(hub.elapsedSeconds, 8 + 1e-9)
+        assertAttemptsFitTheBudget(hub)
     }
 
     func testA429HonoursRetryAfter() async throws {
