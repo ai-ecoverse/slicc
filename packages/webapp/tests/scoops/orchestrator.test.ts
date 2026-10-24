@@ -17,6 +17,7 @@ import {
 } from '../../src/scoops/db.js';
 import type { OrchestratorCallbacks } from '../../src/scoops/orchestrator.js';
 import { Orchestrator, SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
+import { ScoopLifecycleManager } from '../../src/scoops/scoop-lifecycle-manager.js';
 import {
   type ChannelMessage,
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -87,6 +88,41 @@ async function settleAndDisposeSharedFs(
   // `dispose()` alone is sufficient.
   await sharedFs.dispose();
 }
+
+// The first cone context a worker boots pays one-time costs (lazy module
+// loads and transforms, the first VFS skills bootstrap): several seconds on a
+// loaded CI runner, against well under a second for every later boot. Pay it
+// once here, under a hook timeout sized for it, instead of inside whichever
+// test happens to boot a cone first (#1666 timed out that way).
+beforeAll(async () => {
+  const shimmed = typeof (globalThis as any).window === 'undefined';
+  if (shimmed) (globalThis as any).window = globalThis;
+  const warmCone: RegisteredScoop = { ...cone, jid: 'cone_warmup', folder: 'warmup' };
+  let warm: Orchestrator | undefined;
+  try {
+    await initDB();
+    await saveScoop(warmCone);
+    warm = new Orchestrator({ appendChild: () => {} } as unknown as HTMLElement, {
+      onResponse: () => {},
+      onResponseDone: () => {},
+      onSendMessage: () => {},
+      onStatusChange: () => {},
+      onError: () => {},
+      getBrowserAPI: () => ({}) as any,
+    });
+    await warm.init();
+  } finally {
+    if (warm) {
+      const sharedFs = warm.getSharedFS();
+      await warm.shutdown();
+      await settleAndDisposeSharedFs(sharedFs);
+    }
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    await deleteScoop(warmCone.jid);
+    await clearAllMessages();
+    if (shimmed) delete (globalThis as any).window;
+  }
+}, 60_000);
 
 describe('Orchestrator Message Routing (DB-level)', () => {
   beforeAll(async () => {
@@ -484,6 +520,11 @@ describe('Orchestrator session-restore compat for path config', () => {
   });
 
   beforeEach(async () => {
+    // These tests cover the record migration `init()` runs before any context
+    // exists. Booting the restored cone's live context (shell, tools, skills)
+    // asserted nothing here and was the whole cost of the cone cases — enough
+    // to time out under coverage in the merge queue.
+    vi.spyOn(ScoopLifecycleManager.prototype, 'createTab').mockResolvedValue(undefined);
     // Fresh DB state — clear any scoops from previous tests so we control
     // exactly what gets hydrated.
     await initDB();
@@ -500,6 +541,7 @@ describe('Orchestrator session-restore compat for path config', () => {
     const sharedFs = orch?.getSharedFS();
     await orch?.shutdown();
     await settleAndDisposeSharedFs(sharedFs);
+    vi.restoreAllMocks();
   });
 
   function noopCallbacks() {
