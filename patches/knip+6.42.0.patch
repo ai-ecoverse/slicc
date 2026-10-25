@@ -1,11 +1,11 @@
 diff --git a/node_modules/knip/dist/plugins/github-actions/index.js b/node_modules/knip/dist/plugins/github-actions/index.js
-index 9d1907f..2a39dc2 100644
+index b8dfe8f..c18e58e 100644
 --- a/node_modules/knip/dist/plugins/github-actions/index.js
 +++ b/node_modules/knip/dist/plugins/github-actions/index.js
 @@ -30,7 +30,7 @@ const resolveConfig = async (config, options) => {
          for (const step of steps.steps) {
              const workingDir = step['working-directory'];
-             const dir = join(rootCwd, path && workingDir ? relative(workingDir, path) : workingDir ? workingDir : '.');
+             const dir = join(rootCwd, path && workingDir ? relative(path, workingDir) : workingDir ? workingDir : '.');
 -            if (step.run) {
 +            if (isString(step.run)) {
                  const manifest = getManifest(dir) ?? options.manifest;
