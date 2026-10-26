@@ -360,7 +360,11 @@ describe('mountWcUiPreview', () => {
     expect(css).toContain('.wcui-term{');
     expect(css).toContain('background:var(--term-bg,#0c0c0e)');
 
-    expect(css).toContain('.terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}');
+    expect(css).toContain('.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;');
+
+    expect(css).toMatch(/\.wcui-term\{[^}]*min-width:0;[^}]*overflow:hidden;/);
+    expect(css).toMatch(/\.terminal-panel__terminal-host\{[^}]*min-width:0;overflow:hidden;/);
+    expect(css).not.toMatch(/slicc-terminal\{[^}]*display:block/);
 
     expect(css).toContain('slicc-file-tree{width:100%;border-right:none;}');
   });

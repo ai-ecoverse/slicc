@@ -41,11 +41,16 @@ const STYLE = `
 .hd svg { display: block; color: #8a8a93; }
 .hd .title { letter-spacing: -0.01em; }
 .hd .spacer { flex: 1 1 auto; }
-/* The wterm mount host fills the remaining height. */
+/* The wterm mount host fills the remaining height. Inline-size containment
+   keeps the grid's white-space:pre rows out of the host's intrinsic width, so
+   a flex ancestor without min-width:0 cannot be widened by the grid and feed
+   a runaway fit() (more columns, wider grid, more columns). The column-flex
+   :host still stretches it to the full width. */
 .host {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
+  contain: inline-size;
   padding: 8px 0 8px 10px;
   background: var(--term-bg, #0c0c0e);
 }
@@ -58,6 +63,9 @@ const STYLE = `
   line-height: 1.25;
 }
 `;
+
+const MAX_COLS = 1000;
+const MAX_ROWS = 500;
 
 let SHEETS: CSSStyleSheet[] | null = null;
 function chromeSheets(): CSSStyleSheet[] {
@@ -83,6 +91,14 @@ export class SliccTerminal extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+
+    this.addEventListener('click', (event) => {
+      if (event.defaultPrevented) return;
+      if (this.#hostEl && event.composedPath().includes(this.#hostEl)) return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      this.focus();
+    });
   }
 
   connectedCallback(): void {
@@ -150,18 +166,16 @@ export class SliccTerminal extends HTMLElement {
 
   fit(): void {
     if (!this.#term || !this.#hostEl) return;
-    const probe = document.createElement('span');
-    probe.textContent = 'M';
-    this.#hostEl.appendChild(probe);
-    const width = probe.getBoundingClientRect().width;
-    const rowHeight = parseFloat(getComputedStyle(this.#hostEl).fontSize) * 1.25;
-    probe.remove();
-    if (width > 0 && rowHeight > 0) {
-      this.#term.resize(
-        Math.max(1, Math.floor(this.#hostEl.clientWidth / width)),
-        Math.max(1, Math.floor(this.#hostEl.clientHeight / rowHeight))
-      );
-    }
+    if (this.clientWidth === 0 || this.clientHeight === 0) return;
+    this.#unlockHeight();
+    this.#term.fit();
+    const cols = Math.min(this.#term.cols, MAX_COLS);
+    const rows = Math.min(this.#term.rows, MAX_ROWS);
+    if (cols !== this.#term.cols || rows !== this.#term.rows) this.#term.resize(cols, rows);
+  }
+
+  #unlockHeight(): void {
+    if (this.#hostEl?.style.height) this.#hostEl.style.removeProperty('height');
   }
 
   #renderChrome(): void {

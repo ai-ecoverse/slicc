@@ -107,10 +107,12 @@ const CSS = [
   'transition:padding-left .4s cubic-bezier(.4,0,.2,1);}',
   '@media (max-width:560px){.wcui-appcol{padding-left:44px;}}',
 
-  '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 4px 8px 10px;',
-  'box-sizing:border-box;background:var(--term-bg,#0c0c0e);}',
-  '.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}',
-  '.wcui-term .terminal-panel__terminal-host slicc-terminal{display:block;border-radius:0;}',
+  '.wcui-term{flex:1;min-height:0;min-width:0;max-width:100%;overflow:hidden;display:flex;flex-direction:column;',
+  'padding:8px 4px 8px 10px;box-sizing:border-box;background:var(--term-bg,#0c0c0e);}',
+  '.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;min-width:0;overflow:hidden;',
+  'display:flex;flex-direction:column;}',
+
+  '.wcui-term .terminal-panel__terminal-host slicc-terminal{flex:1 1 auto;min-height:0;min-width:0;border-radius:0;}',
   '.wcui-term .terminal-panel__preview{flex:0 0 auto;}',
   '.wcui-term .terminal-panel__preview-label{color:var(--term-fg,#e7e7ea);font:11px var(--ui,ui-sans-serif,system-ui,sans-serif);padding:4px 0;}',
 

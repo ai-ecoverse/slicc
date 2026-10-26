@@ -183,6 +183,71 @@ describe('slicc-terminal', () => {
     });
   });
 
+  describe('layout + focus', () => {
+    it('fit() fills the host height instead of keeping the pinned 24-row grid', async () => {
+      const el = await mount((e) => {
+        e.hideHeader = true;
+        e.style.height = '600px';
+      });
+      el.fit();
+      const host = el.shadowRoot?.querySelector('.host') as HTMLElement;
+
+      expect(host.style.height).toBe('');
+      expect(host.getBoundingClientRect().height).toBeCloseTo(600, 0);
+      expect(el.terminal?.rows).toBeGreaterThan(24);
+    });
+
+    it('cannot widen a narrow flex ancestor into a runaway column count', async () => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;width:352px;height:400px;';
+      const col = document.createElement('div');
+      col.style.cssText = 'flex:1;display:flex;flex-direction:column;';
+      row.appendChild(col);
+      document.body.appendChild(row);
+      const el = document.createElement('slicc-terminal') as SliccTerminal;
+      el.hideHeader = true;
+      el.style.width = '100%';
+      el.style.height = '100%';
+      col.appendChild(el);
+      await waitForTerminal(el);
+      for (let i = 0; i < 5; i++) {
+        el.fit();
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      expect(col.getBoundingClientRect().width).toBeLessThanOrEqual(352);
+      expect(el.terminal?.cols).toBeLessThan(80);
+    });
+
+    it('clicking outside the wterm host (e.g. the header) focuses the input', async () => {
+      const el = await mount();
+      (document.activeElement as HTMLElement | null)?.blur();
+      const header = el.shadowRoot?.querySelector('.hd') as HTMLElement;
+      header.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      expect(el.shadowRoot?.activeElement?.tagName).toBe('TEXTAREA');
+    });
+
+    it('fit() on a collapsed (0x0) panel keeps the last grid size', async () => {
+      const el = await mount();
+      el.fit();
+      const before = `${el.terminal?.cols}x${el.terminal?.rows}`;
+      el.style.width = '0px';
+      el.style.height = '0px';
+      el.fit();
+      expect(`${el.terminal?.cols}x${el.terminal?.rows}`).toBe(before);
+    });
+
+    it('leaves clicks inside the wterm host to wterm', async () => {
+      const el = await mount();
+      const focus = vi.spyOn(el, 'focus');
+      const host = el.shadowRoot?.querySelector('.host') as HTMLElement;
+      host.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      expect(focus).not.toHaveBeenCalled();
+      const header = el.shadowRoot?.querySelector('.hd') as HTMLElement;
+      header.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      expect(focus).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('lifecycle', () => {
     it('disconnect disposes the terminal without throwing and nulls it out', async () => {
       const el = await mount();
