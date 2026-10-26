@@ -191,11 +191,19 @@ const CSS = [
   'transition:padding-left .4s cubic-bezier(.4,0,.2,1);}',
   '@media (max-width:560px){.wcui-appcol{padding-left:44px;}}',
   // Terminal surface: one uniform dark canvas in every page theme. The host
-  // div flexes to fill so wterm measures its available height.
-  '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 4px 8px 10px;',
-  'box-sizing:border-box;background:var(--term-bg,#0c0c0e);}',
-  '.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}',
-  '.wcui-term .terminal-panel__terminal-host slicc-terminal{display:block;border-radius:0;}',
+  // div flexes to fill so wterm measures its available height. `min-width:0`
+  // + `overflow:hidden` keep the wterm grid's `white-space:pre` rows from
+  // widening the flex chain: otherwise the grid's min-content width grows the
+  // surface, `fit()` measures the wider host, adds columns, and the loop runs
+  // away to thousands of columns (a blank terminal in a narrow dock tile).
+  '.wcui-term{flex:1;min-height:0;min-width:0;max-width:100%;overflow:hidden;display:flex;flex-direction:column;',
+  'padding:8px 4px 8px 10px;box-sizing:border-box;background:var(--term-bg,#0c0c0e);}',
+  '.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;min-width:0;overflow:hidden;',
+  'display:flex;flex-direction:column;}',
+  // Keep `<slicc-terminal>`'s own `:host{display:flex}` (a `display:block`
+  // override here strands the wterm host at its intrinsic height, leaving a
+  // dead click zone below it), and let it fill the host column.
+  '.wcui-term .terminal-panel__terminal-host slicc-terminal{flex:1 1 auto;min-height:0;min-width:0;border-radius:0;}',
   '.wcui-term .terminal-panel__preview{flex:0 0 auto;}',
   '.wcui-term .terminal-panel__preview-label{color:var(--term-fg,#e7e7ea);font:11px var(--ui,ui-sans-serif,system-ui,sans-serif);padding:4px 0;}',
   // The files surface is the tree: no dead second column, no divider.
