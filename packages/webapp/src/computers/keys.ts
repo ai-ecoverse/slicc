@@ -117,30 +117,6 @@ const PS2_MOD: Record<string, number[]> = {
   meta: [0xe0, 0x5b],
 };
 
-const ANDROID_KEYS: Record<string, string> = {
-  return: 'KEYCODE_ENTER',
-  enter: 'KEYCODE_ENTER',
-  tab: 'KEYCODE_TAB',
-  escape: 'KEYCODE_ESCAPE',
-  esc: 'KEYCODE_ESCAPE',
-  space: 'KEYCODE_SPACE',
-  backspace: 'KEYCODE_DEL',
-  delete: 'KEYCODE_FORWARD_DEL',
-  del: 'KEYCODE_FORWARD_DEL',
-  home: 'KEYCODE_HOME',
-  end: 'KEYCODE_MOVE_END',
-  insert: 'KEYCODE_INSERT',
-  pageup: 'KEYCODE_PAGE_UP',
-  pagedown: 'KEYCODE_PAGE_DOWN',
-  up: 'KEYCODE_DPAD_UP',
-  down: 'KEYCODE_DPAD_DOWN',
-  left: 'KEYCODE_DPAD_LEFT',
-  right: 'KEYCODE_DPAD_RIGHT',
-  menu: 'KEYCODE_MENU',
-};
-
-for (let i = 1; i <= 12; i++) ANDROID_KEYS[`f${i}`] = `KEYCODE_F${i}`;
-
 const CLICK_NAMED: Record<string, string> = {
   return: 'return',
   enter: 'return',
@@ -298,16 +274,6 @@ export function toCdpKeyEvents(parsed: ParsedKey, down?: boolean): CdpKeyEvent[]
   if (down === true) return [make('keyDown')];
   if (down === false) return [make('keyUp')];
   return [make('keyDown'), make('keyUp')];
-}
-
-export function toAndroidKeycode(parsed: ParsedKey): string {
-  if (parsed.native) return parsed.native;
-  const named = ANDROID_KEYS[parsed.keysym.toLowerCase()];
-  if (named) return named;
-  if (parsed.key.length === 1 && /[A-Za-z0-9]/u.test(parsed.key)) {
-    return `KEYCODE_${parsed.key.toUpperCase()}`;
-  }
-  return `KEYCODE_${parsed.keysym.toUpperCase()}`;
 }
 
 export function toCliclickToken(
