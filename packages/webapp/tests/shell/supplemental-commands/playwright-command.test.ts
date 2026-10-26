@@ -4196,6 +4196,8 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--disable-crash-reporter',
+
+      '--disable-renderer-backgrounding',
       `--user-data-dir=${tmpDir}`,
       'about:blank',
     ]);
