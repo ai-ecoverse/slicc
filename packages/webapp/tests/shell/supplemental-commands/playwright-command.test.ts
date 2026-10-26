@@ -4366,6 +4366,13 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--disable-crash-reporter',
+      // Every fixture tab is a background tab (`createPage` opens with
+      // `background: true`), and Chrome deprioritizes a hidden tab's renderer
+      // process: on macOS its JS ran at ~45% of a visible tab's speed (Chrome
+      // 155/156, idle M4). On the loaded 3-vCPU macOS release runner that
+      // starved renderer let single CDP calls outlast the 30 s command timeout
+      // (#4141). SLICC's own Chrome launchers pass the same flag.
+      '--disable-renderer-backgrounding',
       `--user-data-dir=${tmpDir}`,
       'about:blank',
     ]);
