@@ -132,12 +132,14 @@ export class SliccTerminal extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
-    // Clicks anywhere in the panel (header, padding, any area the wterm host
-    // does not cover) focus the terminal input. Without this the click leaves
-    // focus on <body> and keystrokes fall through to the app's hotkeys. wterm's
-    // own click-to-focus covers the host; the same selection guard applies.
+    // Clicks in the panel outside the wterm host (header, padding, any area the
+    // host does not cover) focus the terminal input. Without this the click
+    // leaves focus on <body> and keystrokes fall through to the app's hotkeys.
+    // Clicks inside the host are left to wterm's own click-to-focus, so it
+    // handles link activation and selection on its own.
     this.addEventListener('click', (event) => {
       if (event.defaultPrevented) return;
+      if (this.#hostEl && event.composedPath().includes(this.#hostEl)) return;
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed) return;
       this.focus();
@@ -220,10 +222,12 @@ export class SliccTerminal extends HTMLElement {
   /**
    * Re-fit the terminal buffer to its current host size. Uses wterm's own
    * measurement (cell probe, padding/scrollbar-aware), clamped to sane bounds
-   * so a mis-sized host can never produce a runaway grid.
+   * so a mis-sized host can never produce a runaway grid. A collapsed (0x0)
+   * panel is a no-op, so the grid keeps its last size until it is shown again.
    */
   fit(): void {
     if (!this.#term || !this.#hostEl) return;
+    if (this.clientWidth === 0 || this.clientHeight === 0) return;
     this.#unlockHeight();
     this.#term.fit();
     const cols = Math.min(this.#term.cols, MAX_COLS);

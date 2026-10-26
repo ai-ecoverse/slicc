@@ -238,6 +238,27 @@ describe('slicc-terminal', () => {
       header.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
       expect(el.shadowRoot?.activeElement?.tagName).toBe('TEXTAREA');
     });
+
+    it('fit() on a collapsed (0x0) panel keeps the last grid size', async () => {
+      const el = await mount();
+      el.fit();
+      const before = `${el.terminal?.cols}x${el.terminal?.rows}`;
+      el.style.width = '0px';
+      el.style.height = '0px';
+      el.fit();
+      expect(`${el.terminal?.cols}x${el.terminal?.rows}`).toBe(before);
+    });
+
+    it('leaves clicks inside the wterm host to wterm', async () => {
+      const el = await mount();
+      const focus = vi.spyOn(el, 'focus');
+      const host = el.shadowRoot?.querySelector('.host') as HTMLElement;
+      host.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      expect(focus).not.toHaveBeenCalled();
+      const header = el.shadowRoot?.querySelector('.hd') as HTMLElement;
+      header.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      expect(focus).toHaveBeenCalledOnce();
+    });
   });
 
   describe('lifecycle', () => {
