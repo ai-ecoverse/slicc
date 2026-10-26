@@ -49,11 +49,16 @@ const STYLE = `
 .hd svg { display: block; color: #8a8a93; }
 .hd .title { letter-spacing: -0.01em; }
 .hd .spacer { flex: 1 1 auto; }
-/* The wterm mount host fills the remaining height. */
+/* The wterm mount host fills the remaining height. Inline-size containment
+   keeps the grid's white-space:pre rows out of the host's intrinsic width, so
+   a flex ancestor without min-width:0 cannot be widened by the grid and feed
+   a runaway fit() (more columns, wider grid, more columns). The column-flex
+   :host still stretches it to the full width. */
 .host {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
+  contain: inline-size;
   padding: 8px 0 8px 10px;
   background: var(--term-bg, #0c0c0e);
 }
@@ -66,6 +71,10 @@ const STYLE = `
   line-height: 1.25;
 }
 `;
+
+/** Upper bounds for `fit()`: far beyond any real panel, well short of runaway. */
+const MAX_COLS = 1000;
+const MAX_ROWS = 500;
 
 /**
  * The wterm chrome (third-party CSS) + component CSS as shared constructable
@@ -123,6 +132,16 @@ export class SliccTerminal extends HTMLElement {
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
+    // Clicks anywhere in the panel (header, padding, any area the wterm host
+    // does not cover) focus the terminal input. Without this the click leaves
+    // focus on <body> and keystrokes fall through to the app's hotkeys. wterm's
+    // own click-to-focus covers the host; the same selection guard applies.
+    this.addEventListener('click', (event) => {
+      if (event.defaultPrevented) return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      this.focus();
+    });
   }
 
   connectedCallback(): void {
@@ -198,21 +217,28 @@ export class SliccTerminal extends HTMLElement {
     this.#term?.focus();
   }
 
-  /** Re-fit the terminal buffer to its current host size. */
+  /**
+   * Re-fit the terminal buffer to its current host size. Uses wterm's own
+   * measurement (cell probe, padding/scrollbar-aware), clamped to sane bounds
+   * so a mis-sized host can never produce a runaway grid.
+   */
   fit(): void {
     if (!this.#term || !this.#hostEl) return;
-    const probe = document.createElement('span');
-    probe.textContent = 'M';
-    this.#hostEl.appendChild(probe);
-    const width = probe.getBoundingClientRect().width;
-    const rowHeight = parseFloat(getComputedStyle(this.#hostEl).fontSize) * 1.25;
-    probe.remove();
-    if (width > 0 && rowHeight > 0) {
-      this.#term.resize(
-        Math.max(1, Math.floor(this.#hostEl.clientWidth / width)),
-        Math.max(1, Math.floor(this.#hostEl.clientHeight / rowHeight))
-      );
-    }
+    this.#unlockHeight();
+    this.#term.fit();
+    const cols = Math.min(this.#term.cols, MAX_COLS);
+    const rows = Math.min(this.#term.rows, MAX_ROWS);
+    if (cols !== this.#term.cols || rows !== this.#term.rows) this.#term.resize(cols, rows);
+  }
+
+  /**
+   * With `autoResize: false`, wterm's `init()` pins the host's inline height to
+   * the initial 24-row grid. Drop it so the host flexes to the panel and `fit()`
+   * measures the real height (otherwise the terminal stays 24-ish rows tall,
+   * leaving a dead, unfocusable area below it).
+   */
+  #unlockHeight(): void {
+    if (this.#hostEl?.style.height) this.#hostEl.style.removeProperty('height');
   }
 
   /** Render the shadow-root chrome (style + header + mount host). */

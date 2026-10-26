@@ -372,7 +372,13 @@ describe('mountWcUiPreview', () => {
     expect(css).toContain('.wcui-term{');
     expect(css).toContain('background:var(--term-bg,#0c0c0e)');
     // …and the (legacy-stylesheet-less) xterm host flexes to full height.
-    expect(css).toContain('.terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}');
+    expect(css).toContain('.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;');
+    // The width chain is clamped so the wterm grid can't widen its own host
+    // (the fit → wider → more columns runaway), and `<slicc-terminal>` keeps
+    // its flex `:host` so the wterm host fills the panel height.
+    expect(css).toMatch(/\.wcui-term\{[^}]*min-width:0;[^}]*overflow:hidden;/);
+    expect(css).toMatch(/\.terminal-panel__terminal-host\{[^}]*min-width:0;overflow:hidden;/);
+    expect(css).not.toMatch(/slicc-terminal\{[^}]*display:block/);
     // The files surface is just the tree — no dead preview column.
     expect(css).toContain('slicc-file-tree{width:100%;border-right:none;}');
   });

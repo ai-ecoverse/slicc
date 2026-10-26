@@ -12,6 +12,16 @@ First mount pins an 80×24 grid (`autoResize: false`) then `fit()`s, and the WC
 shell warm-loads Ghostty WASM after kernel-ready (`workbench/warm-wterm`) so the
 compile cost does not land on the first Term open during tray traffic.
 
+With `autoResize: false`, wterm's `init()` also pins the host's inline
+`height` to the 24-row grid. `SliccTerminal.fit()` drops that pin before it
+delegates to wterm's own `fit()`, then clamps the grid to sane bounds. Otherwise the host stays
+about 424px tall and leaves a dead, unfocusable area below the grid. The
+wterm grid's `white-space: pre` rows can also widen an unclamped flex ancestor.
+The resize observer then refits to the wider host and adds columns, and this
+repeats until there are thousands of columns and the terminal renders blank. The
+`.host` uses `contain: inline-size` to stop that, and the WC shell's
+`.wcui-term` chain sets `min-width: 0; overflow: hidden`.
+
 ## Visual comparison
 
 All captures use the same `Workbench/Terminal/NpmTestRun` Storybook fixture at
