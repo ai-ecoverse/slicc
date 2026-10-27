@@ -63,6 +63,17 @@ enum FrozenSessionIndex {
     static let indexPath = "/sessions/index.json"
     static let sessionsDir = "/sessions"
 
+    
+    
+    
+    
+    
+    
+    
+    static func isAgentTranscript(_ filename: String) -> Bool {
+        filename.hasPrefix("agent-") && filename.hasSuffix(".md")
+    }
+
     static let isoFormatter: ISO8601DateFormatter = ISO8601DateFormatter()
     static let isoFractionalFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -70,6 +81,9 @@ enum FrozenSessionIndex {
         return f
     }()
 
+    
+    
+    
     
     
     
@@ -86,15 +100,19 @@ enum FrozenSessionIndex {
             }
             return try? decoder.decode(FrozenSessionIndexEntry.self, from: elementData)
         }
+        .filter { !isAgentTranscript($0.filename) }
     }
 
     
     
     
     
+    
     static func rebuild(from entries: [TrayFsDirEntry]) -> [FrozenSessionIndexEntry] {
         entries
-            .filter { $0.type == .file && $0.name.hasSuffix(".md") && $0.name != "index.json" }
+            .filter {
+                $0.type == .file && $0.name.hasSuffix(".md") && !isAgentTranscript($0.name)
+            }
             .map { entry -> FrozenSessionIndexEntry in
                 let stem = String(entry.name.dropLast(3))
                 let (timestamp, slug) = splitArchiveStem(stem)

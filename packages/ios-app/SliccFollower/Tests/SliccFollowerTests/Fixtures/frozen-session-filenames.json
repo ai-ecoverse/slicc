@@ -1,0 +1,14 @@
+{
+  "description": "Which /sessions/*.md filenames are frozen sessions. Agent transcripts (agent-<name>-<timestamp>.md, written by packages/webapp/src/scoops/agent-session-archive.ts) share the directory but are never sessions. Hand-maintained; held against the webapp by packages/webapp/tests/transcript/frozen-session-filenames-corpus.test.ts (isAgentSessionArchiveFilename, frozenSessionRows, rebuildSessionsIndexFromArchives) and against the iOS follower by FrozenSessionsTests.swift (FrozenSessionIndex.parse, FrozenSessionIndex.rebuild).",
+  "cases": [
+    { "filename": "agent-memory-curator-2026-06-04T10-00-00-000Z.md", "session": false },
+    { "filename": "agent-zesty-custard-2026-06-04T11-00-00-000Z.md", "session": false },
+    { "filename": "agent-.md", "session": false },
+    { "filename": "2026-06-04T10-00-00-000Z-agent-memory-curator.md", "session": true },
+    { "filename": "2026-05-13T19-30-00Z-fix-build.md", "session": true },
+    { "filename": "pending-ab12.md", "session": true },
+    { "filename": "pending-agent-ab12.md", "session": true },
+    { "filename": "live-cone-mtlor6sy-8egf.md", "session": true },
+    { "filename": "Agent-notes.md", "session": true }
+  ]
+}

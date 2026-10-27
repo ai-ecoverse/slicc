@@ -60,6 +60,73 @@ final class FrozenSessionsTests: XCTestCase {
         XCTAssertNotNil(entries[2].frozenDate)
     }
 
+    // MARK: - Agent transcripts are not sessions
+
+    func testParseDropsAgentTranscriptRows() throws {
+        // The row a leader's corrupt-index rebuild wrote before #4152.
+        let json = """
+            [{"filename":"agent-memory-curator-2026-06-04T10-00-00-000Z.md",
+            "title":"agent-memory-curator-2026-06-04T10-00-00-000Z.md",
+            "frozenAt":"1970-01-01T00:00:00.000Z","messageCount":0},
+            {"filename":"2026-06-04T10-00-00-000Z-agent-slug.md","title":"Agent slug",
+            "frozenAt":"2026-06-04T10:00:00.000Z","messageCount":4},
+            {"filename":"pending-ab12.md","title":"Pending session","frozenAt":"","messageCount":1}]
+            """.replacingOccurrences(of: "\n", with: "")
+        let entries = try XCTUnwrap(FrozenSessionIndex.parse(indexJson: json))
+        XCTAssertEqual(
+            entries.map(\.filename), ["2026-06-04T10-00-00-000Z-agent-slug.md", "pending-ab12.md"])
+    }
+
+    func testRebuildOmitsAgentTranscripts() {
+        let entries = FrozenSessionIndex.rebuild(from: [
+            TrayFsDirEntry(name: "agent-memory-curator-2026-06-04T10-00-00-000Z.md", type: .file),
+            TrayFsDirEntry(name: "2026-06-04T10-00-00-000Z-agent-slug.md", type: .file),
+            TrayFsDirEntry(name: "agent-zesty-custard-2026-06-04T11-00-00-000Z.md", type: .file),
+            TrayFsDirEntry(name: "pending-ab12.md", type: .file),
+        ])
+        XCTAssertEqual(
+            entries.map(\.filename), ["pending-ab12.md", "2026-06-04T10-00-00-000Z-agent-slug.md"])
+        XCTAssertEqual(entries[1].title, "Agent Slug")
+    }
+
+    /// The webapp suite holds `isAgentSessionArchiveFilename`,
+    /// `frozenSessionRows` and its rebuild to the same corpus, so the two
+    /// rules cannot drift apart.
+    func testParseAndRebuildKeepExactlyTheCorpusSessions() throws {
+        let cases = try loadFilenameCorpus()
+        XCTAssertTrue(cases.contains { $0.session } && cases.contains { !$0.session })
+        let sessions = cases.filter(\.session).map(\.filename)
+
+        let rows = cases.map {
+            ["filename": $0.filename, "title": $0.filename, "frozenAt": "", "messageCount": 0]
+                as [String: Any]
+        }
+        let json = try XCTUnwrap(
+            String(data: JSONSerialization.data(withJSONObject: rows), encoding: .utf8))
+        XCTAssertEqual(try XCTUnwrap(FrozenSessionIndex.parse(indexJson: json)).map(\.filename), sessions)
+
+        let rebuilt = FrozenSessionIndex.rebuild(
+            from: cases.map { TrayFsDirEntry(name: $0.filename, type: .file) })
+        XCTAssertEqual(rebuilt.map(\.filename), sessions.sorted(by: >))
+    }
+
+    private func loadFilenameCorpus() throws -> [(filename: String, session: Bool)] {
+        // Fail hard rather than skip: a fixture lost to project.yml drift must
+        // not turn this suite quietly green.
+        let url = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "frozen-session-filenames", withExtension: "json"),
+            "frozen-session-filenames.json missing from the test bundle")
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let rawCases = try XCTUnwrap(root["cases"] as? [[String: Any]])
+        return try rawCases.map { raw in
+            (
+                filename: try XCTUnwrap(raw["filename"] as? String),
+                session: try XCTUnwrap(raw["session"] as? Bool)
+            )
+        }
+    }
+
     // MARK: - Meta line + search
 
     func testMetaLineMatchesTheRailFormat() {
