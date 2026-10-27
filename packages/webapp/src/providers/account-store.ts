@@ -16,7 +16,12 @@ import {
   writeOAuthExtras as sharedWriteOAuthExtras,
 } from '@slicc/shared-ts';
 import { knownProviderLabel } from '../base/provider-labels.js';
-import { ACCOUNTS_KEY, readStoredAccounts } from '../base/stored-accounts.js';
+import {
+  ACCOUNTS_KEY,
+  CORRUPT_ACCOUNTS_KEY,
+  preserveCorruptAccounts,
+  readStoredAccounts,
+} from '../base/stored-accounts.js';
 import type { Model } from '../core/index.js';
 import { createLogger, getModel, getModels, getProviders } from '../core/index.js';
 import { resolveSecretTopology } from '../core/secret-topology.js';
@@ -864,7 +869,10 @@ export function getAllExtraOAuthDomains(): OAuthExtraDomainsStore {
   return sharedReadOAuthExtras(localStorage);
 }
 
+// `accounts` was built from `getAccounts()`, which reads a corrupt store as
+// `[]`; preserve that value before replacing it (#4146).
 function saveAccounts(accounts: Account[]): void {
+  preserveCorruptAccounts(localStorage);
   localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
@@ -1693,6 +1701,7 @@ export async function clearAllSettings(): Promise<void> {
   const accounts = getAccounts();
   await Promise.allSettled(accounts.map((a) => removeAccount(a.providerId)));
   localStorage.removeItem(ACCOUNTS_KEY);
+  localStorage.removeItem(CORRUPT_ACCOUNTS_KEY);
   localStorage.removeItem(MODEL_KEY);
   for (const key of LEGACY_KEYS) {
     localStorage.removeItem(key);

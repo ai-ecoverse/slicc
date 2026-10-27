@@ -1,3 +1,4 @@
+import { preserveCorruptAccounts } from '../src/base/stored-accounts.js';
 import {
   assembleBundle,
   assembleDelta,
@@ -289,6 +290,7 @@ function removeDashboardAccount(providerId) {
   }
   const accounts = readAccounts().filter((a) => a.providerId !== providerId);
   try {
+    preserveCorruptAccounts();
     localStorage.setItem('slicc_accounts', JSON.stringify(accounts));
   } catch {
     /* best-effort */
@@ -340,6 +342,9 @@ function ensureAdobeDefaultAccount(force = false) {
     return; // other providers exist and Adobe was removed — leave it removed
   }
   try {
+    // readAccounts() reads an unparsable store as [], which would otherwise
+    // seed Adobe over every saved provider on sign-in (#4146).
+    preserveCorruptAccounts();
     localStorage.setItem('slicc_accounts', JSON.stringify(accounts));
   } catch {
     /* best-effort */

@@ -37,6 +37,7 @@ export * from './sign-and-forward.js';
 export * from './sigv4.js';
 export * from './slicc-app-url.js';
 export * from './slugify.js';
+export * from './storage-quarantine.js';
 export * from './transcript-export.js';
 export * from './transcript-redaction.js';
 export * from './tray-signaling.js';

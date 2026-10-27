@@ -11,34 +11,73 @@
  * read (no chrome.runtime round-trip needed).
  */
 
+import {
+  corruptValueKey,
+  type QuarantineStorage,
+  quarantineCorruptValue,
+} from './storage-quarantine.js';
+
 export const OAUTH_EXTRA_DOMAINS_KEY = 'slicc_oauth_extra_domains';
 
 export type OAuthExtraDomainsStore = Record<string, string[]>;
 
-export interface LocalStorageLike {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
+export type LocalStorageLike = QuarantineStorage;
+
+/** `null` when `raw` is not a JSON object: a value nothing may overwrite unpreserved (#4146). */
+function parseOAuthExtras(raw: string): OAuthExtraDomainsStore | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const out: OAuthExtraDomainsStore = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (!Array.isArray(v)) continue;
+    const cleaned = v.filter((d): d is string => typeof d === 'string' && d.length > 0);
+    if (cleaned.length > 0) out[k] = cleaned;
+  }
+  return out;
 }
 
+/** `{}` when absent or unparsable; {@link writeOAuthExtras} preserves an unparsable value. */
 export function readOAuthExtras(storage: LocalStorageLike): OAuthExtraDomainsStore {
   try {
     const raw = storage.getItem(OAUTH_EXTRA_DOMAINS_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const out: OAuthExtraDomainsStore = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (typeof k !== 'string' || !Array.isArray(v)) continue;
-      const cleaned = v.filter((d): d is string => typeof d === 'string' && d.length > 0);
-      if (cleaned.length > 0) out[k] = cleaned;
-    }
-    return out;
+    return parseOAuthExtras(raw) ?? {};
   } catch {
     return {};
   }
 }
 
+/**
+ * Every writer replaces the whole store from a `readOAuthExtras` baseline,
+ * which is `{}` for an unparsable value. Move such a value to
+ * `slicc_oauth_extra_domains.corrupt` first, or throw when it cannot be kept.
+ */
+function preserveCorruptOAuthExtras(storage: LocalStorageLike): void {
+  let raw: string | null;
+  try {
+    raw = storage.getItem(OAUTH_EXTRA_DOMAINS_KEY);
+  } catch {
+    return;
+  }
+  if (!raw || parseOAuthExtras(raw) !== null) return;
+  const target = corruptValueKey(OAUTH_EXTRA_DOMAINS_KEY);
+  if (!quarantineCorruptValue(storage, OAUTH_EXTRA_DOMAINS_KEY, raw)) {
+    throw new Error(
+      `${OAUTH_EXTRA_DOMAINS_KEY} is unparsable and could not be copied to ${target} (storage full?); not overwriting it`
+    );
+  }
+  console.error(
+    `[slicc] ${OAUTH_EXTRA_DOMAINS_KEY} was unparsable (${raw.length} chars); moved it to ${target} before saving`
+  );
+}
+
 export function writeOAuthExtras(storage: LocalStorageLike, store: OAuthExtraDomainsStore): void {
+  preserveCorruptOAuthExtras(storage);
   // setItem throws synchronously on QuotaExceededError. The options-page
   // click handlers call this through addOAuthExtraDomain / remove / clear
   // and rely on the throw being caught by their toast wiring; without an

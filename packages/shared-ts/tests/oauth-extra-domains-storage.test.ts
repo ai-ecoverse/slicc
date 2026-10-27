@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addOAuthExtraDomain,
   clearOAuthExtras,
@@ -98,5 +98,63 @@ describe('oauth-extra-domains storage (options page <-> side panel)', () => {
     writeOAuthExtras(storage, { adobe: ['admin.da.live'], github: ['hub.example.com'] });
     clearOAuthExtras(storage, 'adobe');
     expect(readOAuthExtras(storage)).toEqual({ github: ['hub.example.com'] });
+  });
+});
+
+describe('oauth-extra-domains storage — present but unparsable (#4146)', () => {
+  const CORRUPT_KEY = `${OAUTH_EXTRA_DOMAINS_KEY}.corrupt`;
+  let storage: ReturnType<typeof makeStorage>;
+  let consoleError: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    storage = makeStorage();
+    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleError.mockRestore();
+  });
+
+  it('moves a truncated store aside before adding, and still adds', () => {
+    const raw = '{"adobe":["admin.da.live"],"github":["hub.exa';
+    storage.data[OAUTH_EXTRA_DOMAINS_KEY] = raw;
+    expect(addOAuthExtraDomain(storage, 'adobe', '*.da.live')).toEqual({ added: true });
+    expect(storage.data[CORRUPT_KEY]).toBe(raw);
+    expect(readOAuthExtras(storage)).toEqual({ adobe: ['*.da.live'] });
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(String(consoleError.mock.calls[0])).not.toContain('admin.da.live');
+  });
+
+  it('treats JSON that is not an object as corrupt', () => {
+    storage.data[OAUTH_EXTRA_DOMAINS_KEY] = '["admin.da.live"]';
+    clearOAuthExtras(storage, 'adobe');
+    expect(storage.data[CORRUPT_KEY]).toBe('["admin.da.live"]');
+    expect(storage.data[OAUTH_EXTRA_DOMAINS_KEY]).toBe('{}');
+  });
+
+  it('refuses to overwrite when the corrupt value cannot be preserved', () => {
+    const raw = '{"adobe":["admin.da.live"';
+    storage.data[OAUTH_EXTRA_DOMAINS_KEY] = raw;
+    const setItem = storage.setItem;
+    storage.setItem = (key, value) => {
+      if (key === CORRUPT_KEY) throw new Error('blocked');
+      setItem(key, value);
+    };
+    const result = addOAuthExtraDomain(storage, 'adobe', '*.da.live');
+    expect(result.added).toBe(false);
+    expect(result.reason).toContain('could not be copied');
+    expect(() => clearOAuthExtras(storage, 'adobe')).toThrow(/not overwriting/);
+    expect(storage.data[OAUTH_EXTRA_DOMAINS_KEY]).toBe(raw);
+  });
+
+  it('leaves absent and valid stores without a quarantine copy', () => {
+    addOAuthExtraDomain(storage, 'adobe', 'admin.da.live');
+    addOAuthExtraDomain(storage, 'github', 'hub.example.com');
+    expect(readOAuthExtras(storage)).toEqual({
+      adobe: ['admin.da.live'],
+      github: ['hub.example.com'],
+    });
+    expect(storage.data[CORRUPT_KEY]).toBeUndefined();
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });
