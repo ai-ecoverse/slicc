@@ -217,7 +217,10 @@ export interface AgentSpawnOptions {
    * whatever `targetPath` holds NOW, so edits that landed on the target
    * during the run survive instead of being clobbered by a whole-file
    * rewrite. Conflicting regions resolve to the draft (the spawned agent
-   * is the curator of record for the file). All three paths are absolute
+   * is the curator of record for the file), except over an empty base:
+   * the scoop saw none of a non-empty target, so a target written since
+   * the snapshot keeps both sides and one that predates it fails the
+   * merge (the empty base was never its state). All three paths are absolute
    * VFS paths; the scoop itself only ever sees `draftPath`. On a merge
    * the bridge removes `basePath` + `draftPath`; a failed run keeps them
    * for a retry or a human post-mortem — except a run cut off at its
@@ -226,11 +229,12 @@ export interface AgentSpawnOptions {
    * `memory_write`, so the draft is never torn). Runs in the worker realm with the
    * bridge's full shared-VFS handle, so a page death after spawn cannot
    * lose the completed rewrite (#1989 companion). A merge failure (I/O
-   * error, missing base snapshot) DOWNGRADES the spawn to a non-zero
-   * exit: the run succeeded but its rewrite never landed, and a success
-   * signal would let callers clear their pending bookkeeping with the
-   * work undone. The error is logged and recorded in the outcome
-   * receipt; the success receipt is not written.
+   * error, missing base snapshot, an empty base over an older target)
+   * DOWNGRADES the spawn to a non-zero exit: the run succeeded but its
+   * rewrite never landed, and a success signal would let callers clear
+   * their pending bookkeeping with the work undone. The error is logged
+   * and recorded in the outcome receipt; the success receipt is not
+   * written.
    */
   mergeOnSuccess?: AgentMergeOnSuccess;
   /**
@@ -793,6 +797,25 @@ async function applyMergeOnSuccess(
       await cleanup();
       return { applied: false, conflicts: 0 };
     }
+    if (base === '' && current !== '') {
+      // The scoop saw none of the target's content, so the whole-file
+      // conflict below is none of its deliberate deletions: favoring the
+      // draft would replace the target outright. A target written since
+      // the snapshot (created mid-run under a first-ever pass) keeps both
+      // sides; one that predates it means the empty base was never its
+      // state — a read fault taken for absence — and the draft is refused.
+      if (!(await writtenSinceSnapshot(sharedFs, spec))) {
+        return {
+          applied: false,
+          conflicts: 0,
+          error: 'base snapshot is empty but the target predates it; target left as-is',
+        };
+      }
+      const merged = threeWayMerge(current, base, draft, { favor: 'union' });
+      await sharedFs.writeFile(spec.targetPath, merged.content);
+      await cleanup();
+      return { applied: true, conflicts: merged.conflicts };
+    }
     if (current === base) {
       // No concurrent edits — the rewrite lands verbatim.
       await sharedFs.writeFile(spec.targetPath, draft);
@@ -813,6 +836,27 @@ async function applyMergeOnSuccess(
       error,
     });
     return { applied: false, conflicts: 0, error };
+  }
+}
+
+/**
+ * Whether `targetPath` was last written no earlier than the `basePath`
+ * snapshot. The caller seeds the base at spawn time and the scoop edits only
+ * the draft, so the base's mtime dates the snapshot. A stat fault reads as `false`;
+ * the refusal that follows leaves the target untouched.
+ */
+async function writtenSinceSnapshot(
+  sharedFs: VirtualFS,
+  spec: AgentMergeOnSuccess
+): Promise<boolean> {
+  try {
+    const [target, base] = await Promise.all([
+      sharedFs.stat(spec.targetPath),
+      sharedFs.stat(spec.basePath),
+    ]);
+    return target.mtime >= base.mtime;
+  } catch {
+    return false;
   }
 }
 

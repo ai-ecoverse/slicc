@@ -428,6 +428,12 @@ docs under the workspace are not memory).
   The cone's `scoop-notify` for these passes is deferred until that receipt is written (#3460): a
   non-zero exit headlines as `[@… failed]` with `status` / `exitCode` / `reason` and a
   `status.json:` path; a truncated success still headlines as `completed` (with the bound note).
+- **Empty bases.** The snapshot seeds an empty `base.md` only when the live file is `ENOENT`; any
+  other read fault (EIO, a locked or half-mounted VFS) aborts the pass before anything is written,
+  and the freezer's legacy fallback re-reads with the same `ENOENT`-only rule, so the live file
+  stays untouched. The bridge merge never resolves an empty base over a non-empty target in the
+  draft's favor: a target last written before `base.md` fails the merge (target untouched, staging
+  kept), and one written since the snapshot keeps both sides (`favor: 'union'`).
 
 ## Frozen Sessions ("New session" flow)
 
