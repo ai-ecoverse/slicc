@@ -1,11 +1,19 @@
 import type { Api } from '@earendil-works/pi-ai';
 import {
+  corruptValueKey,
+  OAUTH_EXTRA_DOMAINS_KEY,
   type OAuthExtraDomainsStore,
+  clearOAuthExtras as sharedClearOAuthExtras,
   readOAuthExtras as sharedReadOAuthExtras,
   writeOAuthExtras as sharedWriteOAuthExtras,
 } from '@slicc/shared-ts';
 import { knownProviderLabel } from '../base/provider-labels.js';
-import { ACCOUNTS_KEY, readStoredAccounts } from '../base/stored-accounts.js';
+import {
+  ACCOUNTS_KEY,
+  CORRUPT_ACCOUNTS_KEY,
+  readStoredAccounts,
+  writeStoredAccounts,
+} from '../base/stored-accounts.js';
 import type { Model } from '../core/index.js';
 import { createLogger, getModel, getModels, getProviders } from '../core/index.js';
 import { resolveSecretTopology } from '../core/secret-topology.js';
@@ -539,13 +547,13 @@ export function getExtraOAuthDomains(providerId: string): string[] {
 }
 
 export function setExtraOAuthDomains(providerId: string, domains: string[]): void {
-  const store = sharedReadOAuthExtras(localStorage);
   const cleaned = domains.map((d) => d.trim()).filter((d) => d.length > 0);
   if (cleaned.length === 0) {
-    delete store[providerId];
-  } else {
-    store[providerId] = cleaned;
+    sharedClearOAuthExtras(localStorage, providerId);
+    return;
   }
+  const store = sharedReadOAuthExtras(localStorage);
+  store[providerId] = cleaned;
   sharedWriteOAuthExtras(localStorage, store);
 }
 
@@ -579,7 +587,7 @@ export function getAllExtraOAuthDomains(): OAuthExtraDomainsStore {
 }
 
 function saveAccounts(accounts: Account[]): void {
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+  writeStoredAccounts(JSON.stringify(accounts));
 }
 
 async function saveAccountsAsync(accounts: Account[]): Promise<void> {
@@ -1171,6 +1179,8 @@ export async function clearAllSettings(): Promise<void> {
   const accounts = getAccounts();
   await Promise.allSettled(accounts.map((a) => removeAccount(a.providerId)));
   localStorage.removeItem(ACCOUNTS_KEY);
+  localStorage.removeItem(CORRUPT_ACCOUNTS_KEY);
+  localStorage.removeItem(corruptValueKey(OAUTH_EXTRA_DOMAINS_KEY));
   localStorage.removeItem(MODEL_KEY);
   for (const key of LEGACY_KEYS) {
     localStorage.removeItem(key);

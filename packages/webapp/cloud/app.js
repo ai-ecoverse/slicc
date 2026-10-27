@@ -1,3 +1,4 @@
+import { writeStoredAccounts } from '../src/base/stored-accounts.js';
 import {
   assembleBundle,
   assembleDelta,
@@ -265,16 +266,23 @@ function readCatalog() {
   return parseModelCatalog(localStorage.getItem(MODEL_CATALOG_KEY));
 }
 
+function saveDashboardAccounts(accounts) {
+  try {
+    writeStoredAccounts(JSON.stringify(accounts));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[cloud] could not save provider accounts:', message);
+    showToast(`Could not save provider accounts: ${message}`);
+  }
+}
+
 function removeDashboardAccount(providerId) {
   if (providerId === ADOBE_PROVIDER_ID) {
     try {
       localStorage.setItem(ADOBE_OPTOUT_KEY, '1');
     } catch {}
   }
-  const accounts = readAccounts().filter((a) => a.providerId !== providerId);
-  try {
-    localStorage.setItem('slicc_accounts', JSON.stringify(accounts));
-  } catch {}
+  saveDashboardAccounts(readAccounts().filter((a) => a.providerId !== providerId));
   renderCreateConfig();
 }
 
@@ -309,9 +317,7 @@ function ensureAdobeDefaultAccount(force = false) {
   } else {
     return;
   }
-  try {
-    localStorage.setItem('slicc_accounts', JSON.stringify(accounts));
-  } catch {}
+  saveDashboardAccounts(accounts);
 }
 
 function effectiveCatalog() {

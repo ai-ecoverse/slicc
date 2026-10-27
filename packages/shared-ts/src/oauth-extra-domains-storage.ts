@@ -1,38 +1,69 @@
+import {
+  corruptValueKey,
+  type QuarantineStorage,
+  replaceStoredValue,
+} from './storage-quarantine.js';
+
 export const OAUTH_EXTRA_DOMAINS_KEY = 'slicc_oauth_extra_domains';
 
 export type OAuthExtraDomainsStore = Record<string, string[]>;
 
-export interface LocalStorageLike {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
+export type LocalStorageLike = QuarantineStorage;
+
+function parseOAuthExtras(raw: string): OAuthExtraDomainsStore | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const out: OAuthExtraDomainsStore = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (!Array.isArray(v)) continue;
+    const cleaned = v.filter((d): d is string => typeof d === 'string' && d.length > 0);
+    if (cleaned.length > 0) out[k] = cleaned;
+  }
+  return out;
 }
 
 export function readOAuthExtras(storage: LocalStorageLike): OAuthExtraDomainsStore {
   try {
     const raw = storage.getItem(OAUTH_EXTRA_DOMAINS_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const out: OAuthExtraDomainsStore = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (typeof k !== 'string' || !Array.isArray(v)) continue;
-      const cleaned = v.filter((d): d is string => typeof d === 'string' && d.length > 0);
-      if (cleaned.length > 0) out[k] = cleaned;
-    }
-    return out;
+    return parseOAuthExtras(raw) ?? {};
   } catch {
     return {};
   }
 }
 
-export function writeOAuthExtras(storage: LocalStorageLike, store: OAuthExtraDomainsStore): void {
+const CORRUPT_OAUTH_EXTRAS_KEY = corruptValueKey(OAUTH_EXTRA_DOMAINS_KEY);
+
+function persistOAuthExtras(storage: LocalStorageLike, store: OAuthExtraDomainsStore): boolean {
+  let copied: boolean;
+
   try {
-    storage.setItem(OAUTH_EXTRA_DOMAINS_KEY, JSON.stringify(store));
+    copied = replaceStoredValue(
+      storage,
+      OAUTH_EXTRA_DOMAINS_KEY,
+      JSON.stringify(store),
+      (raw) => parseOAuthExtras(raw) !== null
+    );
   } catch (err) {
     throw new Error(
       `Failed to persist OAuth extras (localStorage quota exceeded?): ${err instanceof Error ? err.message : String(err)}`
     );
   }
+  if (copied) {
+    console.error(
+      `[slicc] ${OAUTH_EXTRA_DOMAINS_KEY} was unparsable; copied it to ${CORRUPT_OAUTH_EXTRAS_KEY} before saving`
+    );
+  }
+  return copied;
+}
+
+export function writeOAuthExtras(storage: LocalStorageLike, store: OAuthExtraDomainsStore): void {
+  persistOAuthExtras(storage, store);
 }
 
 export function addOAuthExtraDomain(
@@ -75,5 +106,5 @@ export function removeOAuthExtraDomain(
 export function clearOAuthExtras(storage: LocalStorageLike, providerId: string): void {
   const store = readOAuthExtras(storage);
   delete store[providerId];
-  writeOAuthExtras(storage, store);
+  if (!persistOAuthExtras(storage, store)) storage.removeItem?.(CORRUPT_OAUTH_EXTRAS_KEY);
 }

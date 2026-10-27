@@ -388,4 +388,20 @@ describe('createStandalonePanelRpcHandlers — save-oauth-accounts', () => {
     expect(result.storedJson).toBe(next);
     expect(lsData.slicc_accounts).toBe(next);
   });
+
+  it('moves an unparsable page store aside before a worker save replaces it (#4146)', async () => {
+    const raw = '[{"providerId":"anthropic","apiKey":"sk-ant-kept"},{"provid';
+    lsData.slicc_accounts = raw;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const handlers = createStandalonePanelRpcHandlers({});
+    const next = JSON.stringify([{ providerId: 'mcp:foo', apiKey: '', accessToken: 'tok' }]);
+    const result = await handlers['save-oauth-accounts']!({ accountsJson: next });
+    expect(result.storedJson).toBe(next);
+    expect(lsData['slicc_accounts.corrupt']).toBe(raw);
+    consoleError.mockRestore();
+
+    await handlers['save-oauth-accounts']!({ accountsJson: '[]' });
+    expect(lsData.slicc_accounts).toBe('[]');
+    expect(lsData['slicc_accounts.corrupt']).toBeUndefined();
+  });
 });

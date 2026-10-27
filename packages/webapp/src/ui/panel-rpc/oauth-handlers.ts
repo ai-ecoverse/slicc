@@ -1,5 +1,6 @@
 import type { SliccPermissions } from '@slicc/webcomponents';
 
+import { ACCOUNTS_KEY, writeStoredAccounts } from '../../base/stored-accounts.js';
 import type { PanelRpcHandlers } from '../../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import type { StandalonePanelRpcHandlerOptions } from '../panel-rpc-handlers.js';
@@ -136,8 +137,8 @@ export function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions
     },
 
     'save-oauth-accounts': ({ accountsJson }) => {
-      localStorage.setItem('slicc_accounts', accountsJson);
-      const storedJson = localStorage.getItem('slicc_accounts') ?? accountsJson;
+      writeStoredAccounts(accountsJson, localStorage);
+      const storedJson = localStorage.getItem(ACCOUNTS_KEY) ?? accountsJson;
       return { storedJson };
     },
   } satisfies Partial<PanelRpcHandlers>;
