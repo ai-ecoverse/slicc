@@ -44,7 +44,7 @@ Display is `ICloudSessionList.recentRows`: trays the live iCloud list already sh
 
 `AppState.sessionStore` (from **`packages/swift-traysession`**) discovers trays: the launcher publishes, `SettingsView` joins, and liveness needs a connected leader. The shared KVS key `S8LB56P782.ai.sliccy.trays` MUST match macOS or the two never see the same trays; `SLICC_IOS_NO_ICLOUD=1` omits iCloud entirely. A join URL carries the session secret and must **never** reach the screen or a widget. Reconnect attach loops follow `TRAY_SUPERSEDED` / `SupersedeRedirect` — see [iCloud tray supersede chain](#icloud-tray-supersede-chain).
 
-`FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts` and opens a saved transcript read-only; UI-test hooks `-uiTestFrozenFixture` / `-uiTestFrozenEmpty`.
+`FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts` and opens a saved transcript read-only; UI-test hooks `-uiTestFrozenFixture` / `-uiTestFrozenEmpty`. Agent transcripts (`agent-*.md`) share `/sessions` but are not sessions: both the index parse and the corrupt-index rebuild drop them, by the webapp's `isAgentSessionArchiveFilename` rule, and `Fixtures/frozen-session-filenames.json` holds the two sides to one corpus.
 
 ## Protocol mirror (iOS-local messages)
 
