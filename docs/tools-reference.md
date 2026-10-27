@@ -770,7 +770,8 @@ read-modify-write — page freezer, enrichment, worker snapshot — runs under o
 (`slicc:sessions-index`, `transcript/frozen-archive-writer.ts` `serializeIndexWrite`), and a
 snapshot re-checks the unit's session generation inside that transaction so a clear that overtook
 it writes nothing. The cursor (`liveThrough`) and round count also ride the archive frontmatter, so
-a corrupt-index rebuild restores them.
+a corrupt-index rebuild restores them; the snapshot runs that rebuild itself
+(`readSessionsIndexForWrite`) rather than writing its row over a corrupt index (#4151).
 
 With `memory-v2` and `agentic-memory` both on, a cone round also schedules a
 curator pass over the live archive's uncurated delta (`scoops/live-session-curation.ts`).

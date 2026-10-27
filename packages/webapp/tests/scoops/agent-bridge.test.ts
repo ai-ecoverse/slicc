@@ -115,6 +115,7 @@ function pinned(modelId: string, providerId = MOCK_SELECTED_PROVIDER) {
   return { ok: true as const, selection: { modelId, providerId } };
 }
 
+import { isAgentSessionArchiveFilename } from '../../src/scoops/agent-session-archive.js';
 import type { Orchestrator, ScoopObserver } from '../../src/scoops/orchestrator.js';
 import type { ScoopContext } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
@@ -2023,6 +2024,9 @@ describe('createAgentBridge — session archive (persistSession)', () => {
     expect(registerCalls[0].jid).toBe('agent_memory_curator');
     const archive = writes.filter((w) => w.path.startsWith('/sessions/agent-memory-curator-'));
     expect(archive).toHaveLength(1);
+    // The name a corrupt sessions-index rebuild recognizes and skips (#4151).
+    expect(isAgentSessionArchiveFilename(archive[0].path.slice('/sessions/'.length))).toBe(true);
+    expect(isAgentSessionArchiveFilename('2026-06-01T10-00-00-000Z-a.md')).toBe(false);
   });
 
   it('rejects a malformed fixed name without spawning', async () => {

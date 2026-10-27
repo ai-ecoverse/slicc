@@ -12,10 +12,16 @@
  *
  * `ArchiveVfs` is the structural subset both a page-side
  * `WritableVfsClient` and the worker-side `VirtualFS` satisfy.
+ *
+ * Every whole-index writer, in either realm, takes its baseline from
+ * {@link readSessionsIndexForWrite}. A present-but-unparsable index is
+ * rebuilt from the `/sessions/*.md` archives there, so no writer can replace
+ * it with a one-row list and orphan the rest (#4151).
  */
 
 import { slugify as slugifyText } from '@slicc/shared-ts';
-import { FsError } from '../fs/types.js';
+import { createLogger } from '../base/logger.js';
+import { isAgentSessionArchiveFilename } from '../scoops/agent-session-archive.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
 import {
   newAtRestState,
@@ -26,18 +32,26 @@ import { formatChatForClipboard } from './chat-markdown.js';
 import {
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
+  parseFrozenArchiveFrontmatter,
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
 } from './frozen-archive-format.js';
 
+const log = createLogger('frozen-archive-writer');
+
 /** The filesystem surface an archive write needs; nothing more. */
 export interface ArchiveVfs {
   readFile(path: string, options: { encoding: 'utf-8' }): Promise<string | Uint8Array>;
+  /** Lists the archives when a corrupt index has to be rebuilt. */
+  readDir(path: string): Promise<Array<{ name: string; type: string }>>;
   writeFile(path: string, content: string): Promise<void>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   rm(path: string, options?: { recursive?: boolean }): Promise<void>;
   flush(): Promise<void>;
 }
+
+/** What reading the index needs, including the archive rebuild. */
+export type SessionsIndexReadVfs = Pick<ArchiveVfs, 'readFile' | 'readDir'>;
 
 /** Markers for the embedded structured-data block. */
 const SESSION_DATA_START = '<!-- slicc:session-data\n';
@@ -311,23 +325,161 @@ export async function ensureSessionsDir(
 }
 
 /**
- * Read the index for a WRITER: a missing index is an empty list, a
- * malformed one too, but any other read fault propagates — silently
- * treating an EIO as "no entries" would rewrite the index without them.
+ * Read the index for a WRITER — the one baseline every whole-index writer
+ * uses. Missing (ENOENT) is an empty list. Present but unparsable (or not an
+ * array) is rebuilt from the archives: an empty baseline would let the
+ * writer's own row replace every other session, and once the file parses
+ * again nothing would ever run the rebuild (#4151). Any other read fault
+ * propagates — treating an EIO as "no entries" would rewrite the index
+ * without them.
+ *
+ * Side-effect free, so it is safe outside the index lock too; the caller's
+ * own write is what persists the repaired index.
  */
 export async function readSessionsIndexForWrite(
-  vfs: ArchiveVfs,
+  vfs: SessionsIndexReadVfs,
   sessionsDir: string = SESSIONS_DIR
 ): Promise<FrozenSessionIndexEntry[]> {
+  const state = await readSessionsIndexState(vfs, sessionsDir);
+  if (state.kind === 'ok') return state.entries;
+  if (state.kind === 'missing') return [];
+  const rebuilt = await rebuildSessionsIndexFromArchives(vfs, sessionsDir);
+  log.warn('Sessions index corrupt; rebuilt from archives before writing', {
+    sessionsDir,
+    archives: rebuilt.length,
+  });
+  return rebuilt;
+}
+
+/** Discriminated read of a sessions index. */
+export type SessionsIndexState =
+  | { kind: 'ok'; entries: FrozenSessionIndexEntry[] }
+  | { kind: 'missing' }
+  | { kind: 'corrupt' };
+
+/**
+ * The index as written, missing, or corrupt (unparsable or not an array,
+ * e.g. a write cut off by a reload killing the worker). Throws on any read
+ * fault other than ENOENT.
+ */
+export async function readSessionsIndexState(
+  vfs: Pick<ArchiveVfs, 'readFile'>,
+  sessionsDir: string = SESSIONS_DIR
+): Promise<SessionsIndexState> {
+  let text: string;
   try {
     const raw = await vfs.readFile(sessionsIndexPathFor(sessionsDir), { encoding: 'utf-8' });
-    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
+    text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
   } catch (err) {
-    if (err instanceof FsError && err.code !== 'ENOENT') throw err;
-    return [];
+    if (isEnoent(err)) return { kind: 'missing' };
+    throw err;
   }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed)
+      ? { kind: 'ok', entries: parsed as FrozenSessionIndexEntry[] }
+      : { kind: 'corrupt' };
+  } catch {
+    return { kind: 'corrupt' };
+  }
+}
+
+/**
+ * Rebuild a sessions index from its `*.md` archives, the ground truth when
+ * `index.json` is corrupt. Each row comes from the archive's frontmatter
+ * alone (title, timestamps, counts, cost, cone provenance, live and curator
+ * cursors); `pending-*` filenames keep their enrichment marker. Agent
+ * transcripts (`agent-*.md`) share the directory but are not sessions and
+ * are skipped. Newest first, like the live index.
+ *
+ * An archive that vanished mid-scan is skipped. One that will not read for
+ * any other reason keeps a placeholder row (title = filename): dropping it
+ * would orphan it for good once the rebuilt index is written. A directory
+ * listing fault throws — without the listing nothing can be rebuilt.
+ */
+export async function rebuildSessionsIndexFromArchives(
+  vfs: SessionsIndexReadVfs,
+  sessionsDir: string = SESSIONS_DIR
+): Promise<FrozenSessionIndexEntry[]> {
+  let names: string[];
+  try {
+    const dir = await vfs.readDir(sessionsDir);
+    names = dir
+      .filter(
+        (d) => d.type === 'file' && d.name.endsWith('.md') && !isAgentSessionArchiveFilename(d.name)
+      )
+      .map((d) => d.name);
+  } catch (err) {
+    if (isEnoent(err)) return [];
+    throw err;
+  }
+  const entries: FrozenSessionIndexEntry[] = [];
+  for (const filename of names) {
+    let text: string | null;
+    try {
+      const raw = await vfs.readFile(`${sessionsDir}/${filename}`, { encoding: 'utf-8' });
+      text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    } catch (err) {
+      if (isEnoent(err)) continue;
+      log.warn('Archive unreadable during index rebuild; keeping a placeholder row', {
+        sessionsDir,
+        filename,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      text = null;
+    }
+    entries.push(text === null ? placeholderEntry(filename) : entryFromArchive(filename, text));
+  }
+  entries.sort((a, b) => b.frozenAt.localeCompare(a.frozenAt));
+  return entries;
+}
+
+/**
+ * The row for an archive whose body could not be read. It keeps the session
+ * listed and claims nothing else: not a draft (the enrichment catch-up could
+ * not read it either) and not live (its cone is unknown, so no compaction may
+ * resume into it).
+ */
+function placeholderEntry(filename: string): FrozenSessionIndexEntry {
+  return { filename, title: filename, frozenAt: new Date(0).toISOString(), messageCount: 0 };
+}
+
+/** One rebuilt index row from an archive's frontmatter. */
+function entryFromArchive(filename: string, text: string): FrozenSessionIndexEntry {
+  const header = text.slice(0, 2000);
+  const title = /^title:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? filename;
+  const frozenAt = /^frozenAt:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? new Date(0).toISOString();
+  const messageCount = Number(/^messageCount:\s*(\d+)\s*$/m.exec(header)?.[1] ?? 0);
+  const parsed = parseFrozenArchiveFrontmatter(text);
+  // A live compaction snapshot is still being written to — it must not be
+  // handed to the enrichment catch-up, and it needs its cursor back. A
+  // `live-` file WITHOUT the marker was finalized (bare clear-chat) and is
+  // an ordinary draft.
+  const pending = filename.startsWith('pending-') || (filename.startsWith('live-') && !parsed.live);
+  return {
+    filename,
+    title,
+    frozenAt,
+    messageCount,
+    ...(parsed.cost ? { cost: parsed.cost } : {}),
+    ...(parsed.models ? { models: parsed.models } : {}),
+    ...(parsed.cone ? { cone: parsed.cone } : {}),
+    ...(parsed.coneLabel ? { coneLabel: parsed.coneLabel } : {}),
+    ...(parsed.memorySkipped ? { memorySkipped: true as const } : {}),
+    ...(parsed.live ? { live: true as const } : {}),
+    ...(parsed.live && parsed.liveThrough ? { liveThrough: parsed.liveThrough } : {}),
+    ...(parsed.live && parsed.compactions ? { compactions: parsed.compactions } : {}),
+    ...(parsed.curatedThrough ? { curatedThrough: parsed.curatedThrough } : {}),
+    // Per-freeze UUID only. Frontmatter `id` is the live chat key
+    // (`session-<folder>`); copying it here collapsed every freeze on a
+    // cone onto one sessionId after a corrupt-index rebuild (#3807).
+    ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
+    ...(pending ? { pendingEnrichment: true } : {}),
+  };
+}
+
+function isEnoent(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === 'ENOENT';
 }
 
 interface LockManagerLike {
@@ -379,22 +531,32 @@ export function serializeIndexWrite<T>(
   return next;
 }
 
-/** Write the whole index. Caller holds the lock (`serializeIndexWrite`). */
+/**
+ * Write the whole index. Caller holds the lock (`serializeIndexWrite`) and
+ * built `entries` from {@link readSessionsIndexForWrite} — the only index
+ * write in `src/` (a source-scan test keeps it that way).
+ */
 export function writeSessionsIndexUnlocked(
-  vfs: ArchiveVfs,
+  vfs: Pick<ArchiveVfs, 'writeFile'>,
   entries: readonly FrozenSessionIndexEntry[],
   sessionsDir: string = SESSIONS_DIR
 ): Promise<void> {
   return vfs.writeFile(sessionsIndexPathFor(sessionsDir), JSON.stringify(entries, null, 2));
 }
 
-/** Insert or replace one row, newest first. Caller holds the lock. */
+/**
+ * Insert or replace one row, newest first. Caller holds the lock. A caller
+ * that already read the index in this transaction passes that result as
+ * `baseline`, so a corrupt index is rebuilt (every archive read) once per
+ * write, not twice under the origin-wide lock.
+ */
 export async function upsertSessionsIndexEntryUnlocked(
   vfs: ArchiveVfs,
   entry: FrozenSessionIndexEntry,
-  sessionsDir: string = SESSIONS_DIR
+  sessionsDir: string = SESSIONS_DIR,
+  baseline?: readonly FrozenSessionIndexEntry[]
 ): Promise<void> {
-  const existing = await readSessionsIndexForWrite(vfs, sessionsDir);
+  const existing = baseline ?? (await readSessionsIndexForWrite(vfs, sessionsDir));
   await writeSessionsIndexUnlocked(
     vfs,
     [entry, ...existing.filter((e) => e.filename !== entry.filename)],

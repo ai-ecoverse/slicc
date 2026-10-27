@@ -17,6 +17,7 @@ import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { scoopSessionsDir, snapshotLiveSession } from '../../src/scoops/live-session-snapshot.js';
 import { parseFrozenArchive } from '../../src/transcript/frozen-archive-format.js';
 import type { ArchiveVfs } from '../../src/transcript/frozen-archive-writer.js';
+import { mapReadDir } from '../helpers/map-read-dir.js';
 
 type TestMessage = { role: string; content: { type: string; text?: string }[] | string };
 type CompactionSettingsArg = { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
@@ -77,6 +78,7 @@ function fakeVfs(): ArchiveVfs & { files: Map<string, string> } {
   const files = new Map<string, string>();
   return {
     files,
+    readDir: mapReadDir(files),
     async readFile(path: string): Promise<string> {
       const { FsError } = await import('../../src/fs/types.js');
       if (!files.has(path)) throw new FsError('ENOENT', `missing ${path}`, path);

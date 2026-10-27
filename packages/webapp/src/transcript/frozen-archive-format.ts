@@ -337,9 +337,7 @@ export function parseFrozenArchive(
 }
 
 /** The scalar metadata a freezer-shaped frontmatter block carries, besides the title. */
-function parseFrontmatterMeta(
-  frontmatter: string
-): Pick<
+export type FrozenArchiveFrontmatter = Pick<
   FrozenSessionArchive,
   | 'cost'
   | 'models'
@@ -352,8 +350,20 @@ function parseFrontmatterMeta(
   | 'curatedThrough'
   | 'sessionId'
   | 'attachmentsKey'
-> & { id?: string; sidecar?: string } {
-  const meta: ReturnType<typeof parseFrontmatterMeta> = {};
+> & { id?: string; sidecar?: string };
+
+/**
+ * An archive's frontmatter metadata alone — what an index row is built from.
+ * Never touches the body, so a corrupt-index rebuild does not parse every
+ * archive's embedded message JSON while it holds the index lock.
+ */
+export function parseFrozenArchiveFrontmatter(markdown: string): FrozenArchiveFrontmatter {
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(markdown)?.[1];
+  return frontmatter === undefined ? {} : parseFrontmatterMeta(frontmatter);
+}
+
+function parseFrontmatterMeta(frontmatter: string): FrozenArchiveFrontmatter {
+  const meta: FrozenArchiveFrontmatter = {};
   const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
   const models = parseFrontmatterJson<FrozenSessionModel[]>(frontmatter, 'models');
   if (cost) meta.cost = cost;
