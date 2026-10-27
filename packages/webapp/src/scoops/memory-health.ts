@@ -19,6 +19,7 @@
 
 import {
   type FrozenSessionIndexEntry,
+  frozenSessionRows,
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
 import { EXTRA_CONE_HOME_ROOT, workspaceFor } from '../work-unit/descriptor.js';
@@ -113,7 +114,8 @@ async function readText(fs: MemoryHealthFs, path: string): Promise<string> {
 /**
  * Read the sessions index WITHOUT the swallow-to-`[]` behavior of
  * `readSessionsIndex`: for a health check, "the ledger cannot be read" and
- * "the ledger is empty" are opposite verdicts.
+ * "the ledger is empty" are opposite verdicts. Agent-transcript rows are
+ * dropped the same way, so the counts match `memory status`.
  */
 async function readIndexStrict(
   fs: MemoryHealthFs
@@ -130,7 +132,7 @@ async function readIndexStrict(
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return { failure: `sessions index is not an array` };
-    return { entries: parsed as FrozenSessionIndexEntry[] };
+    return { entries: frozenSessionRows(parsed) };
   } catch {
     return { failure: `sessions index at ${SESSIONS_INDEX_PATH} is not valid JSON` };
   }

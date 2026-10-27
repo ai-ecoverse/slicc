@@ -15,6 +15,7 @@ import { computeBudget } from '../base/memory-budget.js';
 import { wellFormed } from '../base/utf16-clip.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
+import { frozenSessionRows } from '../transcript/frozen-archive-format.js';
 import { PRIMARY_WORKSPACE } from '../work-unit/descriptor.js';
 
 // The pure budget policy moved to base/memory-budget.ts so the `memory`
@@ -59,13 +60,16 @@ export function splitConeMemory(content: string): { header: string; autoExtracte
   return { header: content.slice(0, idx), autoExtracted: content.slice(idx) };
 }
 
-/** Best-effort read of /sessions/index.json — returns 0 on any failure. */
+/**
+ * Best-effort count of the frozen sessions in /sessions/index.json (agent
+ * transcript rows an older rebuild listed are not counted) — 0 on any failure.
+ */
 export async function readSessionCount(vfs: LocalVfsClient): Promise<number> {
   try {
     const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed.length : 0;
+    return Array.isArray(parsed) ? frozenSessionRows(parsed).length : 0;
   } catch {
     return 0;
   }

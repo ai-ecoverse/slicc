@@ -143,6 +143,56 @@ describe('thawFrozenSession', () => {
   });
 });
 
+describe('agent-transcript rows an older rebuild listed', () => {
+  const AGENT_FILE = 'agent-memory-curator-2026-06-04T10-00-00-000Z.md';
+  const STALE: FrozenSessionIndexEntry = {
+    filename: AGENT_FILE,
+    title: AGENT_FILE,
+    frozenAt: new Date(0).toISOString(),
+    messageCount: 0,
+  };
+
+  async function healedFs(): Promise<VirtualFS> {
+    const fs = await seededFs();
+    await fs.writeFile(`/sessions/${AGENT_FILE}`, '# Agent session: memory-curator\n');
+    await fs.writeFile('/sessions/index.json', JSON.stringify([STALE, ENTRY]));
+    return fs;
+  }
+
+  it('are not on the rail: no card, so no trash button for the transcript', async () => {
+    const fs = await healedFs();
+    const freezer = document.createElement('slicc-freezer');
+
+    const entries = await readFreezerEntries(fs);
+    renderFreezerCards(freezer, entries ?? [], { deletable: true });
+
+    expect(entries).toEqual([ENTRY]);
+    const slugs = Array.from(freezer.querySelectorAll('slicc-freezer-card'), (card) =>
+      card.getAttribute('slug')
+    );
+    expect(slugs).toEqual([ENTRY.filename]);
+  });
+
+  it('get no icon pick, and the backfill write drops them and keeps the file', async () => {
+    const fs = await healedFs();
+    const freezer = document.createElement('slicc-freezer');
+    const entries = (await readFreezerEntries(fs)) ?? [];
+    renderFreezerCards(freezer, entries);
+
+    const pickIcon = vi.fn(async (_subject: string) => 'wrench');
+    await enrichFreezerIcons({ reader: fs, writer: fs, freezer, entries, pickIcon });
+
+    expect(pickIcon).toHaveBeenCalledTimes(1);
+    expect(pickIcon.mock.calls[0]).toEqual([`"${ENTRY.title}" \u2014 an archived chat session`]);
+    expect(
+      JSON.parse((await fs.readFile('/sessions/index.json', { encoding: 'utf-8' })) as string)
+    ).toEqual([{ ...ENTRY, icon: 'wrench' }]);
+    expect(await fs.readFile(`/sessions/${AGENT_FILE}`, { encoding: 'utf-8' })).toContain(
+      'memory-curator'
+    );
+  });
+});
+
 describe('freezer thread icons', () => {
   it('frozenCard forwards a stored entry icon (default stays the snowflake)', () => {
     expect(frozenCard(ENTRY).hasAttribute('icon')).toBe(false);

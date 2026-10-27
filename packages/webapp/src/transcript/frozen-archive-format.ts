@@ -18,6 +18,36 @@ import type { ChatMessage } from '../scoops/chat-types.js';
 export const SESSIONS_DIR = '/sessions';
 export const SESSIONS_INDEX_PATH = '/sessions/index.json';
 
+/**
+ * Filename prefix of a spawned agent's transcript
+ * (`scoops/agent-session-archive.ts`, re-exported there).
+ */
+export const AGENT_SESSION_ARCHIVE_PREFIX = 'agent-';
+
+/**
+ * Whether a `/sessions` file is an agent transcript, not a frozen chat. The
+ * two share the directory but never the index, so a corrupt-index rebuild
+ * skips these. Frozen archives are `<timestamp>-<slug>.md`, `pending-…` or
+ * `live-…`, never `agent-…`.
+ */
+export function isAgentSessionArchiveFilename(filename: string): boolean {
+  return filename.startsWith(AGENT_SESSION_ARCHIVE_PREFIX) && filename.endsWith('.md');
+}
+
+/**
+ * The frozen-session rows of a parsed index. Indexes healed by the rebuild
+ * before #4152 can still list agent transcripts (title = filename, 1970,
+ * 0 turns); every index reader drops them, so nothing lists, enriches,
+ * curates, exports or deletes one, and the next whole-index write leaves
+ * them out. The transcript files stay. Other rows pass through untouched.
+ */
+export function frozenSessionRows(entries: readonly unknown[]): FrozenSessionIndexEntry[] {
+  return entries.filter((entry) => {
+    const filename = (entry as { filename?: unknown } | null)?.filename;
+    return typeof filename !== 'string' || !isAgentSessionArchiveFilename(filename);
+  }) as FrozenSessionIndexEntry[];
+}
+
 export interface FrozenSessionCost {
   total: number;
   input: number;
@@ -232,7 +262,7 @@ export async function readSessionsIndex(vfs: LocalVfsClient): Promise<FrozenSess
     const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
+    return Array.isArray(parsed) ? frozenSessionRows(parsed) : [];
   } catch {
     return [];
   }

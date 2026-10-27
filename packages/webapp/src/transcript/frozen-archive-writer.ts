@@ -16,12 +16,13 @@
  * Every whole-index writer, in either realm, takes its baseline from
  * {@link readSessionsIndexForWrite}. A present-but-unparsable index is
  * rebuilt from the `/sessions/*.md` archives there, so no writer can replace
- * it with a one-row list and orphan the rest (#4151).
+ * it with a one-row list and orphan the rest (#4151). Agent-transcript rows
+ * an older rebuild listed are dropped from that baseline, so the next write
+ * cleans them out of the file.
  */
 
 import { slugify as slugifyText } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
-import { isAgentSessionArchiveFilename } from '../scoops/agent-session-archive.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
 import {
   newAtRestState,
@@ -32,6 +33,8 @@ import { formatChatForClipboard } from './chat-markdown.js';
 import {
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
+  frozenSessionRows,
+  isAgentSessionArchiveFilename,
   parseFrozenArchiveFrontmatter,
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
@@ -360,7 +363,9 @@ export type SessionsIndexState =
 /**
  * The index as written, missing, or corrupt (unparsable or not an array,
  * e.g. a write cut off by a reload killing the worker). Throws on any read
- * fault other than ENOENT.
+ * fault other than ENOENT. Rows naming an agent transcript are not sessions
+ * and are left out ({@link frozenSessionRows}): the rail never lists one, and
+ * a writer's baseline (this read, inside its lock) never writes one back.
  */
 export async function readSessionsIndexState(
   vfs: Pick<ArchiveVfs, 'readFile'>,
@@ -377,7 +382,7 @@ export async function readSessionsIndexState(
   try {
     const parsed: unknown = JSON.parse(text);
     return Array.isArray(parsed)
-      ? { kind: 'ok', entries: parsed as FrozenSessionIndexEntry[] }
+      ? { kind: 'ok', entries: frozenSessionRows(parsed) }
       : { kind: 'corrupt' };
   } catch {
     return { kind: 'corrupt' };
