@@ -198,7 +198,14 @@ export async function seedMemoryInstructions(fs: {
   try {
     await fs.stat(MEMORY_INSTRUCTIONS_PATH);
     return;
-  } catch {}
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      log.warn(`Could not stat ${MEMORY_INSTRUCTIONS_PATH}; not seeding`, {
+        error: errorText(error),
+      });
+      return;
+    }
+  }
   try {
     await fs.mkdir('/etc', { recursive: true });
     await fs.writeFile(MEMORY_INSTRUCTIONS_PATH, DEFAULT_MEMORY_MD);
@@ -282,6 +289,10 @@ export async function runAgenticMemoryPass(
     try {
       await seedCurationSnapshot(opts.vfs, workspace.memoryPath, opts.sessionArchivePath);
     } catch (error) {
+      log.error('Curation snapshot failed; pass aborted, live memory untouched', {
+        memoryPath: workspace.memoryPath,
+        error: errorText(error),
+      });
       return { ok: false, reason: `snapshot: ${errorText(error)}`, legacyFallbackSafe: true };
     }
 
@@ -444,7 +455,9 @@ async function seedCurationSnapshot(
   try {
     const raw = await vfs.readFile(memoryPath, { encoding: 'utf-8' });
     live = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  } catch {}
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
+  }
   await vfs.mkdir(curationDirPath(sessionArchivePath), { recursive: true });
   await vfs.writeFile(curationBasePath(sessionArchivePath), live);
   await vfs.writeFile(curationDraftPath(sessionArchivePath), live);
@@ -542,4 +555,8 @@ function waitForSpawn(
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'ENOENT';
 }

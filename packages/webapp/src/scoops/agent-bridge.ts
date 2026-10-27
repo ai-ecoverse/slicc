@@ -449,6 +449,19 @@ async function applyMergeOnSuccess(
       await cleanup();
       return { applied: false, conflicts: 0 };
     }
+    if (base === '' && current !== '') {
+      if (!(await writtenSinceSnapshot(sharedFs, spec))) {
+        return {
+          applied: false,
+          conflicts: 0,
+          error: 'base snapshot is empty but the target predates it; target left as-is',
+        };
+      }
+      const merged = threeWayMerge(current, base, draft, { favor: 'union' });
+      await sharedFs.writeFile(spec.targetPath, merged.content);
+      await cleanup();
+      return { applied: true, conflicts: merged.conflicts };
+    }
     if (current === base) {
       await sharedFs.writeFile(spec.targetPath, draft);
       await cleanup();
@@ -466,6 +479,21 @@ async function applyMergeOnSuccess(
       error,
     });
     return { applied: false, conflicts: 0, error };
+  }
+}
+
+async function writtenSinceSnapshot(
+  sharedFs: VirtualFS,
+  spec: AgentMergeOnSuccess
+): Promise<boolean> {
+  try {
+    const [target, base] = await Promise.all([
+      sharedFs.stat(spec.targetPath),
+      sharedFs.stat(spec.basePath),
+    ]);
+    return target.mtime >= base.mtime;
+  } catch {
+    return false;
   }
 }
 

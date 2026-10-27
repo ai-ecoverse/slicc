@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it, vi } from 'vitest';
+import { FsError } from '../../src/fs/types.js';
 import { Bridge } from '../../src/kernel/facade.js';
 import type {
   ExtensionMessage,
@@ -168,7 +169,7 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
     const result = await runAgenticMemoryPass({
       spawn: (options) => client.spawnAgent(options),
       vfs: {
-        readFile: async () => Promise.reject(new Error('MEMORY.md absent')),
+        readFile: async (path) => Promise.reject(new FsError('ENOENT', 'absent', path)),
         writeFile: async () => {},
         mkdir: async () => {},
       },

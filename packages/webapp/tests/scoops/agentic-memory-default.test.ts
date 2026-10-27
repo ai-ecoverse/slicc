@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
+import { FsError } from '../../src/fs/types.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { AgentSpawnOptions, AgentSpawnResult } from '../../src/scoops/agent-bridge.js';
 import {
@@ -93,5 +94,28 @@ describe('bundled MEMORY.md', () => {
     expect(await vfs.readFile(MEMORY_INSTRUCTIONS_PATH, { encoding: 'utf-8' })).toBe(
       'custom memory curator'
     );
+  });
+
+  it('leaves the document alone when the existence probe fails with anything but ENOENT', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vfs = await VirtualFS.create({ dbName: `memory-default-${dbCounter++}`, wipe: true });
+    await vfs.mkdir('/etc', { recursive: true });
+    await vfs.writeFile(MEMORY_INSTRUCTIONS_PATH, 'custom memory curator');
+    const realVfs = vfs;
+    const faulty = {
+      stat: async () => {
+        throw new FsError('EIO', 'i/o error', MEMORY_INSTRUCTIONS_PATH);
+      },
+      mkdir: realVfs.mkdir.bind(realVfs),
+      writeFile: realVfs.writeFile.bind(realVfs),
+    };
+
+    await seedMemoryInstructions(faulty);
+
+    expect(await vfs.readFile(MEMORY_INSTRUCTIONS_PATH, { encoding: 'utf-8' })).toBe(
+      'custom memory curator'
+    );
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
   });
 });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetLoggerDedupForTests } from '../../src/base/logger.js';
+import { FsError } from '../../src/fs/types.js';
 import {
   AGENT_NAME_IN_USE_PREFIX,
   type AgentSpawnOptions,
@@ -62,7 +63,7 @@ interface FakeVfs extends CuratorVfs {
   writes: Map<string, string>;
 }
 
-function fakeVfs(content: string | Error, liveMemory?: string): FakeVfs {
+function fakeVfs(content: string | Error, liveMemory?: string | Error): FakeVfs {
   const writes = new Map<string, string>();
   return {
     writes,
@@ -73,6 +74,7 @@ function fakeVfs(content: string | Error, liveMemory?: string): FakeVfs {
       }
       const written = writes.get(path);
       if (written !== undefined) return written;
+      if (liveMemory instanceof Error) throw liveMemory;
       if (liveMemory !== undefined) return liveMemory;
       throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
     }),
@@ -503,6 +505,58 @@ Curate {{MEMORY_PATH}}.`;
 
     expect(vfs.writes.get(curationBasePath(ARCHIVE_PATH))).toBe('');
     expect(vfs.writes.get(DRAFT_PATH)).toBe('');
+  });
+
+  it('seeds empty base and draft for the FsError ENOENT a VFS throws', async () => {
+    const spawn = successSpawn();
+    const vfs = fakeVfs(
+      DEFAULT_MEMORY_MD,
+      new FsError('ENOENT', 'no such file or directory', CONE_MEMORY_PATH)
+    );
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs,
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(result).toEqual({ ok: true, report: 'done' });
+    expect(vfs.writes.get(curationBasePath(ARCHIVE_PATH))).toBe('');
+    expect(vfs.writes.get(DRAFT_PATH)).toBe('');
+  });
+
+  it.each([
+    ['EIO', new FsError('EIO', 'i/o error', CONE_MEMORY_PATH)],
+    ['EACCES', new FsError('EACCES', 'mount locked', CONE_MEMORY_PATH)],
+    ['a decode error', new TypeError('The encoded data was not valid for encoding utf-8')],
+  ])('aborts the pass on %s reading the live memory, seeding nothing', async (_name, fault) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const spawn = successSpawn();
+    const vfs = fakeVfs(DEFAULT_MEMORY_MD, fault);
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs,
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: `snapshot: ${fault.message}`,
+      legacyFallbackSafe: true,
+    });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(vfs.mkdir).not.toHaveBeenCalled();
+    expect(vfs.writes.size).toBe(0);
+
+    expect(error).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith(
+      '[agentic-memory]',
+      'Curation snapshot failed; pass aborted, live memory untouched',
+      { memoryPath: CONE_MEMORY_PATH, error: fault.message }
+    );
   });
 
   it('falls back safely (nothing spawned) when snapshot seeding fails', async () => {
