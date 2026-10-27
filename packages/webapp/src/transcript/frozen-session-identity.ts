@@ -1,4 +1,9 @@
-import { type FrozenSessionIndexEntry, SESSIONS_INDEX_PATH } from './frozen-archive-format.js';
+import {
+  type FrozenSessionIndexEntry,
+  frozenSessionRows,
+  isAgentSessionArchiveFilename,
+  SESSIONS_INDEX_PATH,
+} from './frozen-archive-format.js';
 import { isDraftArchiveFilename } from './frozen-archive-writer.js';
 
 export interface FrozenSessionKey {
@@ -22,7 +27,12 @@ function isSafeSegment(value: unknown): value is string {
 }
 
 export function isSafeArchiveFilename(name: unknown): name is string {
-  return isSafeSegment(name) && name.endsWith('.md') && name.length > '.md'.length;
+  return (
+    isSafeSegment(name) &&
+    name.endsWith('.md') &&
+    name.length > '.md'.length &&
+    !isAgentSessionArchiveFilename(name)
+  );
 }
 
 export function isSafeSessionKey(key: unknown): key is string {
@@ -61,7 +71,7 @@ export async function readIndexForPresence(
     const parsed: unknown = JSON.parse(
       typeof raw === 'string' ? raw : new TextDecoder().decode(raw)
     );
-    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : null;
+    return Array.isArray(parsed) ? frozenSessionRows(parsed) : null;
   } catch {
     return null;
   }

@@ -1,6 +1,5 @@
 import { slugify as slugifyText } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
-import { isAgentSessionArchiveFilename } from '../scoops/agent-session-archive.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
 import {
   newAtRestState,
@@ -11,6 +10,8 @@ import { formatChatForClipboard } from './chat-markdown.js';
 import {
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
+  frozenSessionRows,
+  isAgentSessionArchiveFilename,
   parseFrozenArchiveFrontmatter,
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
@@ -240,7 +241,7 @@ export async function readSessionsIndexState(
   try {
     const parsed: unknown = JSON.parse(text);
     return Array.isArray(parsed)
-      ? { kind: 'ok', entries: parsed as FrozenSessionIndexEntry[] }
+      ? { kind: 'ok', entries: frozenSessionRows(parsed) }
       : { kind: 'corrupt' };
   } catch {
     return { kind: 'corrupt' };

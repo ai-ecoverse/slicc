@@ -4,6 +4,19 @@ import type { ChatMessage } from '../scoops/chat-types.js';
 export const SESSIONS_DIR = '/sessions';
 export const SESSIONS_INDEX_PATH = '/sessions/index.json';
 
+export const AGENT_SESSION_ARCHIVE_PREFIX = 'agent-';
+
+export function isAgentSessionArchiveFilename(filename: string): boolean {
+  return filename.startsWith(AGENT_SESSION_ARCHIVE_PREFIX) && filename.endsWith('.md');
+}
+
+export function frozenSessionRows(entries: readonly unknown[]): FrozenSessionIndexEntry[] {
+  return entries.filter((entry) => {
+    const filename = (entry as { filename?: unknown } | null)?.filename;
+    return typeof filename !== 'string' || !isAgentSessionArchiveFilename(filename);
+  }) as FrozenSessionIndexEntry[];
+}
+
 export interface FrozenSessionCost {
   total: number;
   input: number;
@@ -116,7 +129,7 @@ export async function readSessionsIndex(vfs: LocalVfsClient): Promise<FrozenSess
     const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
+    return Array.isArray(parsed) ? frozenSessionRows(parsed) : [];
   } catch {
     return [];
   }

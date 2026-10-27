@@ -1,16 +1,16 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { newAtRestState, redactArchiveText } from '../transcript/archive-redaction.js';
+import { AGENT_SESSION_ARCHIVE_PREFIX } from '../transcript/frozen-archive-format.js';
 import { agentMessagesToChatMessages } from './agent-message-to-chat.js';
 import type { ChatMessage, ToolCall } from './chat-types.js';
 
-export const AGENT_SESSION_ARCHIVE_PREFIX = 'agent-';
+export {
+  AGENT_SESSION_ARCHIVE_PREFIX,
+  isAgentSessionArchiveFilename,
+} from '../transcript/frozen-archive-format.js';
 
 export function agentSessionArchiveFilename(nameToken: string, timestamp: string): string {
   return `${AGENT_SESSION_ARCHIVE_PREFIX}${nameToken}-${timestamp}.md`;
-}
-
-export function isAgentSessionArchiveFilename(filename: string): boolean {
-  return filename.startsWith(AGENT_SESSION_ARCHIVE_PREFIX) && filename.endsWith('.md');
 }
 
 export interface AgentSessionArchiveInput {

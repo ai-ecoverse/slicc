@@ -1,5 +1,6 @@
 import {
   type FrozenSessionIndexEntry,
+  frozenSessionRows,
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
 import { EXTRA_CONE_HOME_ROOT, workspaceFor } from '../work-unit/descriptor.js';
@@ -87,7 +88,7 @@ async function readIndexStrict(
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return { failure: `sessions index is not an array` };
-    return { entries: parsed as FrozenSessionIndexEntry[] };
+    return { entries: frozenSessionRows(parsed) };
   } catch {
     return { failure: `sessions index at ${SESSIONS_INDEX_PATH} is not valid JSON` };
   }

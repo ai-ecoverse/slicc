@@ -5,6 +5,7 @@ import { computeBudget } from '../base/memory-budget.js';
 import { wellFormed } from '../base/utf16-clip.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
+import { frozenSessionRows } from '../transcript/frozen-archive-format.js';
 import { PRIMARY_WORKSPACE } from '../work-unit/descriptor.js';
 
 export { computeBudget, MEMORY_BASE_CHARS, MEMORY_PER_LOG_CHARS } from '../base/memory-budget.js';
@@ -40,7 +41,7 @@ export async function readSessionCount(vfs: LocalVfsClient): Promise<number> {
     const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed.length : 0;
+    return Array.isArray(parsed) ? frozenSessionRows(parsed).length : 0;
   } catch {
     return 0;
   }
