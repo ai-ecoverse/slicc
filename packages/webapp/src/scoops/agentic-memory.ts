@@ -309,6 +309,9 @@ function passTask(
  * later boot (a changed bundled version reaches them through `upgrade`).
  * Best-effort — the pass falls back to the bundled text when the file is
  * missing or unreadable, so a failed seed costs nothing but editability.
+ * Only ENOENT counts as absent: a probe that failed any other way (EIO, a
+ * locked VFS) says nothing about the file, and seeding over it would
+ * replace the user's edited copy with the bundled text.
  */
 export async function seedMemoryInstructions(fs: {
   stat(path: string): Promise<unknown>;
@@ -318,8 +321,13 @@ export async function seedMemoryInstructions(fs: {
   try {
     await fs.stat(MEMORY_INSTRUCTIONS_PATH);
     return;
-  } catch {
-    // Absent — seed it.
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      log.warn(`Could not stat ${MEMORY_INSTRUCTIONS_PATH}; not seeding`, {
+        error: errorText(error),
+      });
+      return;
+    }
   }
   try {
     await fs.mkdir('/etc', { recursive: true });
@@ -454,7 +462,13 @@ export async function runAgenticMemoryPass(
       await seedCurationSnapshot(opts.vfs, workspace.memoryPath, opts.sessionArchivePath);
     } catch (error) {
       // Nothing spawned yet, so the legacy single-call append cannot race a
-      // curator — falling back is safe.
+      // curator — falling back is safe. That append re-reads the live file
+      // and treats only ENOENT as empty, so a fault still there cannot
+      // clobber the memory either.
+      log.error('Curation snapshot failed; pass aborted, live memory untouched', {
+        memoryPath: workspace.memoryPath,
+        error: errorText(error),
+      });
       return { ok: false, reason: `snapshot: ${errorText(error)}`, legacyFallbackSafe: true };
     }
     // A dream is keyed by a synthetic archive path (`dream-<date>-<cone>`)
@@ -656,7 +670,10 @@ export function curationStatusPath(sessionArchivePath: string): string {
  * Snapshot the live memory file into the per-archive curation folder: the
  * `base.md` the completion merge diffs against, and the `draft.md` the
  * curator rewrites in place of the live file. A missing live file seeds
- * both as empty — a first-ever pass merges onto whatever exists then.
+ * both as empty — a first-ever pass merges onto whatever exists then. Any
+ * other read fault (EIO, a half-mounted VFS) throws before anything is
+ * written: an empty base over a live file that merely failed to read would
+ * have the completion merge drop every existing memory in the draft's favor.
  */
 async function seedCurationSnapshot(
   vfs: CuratorVfs,
@@ -667,8 +684,8 @@ async function seedCurationSnapshot(
   try {
     const raw = await vfs.readFile(memoryPath, { encoding: 'utf-8' });
     live = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  } catch {
-    // No live memory yet — snapshot the empty state.
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
   }
   await vfs.mkdir(curationDirPath(sessionArchivePath), { recursive: true });
   await vfs.writeFile(curationBasePath(sessionArchivePath), live);
@@ -814,4 +831,13 @@ function waitForSpawn(
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The one read fault that means "no such file". Checked by `code`, not
+ * `instanceof FsError`, like the sessions-index writers (#4151): an error
+ * relayed across a realm keeps its code but not always its class.
+ */
+function isMissingFile(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'ENOENT';
 }

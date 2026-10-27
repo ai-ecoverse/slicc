@@ -16,6 +16,12 @@ import {
   defaultResolveModel,
   publishAgentBridge,
 } from '../../src/scoops/agent-bridge.js';
+import {
+  type CuratorVfs,
+  curationBasePath,
+  curationDraftPath,
+  runAgenticMemoryPass,
+} from '../../src/scoops/agentic-memory.js';
 
 // `defaultResolveModel` is a thin delegate over account-store's
 // `resolveModelSelectionForScoop`; mock just that seam and keep every other
@@ -229,6 +235,13 @@ function makeMockSharedFs(options?: {
   writeFile?: (path: string) => Promise<void>;
   /** Initial file contents served by `readFile` (mergeOnSuccess tests). */
   files?: Record<string, string>;
+  /**
+   * mtimes `stat` reports for the initial `files` (default 0, i.e. older
+   * than anything the test writes); every `writeFile` stamps a later one.
+   */
+  mtimes?: Record<string, number>;
+  /** Throw from `stat` (undatable-target tests). */
+  stat?: (path: string) => Promise<void>;
 }): {
   fs: VirtualFS;
   rmCalls: string[];
@@ -238,6 +251,8 @@ function makeMockSharedFs(options?: {
   const rmCalls: string[] = [];
   const writes: Array<{ path: string; content: string }> = [];
   const files = new Map<string, string>(Object.entries(options?.files ?? {}));
+  const mtimes = new Map<string, number>(Object.entries(options?.mtimes ?? {}));
+  let clock = Math.max(1_000, ...mtimes.values());
   const mock: Partial<VirtualFS> = {
     rm: vi.fn(async (path: string) => {
       rmCalls.push(path);
@@ -249,12 +264,20 @@ function makeMockSharedFs(options?: {
       if (options?.writeFile) await options.writeFile(path);
       writes.push({ path, content });
       files.set(path, content);
+      mtimes.set(path, ++clock);
     }) as unknown as VirtualFS['writeFile'],
     readFile: vi.fn(async (path: string) => {
       const content = files.get(path);
       if (content === undefined) throw new FsError('ENOENT', 'no such file', path);
       return content;
     }) as unknown as VirtualFS['readFile'],
+    stat: vi.fn(async (path: string) => {
+      if (options?.stat) await options.stat(path);
+      const content = files.get(path);
+      if (content === undefined) throw new FsError('ENOENT', 'no such file', path);
+      const mtime = mtimes.get(path) ?? 0;
+      return { type: 'file' as const, size: content.length, mtime, ctime: mtime };
+    }) as unknown as VirtualFS['stat'],
   };
   return { fs: mock as unknown as VirtualFS, rmCalls, writes, files };
 }
@@ -2181,9 +2204,9 @@ describe('createAgentBridge — mergeOnSuccess + outcome receipts', () => {
   };
   const STATUS = '/sessions/.curation/a.md/status.json';
 
-  function mergeBridge(files: Record<string, string>) {
+  function mergeBridge(files: Record<string, string>, mtimes?: Record<string, number>) {
     const { orchestrator, scripts, registerCalls } = makeMockOrchestrator();
-    const shared = makeMockSharedFs({ files });
+    const shared = makeMockSharedFs({ files, ...(mtimes ? { mtimes } : {}) });
     const bridge = createAgentBridge(orchestrator, shared.fs, null, {
       generateName: () => 'calm-torte',
     });
@@ -2568,6 +2591,126 @@ describe('createAgentBridge — mergeOnSuccess + outcome receipts', () => {
     expect(shared.files.has(MERGE.draftPath)).toBe(true);
     const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
     expect(status).toMatchObject({ status: 'failed', exitCode: 1 });
+  });
+
+  // An empty base means the scoop saw none of the target, so the whole-file
+  // conflict a non-empty target makes is none of its deliberate deletions.
+  it('refuses a draft over an empty base when the target predates the snapshot', async () => {
+    const { bridge, shared } = mergeBridge(
+      {
+        [MERGE.basePath]: '',
+        [MERGE.draftPath]: 'curated from nothing\n',
+        [MERGE.targetPath]: 'existing memory\n',
+      },
+      // The target was last written well before the base was seeded.
+      { [MERGE.targetPath]: 1_000, [MERGE.basePath]: 2_000 }
+    );
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      successReceiptPath: '/sessions/.curated/a.md',
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('base snapshot is empty but the target predates it');
+    expect(shared.files.get(MERGE.targetPath)).toBe('existing memory\n');
+    expect(shared.files.has('/sessions/.curated/a.md')).toBe(false);
+    expect(shared.files.get(MERGE.draftPath)).toBe('curated from nothing\n');
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status).toMatchObject({ status: 'failed', merge: { applied: false } });
+  });
+
+  it('refuses a draft over an empty base when the target cannot be dated', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: {
+        [MERGE.basePath]: '',
+        [MERGE.draftPath]: 'curated from nothing\n',
+        [MERGE.targetPath]: 'existing memory\n',
+      },
+      stat: async (path) => {
+        throw new FsError('EIO', 'i/o error', path);
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'blind-sorbet',
+    });
+    scripts.set('agent_blind_sorbet', (obs) => obs.onSendMessage?.('curated'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(shared.files.get(MERGE.targetPath)).toBe('existing memory\n');
+  });
+
+  it('keeps both sides when the target was created after an empty snapshot', async () => {
+    // A first-ever pass: no memory file when the base was seeded, one
+    // written (by the cone) while the scoop ran.
+    const { bridge, shared } = mergeBridge({
+      [MERGE.basePath]: '',
+      [MERGE.draftPath]: 'curated memory\n',
+    });
+    await shared.fs.writeFile(MERGE.targetPath, 'written mid-run\n');
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(shared.files.get(MERGE.targetPath)).toBe('written mid-run\ncurated memory\n');
+    expect(shared.files.has(MERGE.basePath)).toBe(false);
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status.merge).toMatchObject({ applied: true, conflicts: 1 });
+  });
+
+  // End to end with the real curator pass: a transient fault on the memory
+  // read that seeds the snapshot, and a merge-time read that succeeds — the
+  // window in which an empty base used to replace every existing memory.
+  it('a transient fault on the snapshot read never reaches the live memory', async () => {
+    const original = '# Memory\n\n## Kept (2026-01-01)\nlong-standing fact\n';
+    const archive = '/sessions/2026-10-27-faulty.md';
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({ files: { '/workspace/CLAUDE.md': original } });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null);
+    // The curator only knows what the session taught it.
+    scripts.set('agent_memory_curator', async (obs) => {
+      await shared.fs.writeFile(curationDraftPath(archive), '# Memory\n\n## Session\nfresh fact\n');
+      obs.onSendMessage?.('curated');
+    });
+    let faults = 1;
+    const curatorVfs: CuratorVfs = {
+      readFile: async (path, options) => {
+        if (path === '/workspace/CLAUDE.md' && faults-- > 0) {
+          throw new FsError('EIO', 'i/o error', path);
+        }
+        return shared.fs.readFile(path, options);
+      },
+      writeFile: (path, content) => shared.fs.writeFile(path, content),
+      mkdir: (path, options) => shared.fs.mkdir(path, options),
+    };
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await runAgenticMemoryPass({
+      spawn: (options) => bridge.spawn({ ...options, persistSession: false }),
+      vfs: curatorVfs,
+      sessionArchivePath: archive,
+      sessionCount: 1,
+    });
+
+    expect(shared.files.get('/workspace/CLAUDE.md')).toBe(original);
+    expect(result).toMatchObject({ ok: false, legacyFallbackSafe: true });
+    expect(shared.files.has(curationBasePath(archive))).toBe(false);
   });
 
   it('rejects a relative mergeOnSuccess path without spawning', async () => {
