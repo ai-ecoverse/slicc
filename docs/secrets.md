@@ -365,6 +365,8 @@ OAuth tokens have a dual-storage architecture:
 
 The webapp pushes masked entries to the replica on login/logout. The replica is used for unmasking at the network boundary. On extension/CLI initialization, the webapp re-pushes all OAuth entries to ensure the proxy has up-to-date replicas after a page reload.
 
+If `slicc_accounts` holds a value that doesn't parse as a JSON array, the webapp reads it as no accounts, and the next save first copies the raw value to `slicc_accounts.corrupt` (only the newest copy is kept) and logs one error. The other providers' keys and OAuth masks stay recoverable from that copy, and the login itself still works. The original stays in `slicc_accounts` until the copy is stored: if storage has no room for the copy, the save fails with a clear error and nothing changes. A later save that deletes an account or clears its credentials (remove, logout, the `/cloud` dashboard delete) drops the copy, since it may still hold them; `nuke` leaves it, like the accounts themselves. Profile exports never read it. `slicc_oauth_extra_domains` does the same with `slicc_oauth_extra_domains.corrupt`, which clearing a provider's extras drops.
+
 ### Reserved namespace
 
 Secret names starting with `oauth.` are reserved for OAuth replicas (e.g., `oauth.google`, `oauth.adobe`). User-defined secrets with this prefix are rejected at load time.

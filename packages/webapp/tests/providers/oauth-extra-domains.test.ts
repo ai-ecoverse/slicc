@@ -90,6 +90,21 @@ describe('OAuth extra-domains store', () => {
     expect(getExtraOAuthDomains('adobe')).toEqual([]);
     expect(getAllExtraOAuthDomains()).toEqual({});
   });
+
+  it('moves a malformed store aside before the next write replaces it (#4146)', async () => {
+    lsData['slicc_oauth_extra_domains'] = '{"github":["hub.example.com"],"ado';
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { setExtraOAuthDomains, getAllExtraOAuthDomains } = await import(
+      '../../src/ui/provider-settings.js'
+    );
+    setExtraOAuthDomains('adobe', ['admin.da.live']);
+    expect(lsData['slicc_oauth_extra_domains.corrupt']).toBe('{"github":["hub.example.com"],"ado');
+    expect(getAllExtraOAuthDomains()).toEqual({ adobe: ['admin.da.live'] });
+    // `oauth-domain clear` drops the copy along with the provider's extras.
+    setExtraOAuthDomains('github', []);
+    expect(lsData['slicc_oauth_extra_domains.corrupt']).toBeUndefined();
+    consoleError.mockRestore();
+  });
 });
 
 /**

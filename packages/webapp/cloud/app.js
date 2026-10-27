@@ -1,3 +1,4 @@
+import { writeStoredAccounts } from '../src/base/stored-accounts.js';
 import {
   assembleBundle,
   assembleDelta,
@@ -274,6 +275,20 @@ function readCatalog() {
   return parseModelCatalog(localStorage.getItem(MODEL_CATALOG_KEY));
 }
 
+// readAccounts() reads an unparsable store as [], which would otherwise seed
+// Adobe over every saved provider on sign-in; writeStoredAccounts keeps that
+// value in slicc_accounts.corrupt, or throws and saves nothing (#4146). Show the
+// failure instead of dropping it: the sign-in would go on with no account.
+function saveDashboardAccounts(accounts) {
+  try {
+    writeStoredAccounts(JSON.stringify(accounts));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[cloud] could not save provider accounts:', message);
+    showToast(`Could not save provider accounts: ${message}`);
+  }
+}
+
 // Drop a provider from slicc_accounts and re-render. (The dashboard is a separate
 // bundle from the webapp, so it edits slicc_accounts directly — same as the
 // Adobe seed.) Removing Adobe sticks while other providers exist; if it leaves
@@ -287,12 +302,7 @@ function removeDashboardAccount(providerId) {
       /* best-effort */
     }
   }
-  const accounts = readAccounts().filter((a) => a.providerId !== providerId);
-  try {
-    localStorage.setItem('slicc_accounts', JSON.stringify(accounts));
-  } catch {
-    /* best-effort */
-  }
+  saveDashboardAccounts(readAccounts().filter((a) => a.providerId !== providerId));
   renderCreateConfig();
 }
 
@@ -339,11 +349,7 @@ function ensureAdobeDefaultAccount(force = false) {
   } else {
     return; // other providers exist and Adobe was removed — leave it removed
   }
-  try {
-    localStorage.setItem('slicc_accounts', JSON.stringify(accounts));
-  } catch {
-    /* best-effort */
-  }
+  saveDashboardAccounts(accounts);
 }
 
 // Merge the worker-provided Adobe model list (GET /api/cloud/config → adobeModels,

@@ -3,6 +3,7 @@
  */
 import type { SliccPermissions } from '@slicc/webcomponents';
 
+import { ACCOUNTS_KEY, writeStoredAccounts } from '../../base/stored-accounts.js';
 import type { PanelRpcHandlers } from '../../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import type { StandalonePanelRpcHandlerOptions } from '../panel-rpc-handlers.js';
@@ -165,9 +166,11 @@ export function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions
       // page, so without this bridge the MCP OAuth account is lost
       // on reload (issue #701). Returning the stored JSON lets the
       // worker mirror it into its shim immediately, avoiding a race
-      // with the `local-storage-set` forward.
-      localStorage.setItem('slicc_accounts', accountsJson);
-      const storedJson = localStorage.getItem('slicc_accounts') ?? accountsJson;
+      // with the `local-storage-set` forward. The worker built
+      // `accountsJson` from its shim, which reads a corrupt store as
+      // `[]`; `writeStoredAccounts` keeps the page's value (#4146).
+      writeStoredAccounts(accountsJson, localStorage);
+      const storedJson = localStorage.getItem(ACCOUNTS_KEY) ?? accountsJson;
       return { storedJson };
     },
   } satisfies Partial<PanelRpcHandlers>;
