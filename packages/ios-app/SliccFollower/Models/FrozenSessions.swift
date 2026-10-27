@@ -63,6 +63,17 @@ enum FrozenSessionIndex {
     static let indexPath = "/sessions/index.json"
     static let sessionsDir = "/sessions"
 
+    /// Whether a `/sessions` file is a spawned agent's transcript
+    /// (`agent-<name>-<timestamp>.md`, the leader's
+    /// `scoops/agent-session-archive.ts`) rather than a frozen session. Same
+    /// rule as the webapp's `isAgentSessionArchiveFilename`
+    /// (`frozen-archive-format.ts`), held to it by
+    /// `Fixtures/frozen-session-filenames.json`: a `<timestamp>-agent-…` or
+    /// `pending-…` archive never matches.
+    static func isAgentTranscript(_ filename: String) -> Bool {
+        filename.hasPrefix("agent-") && filename.hasSuffix(".md")
+    }
+
     static let isoFormatter: ISO8601DateFormatter = ISO8601DateFormatter()
     static let isoFractionalFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -73,7 +84,10 @@ enum FrozenSessionIndex {
     /// Parse `/sessions/index.json`. Returns nil when the payload is not a
     /// JSON array at all (corrupt / partially written — the caller rebuilds
     /// from a directory scan); within an array, undecodable entries are
-    /// dropped so one bad row cannot take down the rail.
+    /// dropped so one bad row cannot take down the rail. So are agent
+    /// transcript rows: a leader's corrupt-index rebuild before #4152 listed
+    /// them (title = filename, 1970, 0 turns), and this phone may follow a
+    /// leader that has not rewritten its index since.
     static func parse(indexJson: String) -> [FrozenSessionIndexEntry]? {
         guard let data = indexJson.data(using: .utf8),
             let raw = try? JSONSerialization.jsonObject(with: data),
@@ -86,15 +100,19 @@ enum FrozenSessionIndex {
             }
             return try? decoder.decode(FrozenSessionIndexEntry.self, from: elementData)
         }
+        .filter { !isAgentTranscript($0.filename) }
     }
 
     /// Rebuild a usable list from a `/sessions` directory scan when the index
     /// is corrupt. Archive filenames are `<timestamp>-<slug>.md` (timestamps
     /// like `2026-05-13T19-30-00Z` — colons dashed for filesystem safety) or
-    /// `pending-<id>.md` for quick freezes; anything else is ignored.
+    /// `pending-<id>.md` for quick freezes; agent transcripts share the
+    /// directory and are skipped, as is anything that is not `.md`.
     static func rebuild(from entries: [TrayFsDirEntry]) -> [FrozenSessionIndexEntry] {
         entries
-            .filter { $0.type == .file && $0.name.hasSuffix(".md") && $0.name != "index.json" }
+            .filter {
+                $0.type == .file && $0.name.hasSuffix(".md") && !isAgentTranscript($0.name)
+            }
             .map { entry -> FrozenSessionIndexEntry in
                 let stem = String(entry.name.dropLast(3))
                 let (timestamp, slug) = splitArchiveStem(stem)
