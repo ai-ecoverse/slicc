@@ -12,6 +12,7 @@
 
 import 'fake-indexeddb/auto';
 import { describe, expect, it, vi } from 'vitest';
+import { FsError } from '../../src/fs/types.js';
 import { Bridge } from '../../src/kernel/facade.js';
 import type {
   ExtensionMessage,
@@ -189,7 +190,10 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
     const result = await runAgenticMemoryPass({
       spawn: (options) => client.spawnAgent(options),
       vfs: {
-        readFile: async () => Promise.reject(new Error('MEMORY.md absent')),
+        // Absent, as a VFS says it: MEMORY.md falls back to the bundled
+        // document and the memory file snapshots empty. Any other read
+        // fault would abort the pass before the spawn.
+        readFile: async (path) => Promise.reject(new FsError('ENOENT', 'absent', path)),
         writeFile: async () => {},
         mkdir: async () => {},
       },
