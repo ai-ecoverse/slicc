@@ -16,25 +16,20 @@
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { newAtRestState, redactArchiveText } from '../transcript/archive-redaction.js';
+import { AGENT_SESSION_ARCHIVE_PREFIX } from '../transcript/frozen-archive-format.js';
 import { agentMessagesToChatMessages } from './agent-message-to-chat.js';
 import type { ChatMessage, ToolCall } from './chat-types.js';
 
-/** Filename prefix of a spawned agent's transcript. */
-export const AGENT_SESSION_ARCHIVE_PREFIX = 'agent-';
+// The filename rules live with the sessions index (`transcript/`), whose
+// readers and corrupt-index rebuild tell these files from frozen chats.
+export {
+  AGENT_SESSION_ARCHIVE_PREFIX,
+  isAgentSessionArchiveFilename,
+} from '../transcript/frozen-archive-format.js';
 
 /** The transcript's filename: `agent-<name>-<timestamp>.md`, in `/sessions` or `/tmp`. */
 export function agentSessionArchiveFilename(nameToken: string, timestamp: string): string {
   return `${AGENT_SESSION_ARCHIVE_PREFIX}${nameToken}-${timestamp}.md`;
-}
-
-/**
- * Whether a `/sessions` file is an agent transcript, not a frozen chat. The
- * two share the directory but never the index, so a corrupt-index rebuild
- * skips these. Frozen archives are `<timestamp>-<slug>.md`, `pending-…` or
- * `live-…`, never `agent-…`.
- */
-export function isAgentSessionArchiveFilename(filename: string): boolean {
-  return filename.startsWith(AGENT_SESSION_ARCHIVE_PREFIX) && filename.endsWith('.md');
 }
 
 /** Inputs to {@link serializeAgentSessionArchive}. */

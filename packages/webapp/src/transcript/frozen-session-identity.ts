@@ -8,7 +8,12 @@
  * before #3807 gave every chat of a cone the same per-cone chat key.
  */
 
-import { type FrozenSessionIndexEntry, SESSIONS_INDEX_PATH } from './frozen-archive-format.js';
+import {
+  type FrozenSessionIndexEntry,
+  frozenSessionRows,
+  isAgentSessionArchiveFilename,
+  SESSIONS_INDEX_PATH,
+} from './frozen-archive-format.js';
 import { isDraftArchiveFilename } from './frozen-archive-writer.js';
 
 /** What a caller holds for one frozen session: the rail card's slug and id. */
@@ -33,9 +38,18 @@ function isSafeSegment(value: unknown): value is string {
   );
 }
 
-/** A direct `/sessions/` child archive: `<safe segment>.md`. */
+/**
+ * A direct `/sessions/` child frozen archive: `<safe segment>.md`, and never
+ * an agent transcript (`agent-*.md`) — those share the directory, and a row
+ * an older index rebuild made for one must not let a delete remove it.
+ */
 export function isSafeArchiveFilename(name: unknown): name is string {
-  return isSafeSegment(name) && name.endsWith('.md') && name.length > '.md'.length;
+  return (
+    isSafeSegment(name) &&
+    name.endsWith('.md') &&
+    name.length > '.md'.length &&
+    !isAgentSessionArchiveFilename(name)
+  );
 }
 
 /** A `sessionId` or archive base usable as one path segment. */
@@ -81,7 +95,8 @@ export function findFrozenRow(
 /**
  * The index as a presence oracle: its rows, or `null` when it cannot say
  * (missing, unreadable, malformed). Never read `null` as "absent" — a
- * corrupt index is not a deleted session.
+ * corrupt index is not a deleted session. Agent-transcript rows are left
+ * out, as in the writers' baseline, so both agree on what is a session.
  */
 export async function readIndexForPresence(
   vfs: IndexReader
@@ -91,7 +106,7 @@ export async function readIndexForPresence(
     const parsed: unknown = JSON.parse(
       typeof raw === 'string' ? raw : new TextDecoder().decode(raw)
     );
-    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : null;
+    return Array.isArray(parsed) ? frozenSessionRows(parsed) : null;
   } catch {
     return null;
   }

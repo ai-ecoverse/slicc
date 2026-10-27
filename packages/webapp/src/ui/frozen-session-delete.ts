@@ -7,7 +7,9 @@
  * gone" as done — instead of orphan archives a later corrupt-index rebuild
  * would turn back into sessions. Live rows are refused: the open chat is
  * discarded through New chat → Discard, which the kernel orders with the
- * snapshot writer. Extracted memories are kept; they carry no per-session
+ * snapshot writer. A row naming an agent transcript (`agent-*.md`) is never
+ * acted on: the index readers drop it and `isSafeArchiveFilename` refuses
+ * the name. Extracted memories are kept; they carry no per-session
  * provenance.
  *
  * Attachment-dir ownership is read from the archive's own `attachmentsKey`

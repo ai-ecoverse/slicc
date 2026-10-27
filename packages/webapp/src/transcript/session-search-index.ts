@@ -12,6 +12,7 @@
 import type { ChatMessage } from '@slicc/shared-ts';
 import {
   type FrozenSessionIndexEntry,
+  frozenSessionRows,
   readSessionsIndex,
   SESSIONS_DIR,
 } from './frozen-archive-format.js';
@@ -279,7 +280,7 @@ async function readIndexEntriesAt(
     const raw = await vfs.readFile(`${sessionsDir}/index.json`, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
+    return Array.isArray(parsed) ? frozenSessionRows(parsed) : [];
   } catch {
     return [];
   }

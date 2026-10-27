@@ -46,6 +46,10 @@ describe('isSafeArchiveFilename', () => {
       expect(isSafeArchiveFilename(name), String(name)).toBe(false);
     }
   });
+
+  it('rejects agent transcripts: they share /sessions but are not frozen sessions', () => {
+    expect(isSafeArchiveFilename('agent-memory-curator-2026-06-04T10-00-00-000Z.md')).toBe(false);
+  });
 });
 
 describe('isSafeSessionKey', () => {
