@@ -62,6 +62,7 @@ import {
   readSessionsIndex,
   SESSIONS_INDEX_PATH,
 } from '../../src/ui/session-freezer.js';
+import { mapReadDir } from '../helpers/map-read-dir.js';
 
 function makeFakeVfs() {
   const files = new Map<string, string>();
@@ -70,6 +71,7 @@ function makeFakeVfs() {
     files,
 
     mtimes,
+    readDir: mapReadDir(files),
     async readFile(path: string): Promise<string> {
       if (!files.has(path)) throw new FsError('ENOENT', `missing ${path}`, path);
       return files.get(path)!;
@@ -2450,6 +2452,37 @@ describe('enrichPendingSession', () => {
 
     expect(updated).toBeNull();
     expect(vfs.files.get(SESSIONS_INDEX_PATH)).toBe(durableIndex);
+  });
+
+  it('renames over a non-array index without dropping the other archived sessions (#4151)', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+    const older = '2026-01-01T00-00-00-000Z-older.md';
+    vfs.files.set(
+      `/sessions/${older}`,
+      '---\ntitle: "Older chat"\nfrozenAt: 2026-01-01T00:00:00.000Z\nmessageCount: 2\n---\n'
+    );
+
+    vfs.files.set(SESSIONS_INDEX_PATH, '{}');
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Canonical title');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'heuristic',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k', skipMemory: true }
+    );
+
+    expect(updated?.filename).toMatch(/-canonical-title\.md$/);
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index.map((e) => e.filename).sort()).toEqual([updated!.filename, older].sort());
   });
 
   it('does not duplicate the canonical row when it already exists in the index', async () => {

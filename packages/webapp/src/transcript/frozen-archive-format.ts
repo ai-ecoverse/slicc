@@ -191,9 +191,7 @@ export function parseFrozenArchive(
   return { title, messages: parseHeadingFallback(body), ...meta };
 }
 
-function parseFrontmatterMeta(
-  frontmatter: string
-): Pick<
+export type FrozenArchiveFrontmatter = Pick<
   FrozenSessionArchive,
   | 'cost'
   | 'models'
@@ -206,8 +204,15 @@ function parseFrontmatterMeta(
   | 'curatedThrough'
   | 'sessionId'
   | 'attachmentsKey'
-> & { id?: string; sidecar?: string } {
-  const meta: ReturnType<typeof parseFrontmatterMeta> = {};
+> & { id?: string; sidecar?: string };
+
+export function parseFrozenArchiveFrontmatter(markdown: string): FrozenArchiveFrontmatter {
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(markdown)?.[1];
+  return frontmatter === undefined ? {} : parseFrontmatterMeta(frontmatter);
+}
+
+function parseFrontmatterMeta(frontmatter: string): FrozenArchiveFrontmatter {
+  const meta: FrozenArchiveFrontmatter = {};
   const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
   const models = parseFrontmatterJson<FrozenSessionModel[]>(frontmatter, 'models');
   if (cost) meta.cost = cost;

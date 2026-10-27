@@ -1,5 +1,6 @@
 import { slugify as slugifyText } from '@slicc/shared-ts';
-import { FsError } from '../fs/types.js';
+import { createLogger } from '../base/logger.js';
+import { isAgentSessionArchiveFilename } from '../scoops/agent-session-archive.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
 import {
   newAtRestState,
@@ -10,17 +11,24 @@ import { formatChatForClipboard } from './chat-markdown.js';
 import {
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
+  parseFrozenArchiveFrontmatter,
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
 } from './frozen-archive-format.js';
 
+const log = createLogger('frozen-archive-writer');
+
 export interface ArchiveVfs {
   readFile(path: string, options: { encoding: 'utf-8' }): Promise<string | Uint8Array>;
+
+  readDir(path: string): Promise<Array<{ name: string; type: string }>>;
   writeFile(path: string, content: string): Promise<void>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   rm(path: string, options?: { recursive?: boolean }): Promise<void>;
   flush(): Promise<void>;
 }
+
+export type SessionsIndexReadVfs = Pick<ArchiveVfs, 'readFile' | 'readDir'>;
 
 const SESSION_DATA_START = '<!-- slicc:session-data\n';
 const SESSION_DATA_END = '\n-->';
@@ -198,18 +206,118 @@ export async function ensureSessionsDir(
 }
 
 export async function readSessionsIndexForWrite(
-  vfs: ArchiveVfs,
+  vfs: SessionsIndexReadVfs,
   sessionsDir: string = SESSIONS_DIR
 ): Promise<FrozenSessionIndexEntry[]> {
+  const state = await readSessionsIndexState(vfs, sessionsDir);
+  if (state.kind === 'ok') return state.entries;
+  if (state.kind === 'missing') return [];
+  const rebuilt = await rebuildSessionsIndexFromArchives(vfs, sessionsDir);
+  log.warn('Sessions index corrupt; rebuilt from archives before writing', {
+    sessionsDir,
+    archives: rebuilt.length,
+  });
+  return rebuilt;
+}
+
+export type SessionsIndexState =
+  | { kind: 'ok'; entries: FrozenSessionIndexEntry[] }
+  | { kind: 'missing' }
+  | { kind: 'corrupt' };
+
+export async function readSessionsIndexState(
+  vfs: Pick<ArchiveVfs, 'readFile'>,
+  sessionsDir: string = SESSIONS_DIR
+): Promise<SessionsIndexState> {
+  let text: string;
   try {
     const raw = await vfs.readFile(sessionsIndexPathFor(sessionsDir), { encoding: 'utf-8' });
-    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
+    text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
   } catch (err) {
-    if (err instanceof FsError && err.code !== 'ENOENT') throw err;
-    return [];
+    if (isEnoent(err)) return { kind: 'missing' };
+    throw err;
   }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed)
+      ? { kind: 'ok', entries: parsed as FrozenSessionIndexEntry[] }
+      : { kind: 'corrupt' };
+  } catch {
+    return { kind: 'corrupt' };
+  }
+}
+
+export async function rebuildSessionsIndexFromArchives(
+  vfs: SessionsIndexReadVfs,
+  sessionsDir: string = SESSIONS_DIR
+): Promise<FrozenSessionIndexEntry[]> {
+  let names: string[];
+  try {
+    const dir = await vfs.readDir(sessionsDir);
+    names = dir
+      .filter(
+        (d) => d.type === 'file' && d.name.endsWith('.md') && !isAgentSessionArchiveFilename(d.name)
+      )
+      .map((d) => d.name);
+  } catch (err) {
+    if (isEnoent(err)) return [];
+    throw err;
+  }
+  const entries: FrozenSessionIndexEntry[] = [];
+  for (const filename of names) {
+    let text: string | null;
+    try {
+      const raw = await vfs.readFile(`${sessionsDir}/${filename}`, { encoding: 'utf-8' });
+      text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    } catch (err) {
+      if (isEnoent(err)) continue;
+      log.warn('Archive unreadable during index rebuild; keeping a placeholder row', {
+        sessionsDir,
+        filename,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      text = null;
+    }
+    entries.push(text === null ? placeholderEntry(filename) : entryFromArchive(filename, text));
+  }
+  entries.sort((a, b) => b.frozenAt.localeCompare(a.frozenAt));
+  return entries;
+}
+
+function placeholderEntry(filename: string): FrozenSessionIndexEntry {
+  return { filename, title: filename, frozenAt: new Date(0).toISOString(), messageCount: 0 };
+}
+
+function entryFromArchive(filename: string, text: string): FrozenSessionIndexEntry {
+  const header = text.slice(0, 2000);
+  const title = /^title:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? filename;
+  const frozenAt = /^frozenAt:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? new Date(0).toISOString();
+  const messageCount = Number(/^messageCount:\s*(\d+)\s*$/m.exec(header)?.[1] ?? 0);
+  const parsed = parseFrozenArchiveFrontmatter(text);
+
+  const pending = filename.startsWith('pending-') || (filename.startsWith('live-') && !parsed.live);
+  return {
+    filename,
+    title,
+    frozenAt,
+    messageCount,
+    ...(parsed.cost ? { cost: parsed.cost } : {}),
+    ...(parsed.models ? { models: parsed.models } : {}),
+    ...(parsed.cone ? { cone: parsed.cone } : {}),
+    ...(parsed.coneLabel ? { coneLabel: parsed.coneLabel } : {}),
+    ...(parsed.memorySkipped ? { memorySkipped: true as const } : {}),
+    ...(parsed.live ? { live: true as const } : {}),
+    ...(parsed.live && parsed.liveThrough ? { liveThrough: parsed.liveThrough } : {}),
+    ...(parsed.live && parsed.compactions ? { compactions: parsed.compactions } : {}),
+    ...(parsed.curatedThrough ? { curatedThrough: parsed.curatedThrough } : {}),
+
+    ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
+    ...(pending ? { pendingEnrichment: true } : {}),
+  };
+}
+
+function isEnoent(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === 'ENOENT';
 }
 
 interface LockManagerLike {
@@ -238,7 +346,7 @@ export function serializeIndexWrite<T>(
 }
 
 export function writeSessionsIndexUnlocked(
-  vfs: ArchiveVfs,
+  vfs: Pick<ArchiveVfs, 'writeFile'>,
   entries: readonly FrozenSessionIndexEntry[],
   sessionsDir: string = SESSIONS_DIR
 ): Promise<void> {
@@ -248,9 +356,10 @@ export function writeSessionsIndexUnlocked(
 export async function upsertSessionsIndexEntryUnlocked(
   vfs: ArchiveVfs,
   entry: FrozenSessionIndexEntry,
-  sessionsDir: string = SESSIONS_DIR
+  sessionsDir: string = SESSIONS_DIR,
+  baseline?: readonly FrozenSessionIndexEntry[]
 ): Promise<void> {
-  const existing = await readSessionsIndexForWrite(vfs, sessionsDir);
+  const existing = baseline ?? (await readSessionsIndexForWrite(vfs, sessionsDir));
   await writeSessionsIndexUnlocked(
     vfs,
     [entry, ...existing.filter((e) => e.filename !== entry.filename)],

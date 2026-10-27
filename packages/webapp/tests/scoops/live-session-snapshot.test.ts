@@ -12,11 +12,13 @@ import {
   SESSIONS_INDEX_PATH,
 } from '../../src/transcript/frozen-archive-format.js';
 import type { ArchiveVfs } from '../../src/transcript/frozen-archive-writer.js';
+import { mapReadDir } from '../helpers/map-read-dir.js';
 
 function fakeVfs(): ArchiveVfs & { files: Map<string, string> } {
   const files = new Map<string, string>();
   return {
     files,
+    readDir: mapReadDir(files),
     async readFile(path: string): Promise<string> {
       if (!files.has(path)) throw new FsError('ENOENT', `missing ${path}`, path);
       return files.get(path)!;

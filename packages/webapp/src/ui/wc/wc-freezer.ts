@@ -1,13 +1,14 @@
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
-import { serializeIndexWrite } from '../../transcript/frozen-archive-writer.js';
+import {
+  type ArchiveVfs,
+  readSessionsIndexForWrite,
+  readSessionsIndexState,
+  serializeIndexWrite,
+  writeSessionsIndexUnlocked,
+} from '../../transcript/frozen-archive-writer.js';
 import { loadFrozenArchive } from '../../transcript/session-jsonl.js';
 import { PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
-import {
-  type FrozenSessionIndexEntry,
-  frozenSessionPath,
-  parseFrozenArchive,
-  SESSIONS_INDEX_PATH,
-} from '../session-freezer.js';
+import { type FrozenSessionIndexEntry, frozenSessionPath } from '../session-freezer.js';
 import type { ChatMessage } from '../types.js';
 
 export type { FrozenSessionIndexEntry } from '../session-freezer.js';
@@ -49,7 +50,7 @@ export function frozenCard(
 
 export async function enrichFreezerIcons(deps: {
   reader: LocalVfsClient;
-  writer: { writeFile(path: string, content: string): Promise<unknown> };
+  writer: Pick<ArchiveVfs, 'writeFile'>;
   freezer: HTMLElement;
   entries: readonly FrozenSessionIndexEntry[];
   pickIcon: (subject: string) => Promise<string | null>;
@@ -63,13 +64,13 @@ export async function enrichFreezerIcons(deps: {
   if (picked.size === 0) return;
 
   const written = await serializeIndexWrite(async () => {
-    const current = await readFreezerEntries(deps.reader);
-    if (current === null || current.length === 0) return false;
+    const current = await readSessionsIndexForWrite(deps.reader);
+    if (current.length === 0) return false;
     const updated = current.map((e) => {
       const icon = !e.icon && picked.has(e.filename) ? picked.get(e.filename) : undefined;
       return icon ? { ...e, icon } : e;
     });
-    await deps.writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await writeSessionsIndexUnlocked(deps.writer, updated);
     return true;
   });
   if (!written) return;
@@ -97,87 +98,31 @@ export type FreezerIndexState =
   | { kind: 'fault' };
 
 export async function readFreezerIndexState(fs: LocalVfsClient): Promise<FreezerIndexState> {
-  let text: string;
   try {
-    const raw = await fs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
-    text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  } catch (err) {
-    return (err as { code?: string } | null)?.code === 'ENOENT'
-      ? { kind: 'missing' }
-      : { kind: 'fault' };
-  }
-  try {
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed)) return { kind: 'corrupt' };
-    return { kind: 'ok', entries: parsed as FrozenSessionIndexEntry[] };
+    return await readSessionsIndexState(fs);
   } catch {
-    return { kind: 'corrupt' };
+    return { kind: 'fault' };
   }
-}
-
-export async function rebuildFreezerIndexFromArchives(
-  fs: LocalVfsClient
-): Promise<FrozenSessionIndexEntry[]> {
-  let names: string[];
-  try {
-    const dir = await fs.readDir('/sessions');
-    names = dir.filter((d) => d.type === 'file' && d.name.endsWith('.md')).map((d) => d.name);
-  } catch {
-    return [];
-  }
-  const entries: FrozenSessionIndexEntry[] = [];
-  for (const filename of names) {
-    try {
-      const raw = await fs.readFile(`/sessions/${filename}`, { encoding: 'utf-8' });
-      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      entries.push(entryFromArchive(filename, text));
-    } catch {}
-  }
-  entries.sort((a, b) => b.frozenAt.localeCompare(a.frozenAt));
-  return entries;
 }
 
 export function recoverCorruptFreezerIndex(
   reader: LocalVfsClient,
-  writer: { writeFile(path: string, content: string): Promise<unknown> }
+  writer: Pick<ArchiveVfs, 'writeFile'>
 ): Promise<FrozenSessionIndexEntry[] | null> {
   return serializeIndexWrite(async () => {
     const state = await readFreezerIndexState(reader);
     if (state.kind === 'ok') return state.entries;
     if (state.kind !== 'corrupt') return null;
-    const entries = await rebuildFreezerIndexFromArchives(reader);
+    let entries: FrozenSessionIndexEntry[];
+    try {
+      entries = await readSessionsIndexForWrite(reader);
+    } catch {
+      return null;
+    }
     if (entries.length === 0) return null;
-    await writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
+    await writeSessionsIndexUnlocked(writer, entries);
     return entries;
   });
-}
-
-function entryFromArchive(filename: string, text: string): FrozenSessionIndexEntry {
-  const header = text.slice(0, 2000);
-  const title = /^title:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? filename;
-  const frozenAt = /^frozenAt:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? new Date(0).toISOString();
-  const messageCount = Number(/^messageCount:\s*(\d+)\s*$/m.exec(header)?.[1] ?? 0);
-  const parsed = parseFrozenArchive(text);
-
-  const pending = filename.startsWith('pending-') || (filename.startsWith('live-') && !parsed.live);
-  return {
-    filename,
-    title,
-    frozenAt,
-    messageCount,
-    ...(parsed.cost ? { cost: parsed.cost } : {}),
-    ...(parsed.models ? { models: parsed.models } : {}),
-    ...(parsed.cone ? { cone: parsed.cone } : {}),
-    ...(parsed.coneLabel ? { coneLabel: parsed.coneLabel } : {}),
-    ...(parsed.memorySkipped ? { memorySkipped: true as const } : {}),
-    ...(parsed.live ? { live: true as const } : {}),
-    ...(parsed.live && parsed.liveThrough ? { liveThrough: parsed.liveThrough } : {}),
-    ...(parsed.live && parsed.compactions ? { compactions: parsed.compactions } : {}),
-    ...(parsed.curatedThrough ? { curatedThrough: parsed.curatedThrough } : {}),
-
-    ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
-    ...(pending ? { pendingEnrichment: true } : {}),
-  };
 }
 
 export function renderFreezerCards(

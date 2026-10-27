@@ -41,6 +41,8 @@ export const DEFAULT_DELTA_LIMITS: DeltaLimits = {
 
 export interface LiveCurationVfs {
   readFile(path: string, options?: { encoding?: 'utf-8' }): Promise<string | Uint8Array>;
+
+  readDir(path: string): Promise<Array<{ name: string; type: string }>>;
   writeFile(path: string, content: string): Promise<void>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   rm?(path: string, options?: { recursive?: boolean }): Promise<void>;

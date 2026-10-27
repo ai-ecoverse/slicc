@@ -31,7 +31,10 @@ import {
   sessionIdError,
   sumAssistantUsage,
 } from './agent-session.js';
-import { serializeAgentSessionArchive } from './agent-session-archive.js';
+import {
+  agentSessionArchiveFilename,
+  serializeAgentSessionArchive,
+} from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -561,7 +564,7 @@ async function writeAgentSessionArchive(
   if (options.persistSession === false) return;
   const dir = options.persistSession === true ? '/sessions' : '/tmp';
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const path = `${dir}/agent-${nameToken}-${timestamp}.md`;
+  const path = `${dir}/${agentSessionArchiveFilename(nameToken, timestamp)}`;
   try {
     const scoopCtx = ctx.orchestrator.getScoopContext(jid);
     const messages =

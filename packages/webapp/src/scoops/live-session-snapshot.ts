@@ -141,7 +141,8 @@ async function writeSnapshot(
   const transcriptPath = `${sessionsDir}/${filename}`;
 
   await deps.vfs.writeFile(transcriptPath, formatArchiveAsMarkdown(archive));
-  await upsertSessionsIndexEntryUnlocked(deps.vfs, entry, sessionsDir);
+
+  await upsertSessionsIndexEntryUnlocked(deps.vfs, entry, sessionsDir, entries);
   await deps.vfs.flush();
   log.info('Live session snapshot written', {
     cone: folder,
