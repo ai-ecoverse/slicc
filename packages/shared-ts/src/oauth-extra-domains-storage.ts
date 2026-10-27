@@ -14,7 +14,7 @@
 import {
   corruptValueKey,
   type QuarantineStorage,
-  quarantineCorruptValue,
+  replaceStoredValue,
 } from './storage-quarantine.js';
 
 export const OAUTH_EXTRA_DOMAINS_KEY = 'slicc_oauth_extra_domains';
@@ -52,43 +52,41 @@ export function readOAuthExtras(storage: LocalStorageLike): OAuthExtraDomainsSto
   }
 }
 
+const CORRUPT_OAUTH_EXTRAS_KEY = corruptValueKey(OAUTH_EXTRA_DOMAINS_KEY);
+
 /**
  * Every writer replaces the whole store from a `readOAuthExtras` baseline,
- * which is `{}` for an unparsable value. Move such a value to
- * `slicc_oauth_extra_domains.corrupt` first, or throw when it cannot be kept.
+ * which is `{}` for an unparsable value, so such a value is first copied to
+ * `slicc_oauth_extra_domains.corrupt` (#4146). Returns whether it was.
  */
-function preserveCorruptOAuthExtras(storage: LocalStorageLike): void {
-  let raw: string | null;
-  try {
-    raw = storage.getItem(OAUTH_EXTRA_DOMAINS_KEY);
-  } catch {
-    return;
-  }
-  if (!raw || parseOAuthExtras(raw) !== null) return;
-  const target = corruptValueKey(OAUTH_EXTRA_DOMAINS_KEY);
-  if (!quarantineCorruptValue(storage, OAUTH_EXTRA_DOMAINS_KEY, raw)) {
-    throw new Error(
-      `${OAUTH_EXTRA_DOMAINS_KEY} is unparsable and could not be copied to ${target} (storage full?); not overwriting it`
-    );
-  }
-  console.error(
-    `[slicc] ${OAUTH_EXTRA_DOMAINS_KEY} was unparsable (${raw.length} chars); moved it to ${target} before saving`
-  );
-}
-
-export function writeOAuthExtras(storage: LocalStorageLike, store: OAuthExtraDomainsStore): void {
-  preserveCorruptOAuthExtras(storage);
+function persistOAuthExtras(storage: LocalStorageLike, store: OAuthExtraDomainsStore): boolean {
+  let copied: boolean;
   // setItem throws synchronously on QuotaExceededError. The options-page
   // click handlers call this through addOAuthExtraDomain / remove / clear
   // and rely on the throw being caught by their toast wiring; without an
   // explicit message the toast says nothing useful.
   try {
-    storage.setItem(OAUTH_EXTRA_DOMAINS_KEY, JSON.stringify(store));
+    copied = replaceStoredValue(
+      storage,
+      OAUTH_EXTRA_DOMAINS_KEY,
+      JSON.stringify(store),
+      (raw) => parseOAuthExtras(raw) !== null
+    );
   } catch (err) {
     throw new Error(
       `Failed to persist OAuth extras (localStorage quota exceeded?): ${err instanceof Error ? err.message : String(err)}`
     );
   }
+  if (copied) {
+    console.error(
+      `[slicc] ${OAUTH_EXTRA_DOMAINS_KEY} was unparsable; copied it to ${CORRUPT_OAUTH_EXTRAS_KEY} before saving`
+    );
+  }
+  return copied;
+}
+
+export function writeOAuthExtras(storage: LocalStorageLike, store: OAuthExtraDomainsStore): void {
+  persistOAuthExtras(storage, store);
 }
 
 export function addOAuthExtraDomain(
@@ -128,8 +126,9 @@ export function removeOAuthExtraDomain(
   return { removed: true };
 }
 
+/** Also drops the unreadable copy, which may still list the cleared provider's domains. */
 export function clearOAuthExtras(storage: LocalStorageLike, providerId: string): void {
   const store = readOAuthExtras(storage);
   delete store[providerId];
-  writeOAuthExtras(storage, store);
+  if (!persistOAuthExtras(storage, store)) storage.removeItem?.(CORRUPT_OAUTH_EXTRAS_KEY);
 }

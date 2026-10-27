@@ -3,8 +3,8 @@ import { resetLoggerDedupForTests } from '../../src/base/logger.js';
 import {
   ACCOUNTS_KEY,
   CORRUPT_ACCOUNTS_KEY,
-  preserveCorruptAccounts,
   readStoredAccounts,
+  writeStoredAccounts,
 } from '../../src/base/stored-accounts.js';
 import * as accountStore from '../../src/providers/account-store.js';
 
@@ -45,9 +45,10 @@ describe('base/stored-accounts', () => {
   });
 });
 
-describe('base/stored-accounts — preserveCorruptAccounts (#4146)', () => {
+describe('base/stored-accounts — writeStoredAccounts (#4146)', () => {
   let data: Record<string, string>;
   let consoleError: ReturnType<typeof vi.spyOn>;
+  const json = (rows: object[]): string => JSON.stringify(rows);
 
   beforeEach(() => {
     data = {};
@@ -69,27 +70,23 @@ describe('base/stored-accounts — preserveCorruptAccounts (#4146)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('leaves an absent or parsable store alone', () => {
-    preserveCorruptAccounts();
-    expect(data).toEqual({});
-    data[ACCOUNTS_KEY] = '[]';
-    preserveCorruptAccounts();
-    data[ACCOUNTS_KEY] = JSON.stringify([{ providerId: 'openai', apiKey: 'sk-x' }]);
-    preserveCorruptAccounts();
-    expect(data[CORRUPT_ACCOUNTS_KEY]).toBeUndefined();
+  it('writes absent and parsable stores without a copy', () => {
+    writeStoredAccounts('[]');
+    writeStoredAccounts(json([{ providerId: 'openai', apiKey: 'sk-x' }]));
+    expect(data).toEqual({ [ACCOUNTS_KEY]: json([{ providerId: 'openai', apiKey: 'sk-x' }]) });
     expect(consoleError).not.toHaveBeenCalled();
   });
 
   it('copies unparsable or non-array JSON aside and logs one error without the contents', () => {
     const raw = '[{"providerId":"openai","apiKey":"sk-secret-value"},{"provid';
     data[ACCOUNTS_KEY] = raw;
-    preserveCorruptAccounts();
-    expect(data[CORRUPT_ACCOUNTS_KEY]).toBe(raw);
+    writeStoredAccounts('[]');
+    expect(data).toEqual({ [ACCOUNTS_KEY]: '[]', [CORRUPT_ACCOUNTS_KEY]: raw });
     expect(consoleError).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(consoleError.mock.calls[0])).not.toContain('sk-secret-value');
 
     data[ACCOUNTS_KEY] = '{"providerId":"adobe"}';
-    preserveCorruptAccounts();
+    writeStoredAccounts('[]');
     expect(data[CORRUPT_ACCOUNTS_KEY]).toBe('{"providerId":"adobe"}');
   });
 
@@ -101,8 +98,27 @@ describe('base/stored-accounts — preserveCorruptAccounts (#4146)', () => {
         throw new Error('SecurityError');
       }),
     };
-    expect(() => preserveCorruptAccounts(storage)).toThrow(/could not be backed up/);
+    expect(() => writeStoredAccounts('[]', storage)).toThrow(/could not be backed up/);
     expect(storage.setItem).toHaveBeenCalledTimes(1);
     expect(storage.setItem).toHaveBeenCalledWith(CORRUPT_ACCOUNTS_KEY, raw);
+  });
+
+  it('drops the copy once a save deletes an account or clears its credentials', () => {
+    const groq = { providerId: 'groq', apiKey: 'gsk' };
+    const github = { providerId: 'github', apiKey: '', accessToken: 'gho' };
+    data[ACCOUNTS_KEY] = json([groq, github]);
+    data[CORRUPT_ACCOUNTS_KEY] = '[{"providerId":"anthropic","apiKey":"sk-ant';
+
+    writeStoredAccounts(
+      json([groq, { ...github, maskedValue: 'gho_m' }, { providerId: 'x', apiKey: 'k' }])
+    );
+    expect(data[CORRUPT_ACCOUNTS_KEY]).toBeDefined();
+
+    writeStoredAccounts(json([groq, { providerId: 'github', apiKey: '', loggedOut: true }]));
+    expect(data[CORRUPT_ACCOUNTS_KEY]).toBeUndefined();
+
+    data[CORRUPT_ACCOUNTS_KEY] = '[{"provid';
+    writeStoredAccounts('[]');
+    expect(data[CORRUPT_ACCOUNTS_KEY]).toBeUndefined();
   });
 });

@@ -142,9 +142,26 @@ describe('oauth-extra-domains storage — present but unparsable (#4146)', () =>
     };
     const result = addOAuthExtraDomain(storage, 'adobe', '*.da.live');
     expect(result.added).toBe(false);
-    expect(result.reason).toContain('could not be copied');
-    expect(() => clearOAuthExtras(storage, 'adobe')).toThrow(/not overwriting/);
+    expect(result.reason).toContain('could not be backed up');
+    expect(() => clearOAuthExtras(storage, 'adobe')).toThrow(/nothing was saved/);
     expect(storage.data[OAUTH_EXTRA_DOMAINS_KEY]).toBe(raw);
+  });
+
+  it('clearOAuthExtras drops the copy, which may still list the cleared domains', () => {
+    const raw = '{"adobe":["admin.da.live"],"git';
+    storage.data[OAUTH_EXTRA_DOMAINS_KEY] = raw;
+    const removeItem = (key: string) => {
+      delete storage.data[key];
+    };
+    const withRemove = { ...storage, removeItem };
+    // The write that copies it aside keeps it.
+    clearOAuthExtras(withRemove, 'github');
+    expect(storage.data[CORRUPT_KEY]).toBe(raw);
+    addOAuthExtraDomain(withRemove, 'github', 'hub.example.com');
+    expect(storage.data[CORRUPT_KEY]).toBe(raw);
+    clearOAuthExtras(withRemove, 'github');
+    expect(storage.data[CORRUPT_KEY]).toBeUndefined();
+    expect(readOAuthExtras(storage)).toEqual({});
   });
 
   it('leaves absent and valid stores without a quarantine copy', () => {

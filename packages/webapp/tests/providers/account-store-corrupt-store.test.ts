@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetLoggerDedupForTests } from '../../src/base/logger.js';
 import {
   addAccount,
+  clearAllSettings,
   getAccounts,
+  logoutOAuthAccount,
   removeAccount,
   saveOAuthAccount,
 } from '../../src/providers/account-store.js';
@@ -108,6 +110,65 @@ describe('account-store — present but unparsable slicc_accounts (#4146)', () =
 
     expect(data[CORRUPT]).toBe(TRUNCATED);
     expect(data[ACCOUNTS]).toBe('[]');
+  });
+
+  it('keeps the corrupt value in place when storage only has room for one copy', () => {
+    // Moving it (remove, then copy) would leave slicc_accounts empty once the
+    // new array then fails to fit, and a retry would read that as absent.
+    data[ACCOUNTS] = TRUNCATED;
+    const capacity = ACCOUNTS.length + TRUNCATED.length + 10;
+    const used = (): number =>
+      Object.entries(data).reduce((n, [k, v]) => n + k.length + v.length, 0);
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => data[k] ?? null,
+      setItem: (k: string, v: string) => {
+        const old = k in data ? k.length + data[k].length : 0;
+        if (used() - old + k.length + v.length > capacity) {
+          throw Object.assign(new Error('quota'), { name: 'QuotaExceededError' });
+        }
+        data[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete data[k];
+      },
+    });
+
+    expect(() => addAccount('groq', 'gsk-new')).toThrow(/could not be backed up/);
+    expect(data).toEqual({ [ACCOUNTS]: TRUNCATED });
+  });
+
+  it('drops the quarantined copy when the last account is removed', async () => {
+    data[ACCOUNTS] = TRUNCATED;
+    addAccount('groq', 'gsk-new');
+    expect(data[CORRUPT]).toBe(TRUNCATED);
+
+    await removeAccount('groq');
+
+    expect(data[ACCOUNTS]).toBe('[]');
+    expect(data[CORRUPT]).toBeUndefined();
+  });
+
+  it('drops the quarantined copy on logout, which clears the token', async () => {
+    data[ACCOUNTS] = TRUNCATED;
+    await saveOAuthAccount({ providerId: 'github', accessToken: 'gho_real' });
+    expect(data[CORRUPT]).toBe(TRUNCATED);
+
+    await logoutOAuthAccount('github');
+
+    expect(getAccounts()).toEqual([
+      expect.objectContaining({ providerId: 'github', loggedOut: true }),
+    ]);
+    expect(data[CORRUPT]).toBeUndefined();
+  });
+
+  it('clearAllSettings drops both quarantined copies', async () => {
+    data[CORRUPT] = TRUNCATED;
+    data['slicc_oauth_extra_domains.corrupt'] = '{"adobe":["admin.da';
+
+    await clearAllSettings();
+
+    expect(data[CORRUPT]).toBeUndefined();
+    expect(data['slicc_oauth_extra_domains.corrupt']).toBeUndefined();
   });
 
   it('keeps the corrupt value and fails the save when no copy can be kept', () => {

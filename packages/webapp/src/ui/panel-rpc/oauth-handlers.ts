@@ -3,7 +3,7 @@
  */
 import type { SliccPermissions } from '@slicc/webcomponents';
 
-import { ACCOUNTS_KEY, preserveCorruptAccounts } from '../../base/stored-accounts.js';
+import { ACCOUNTS_KEY, writeStoredAccounts } from '../../base/stored-accounts.js';
 import type { PanelRpcHandlers } from '../../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import type { StandalonePanelRpcHandlerOptions } from '../panel-rpc-handlers.js';
@@ -168,9 +168,8 @@ export function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions
       // worker mirror it into its shim immediately, avoiding a race
       // with the `local-storage-set` forward. The worker built
       // `accountsJson` from its shim, which reads a corrupt store as
-      // `[]`, so preserve the page's value before replacing it (#4146).
-      preserveCorruptAccounts(localStorage);
-      localStorage.setItem(ACCOUNTS_KEY, accountsJson);
+      // `[]`; `writeStoredAccounts` keeps the page's value (#4146).
+      writeStoredAccounts(accountsJson, localStorage);
       const storedJson = localStorage.getItem(ACCOUNTS_KEY) ?? accountsJson;
       return { storedJson };
     },

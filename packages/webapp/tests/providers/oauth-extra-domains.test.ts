@@ -100,6 +100,9 @@ describe('OAuth extra-domains store', () => {
     setExtraOAuthDomains('adobe', ['admin.da.live']);
     expect(lsData['slicc_oauth_extra_domains.corrupt']).toBe('{"github":["hub.example.com"],"ado');
     expect(getAllExtraOAuthDomains()).toEqual({ adobe: ['admin.da.live'] });
+    // `oauth-domain clear` drops the copy along with the provider's extras.
+    setExtraOAuthDomains('github', []);
+    expect(lsData['slicc_oauth_extra_domains.corrupt']).toBeUndefined();
     consoleError.mockRestore();
   });
 });

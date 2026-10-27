@@ -6,7 +6,7 @@
  * remains the API everything else uses.
  */
 
-import { corruptValueKey, type QuarantineStorage, quarantineCorruptValue } from '@slicc/shared-ts';
+import { corruptValueKey, type QuarantineStorage, replaceStoredValue } from '@slicc/shared-ts';
 import type { Account } from '../providers/account-store.js';
 import { createLogger } from './logger.js';
 
@@ -15,11 +15,13 @@ const log = createLogger('stored-accounts');
 /** localStorage key of the JSON account array. */
 export const ACCOUNTS_KEY = 'slicc_accounts';
 
-/** Where {@link preserveCorruptAccounts} moves an unparsable `slicc_accounts` value. */
+/** Where {@link writeStoredAccounts} copies an unparsable `slicc_accounts` value. */
 export const CORRUPT_ACCOUNTS_KEY = corruptValueKey(ACCOUNTS_KEY);
 
-/** `null` when `raw` is not a JSON array: a value nothing may overwrite unpreserved (#4146). */
-function parseStoredAccounts(raw: string): Account[] | null {
+type StoredRow = Partial<Account> & { providerId: string };
+
+/** Rows with a `providerId`; `null` when `raw` is not a JSON array (#4146). */
+function parseStoredRows(raw: string): StoredRow[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -28,18 +30,21 @@ function parseStoredAccounts(raw: string): Account[] | null {
   }
   if (!Array.isArray(parsed)) return null;
   return parsed.filter(
-    (entry): entry is Account =>
-      entry != null &&
-      typeof entry === 'object' &&
-      typeof entry.providerId === 'string' &&
-      typeof entry.apiKey === 'string'
+    (entry): entry is StoredRow =>
+      entry != null && typeof entry === 'object' && typeof entry.providerId === 'string'
+  );
+}
+
+function parseStoredAccounts(raw: string): Account[] | null {
+  return (
+    parseStoredRows(raw)?.filter((row): row is Account => typeof row.apiKey === 'string') ?? null
   );
 }
 
 /**
  * Parse the stored accounts, dropping malformed entries; `[]` when absent or
- * unparsable. Writers must call {@link preserveCorruptAccounts} first, since
- * a save built on that `[]` would replace every stored provider.
+ * unparsable. Save through {@link writeStoredAccounts}, since a save built on
+ * that `[]` would otherwise replace every stored provider.
  */
 export function readStoredAccounts(): Account[] {
   const raw = localStorage.getItem(ACCOUNTS_KEY);
@@ -47,26 +52,43 @@ export function readStoredAccounts(): Account[] {
   return parseStoredAccounts(raw) ?? [];
 }
 
+const holdsCredential = (row: StoredRow): boolean =>
+  Boolean(row.apiKey || row.accessToken || row.refreshToken);
+
+/** Whether `next` deletes a row of `previous` or clears one of its credentials. */
+function dropsAccountData(previous: StoredRow[], next: StoredRow[]): boolean {
+  return previous.some((p) => {
+    const n = next.find((row) => row.providerId === p.providerId);
+    return !n || (holdsCredential(p) && !holdsCredential(n));
+  });
+}
+
 /**
- * Run before anything replaces `slicc_accounts`: when the stored value is
- * unparsable, move it to {@link CORRUPT_ACCOUNTS_KEY} (replacing an older
- * copy) so the save can go ahead without destroying the keys and OAuth masks
- * it may still hold (#4146). Throws, leaving the value in place, when it
- * cannot be preserved. Absent and parsable values are left alone.
+ * The writer for `slicc_accounts` (#4146). An unparsable stored value is
+ * copied to {@link CORRUPT_ACCOUNTS_KEY} before `accountsJson` replaces it;
+ * if it can't be copied this throws and nothing changes. A save that deletes
+ * an account or clears its credentials also drops that copy, since it may
+ * still hold them. Absent and parsable values are written as before.
  */
-export function preserveCorruptAccounts(storage: QuarantineStorage = localStorage): void {
-  const raw = storage.getItem(ACCOUNTS_KEY);
-  if (!raw || parseStoredAccounts(raw) !== null) return;
-  if (!quarantineCorruptValue(storage, ACCOUNTS_KEY, raw)) {
-    log.error('Unparsable account store could not be preserved; refusing to overwrite it', {
-      chars: raw.length,
-    });
-    throw new Error(
-      `The saved provider accounts (${ACCOUNTS_KEY}) are unreadable and could not be backed up, so nothing was saved. Free some browser storage for this site and try again.`
+export function writeStoredAccounts(
+  accountsJson: string,
+  storage: QuarantineStorage = localStorage
+): void {
+  const before = storage.getItem(ACCOUNTS_KEY);
+  if (
+    replaceStoredValue(storage, ACCOUNTS_KEY, accountsJson, (raw) => parseStoredRows(raw) !== null)
+  ) {
+    log.error(
+      `Unparsable account store copied to ${CORRUPT_ACCOUNTS_KEY} before saving; accounts saved before this are only in that copy`
     );
+    return;
   }
-  log.error(
-    `Unparsable account store moved to ${CORRUPT_ACCOUNTS_KEY}; accounts saved before this are only in that copy`,
-    { chars: raw.length }
-  );
+  const previous = before ? parseStoredRows(before) : null;
+  if (
+    previous &&
+    storage.getItem(CORRUPT_ACCOUNTS_KEY) !== null &&
+    dropsAccountData(previous, parseStoredRows(accountsJson) ?? [])
+  ) {
+    storage.removeItem?.(CORRUPT_ACCOUNTS_KEY);
+  }
 }

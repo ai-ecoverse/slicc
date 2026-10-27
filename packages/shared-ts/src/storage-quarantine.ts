@@ -1,63 +1,53 @@
 /**
- * Preserve a present-but-unparsable `localStorage` value before a writer
- * replaces it (#4146). The JSON stores in `slicc_accounts` and
+ * Keep a present-but-unreadable `localStorage` value when a writer replaces
+ * it (#4146). The JSON stores in `slicc_accounts` and
  * `slicc_oauth_extra_domains` are read-modify-written as a whole and their
- * readers report an unparsable value as empty, so the next save would
- * otherwise overwrite every entry the corrupt value still held.
+ * readers report an unreadable value as empty, so the next save would
+ * otherwise overwrite every entry the unreadable value still held.
  */
 
 export interface QuarantineStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
-  /** Optional so a get/set-only fake still works; without it a full store cannot be preserved. */
+  /** Optional so a get/set-only fake still works; the stores use it to drop their copy. */
   removeItem?(key: string): void;
 }
 
-/** Where the corrupt value of `key` is kept. Only the newest copy survives. */
+/** Where the unreadable value of `key` is kept. Only the newest copy survives. */
 export function corruptValueKey(key: string): string {
   return `${key}.corrupt`;
 }
 
-function isQuotaError(err: unknown): boolean {
-  if (err == null || typeof err !== 'object') return false;
-  const { name, code } = err as { name?: unknown; code?: unknown };
-  return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED' || code === 22;
-}
-
 /**
- * Copy `raw`, the current value of `key`, to {@link corruptValueKey}. A full
- * store (plausibly why `key` went bad) gets a move instead of a copy: the
- * original is removed to make room and written back if the copy still fails.
- * Returns false when `raw` could not be preserved; `key` then still holds it
- * and the caller must not overwrite `key`.
+ * Write `value` to `key`. When `key` holds a value `isReadable` rejects, copy
+ * it to {@link corruptValueKey} first, replacing an older copy. `key` is only
+ * replaced after that copy is stored, and a `setItem` that throws leaves the
+ * previous value in place, so the original is never held nowhere: if the
+ * copy can't be stored this throws and saves nothing, and if the replacement
+ * throws, `key` still holds the original next to its copy.
+ *
+ * Returns whether an unreadable value was copied aside.
  */
-export function quarantineCorruptValue(
+export function replaceStoredValue(
   storage: QuarantineStorage,
   key: string,
-  raw: string
+  value: string,
+  isReadable: (raw: string) => boolean
 ): boolean {
-  const target = corruptValueKey(key);
-  try {
-    storage.setItem(target, raw);
-    return true;
-  } catch (err) {
-    if (!isQuotaError(err)) return false;
-  }
-  if (!storage.removeItem) return false;
-  try {
-    storage.removeItem(key);
-  } catch {
-    return false;
-  }
-  try {
-    storage.setItem(target, raw);
-    return true;
-  } catch {
+  const raw = storage.getItem(key);
+  const unreadable = raw !== null && raw !== '' && !isReadable(raw);
+  if (unreadable) {
+    const target = corruptValueKey(key);
     try {
-      storage.setItem(key, raw);
+      storage.setItem(target, raw);
     } catch {
-      // The slot was freed a moment ago, so this only fails if another tab filled it.
+      throw new Error(
+        storage.getItem(key) === raw
+          ? `${key} is unreadable and could not be backed up to ${target}, so nothing was saved and ${key} was left as it was. Free some browser storage for this site and try again.`
+          : `${key} changed while it was being backed up, so nothing was saved. Try again.`
+      );
     }
-    return false;
   }
+  storage.setItem(key, value);
+  return unreadable;
 }

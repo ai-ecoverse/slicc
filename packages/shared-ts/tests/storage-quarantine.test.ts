@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   corruptValueKey,
   type QuarantineStorage,
-  quarantineCorruptValue,
+  replaceStoredValue,
 } from '../src/storage-quarantine.js';
 
 function quotaError(): Error {
@@ -16,9 +16,8 @@ function makeStorage(initial: Record<string, string>, capacity = Number.POSITIVE
   const storage: Required<QuarantineStorage> = {
     getItem: (key) => data[key] ?? null,
     setItem: (key, value) => {
-      const next =
-        used() - (key in data ? key.length + data[key].length : 0) + key.length + value.length;
-      if (next > capacity) throw quotaError();
+      const old = key in data ? key.length + data[key].length : 0;
+      if (used() - old + key.length + value.length > capacity) throw quotaError();
       data[key] = value;
     },
     removeItem: (key) => {
@@ -28,53 +27,59 @@ function makeStorage(initial: Record<string, string>, capacity = Number.POSITIVE
   return { data, storage };
 }
 
+const isArray = (raw: string): boolean => {
+  try {
+    return Array.isArray(JSON.parse(raw));
+  } catch {
+    return false;
+  }
+};
+
 describe('storage-quarantine', () => {
   it('names the quarantine key after the store', () => {
     expect(corruptValueKey('slicc_accounts')).toBe('slicc_accounts.corrupt');
   });
 
-  it('copies the value aside, replacing an older copy', () => {
-    const { data, storage } = makeStorage({ k: '{bad', 'k.corrupt': 'older' });
-    expect(quarantineCorruptValue(storage, 'k', '{bad')).toBe(true);
-    expect(data).toEqual({ k: '{bad', 'k.corrupt': '{bad' });
+  it('writes absent and readable values without a copy', () => {
+    const { data, storage } = makeStorage({});
+    expect(replaceStoredValue(storage, 'k', '[1]', isArray)).toBe(false);
+    expect(replaceStoredValue(storage, 'k', '[2]', isArray)).toBe(false);
+    expect(data).toEqual({ k: '[2]' });
   });
 
-  it('moves the value when there is no room for a copy', () => {
-    const raw = '{"truncated":';
+  it('copies an unreadable value aside, replacing an older copy, then writes', () => {
+    const { data, storage } = makeStorage({ k: '[{bad', 'k.corrupt': 'older' });
+    expect(replaceStoredValue(storage, 'k', '[]', isArray)).toBe(true);
+    expect(data).toEqual({ k: '[]', 'k.corrupt': '[{bad' });
+  });
+
+  it('leaves the original in place and throws when there is no room for the copy', () => {
+    // Room for the original or its copy, never both: a move would have to empty `k` first.
+    const raw = '[{"truncated":';
     const { data, storage } = makeStorage({ k: raw }, 'k'.length + raw.length + 12);
-    expect(quarantineCorruptValue(storage, 'k', raw)).toBe(true);
-    expect(data).toEqual({ 'k.corrupt': raw });
-  });
-
-  it('puts the value back and reports failure when even a move does not fit', () => {
-    const raw = '{"truncated":';
-    const { data, storage } = makeStorage({ k: raw }, 'k'.length + raw.length);
-    expect(quarantineCorruptValue(storage, 'k', raw)).toBe(false);
+    expect(() => replaceStoredValue(storage, 'k', '[]', isArray)).toThrow(
+      /could not be backed up to k\.corrupt, so nothing was saved and k was left as it was/
+    );
     expect(data).toEqual({ k: raw });
   });
 
-  it('leaves the value alone on a non-quota failure', () => {
-    const { data, storage } = makeStorage({ k: '{bad' });
-    storage.setItem = () => {
-      throw new Error('SecurityError');
-    };
-    expect(quarantineCorruptValue(storage, 'k', '{bad')).toBe(false);
-    expect(data).toEqual({ k: '{bad' });
+  it('keeps the original next to its copy when the replacement write fails', () => {
+    const raw = '[{"truncated":';
+    const big = `[${'"x",'.repeat(10)}"x"]`;
+    const { data, storage } = makeStorage({ k: raw }, 2 * (raw.length + 10));
+    expect(() => replaceStoredValue(storage, 'k', big, isArray)).toThrow(/quota/);
+    expect(data).toEqual({ k: raw, 'k.corrupt': raw });
+    expect(replaceStoredValue(storage, 'k', '[]', isArray)).toBe(true);
+    expect(data).toEqual({ k: '[]', 'k.corrupt': raw });
   });
 
-  it('cannot move without removeItem', () => {
-    const { data, storage } = makeStorage({ k: '{bad' }, 5);
-    const { removeItem: _omit, ...getSetOnly } = storage;
-    expect(quarantineCorruptValue(getSetOnly, 'k', '{bad')).toBe(false);
-    expect(data).toEqual({ k: '{bad' });
-  });
-
-  it('reports failure when the original cannot be removed', () => {
-    const { data, storage } = makeStorage({ k: '{bad' }, 5);
-    storage.removeItem = () => {
-      throw new Error('locked');
+  it('says so when another writer changed the value while the copy failed', () => {
+    const { data, storage } = makeStorage({ k: '[{bad' });
+    storage.setItem = (key, value) => {
+      data.k = '[1]';
+      if (key === 'k.corrupt') throw new Error('blocked');
+      data[key] = value;
     };
-    expect(quarantineCorruptValue(storage, 'k', '{bad')).toBe(false);
-    expect(data).toEqual({ k: '{bad' });
+    expect(() => replaceStoredValue(storage, 'k', '[]', isArray)).toThrow(/changed while/);
   });
 });

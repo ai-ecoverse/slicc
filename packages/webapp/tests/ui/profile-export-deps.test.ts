@@ -93,6 +93,8 @@ describe('createPageProfileExportDeps', () => {
   it('degrades to empty values when a store is missing or malformed', async () => {
     const d = deps();
     localStorage.setItem('slicc_accounts', '{bad');
+    // The quarantined copy (#4146) is never exported or read as accounts.
+    localStorage.setItem('slicc_accounts.corrupt', '[{"providerId":"openai","apiKey":"sk-x"}]');
     expect(d.accounts()).toEqual([]);
     localStorage.setItem('slicc_accounts', '{}');
     expect(d.accounts()).toEqual([]);

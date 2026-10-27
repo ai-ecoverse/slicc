@@ -435,5 +435,10 @@ describe('createStandalonePanelRpcHandlers — save-oauth-accounts', () => {
     expect(result.storedJson).toBe(next);
     expect(lsData['slicc_accounts.corrupt']).toBe(raw);
     consoleError.mockRestore();
+
+    // A worker `mcp delete` of the last account wipes the copy on the page too.
+    await handlers['save-oauth-accounts']!({ accountsJson: '[]' });
+    expect(lsData.slicc_accounts).toBe('[]');
+    expect(lsData['slicc_accounts.corrupt']).toBeUndefined();
   });
 });
