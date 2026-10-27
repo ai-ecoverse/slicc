@@ -220,7 +220,9 @@ async function writeSnapshot(
   // (session-freezer → lazy session-jsonl) so this boot-critical worker module
   // does not grow the eager graph for a flag-gated feature.
   await deps.vfs.writeFile(transcriptPath, formatArchiveAsMarkdown(archive));
-  await upsertSessionsIndexEntryUnlocked(deps.vfs, entry, sessionsDir);
+  // `entries` is this transaction's read (rebuilt from the archives if the
+  // index was corrupt); nothing has written the index since.
+  await upsertSessionsIndexEntryUnlocked(deps.vfs, entry, sessionsDir, entries);
   await deps.vfs.flush();
   log.info('Live session snapshot written', {
     cone: folder,

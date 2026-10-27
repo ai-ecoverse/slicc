@@ -224,6 +224,97 @@ describe('a corrupt sessions index survives one write from every writer', () => 
   });
 });
 
+describe('what a writer heals a corrupt index into', () => {
+  /** A curator run's transcript, written beside the frozen chats (agent-bridge). */
+  const AGENT_TRANSCRIPT = '/sessions/agent-memory-curator-2026-06-04T10-00-00-000Z.md';
+
+  it('leaves agent transcripts out: they share /sessions but are not sessions', async () => {
+    await seedCorrupt();
+    await vfs.writeFile(AGENT_TRANSCRIPT, '# Agent session: memory-curator\n\n- exit code: 0\n');
+
+    const result = await snapshotLiveSession({
+      vfs,
+      cone: { folder: 'cone' },
+      messages: [agent('user', 'still going', 10)],
+      trigger: 'threshold',
+    });
+
+    // Listed, it would read as a 0-turn session from 1970 that a rail
+    // delete would remove.
+    expect(names(await indexAt())).toEqual([...FILENAMES, result!.entry.filename].sort());
+    expect(await vfs.readFile(AGENT_TRANSCRIPT, utf8)).toContain('memory-curator');
+  });
+
+  it('reads each archive once per snapshot round, not once per index read', async () => {
+    await seedCorrupt();
+    const reads = new Map<string, number>();
+    const counting = withReads({
+      readFile: (path, options) => {
+        reads.set(path, (reads.get(path) ?? 0) + 1);
+        return vfs.readFile(path, options);
+      },
+    });
+
+    await snapshotLiveSession({
+      vfs: counting,
+      cone: { folder: 'cone' },
+      messages: [agent('user', 'still going', 10)],
+      trigger: 'threshold',
+    });
+
+    for (const filename of FILENAMES) expect(reads.get(`/sessions/${filename}`), filename).toBe(1);
+    expect(names(await indexAt())).toHaveLength(FILENAMES.length + 1);
+  });
+
+  it('does not publish an unreadable live archive as a draft beside the new snapshot', async () => {
+    await seedCorrupt();
+    const stale = '/sessions/live-cone-old1.md';
+    await vfs.writeFile(
+      stale,
+      formatArchiveAsMarkdown({
+        id: 'session-cone',
+        sessionId: 'sid-live',
+        title: 'still going',
+        frozenAt: '2026-06-05T10:00:00.000Z',
+        createdAt: 1,
+        updatedAt: 2,
+        messageCount: 1,
+        messages: [{ id: 'u1', role: 'user', content: 'still going', timestamp: 1 }],
+        cone: 'cone',
+        live: true,
+        liveThrough: 1,
+      })
+    );
+    const flaky = withReads({
+      readFile: async (path, options) => {
+        if (path === stale) throw new FsError('EIO', 'bad block', path);
+        return vfs.readFile(path, options);
+      },
+    });
+
+    const result = await snapshotLiveSession({
+      vfs: flaky,
+      cone: { folder: 'cone' },
+      messages: [agent('user', 'still going', 10), agent('assistant', 'on it', 20)],
+      trigger: 'threshold',
+    });
+
+    const after = await indexAt();
+    expect(names(after)).toEqual(
+      [...FILENAMES, 'live-cone-old1.md', result!.entry.filename].sort()
+    );
+    // Still listed (its bytes are intact), but nothing enrichment may title
+    // or a later compaction may resume into.
+    expect(after.find((e) => e.filename === 'live-cone-old1.md')).toEqual({
+      filename: 'live-cone-old1.md',
+      title: 'live-cone-old1.md',
+      frozenAt: new Date(0).toISOString(),
+      messageCount: 0,
+    });
+    expect(after.filter((e) => e.live).map((e) => e.filename)).toEqual([result!.entry.filename]);
+  });
+});
+
 describe('readSessionsIndexForWrite outside the corrupt case', () => {
   it('reads a missing index as empty: the first freeze writes one row', async () => {
     for (const entry of SESSIONS) await writeArchive(entry);
