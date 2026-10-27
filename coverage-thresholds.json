@@ -64,10 +64,10 @@
       "branches": 83
     },
     "cloud-core": {
-      "lines": 86,
-      "statements": 83,
-      "functions": 82,
-      "branches": 78,
+      "lines": 87,
+      "statements": 85,
+      "functions": 83,
+      "branches": 81,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -152,8 +152,8 @@
       "regions": 87
     },
     "swift-trayfollower": {
-      "lines": 90,
-      "functions": 83,
+      "lines": 91,
+      "functions": 84,
       "regions": 91
     },
     "swift-traykit": {
