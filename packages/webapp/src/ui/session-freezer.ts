@@ -57,7 +57,6 @@ import {
   frozenSessionPath,
   readSessionsIndex,
   SESSIONS_DIR,
-  SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
 import {
   findLiveSnapshotEntry,
@@ -70,6 +69,7 @@ import {
   shortId,
   slugify,
   upsertSessionsIndexEntry,
+  writeSessionsIndexUnlocked,
 } from '../transcript/frozen-archive-writer.js';
 import { isChatKeyId } from '../transcript/frozen-session-identity.js';
 import {
@@ -1488,7 +1488,7 @@ async function clearPendingMarkers(
 ): Promise<FrozenSessionIndexEntry | null> {
   let cleared: FrozenSessionIndexEntry | null = null;
   const run = async (): Promise<void> => {
-    const existing = await readSessionsIndex(vfs);
+    const existing = await readSessionsIndexForWrite(vfs);
     const index = existing.findIndex((entry) => entry.filename === filename);
     if (index === -1) return;
     const {
@@ -1504,7 +1504,7 @@ async function clearPendingMarkers(
     };
     const updated = existing.slice();
     updated[index] = updatedEntry;
-    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await writeSessionsIndexUnlocked(vfs, updated);
     await vfs.flush();
     cleared = updatedEntry;
   };
@@ -1527,7 +1527,7 @@ async function recordPendingAttempt(
 ): Promise<FrozenSessionIndexEntry | null> {
   let attempted: FrozenSessionIndexEntry | null = null;
   const run = async (): Promise<void> => {
-    const existing = await readSessionsIndex(vfs);
+    const existing = await readSessionsIndexForWrite(vfs);
     const index = existing.findIndex((entry) => entry.filename === filename);
     if (index === -1) return;
     const current = existing[index];
@@ -1537,7 +1537,7 @@ async function recordPendingAttempt(
     attempted = { ...current, pendingAttemptCount: attempts + 1 };
     const updated = existing.slice();
     updated[index] = attempted;
-    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await writeSessionsIndexUnlocked(vfs, updated);
     await vfs.flush();
   };
   const next = serializeIndexWrite(run);
@@ -1557,12 +1557,12 @@ async function stampMemoryFailure(
   reason: string
 ): Promise<void> {
   const run = async (): Promise<void> => {
-    const existing = await readSessionsIndex(vfs);
+    const existing = await readSessionsIndexForWrite(vfs);
     const index = existing.findIndex((entry) => entry.filename === filename);
     if (index === -1) return;
     const updated = existing.slice();
     updated[index] = { ...existing[index], memoryFailed: reason.slice(0, 300) };
-    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await writeSessionsIndexUnlocked(vfs, updated);
     await vfs.flush();
   };
   const next = serializeIndexWrite(run);
@@ -1584,13 +1584,13 @@ async function stampMemoryFailure(
  */
 async function stampMemoryCurated(vfs: WritableVfsClient, filename: string): Promise<void> {
   const run = async (): Promise<void> => {
-    const existing = await readSessionsIndex(vfs);
+    const existing = await readSessionsIndexForWrite(vfs);
     const index = existing.findIndex((entry) => entry.filename === filename);
     if (index === -1) return;
     const { memoryFailed: _memoryFailed, ...rest } = existing[index];
     const updated = existing.slice();
     updated[index] = { ...rest, memoryCuratedAt: new Date().toISOString() };
-    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await writeSessionsIndexUnlocked(vfs, updated);
     await vfs.flush();
   };
   const next = serializeIndexWrite(run);
@@ -1628,41 +1628,29 @@ async function replaceIndexEntry(
   replacement: FrozenSessionIndexEntry
 ): Promise<ReplaceIndexOutcome> {
   const run = async (): Promise<ReplaceIndexOutcome> => {
-    const existing = await readIndexForReplace(vfs);
+    const existing = await readSessionsIndexForWrite(vfs);
     const idx = existing.findIndex((e) => e.filename === oldFilename);
     if (idx !== -1) {
       const updated = existing.slice();
       updated[idx] = replacement;
       const deduped = updated.filter((e, i) => i === idx || e.filename !== replacement.filename);
-      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(deduped, null, 2));
+      await writeSessionsIndexUnlocked(vfs, deduped);
       return 'replaced';
     }
     const outcome = await resolveMissingOldRow(vfs, existing, oldFilename, replacement);
     if (outcome === 'prepended') {
       const updated = [replacement, ...existing.filter((e) => e.filename !== replacement.filename)];
-      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+      await writeSessionsIndexUnlocked(vfs, updated);
     } else if (outcome === 'replaced') {
       // The canonical row already exists (#718): swap it in place, never duplicate.
       const updated = existing.map((e) => (e.filename === replacement.filename ? replacement : e));
-      await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+      await writeSessionsIndexUnlocked(vfs, updated);
     } else {
       await dropUnreferencedCopy(vfs, existing, oldFilename, replacement.filename);
     }
     return outcome;
   };
   return serializeIndexWrite(run);
-}
-
-/** The index for {@link replaceIndexEntry}: missing is empty; a read or parse fault throws. */
-async function readIndexForReplace(vfs: WritableVfsClient): Promise<FrozenSessionIndexEntry[]> {
-  try {
-    const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
-    const parsed = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
-    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
-  } catch (err) {
-    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-    return [];
-  }
 }
 
 /**
@@ -1764,23 +1752,13 @@ export async function markSnapshotUnavailable(
   filename: string
 ): Promise<void> {
   const run = async (): Promise<void> => {
-    let existing: FrozenSessionIndexEntry[] = [];
-    try {
-      const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
-      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
-    } catch (err) {
-      if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-      // No index yet — nothing to mark.
-      return;
-    }
+    const existing = await readSessionsIndexForWrite(vfs);
     const entry = existing.find((e) => e.filename === filename);
-    if (!entry) return; // Entry not found — nothing to update.
+    if (!entry) return; // No index yet, or no such row — nothing to mark.
     const updated = existing.map((e) =>
-      e.filename === filename ? { ...e, completeSnapshotUnavailable: true } : e
+      e.filename === filename ? { ...e, completeSnapshotUnavailable: true as const } : e
     );
-    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await writeSessionsIndexUnlocked(vfs, updated);
   };
   const next = serializeIndexWrite(run);
   return next;

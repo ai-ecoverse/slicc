@@ -6,15 +6,16 @@
  */
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
-import { serializeIndexWrite } from '../../transcript/frozen-archive-writer.js';
+import {
+  type ArchiveVfs,
+  readSessionsIndexForWrite,
+  readSessionsIndexState,
+  serializeIndexWrite,
+  writeSessionsIndexUnlocked,
+} from '../../transcript/frozen-archive-writer.js';
 import { loadFrozenArchive } from '../../transcript/session-jsonl.js';
 import { PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
-import {
-  type FrozenSessionIndexEntry,
-  frozenSessionPath,
-  parseFrozenArchive,
-  SESSIONS_INDEX_PATH,
-} from '../session-freezer.js';
+import { type FrozenSessionIndexEntry, frozenSessionPath } from '../session-freezer.js';
 import type { ChatMessage } from '../types.js';
 
 export type { FrozenSessionIndexEntry } from '../session-freezer.js';
@@ -75,7 +76,7 @@ export function frozenCard(
  */
 export async function enrichFreezerIcons(deps: {
   reader: LocalVfsClient;
-  writer: { writeFile(path: string, content: string): Promise<unknown> };
+  writer: Pick<ArchiveVfs, 'writeFile'>;
   freezer: HTMLElement;
   entries: readonly FrozenSessionIndexEntry[];
   pickIcon: (subject: string) => Promise<string | null>;
@@ -89,17 +90,17 @@ export async function enrichFreezerIcons(deps: {
   if (picked.size === 0) return;
 
   // Re-read and write as ONE index transaction: an unlocked read-then-write
-  // could put back a row deleted (or drop a row frozen) in between. Refuse
-  // to write over a fault, a corrupt index, OR an empty one (we were called
-  // with entries — an empty re-read means something is wrong).
+  // could put back a row deleted (or drop a row frozen) in between. The
+  // writers' read throws on a fault and rebuilds a corrupt index from the
+  // archives; an empty re-read is refused (we were called with entries).
   const written = await serializeIndexWrite(async () => {
-    const current = await readFreezerEntries(deps.reader);
-    if (current === null || current.length === 0) return false;
+    const current = await readSessionsIndexForWrite(deps.reader);
+    if (current.length === 0) return false;
     const updated = current.map((e) => {
       const icon = !e.icon && picked.has(e.filename) ? picked.get(e.filename) : undefined;
       return icon ? { ...e, icon } : e;
     });
-    await deps.writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await writeSessionsIndexUnlocked(deps.writer, updated);
     return true;
   });
   if (!written) return;
@@ -137,112 +138,43 @@ export type FreezerIndexState =
   | { kind: 'fault' };
 
 export async function readFreezerIndexState(fs: LocalVfsClient): Promise<FreezerIndexState> {
-  let text: string;
   try {
-    const raw = await fs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
-    text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  } catch (err) {
-    // Missing index = genuinely no frozen sessions. Anything else is a fault.
-    return (err as { code?: string } | null)?.code === 'ENOENT'
-      ? { kind: 'missing' }
-      : { kind: 'fault' };
-  }
-  try {
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed)) return { kind: 'corrupt' };
-    return { kind: 'ok', entries: parsed as FrozenSessionIndexEntry[] };
+    // Missing = genuinely no frozen sessions. Corrupt (e.g. a write cut off
+    // by a reload killing the worker) is rebuilt from the archives, the
+    // ground truth, by the caller. Any other read failure is a fault.
+    return await readSessionsIndexState(fs);
   } catch {
-    // E.g. a write cut off mid-file by a reload killing the worker. The
-    // archives are the ground truth — callers rebuild from them.
-    return { kind: 'corrupt' };
+    return { kind: 'fault' };
   }
-}
-
-/**
- * Rebuild the frozen-session index from the `/sessions/*.md` archives — the
- * ground truth when `index.json` is corrupt (e.g. truncated by a reload that
- * killed the worker mid-write). Titles / timestamps / counts come from each
- * archive's YAML-style header; `pending-*` filenames keep their enrichment
- * marker and cone provenance is recovered from the frontmatter. Entries sort
- * newest-first like the live index.
- */
-export async function rebuildFreezerIndexFromArchives(
-  fs: LocalVfsClient
-): Promise<FrozenSessionIndexEntry[]> {
-  let names: string[];
-  try {
-    const dir = await fs.readDir('/sessions');
-    names = dir.filter((d) => d.type === 'file' && d.name.endsWith('.md')).map((d) => d.name);
-  } catch {
-    return [];
-  }
-  const entries: FrozenSessionIndexEntry[] = [];
-  for (const filename of names) {
-    try {
-      const raw = await fs.readFile(`/sessions/${filename}`, { encoding: 'utf-8' });
-      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      entries.push(entryFromArchive(filename, text));
-    } catch {
-      // Unreadable archive — skip it rather than failing the whole rebuild.
-    }
-  }
-  entries.sort((a, b) => b.frozenAt.localeCompare(a.frozenAt));
-  return entries;
 }
 
 /**
  * Rebuild a corrupt index from the archives and publish it as ONE index
  * transaction, re-checking the corruption inside the lock: a scan taken
- * outside it could publish a row a concurrent delete just removed. Returns
- * the rows to render, or `null` when there is nothing to show.
+ * outside it could publish a row a concurrent delete just removed. The
+ * rebuild is the writers' own ({@link readSessionsIndexForWrite}), so the
+ * rail and every writer agree on what a corrupt index holds. Returns the
+ * rows to render, or `null` when there is nothing to show.
  */
 export function recoverCorruptFreezerIndex(
   reader: LocalVfsClient,
-  writer: { writeFile(path: string, content: string): Promise<unknown> }
+  writer: Pick<ArchiveVfs, 'writeFile'>
 ): Promise<FrozenSessionIndexEntry[] | null> {
   return serializeIndexWrite(async () => {
     const state = await readFreezerIndexState(reader);
     if (state.kind === 'ok') return state.entries;
     if (state.kind !== 'corrupt') return null;
-    const entries = await rebuildFreezerIndexFromArchives(reader);
+    let entries: FrozenSessionIndexEntry[];
+    try {
+      entries = await readSessionsIndexForWrite(reader);
+    } catch {
+      // The archives cannot be listed right now; the next refresh retries.
+      return null;
+    }
     if (entries.length === 0) return null;
-    await writer.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
+    await writeSessionsIndexUnlocked(writer, entries);
     return entries;
   });
-}
-
-/** One rebuilt index row from an archive's text (frontmatter + data block). */
-function entryFromArchive(filename: string, text: string): FrozenSessionIndexEntry {
-  const header = text.slice(0, 2000);
-  const title = /^title:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? filename;
-  const frozenAt = /^frozenAt:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? new Date(0).toISOString();
-  const messageCount = Number(/^messageCount:\s*(\d+)\s*$/m.exec(header)?.[1] ?? 0);
-  const parsed = parseFrozenArchive(text);
-  // A live compaction snapshot is still being written to — it must not be
-  // handed to the enrichment catch-up, and it needs its cursor back. A
-  // `live-` file WITHOUT the marker was finalized (bare clear-chat) and is
-  // an ordinary draft.
-  const pending = filename.startsWith('pending-') || (filename.startsWith('live-') && !parsed.live);
-  return {
-    filename,
-    title,
-    frozenAt,
-    messageCount,
-    ...(parsed.cost ? { cost: parsed.cost } : {}),
-    ...(parsed.models ? { models: parsed.models } : {}),
-    ...(parsed.cone ? { cone: parsed.cone } : {}),
-    ...(parsed.coneLabel ? { coneLabel: parsed.coneLabel } : {}),
-    ...(parsed.memorySkipped ? { memorySkipped: true as const } : {}),
-    ...(parsed.live ? { live: true as const } : {}),
-    ...(parsed.live && parsed.liveThrough ? { liveThrough: parsed.liveThrough } : {}),
-    ...(parsed.live && parsed.compactions ? { compactions: parsed.compactions } : {}),
-    ...(parsed.curatedThrough ? { curatedThrough: parsed.curatedThrough } : {}),
-    // Per-freeze UUID only. Frontmatter `id` is the live chat key
-    // (`session-<folder>`); copying it here collapsed every freeze on a
-    // cone onto one sessionId after a corrupt-index rebuild (#3807).
-    ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
-    ...(pending ? { pendingEnrichment: true } : {}),
-  };
 }
 
 /**

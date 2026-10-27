@@ -13,7 +13,10 @@ installWcDomStubs();
 import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { readSessionCount } from '../../../src/scoops/cone-memory-budget.js';
-import { serializeIndexWrite } from '../../../src/transcript/frozen-archive-writer.js';
+import {
+  rebuildSessionsIndexFromArchives,
+  serializeIndexWrite,
+} from '../../../src/transcript/frozen-archive-writer.js';
 import {
   coneBadgeFor,
   enrichFreezerIcons,
@@ -21,7 +24,6 @@ import {
   frozenCard,
   readFreezerEntries,
   readFreezerIndexState,
-  rebuildFreezerIndexFromArchives,
   recoverCorruptFreezerIndex,
   renderFreezerCards,
   thawFrozenSession,
@@ -221,7 +223,7 @@ describe('corrupt-index recovery', () => {
     );
     await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
 
-    const rebuilt = await rebuildFreezerIndexFromArchives(fs);
+    const rebuilt = await rebuildSessionsIndexFromArchives(fs);
     expect(rebuilt).toHaveLength(2);
     // Newest first.
     expect(rebuilt[0]).toMatchObject({
@@ -285,7 +287,7 @@ describe('corrupt-index recovery', () => {
       ].join('\n')
     );
 
-    const rebuilt = await rebuildFreezerIndexFromArchives(fs);
+    const rebuilt = await rebuildSessionsIndexFromArchives(fs);
     expect(rebuilt.map((e) => [e.filename, e.sessionId])).toEqual([
       ['two.md', 'freeze-bbbb'],
       ['one.md', 'freeze-aaaa'],
@@ -315,7 +317,7 @@ describe('corrupt-index recovery', () => {
     );
     await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
 
-    const rebuilt = await rebuildFreezerIndexFromArchives(fs);
+    const rebuilt = await rebuildSessionsIndexFromArchives(fs);
     expect(rebuilt[0]).toMatchObject({
       filename: 'pending-dropped.md',
       pendingEnrichment: true,
@@ -340,7 +342,7 @@ describe('corrupt-index recovery', () => {
     expect(await readSessionCount(fs)).toBe(2);
   });
 
-  it('enrichFreezerIcons refuses to write over a corrupt or empty re-read', async () => {
+  it('enrichFreezerIcons rebuilds a corrupt re-read from the archives and refuses an empty one', async () => {
     const fs = await seededFs();
     const entries = (await readFreezerEntries(fs)) ?? [];
     // Corrupt the index AFTER the entries were read (mid-enrichment race).
@@ -351,14 +353,26 @@ describe('corrupt-index recovery', () => {
         writes.push(content);
       },
     };
-    await enrichFreezerIcons({
-      reader: fs,
-      writer,
-      freezer: document.createElement('slicc-freezer'),
-      entries,
-      pickIcon: async () => 'wrench',
-    });
-    expect(writes).toEqual([]);
+    const enrich = () =>
+      enrichFreezerIcons({
+        reader: fs,
+        writer,
+        freezer: document.createElement('slicc-freezer'),
+        entries,
+        pickIcon: async () => 'wrench',
+      });
+    await enrich();
+    // The writers' read rebuilt the row from its archive (#4151): the icon
+    // lands on it instead of on a one-row list or nothing at all.
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0])).toEqual([
+      expect.objectContaining({ filename: ENTRY.filename, title: 'Fix the build', icon: 'wrench' }),
+    ]);
+
+    // An empty re-read (the index is gone) still writes nothing.
+    await fs.rm('/sessions/index.json');
+    await enrich();
+    expect(writes).toHaveLength(1);
   });
 
   it('rebuilds sessionId from the sessionId frontmatter, never from a per-cone chat key (#3807)', async () => {
@@ -384,7 +398,7 @@ describe('corrupt-index recovery', () => {
     );
     await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
 
-    const rebuilt = await rebuildFreezerIndexFromArchives(fs);
+    const rebuilt = await rebuildSessionsIndexFromArchives(fs);
     const byName = new Map(rebuilt.map((entry) => [entry.filename, entry]));
     expect(byName.get('2026-06-04T09-00-00Z-a.md')?.sessionId).toBe('sid-a');
     // A legacy archive only carries the cone's chat key — shared by every
@@ -419,6 +433,19 @@ describe('index writers never resurrect a deleted row', () => {
     expect((await readFreezerEntries(fs))?.map((entry) => entry.filename)).toEqual([
       ENTRY.filename,
     ]);
+  });
+
+  it('recoverCorruptFreezerIndex publishes nothing while the archives cannot be listed', async () => {
+    const fs = await seededFs();
+    await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
+    const unlistable = {
+      readFile: (path: string) => fs.readFile(path, { encoding: 'utf-8' }),
+      readDir: async (path: string) => {
+        throw new FsError('EIO', 'listing failed', path);
+      },
+    } as unknown as VirtualFS;
+    expect(await recoverCorruptFreezerIndex(unlistable, fs)).toBeNull();
+    expect((await readFreezerIndexState(fs)).kind).toBe('corrupt');
   });
 
   it('recoverCorruptFreezerIndex re-checks inside the lock: a delete that landed first wins', async () => {

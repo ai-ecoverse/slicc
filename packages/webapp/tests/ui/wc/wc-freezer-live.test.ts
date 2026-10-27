@@ -12,7 +12,8 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 installWcDomStubs();
 
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
-import { frozenCard, rebuildFreezerIndexFromArchives } from '../../../src/ui/wc/wc-freezer.js';
+import { rebuildSessionsIndexFromArchives } from '../../../src/transcript/frozen-archive-writer.js';
+import { frozenCard } from '../../../src/ui/wc/wc-freezer.js';
 
 function archive(live: boolean): string {
   return [
@@ -34,7 +35,7 @@ function archive(live: boolean): string {
   ].join('\n');
 }
 
-describe('rebuildFreezerIndexFromArchives with live snapshots', () => {
+describe('rebuildSessionsIndexFromArchives with live snapshots', () => {
   it('keeps a live archive live and treats a finalized live- file as a pending draft', async () => {
     const fs = await VirtualFS.create({ dbName: `wc-freezer-live-${Math.random()}`, wipe: true });
     await fs.mkdir('/sessions');
@@ -42,7 +43,7 @@ describe('rebuildFreezerIndexFromArchives with live snapshots', () => {
     await fs.writeFile('/sessions/live-cone-bbb.md', archive(false));
     await fs.writeFile('/sessions/pending-ccc.md', archive(false));
 
-    const entries = await rebuildFreezerIndexFromArchives(fs);
+    const entries = await rebuildSessionsIndexFromArchives(fs);
     const byName = Object.fromEntries(entries.map((e) => [e.filename, e]));
 
     expect(byName['live-cone-aaa.md']).toMatchObject({

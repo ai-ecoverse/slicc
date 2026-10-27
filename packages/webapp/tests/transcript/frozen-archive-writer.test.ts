@@ -28,12 +28,14 @@ import {
   stripEphemeral,
   upsertSessionsIndexEntry,
 } from '../../src/transcript/frozen-archive-writer.js';
+import { mapReadDir } from '../helpers/map-read-dir.js';
 
 function fakeVfs(): ArchiveVfs & { files: Map<string, string>; flushes: number } {
   const files = new Map<string, string>();
   const vfs = {
     files,
     flushes: 0,
+    readDir: mapReadDir(files),
     async readFile(path: string): Promise<string> {
       if (!files.has(path)) throw new FsError('ENOENT', `missing ${path}`, path);
       return files.get(path)!;
