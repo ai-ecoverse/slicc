@@ -7,9 +7,8 @@ The stacked-PR CI contract is documented here so a search of `docs/` finds it.
 ## Stacked PRs
 
 A stacked PR is one whose base is another topic branch, not `main`.
-`ci.yml` uses `pull_request.branches-ignore: [no-comment]`. PRs based on
-the `no-comment` benchmark mirror still get no CI. Every other base, including
-topic-branch stacks, runs the workflow from the PR's merge commit.
+`ci.yml`'s `pull_request` trigger has no branch filter, so every base,
+including topic-branch stacks, runs the workflow from the PR's merge commit.
 
 ### What runs
 
@@ -98,8 +97,8 @@ anchors on `runs-on` do the routing:
   legs. The workflow pins `permissions: contents: read`, so no job can get a
   write token.
 - **Value:** one label (`cloud-run-job`) or a JSON label array
-  (`["self-hosted","cloud-run-job"]`). `bench.yml` and `bench-memory-chain.yml`
-  shards use `CI_HEAVY_RUNNER` too.
+  (`["self-hosted","cloud-run-job"]`). `bench.yml` shards use
+  `CI_HEAVY_RUNNER` too.
 - **Rollback:** unset the variable (`gh variable delete CI_HEAVY_RUNNER`).
   Its jobs go back to `ubuntu-latest` on the next run, with no code change.
 - **No sudo on the pools.** Root-only steps (`playwright install-deps`,

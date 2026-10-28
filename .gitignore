@@ -19,6 +19,7 @@ providers.json
 !/providers/adobe.ts
 !/providers/adobe-config.json
 .superpowers/
+docs/superpowers/
 test-results/
 test-timing/
 playwright-report/

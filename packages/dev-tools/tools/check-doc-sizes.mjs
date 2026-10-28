@@ -21,7 +21,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isNoCommentTree } from '../no-comment/marker.mjs';
 import {
   checkPackageClaudes,
   discoverPackageClaudes,
@@ -32,11 +31,6 @@ import {
 
 const Filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(Filename), '..', '..', '..');
-
-if (isNoCommentTree(repoRoot)) {
-  process.stdout.write('ok: skipping doc-size gate on no-comment tree\n');
-  process.exit(0);
-}
 
 const ROOT_CLAUDE_MAX_CHARS = 15000;
 // Lowered from 3300: the file is injected verbatim into every work unit's

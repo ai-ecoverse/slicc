@@ -255,14 +255,12 @@ enforces it: before each shard's upload and before the report job uploads or
 publishes, it scans every plaintext file in the out dir for windows of every
 encrypted set's task text (URLs excluded; repo sets such as `smoke.json` are
 public) and fails the step on a match, reporting only the
-file and task id. A shard that fails it is not uploaded. The memory-chain
-workflow passes `--scrub memory/` so a curator note that quotes the task is
-rewritten (leaking paragraphs dropped) instead of failing the hop and
-stopping the chain; leaks outside `memory/` still fail hard. Restored chain
-artifacts may also contain a truncated record from a prior hop: `previous()` /
-`readRecords()` skip unreadable files (same as `merge.mjs`), so chain-plan
-treats them as missing and replays that task instead of exiting 1 and killing
-the lineage.
+file and task id. A shard that fails it is not uploaded. `--scrub memory/`
+rewrites a curator note that quotes the task (leaking paragraphs dropped)
+instead of failing; leaks outside `memory/` still fail hard. Restored
+artifacts may also contain a truncated record from a prior run: `previous()` /
+`readRecords()` skip unreadable files (same as `merge.mjs`), so the task is
+treated as missing and replayed instead of exiting 1.
 
 ## Publishing pipeline
 

@@ -1,7 +1,7 @@
 name: Review Responder
 
-# Closes the last open loop in the agentic PR pipeline. Our scheduled agents
-# (boy-scout debt, backlog dispatcher, flake hunter) open `automation/*` PRs;
+# Closes the last open loop in the agentic PR pipeline. Our scheduled jobs
+# (today: coverage-ratchet.yml) open `automation/*` PRs;
 # Codex, Copilot and this repo's own `claude-pr-review.yml` review them. Until
 # now nothing picked that feedback up — a human had to open a local session and
 # say "take over PR X and address the review comments". This workflow does that:
@@ -15,8 +15,8 @@ name: Review Responder
 # session would add a second, private copy of that state which can disagree with
 # the public one.
 #
-# SHAPE — the house two-part pattern (see boy-scout-debt-dispatcher.yml,
-# pr-fix-dispatcher.yml): a deterministic Node selector
+# SHAPE — the house two-part pattern (see rum-error-triage.yml): a
+# deterministic Node selector
 # (packages/dev-tools/review-responder/) enumerates, filters and dedups and
 # writes its decision to $GITHUB_OUTPUT, then ONE Claude step does the work that
 # genuinely needs judgement. "Is there unseen feedback from someone other than
@@ -62,7 +62,7 @@ name: Review Responder
 # — they would race each other's pushes.
 #
 # Required repository secrets (both already present, shared with
-# pr-fix-dispatcher.yml / boy-scout-debt-dispatcher.yml):
+# rum-error-triage.yml / coverage-ratchet.yml):
 #   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
 #                             bearer token) for claude-code-action.
 #   BOT_PAT                   Fine-grained PAT (contents + pull-requests write).
@@ -76,8 +76,8 @@ name: Review Responder
 # Optional repo variables: REVIEW_RESPONDER_BEDROCK_MODEL / RUM_BEDROCK_MODEL,
 # RUM_AWS_REGION.
 #
-# Third-party actions are pinned to immutable commit SHAs (the same SHAs used by
-# pr-fix-dispatcher.yml) — this job can push to a PR branch.
+# Third-party actions are pinned to immutable commit SHAs — this job can push to
+# a PR branch.
 
 on:
   pull_request_review:

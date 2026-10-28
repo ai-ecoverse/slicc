@@ -43,8 +43,7 @@ export const BUILTIN_ALLOWLIST = [
 
   // Branch-only planning artifacts: docs/superpowers/specs/ and
   // docs/superpowers/plans/ are intentionally absent from main —
-  // the planning-artifact-cleanup workflow scrubs them on merge.
-  // docs/CLAUDE.md documents this explicitly.
+  // .gitignore keeps them out. docs/CLAUDE.md documents this explicitly.
   'docs/superpowers/**',
 ];
 

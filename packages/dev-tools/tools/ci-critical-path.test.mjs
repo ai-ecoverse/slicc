@@ -200,7 +200,7 @@ describe('CI critical-path routing', () => {
   });
 
   it('runs stacked PRs without minting a required ci check or the simulator matrix', () => {
-    expect(workflow).toContain('branches-ignore: [no-comment]');
+    expect(workflow).toMatch(/\n {2}pull_request:\n {2}merge_group:/);
     expect(workflow).not.toMatch(/pull_request:\n {4}branches: \[main\]/);
     expect(workflow).toContain('is-stacked: ${{ steps.stacked.outputs.stacked }}');
     expect(workflow).toContain('id: stacked');

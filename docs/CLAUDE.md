@@ -84,6 +84,6 @@ Other:
 - `exploration/` — open design notes (not load-bearing reference)
 - `screenshots/` — image assets used by README and other docs
 
-Planning artifacts (`docs/superpowers/specs/`, `docs/superpowers/plans/`) are intentionally **not** kept on `main` — they're scrubbed by the planning-artifact cleanup. Live in branches only.
+Planning artifacts (`docs/superpowers/specs/`, `docs/superpowers/plans/`) are intentionally **not** kept on `main` — `.gitignore` keeps them out. Keep them local or in the PR description.
 
 Keep this directory explanatory, not redundant: prefer one authoritative page per topic and link to it from the shorter `CLAUDE.md` files.

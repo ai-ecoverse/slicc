@@ -11,11 +11,8 @@ Bare script names → `tools/`; bare dir names → `packages/dev-tools/`.
 - **Build configs**: `packages/webapp/vite.config.ts`, `biome.json`.
 - **QA setup**: `packages/node-server/src/qa-setup.ts` + `npm run qa:*`; visual `packages/webapp/tests/test-dips.mjs`.
 - **RUM error triage** (nightly): `rum-error-triage/triage-rum-errors.mjs`.
-- **Scheduled agentic workflows** (selector `.mjs` + `claude-code-action`): `boy-scout-debt/`, `pr-fix-dispatcher/`, `claude-md-compactor/`, `flaky-ci-hunter/`, `backlog-dispatcher/`; event-driven `review-responder/` on `automation/*`. [details](../../docs/dev-tools-details.md#scheduled-agentic-workflows), [responder](../../docs/dev-tools-details.md#review-responder).
-- **Regression cluster hunter** (release-triggered): `regression-cluster-hunter/` + `.yml`. [details](../../docs/dev-tools-details.md#regression-cluster-hunter).
-- **Bedrock model scout** (weekly canary, no Claude): `model-scout/` + `.yml`. [details](../../docs/dev-tools-details.md#model-scout).
+- **Review responder** (event-driven, `claude-code-action`): `review-responder/` on `automation/*` PRs. [details](../../docs/dev-tools-details.md#review-responder).
 - **e2b template**: `e2b-template/` — hosted-leader cloud float sandbox (`packages/cloud-core/CLAUDE.md`).
-- **no-comment mirror**: `no-comment/` + `no-comment-mirror.yml`; `lint:no-comments` no-ops on `main`, hard gate there. [details](../../docs/dev-tools-details.md#no-comment-mirror).
 - **HF caching mirror** (`tools/hf-cache-mirror.mjs`): zero-dep local `huggingface.co` mirror; e2e CI caches `.cache/hf-mirror` + sets `HF_ENDPOINT` for warm Kokoro weights.
 
 ### Lint / CI gates

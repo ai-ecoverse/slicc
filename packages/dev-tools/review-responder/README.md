@@ -293,8 +293,7 @@ pushes. A response commit pushed with `GITHUB_TOKEN` would never fire the PR's
 `synchronize` event, so CI would never re-run and the PR would sit on stale green
 checks that never saw the fix. This repo has already been bitten by that exact
 class of bug (`checks: 0` on automation PRs #2168/#2169); the same requirement is
-documented in `pr-fix-dispatcher.yml`, `boy-scout-debt-dispatcher.yml`, and
-`coverage-ratchet.yml`.
+documented in `coverage-ratchet.yml`.
 
 ## Run it locally
 
@@ -350,7 +349,7 @@ a human's PR.
 
 ### Required secrets / variables (GitHub Actions)
 
-No new secrets — all shared with `pr-fix-dispatcher.yml`.
+No new secrets — all shared with `rum-error-triage.yml` and `coverage-ratchet.yml`.
 
 | Name                             | Kind     | Purpose                                                                                          |
 | -------------------------------- | -------- | ------------------------------------------------------------------------------------------------ |

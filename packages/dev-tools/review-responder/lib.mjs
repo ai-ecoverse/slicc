@@ -1,7 +1,7 @@
 /*
  * Review Responder — pure logic.
  *
- * Our scheduled agents (boy-scout debt, backlog dispatcher, flake hunter) open
+ * Our scheduled jobs (today: coverage-ratchet.yml) open
  * `automation/*` PRs that Codex, Copilot and this repo's own
  * `claude-pr-review.yml` then review. Nothing used to pick that feedback up —
  * a human had to open a local session and say "take over PR X and address the
@@ -20,7 +20,7 @@
  * file, no state branch, no Actions cache. "We already responded at this head
  * SHA, covering feedback up to this timestamp" is a
  * `<!-- review-response:<sha>:<iso8601> -->` marker comment, the same durable
- * dedup technique as `<!-- pr-fix-skip:<sha> -->` in pr-fix-dispatcher.
+ * dedup technique the retired pr-fix-dispatcher used for `<!-- pr-fix-skip:<sha> -->`.
  *
  * TRUST. This module is also a security boundary, because the feedback it
  * returns becomes the prompt of a step with unrestricted `Bash` and a checkout
