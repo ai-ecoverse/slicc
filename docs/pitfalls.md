@@ -1413,7 +1413,7 @@ gate it. That is why this only reproduces with a **production** float
 **The Fix**
 
 Every Slicc-launched Chrome passes
-`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard`
+`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard,PMProcessPriorityPolicy`
 **unconditionally** (not just in hosted mode), plus
 `--disable-background-timer-throttling`,
 `--disable-backgrounding-occluded-windows` and
@@ -1461,6 +1461,18 @@ extension float cannot control launch flags; its parity equivalent is
 leader tabId is learned — Chrome's `FreezingFollowsDiscardOptOut` makes the
 freeze policy honor the discard opt-out, and the flag resets on browser
 restart).
+
+**Hidden-tab renderers at background priority (Chrome 155/156, macOS, #4162).**
+`--disable-renderer-backgrounding` no longer keeps every renderer at
+foreground priority: the performance manager's own priority vote
+(`PMProcessPriorityPolicy`) still moves a renderer whose frames are all hidden
+to `TASK_BACKGROUND_APPLICATION`, so all its threads run at priority 4 with
+low-priority disk I/O. On an idle Mac that costs little, but on a loaded one
+the renderer of a background tab sat runnable and unscheduled for 14 s, its
+page faults waited in `throttle_lowpri_io` (spindump on the 3-vCPU macOS
+release runner), and CDP commands on that tab outlasted the 30 s timeout. Disabling `PMProcessPriorityPolicy` hands priority back to the
+renderer-host logic that `--disable-renderer-backgrounding` controls, so
+hidden tabs run like visible ones.
 
 Both launchers must stay in sync (cross-runtime parity):
 

@@ -244,6 +244,7 @@ const CHROME_DISABLE_FEATURES = [
   'CPUMeasurementInFreezingPolicy',
   'MemoryMeasurementInFreezingPolicy',
   'AllowDevtoolsConnectedDiscard',
+  'PMProcessPriorityPolicy',
 ] as const;
 
 const HOSTED_DISABLE_FEATURES = [...CHROME_DISABLE_FEATURES, 'WebRtcHideLocalIpsWithMdns'] as const;
@@ -310,6 +311,13 @@ export function buildChromeLaunchArgs(options: {
     // trips it on a ~30 min cadence), and AllowDevtoolsConnectedDiscard
     // removed the DevTools-attached exemption the leader used to enjoy.
     // Belt: seedChromeProfilePreferences() writes the matching prefs.
+    // PMProcessPriorityPolicy is the performance manager's process-priority
+    // vote, which --disable-renderer-backgrounding does not override (Chrome
+    // 155/156): a renderer whose frames are all hidden still drops to
+    // TASK_BACKGROUND_APPLICATION on macOS, every thread at priority 4 with
+    // low-priority disk I/O. On a loaded machine that renderer sat runnable
+    // but unscheduled for 14 s and its page faults waited in the I/O
+    // throttle, so CDP commands on a background tab timed out (#4162).
     // Hosted mode appends WebRtcHideLocalIpsWithMdns; keep that off this list
     // so desktop, extension, and Electron still hide local IPs.
     chromeDisableFeaturesArg(false),

@@ -195,8 +195,24 @@ describe('chrome-launch', () => {
       // without hosted: true.
       const args = buildChromeLaunchArgs(baseOpts);
       expect(args).toContain(
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard'
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard,PMProcessPriorityPolicy'
       );
+    });
+
+    it('keeps background-tab renderers off the background priority band', () => {
+      // --disable-renderer-backgrounding alone does not stop the performance
+      // manager's priority vote from moving a renderer with only hidden frames
+      // to TASK_BACKGROUND_APPLICATION on macOS, where a loaded machine starves
+      // it past the 30 s CDP timeout (#4162). Headed and hosted launches both
+      // drive background tabs.
+      for (const hosted of [false, true]) {
+        const features = buildChromeLaunchArgs({ ...baseOpts, hosted })
+          .find((a) => a.startsWith('--disable-features='))
+          ?.slice('--disable-features='.length)
+          .split(',');
+        expect(features).toContain('PMProcessPriorityPolicy');
+      }
+      expect(buildChromeLaunchArgs(baseOpts)).toContain('--disable-renderer-backgrounding');
     });
 
     it('does not duplicate the Local Network Access flag in hosted mode', () => {

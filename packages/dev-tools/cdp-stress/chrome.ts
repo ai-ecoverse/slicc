@@ -46,6 +46,11 @@ export async function launchChrome(): Promise<ChromeHandle> {
       '--disable-crash-reporter',
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
+      // Scenarios drive background tabs (`createPage`), and on macOS Chrome's
+      // performance-manager priority vote still puts their renderer in the
+      // background band despite the flag above (#4162). SLICC's launchers
+      // disable it too.
+      '--disable-features=PMProcessPriorityPolicy',
       'about:blank',
     ],
     { stdio: ['ignore', 'ignore', 'pipe'] }
