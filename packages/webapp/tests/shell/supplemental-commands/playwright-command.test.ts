@@ -4322,30 +4322,53 @@ const describeIntegration = chromePath && chromeIntegrationEnabled ? describe : 
 const INTEGRATION_CDP_LAUNCH_TIMEOUT_MS = Math.max(getDefaultCdpLaunchTimeoutMs(), 60_000);
 
 /**
- * Renderer processes of the Chrome using `profileDir` that macOS runs in the
- * background band: every thread at priority 4 or below, as
- * TASK_BACKGROUND_APPLICATION puts them. `ps -M -o pri` appends each thread's
- * priority as the last column.
+ * Per-thread scheduling priorities of every renderer process of the Chrome
+ * using `profileDir`, read with `ps -M -o pri` (the last column of each thread
+ * row). Throws instead of returning less than it was asked for: no renderer
+ * found, a live renderer `ps` cannot read, or a renderer with no parseable
+ * priority would otherwise let a priority check pass without checking.
  */
-function backgroundBandRenderers(profileDir: string): number[] {
+function rendererThreadPriorities(profileDir: string): Map<number, number[]> {
   const renderers = execFileSync('ps', ['-axo', 'pid=,args='], { encoding: 'utf8' })
     .split('\n')
     .filter((line) => line.includes(profileDir) && line.includes('--type=renderer'))
     .map((line) => Number(line.trim().split(/\s+/)[0]));
-  return renderers.filter((pid) => {
+  if (renderers.length === 0) throw new Error(`no renderer process found for ${profileDir}`);
+  const priorities = new Map<number, number[]>();
+  for (const pid of renderers) {
     let out: string;
     try {
       out = execFileSync('ps', ['-M', '-o', 'pri', '-p', String(pid)], { encoding: 'utf8' });
-    } catch {
-      return false; // exited between the two ps calls
+    } catch (err) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        continue; // exited between the two ps calls
+      }
+      throw new Error(`could not read thread priorities of renderer ${pid}: ${String(err)}`);
     }
-    const priorities = out
+    const threads = out
       .split('\n')
       .slice(1)
-      .map((line) => Number.parseInt(line.trim().split(/\s+/).at(-1) ?? '', 10))
-      .filter((priority) => Number.isFinite(priority));
-    return priorities.length > 0 && priorities.every((priority) => priority <= 4);
-  });
+      .filter((line) => line.trim() !== '')
+      .map((line) => Number.parseInt(line.trim().split(/\s+/).at(-1) ?? '', 10));
+    if (threads.length === 0 || threads.some((priority) => !Number.isFinite(priority))) {
+      throw new Error(`unparseable thread priorities for renderer ${pid}:\n${out}`);
+    }
+    priorities.set(pid, threads);
+  }
+  if (priorities.size === 0) throw new Error(`every renderer of ${profileDir} exited mid-scan`);
+  return priorities;
+}
+
+/**
+ * Renderers that macOS runs in the background band: every thread at priority
+ * 4 or below, as TASK_BACKGROUND_APPLICATION puts them.
+ */
+function backgroundBandRenderers(profileDir: string): number[] {
+  return [...rendererThreadPriorities(profileDir)]
+    .filter(([, threads]) => threads.every((priority) => priority <= 4))
+    .map(([pid]) => pid);
 }
 
 describeIntegration('iframe integration', { timeout: 90_000 }, () => {
