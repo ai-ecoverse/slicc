@@ -3870,7 +3870,7 @@ describe('iframe support', () => {
   });
 });
 
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -4153,6 +4153,45 @@ const chromeIntegrationEnabled =
 const describeIntegration = chromePath && chromeIntegrationEnabled ? describe : describe.skip;
 const INTEGRATION_CDP_LAUNCH_TIMEOUT_MS = Math.max(getDefaultCdpLaunchTimeoutMs(), 60_000);
 
+function rendererThreadPriorities(profileDir: string): Map<number, number[]> {
+  const renderers = execFileSync('ps', ['-axo', 'pid=,args='], { encoding: 'utf8' })
+    .split('\n')
+    .filter((line) => line.includes(profileDir) && line.includes('--type=renderer'))
+    .map((line) => Number(line.trim().split(/\s+/)[0]));
+  if (renderers.length === 0) throw new Error(`no renderer process found for ${profileDir}`);
+  const priorities = new Map<number, number[]>();
+  for (const pid of renderers) {
+    let out: string;
+    try {
+      out = execFileSync('ps', ['-M', '-o', 'pri', '-p', String(pid)], { encoding: 'utf8' });
+    } catch (err) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        continue;
+      }
+      throw new Error(`could not read thread priorities of renderer ${pid}: ${String(err)}`);
+    }
+    const threads = out
+      .split('\n')
+      .slice(1)
+      .filter((line) => line.trim() !== '')
+      .map((line) => Number.parseInt(line.trim().split(/\s+/).at(-1) ?? '', 10));
+    if (threads.length === 0 || threads.some((priority) => !Number.isFinite(priority))) {
+      throw new Error(`unparseable thread priorities for renderer ${pid}:\n${out}`);
+    }
+    priorities.set(pid, threads);
+  }
+  if (priorities.size === 0) throw new Error(`every renderer of ${profileDir} exited mid-scan`);
+  return priorities;
+}
+
+function backgroundBandRenderers(profileDir: string): number[] {
+  return [...rendererThreadPriorities(profileDir)]
+    .filter(([, threads]) => threads.every((priority) => priority <= 4))
+    .map(([pid]) => pid);
+}
+
 describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   let server: http.Server;
   let serverPort: number;
@@ -4198,6 +4237,8 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       '--disable-crash-reporter',
 
       '--disable-renderer-backgrounding',
+
+      '--disable-features=PMProcessPriorityPolicy',
       `--user-data-dir=${tmpDir}`,
       'about:blank',
     ]);
@@ -4298,6 +4339,16 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     await waitForFixtureLoaded(targetId);
     return targetId;
   }
+
+  it.skipIf(process.platform !== 'darwin')(
+    'runs the renderer of a background tab outside the background priority band',
+    async () => {
+      await openMainPage();
+      expect(backgroundBandRenderers(tmpDir)).toEqual([]);
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(backgroundBandRenderers(tmpDir)).toEqual([]);
+    }
+  );
 
   it('keeps refs on their elements when the page inserts one, and drops them on reload', async () => {
     const url = `http://127.0.0.1:${serverPort}/form.html`;

@@ -190,8 +190,19 @@ describe('chrome-launch', () => {
     it('disables Local Network Access checks in default (headed standalone) mode', () => {
       const args = buildChromeLaunchArgs(baseOpts);
       expect(args).toContain(
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard'
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard,PMProcessPriorityPolicy'
       );
+    });
+
+    it('keeps background-tab renderers off the background priority band', () => {
+      for (const hosted of [false, true]) {
+        const features = buildChromeLaunchArgs({ ...baseOpts, hosted })
+          .find((a) => a.startsWith('--disable-features='))
+          ?.slice('--disable-features='.length)
+          .split(',');
+        expect(features).toContain('PMProcessPriorityPolicy');
+      }
+      expect(buildChromeLaunchArgs(baseOpts)).toContain('--disable-renderer-backgrounding');
     });
 
     it('does not duplicate the Local Network Access flag in hosted mode', () => {

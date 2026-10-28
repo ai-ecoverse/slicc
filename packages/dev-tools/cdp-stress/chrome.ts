@@ -36,6 +36,8 @@ export async function launchChrome(): Promise<ChromeHandle> {
       '--disable-crash-reporter',
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
+
+      '--disable-features=PMProcessPriorityPolicy',
       'about:blank',
     ],
     { stdio: ['ignore', 'ignore', 'pipe'] }

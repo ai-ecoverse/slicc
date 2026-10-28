@@ -206,6 +206,7 @@ const CHROME_DISABLE_FEATURES = [
   'CPUMeasurementInFreezingPolicy',
   'MemoryMeasurementInFreezingPolicy',
   'AllowDevtoolsConnectedDiscard',
+  'PMProcessPriorityPolicy',
 ] as const;
 
 const HOSTED_DISABLE_FEATURES = [...CHROME_DISABLE_FEATURES, 'WebRtcHideLocalIpsWithMdns'] as const;
