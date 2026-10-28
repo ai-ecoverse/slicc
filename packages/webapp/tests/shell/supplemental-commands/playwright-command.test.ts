@@ -227,6 +227,17 @@ function mockTabHandle(browser: MockBrowser, targetId: string): unknown {
     send: (method: string, params?: unknown) =>
       params === undefined ? call('sendCDP')(method) : call('sendCDP')(method, params),
     bringToFront: () => browser.getTransport().send('Page.bringToFront', {}, 'session-1'),
+    // `TabHandle.mouseWheel` on a visible tab: the wheel goes down the transport.
+    mouseWheel: async (x: number, y: number, deltaX: number, deltaY: number) => {
+      await browser
+        .getTransport()
+        .send(
+          'Input.dispatchMouseEvent',
+          { type: 'mouseWheel', x, y, deltaX, deltaY, modifiers: 0 },
+          'session-1'
+        );
+      return 'wheel';
+    },
     setViewportOverride: (width: number, height: number, options?: unknown) =>
       call('setViewportOverride')(targetId, width, height, options),
     navigate: (...a: unknown[]) => call('navigate')(...a),
@@ -4033,6 +4044,7 @@ import type {
   CDPEventListener,
   ConnectionState,
 } from '../../../src/cdp/types.js';
+import { inputTab } from '../../../src/computers/adapters/tab.js';
 
 // -- Thin Node.js CDPTransport using the `ws` package -----------------------
 
@@ -4302,6 +4314,42 @@ const INSERTING_FORM_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+/**
+ * A page taller than any viewport that logs the pointer events it receives,
+ * for the background-tab input tests.
+ */
+const POINTER_HTML = `<!DOCTYPE html>
+<html>
+<head><title>Pointer</title></head>
+<body style="margin:0">
+  <div id="target" style="height:200px">hover target</div>
+  <div style="height:4000px">tall</div>
+  <script>
+    window.__pointer = [];
+    document.addEventListener('mousemove', function () { window.__pointer.push('mousemove'); });
+    document.getElementById('target').addEventListener('mouseover', function () {
+      window.__pointer.push('mouseover');
+    });
+    window.addEventListener('wheel', function () { window.__pointer.push('wheel'); });
+  </script>
+</body>
+</html>`;
+
+/** Reject when `work` has not settled within `ms`, naming what never answered. */
+async function withDeadline<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not answer within ${ms} ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // -- Conditional integration tests -------------------------------------------
 
 const chromePath = findChromeExecutable();
@@ -4398,6 +4446,9 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       } else if (req.url === '/form.html') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(INSERTING_FORM_HTML);
+      } else if (req.url === '/pointer.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(POINTER_HTML);
       } else {
         res.writeHead(404);
         res.end('Not found');
@@ -4571,6 +4622,88 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       expect(backgroundBandRenderers(tmpDir)).toEqual([]);
     }
   );
+
+  /** Open the pointer fixture in a background tab and wait for its listeners. */
+  async function openPointerPage(): Promise<string> {
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/pointer.html`);
+    const deadline = Date.now() + FIXTURE_LOAD_TIMEOUT_MS;
+    await browser.withTab(targetId, async (page) => {
+      while (Date.now() < deadline) {
+        try {
+          if ((await page.evaluate('Array.isArray(window.__pointer)')) === true) return;
+        } catch {
+          /* about:blank teardown */
+        }
+        await new Promise((r) => setTimeout(r, FIXTURE_LOAD_POLL_MS));
+      }
+      throw new Error('pointer page did not finish loading');
+    });
+    return targetId;
+  }
+
+  async function pointerState(targetId: string): Promise<{
+    events: string[];
+    scrollY: number;
+    visibility: string;
+  }> {
+    const raw = await browser.withTab(targetId, (page) =>
+      page.evaluate(
+        'JSON.stringify({ events: window.__pointer, scrollY: Math.round(window.scrollY), visibility: document.visibilityState })'
+      )
+    );
+    return JSON.parse(String(raw));
+  }
+
+  // A background tab draws no frames, and Chrome answers a mouse move only on
+  // the next frame (~5 s each) and a wheel never, so `hover`/`mousemove` crawled
+  // and a wheel waited out the 30 s CDP timeout. Focus emulation held around
+  // the input answers both in milliseconds and leaves the tab in the background.
+  it('answers playwright-cli mousemove and mousewheel on a background tab in well under a second', async () => {
+    const targetId = await openPointerPage();
+    expect((await pointerState(targetId)).visibility).toBe('hidden');
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+    const timed = async (argv: string[]) => {
+      const started = performance.now();
+      const result = await withDeadline(
+        cmd.execute([...argv, `--tab=${targetId}`], mockCtx),
+        5_000,
+        argv.join(' ')
+      );
+      return { result, ms: performance.now() - started };
+    };
+
+    const move = await timed(['mousemove', '50', '50']);
+    expect(move.result.exitCode).toBe(0);
+    expect(move.ms).toBeLessThan(1_000);
+    const wheel = await timed(['mousewheel', '0', '300']);
+    // A real wheel, not the page-scroll fallback (which would add a note).
+    expect(wheel.result).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(wheel.ms).toBeLessThan(1_000);
+
+    const after = await pointerState(targetId);
+    expect(after.events).toEqual(expect.arrayContaining(['mousemove', 'mouseover', 'wheel']));
+    expect(after.scrollY).toBe(300);
+    expect(after.visibility).toBe('hidden');
+  });
+
+  it('answers a computer-use scroll on a background tab in well under a second', async () => {
+    const targetId = await openPointerPage();
+    const started = performance.now();
+    await withDeadline(
+      inputTab(browser, targetId, [{ type: 'scroll', x: 50, y: 50, dx: 0, dy: 200 }]),
+      5_000,
+      'computer-use scroll'
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
+    const after = await pointerState(targetId);
+    expect(after.events).toContain('wheel');
+    expect(after.scrollY).toBe(200);
+    expect(after.visibility).toBe('hidden');
+  });
 
   // The real page, the real injected script, and real ref resolution: refs
   // read before the page inserted an element still hit their elements, and a

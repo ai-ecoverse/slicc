@@ -14,6 +14,7 @@ import type { CdpConnectFailureClassifier } from './cdp-reconnect-policy.js';
 import { throwIfAborted } from './command-abort.js';
 import { FrameContextRegistry } from './frame-context-registry.js';
 import { HarRecorder } from './har-recorder.js';
+import { HiddenPageInput, hiddenPagePointerKind } from './hidden-page-input.js';
 import { MAX_TAB_SESSIONS, SessionCache, type TabSession } from './session-cache.js';
 import type {
   CdpPayload,
@@ -111,15 +112,25 @@ export type SessionChangeCallback = (
  * sends would replay the first one. One wrapper per real transport, so
  * identity is stable for `on`/`off` bookkeeping and for callers that compare
  * transports.
+ *
+ * It is also the one seam every command's pointer input crosses, raw
+ * `tab.transport.send` included, so it is where a move or wheel on a hidden
+ * page gets focus emulation (see `hidden-page-input.ts`).
  */
 class AccountedTransport implements CDPTransport {
   onStateChange?: CDPTransport['onStateChange'];
+  private readonly hiddenPageInput: HiddenPageInput;
 
   constructor(
     private readonly inner: CDPTransport,
     private readonly onApplied: (sessionId: string) => void
   ) {
     if (inner.onStateChange) this.onStateChange = (listener) => inner.onStateChange!(listener);
+    this.hiddenPageInput = new HiddenPageInput((method, params, sessionId, timeout) =>
+      timeout === undefined
+        ? inner.send(method, params, sessionId)
+        : inner.send(method, params, sessionId, timeout)
+    );
   }
 
   get state(): ConnectionState {
@@ -148,15 +159,32 @@ class AccountedTransport implements CDPTransport {
     sessionId?: string,
     timeout?: number
   ): Promise<CdpPayload> {
+    const pointer = sessionId ? hiddenPagePointerKind(method, params) : null;
+    const result =
+      sessionId && pointer
+        ? await this.hiddenPageInput.run(sessionId, pointer, () =>
+            this.forward(method, params, sessionId, timeout)
+          )
+        : await this.forward(method, params, sessionId, timeout);
+    if (sessionId && method === 'Emulation.setFocusEmulationEnabled') {
+      this.hiddenPageInput.noteExplicit(sessionId, params?.['enabled'] === true);
+    }
+    if (sessionId) this.onApplied(sessionId);
+    return result;
+  }
+
+  private forward(
+    method: string,
+    params: CdpPayload | undefined,
+    sessionId: string | undefined,
+    timeout: number | undefined
+  ): Promise<CdpPayload> {
     // Arity is preserved, not normalised: a transport that inspects
     // `arguments.length` (and every test that asserts the exact call) must see
     // the same call the caller made, not one padded with `undefined`.
-    const result =
-      timeout === undefined
-        ? await this.inner.send(method, params, sessionId)
-        : await this.inner.send(method, params, sessionId, timeout);
-    if (sessionId) this.onApplied(sessionId);
-    return result;
+    return timeout === undefined
+      ? this.inner.send(method, params, sessionId)
+      : this.inner.send(method, params, sessionId, timeout);
   }
 
   on(event: string, listener: CDPEventListener): void {

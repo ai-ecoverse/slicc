@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { BrowserAPI } from '../../../../../src/cdp/browser-api.js';
+import type { CDPTransport } from '../../../../../src/cdp/transport.js';
 import type { VirtualFS } from '../../../../../src/fs/index.js';
 import {
   dropHandler,
@@ -7,12 +9,12 @@ import {
   mouseupHandler,
   mousewheelHandler,
 } from '../../../../../src/shell/supplemental-commands/playwright/handlers/mouse.js';
+import type { BrowserAPI as PlaywrightBrowser } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
 import {
   allBytesFixture,
   countReplacementSeqs,
   createHandlerCtx,
   createMockBrowser,
-  createMockTransport,
   createPlaywrightState,
   makeTabSnapshot,
   snapshotRefs,
@@ -62,6 +64,50 @@ function stateWithRefs(...printed: string[]) {
   return state;
 }
 
+/**
+ * A real BrowserAPI over a connection to one background (hidden) tab. With
+ * `emulation: false` the connection lacks `Emulation.setFocusEmulationEnabled`;
+ * like Chrome it then never answers a wheel (modelled as a rejection).
+ */
+function backgroundTab(opts: { emulation: boolean; scroll?: Record<string, unknown> }) {
+  const calls: TransportCall[] = [];
+  let emulated = false;
+  const send = vi.fn(
+    async (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
+      if (sessionId) calls.push({ method, params });
+      if (method === 'Target.attachToTarget') return { sessionId: 'sess-1' };
+      if (method === 'Emulation.setFocusEmulationEnabled') {
+        if (!opts.emulation) throw new Error("'Emulation.setFocusEmulationEnabled' wasn't found");
+        emulated = params['enabled'] === true;
+        return {};
+      }
+      if (method === 'Runtime.evaluate') {
+        if (params['expression'] === 'document.visibilityState') {
+          return { result: { value: emulated ? 'visible' : 'hidden' } };
+        }
+        if (String(params['expression']).includes('scrollBy')) {
+          return opts.scroll ?? { result: { value: true } };
+        }
+        return { result: { value: true } };
+      }
+      if (method === 'Input.dispatchMouseEvent' && !emulated) {
+        throw new Error('CDP command timed out after 30000ms: Input.dispatchMouseEvent');
+      }
+      return {};
+    }
+  );
+  const client = {
+    state: 'connected',
+    connect: vi.fn(async () => undefined),
+    disconnect: vi.fn(),
+    send,
+    on: vi.fn(),
+    off: vi.fn(),
+    once: vi.fn(async () => ({})),
+  } as unknown as CDPTransport;
+  return { browser: new BrowserAPI(client) as unknown as PlaywrightBrowser, calls };
+}
+
 describe('mousemove handler', () => {
   it('requires two coordinates', async () => {
     const r = await mousemoveHandler(createHandlerCtx({ positional: ['1'], flags: { tab: TAB } }));
@@ -90,6 +136,22 @@ describe('mousemove handler', () => {
       'session-1'
     );
     expect(state.lastMousePosition.get(TAB)).toEqual({ x: 10, y: 20 });
+  });
+
+  it('moves the mouse on a background tab under focus emulation, then drops it', async () => {
+    const tab = backgroundTab({ emulation: true });
+    const r = await mousemoveHandler(
+      createHandlerCtx({ browser: tab.browser, positional: ['10', '20'], flags: { tab: TAB } })
+    );
+    expect(r.exitCode).toBe(0);
+    const steps = tab.calls
+      .filter((c) => c.method !== 'Page.enable' && c.method !== 'Runtime.evaluate')
+      .map((c) => `${c.method}:${String(c.params['type'] ?? c.params['enabled'])}`);
+    expect(steps).toEqual([
+      'Emulation.setFocusEmulationEnabled:true',
+      'Input.dispatchMouseEvent:mouseMoved',
+      'Emulation.setFocusEmulationEnabled:false',
+    ]);
   });
 });
 
@@ -160,28 +222,47 @@ describe('mousewheel handler', () => {
     );
   });
 
-  it('scrolls a background tab from the page instead of dispatching a wheel event', async () => {
-    // A hidden tab draws no frames, so Chrome never acknowledges a wheel event and the
-    // dispatch would hang until the 30 s CDP timeout.
-    const calls: TransportCall[] = [];
-    const transport = createMockTransport((method, params) => {
-      calls.push({ method, params: params ?? {} });
-      if (method === 'Runtime.evaluate' && params?.['expression'] === 'document.visibilityState') {
-        return { result: { value: 'hidden' } };
-      }
-      return { result: { value: true } };
-    });
-    const { browser } = createMockBrowser({ transport });
+  it('turns the real wheel on a background tab under focus emulation', async () => {
+    const tab = backgroundTab({ emulation: true });
     const state = createPlaywrightState();
     state.lastMousePosition.set(TAB, { x: 40, y: 50 });
     const r = await mousewheelHandler(
-      createHandlerCtx({ browser, state, positional: ['0', '600'], flags: { tab: TAB } })
+      createHandlerCtx({
+        browser: tab.browser,
+        state,
+        positional: ['0', '600'],
+        flags: { tab: TAB },
+      })
+    );
+    expect(r).toEqual({ stdout: 'Mouse wheel scrolled (dx=0, dy=600)\n', stderr: '', exitCode: 0 });
+    expect(tab.calls.filter((c) => c.method === 'Input.dispatchMouseEvent')).toEqual([
+      {
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mouseWheel', x: 40, y: 50, deltaX: 0, deltaY: 600, modifiers: 0 },
+      },
+    ]);
+    expect(tab.calls.some((c) => String(c.params['expression']).includes('scrollBy'))).toBe(false);
+  });
+
+  it('scrolls a background tab from the page when its connection cannot emulate focus', async () => {
+    // Chrome never answers a wheel on a hidden tab that is not emulating focus:
+    // the dispatch would wait out the 30 s CDP timeout.
+    const tab = backgroundTab({ emulation: false });
+    const state = createPlaywrightState();
+    state.lastMousePosition.set(TAB, { x: 40, y: 50 });
+    const r = await mousewheelHandler(
+      createHandlerCtx({
+        browser: tab.browser,
+        state,
+        positional: ['0', '600'],
+        flags: { tab: TAB },
+      })
     );
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toBe('Mouse wheel scrolled (dx=0, dy=600)\n');
     expect(r.stderr).toContain('background');
-    expect(calls.some((c) => c.method === 'Input.dispatchMouseEvent')).toBe(false);
-    const scroll = calls.find(
+    expect(tab.calls.some((c) => c.method === 'Input.dispatchMouseEvent')).toBe(false);
+    const scroll = tab.calls.find(
       (c) => c.method === 'Runtime.evaluate' && String(c.params['expression']).includes('scrollBy')
     );
     expect(String(scroll?.params['expression'])).toContain('elementFromPoint(40, 50)');
@@ -189,22 +270,18 @@ describe('mousewheel handler', () => {
   });
 
   it('fails instead of reporting a scroll when the page-side scroll throws', async () => {
-    const transport = createMockTransport((method, params) => {
-      if (method !== 'Runtime.evaluate') return {};
-      if (params?.['expression'] === 'document.visibilityState') {
-        return { result: { value: 'hidden' } };
-      }
-      return {
+    const tab = backgroundTab({
+      emulation: false,
+      scroll: {
         exceptionDetails: {
           text: 'Uncaught',
           exception: { description: 'EvalError: blocked by CSP' },
         },
-      };
+      },
     });
-    const { browser } = createMockBrowser({ transport });
     await expect(
       mousewheelHandler(
-        createHandlerCtx({ browser, positional: ['0', '600'], flags: { tab: TAB } })
+        createHandlerCtx({ browser: tab.browser, positional: ['0', '600'], flags: { tab: TAB } })
       )
     ).rejects.toThrow('blocked by CSP');
   });

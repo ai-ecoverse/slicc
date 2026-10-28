@@ -265,13 +265,9 @@ export async function dispatchTabEvent(
       return;
     case 'scroll': {
       const p = cssPointer(pointer, event, ratio);
-      await tab.send('Input.dispatchMouseEvent', {
-        type: 'mouseWheel',
-        x: p.x,
-        y: p.y,
-        deltaX: event.dx,
-        deltaY: event.dy,
-      });
+      // On a hidden tab without focus emulation this scrolls from the page
+      // rather than send a wheel Chrome would never answer.
+      await tab.mouseWheel(p.x, p.y, event.dx, event.dy);
       return;
     }
     case 'key':
