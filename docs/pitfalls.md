@@ -1100,7 +1100,10 @@ buffering (`chromeConnectionId: null`) still flushes.
 
 **File**: `packages/webapp/src/cdp/hidden-page-input.ts`, wired into
 `BrowserAPI`'s transport facade (`AccountedTransport`), which every command's
-session-scoped send crosses, raw `tab.transport.send` included.
+session-scoped send crosses, raw `tab.transport.send` included. The gate is
+imported on the first move, wheel or `setFocusEmulationEnabled` send, to stay
+off the worker's boot graph; `hidden-page-scroll.ts` is the eager part
+(`HiddenPageWheelError`, the page-scroll fallback).
 
 **The Problem**
 
