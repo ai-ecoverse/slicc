@@ -14,7 +14,7 @@ import type { CdpConnectFailureClassifier } from './cdp-reconnect-policy.js';
 import { throwIfAborted } from './command-abort.js';
 import { FrameContextRegistry } from './frame-context-registry.js';
 import { HarRecorder } from './har-recorder.js';
-import { HiddenPageInput, hiddenPagePointerKind } from './hidden-page-input.js';
+import { HiddenPageInput } from './hidden-page-input.js';
 import { MAX_TAB_SESSIONS, SessionCache, type TabSession } from './session-cache.js';
 import type {
   CdpPayload,
@@ -115,22 +115,18 @@ export type SessionChangeCallback = (
  *
  * It is also the one seam every command's pointer input crosses, raw
  * `tab.transport.send` included, so it is where a move or wheel on a hidden
- * page gets focus emulation (see `hidden-page-input.ts`).
+ * page gets focus emulation. The {@link HiddenPageInput} is the bridge's, shared
+ * by every facade, because a hold belongs to a tab, not to a transport.
  */
 class AccountedTransport implements CDPTransport {
   onStateChange?: CDPTransport['onStateChange'];
-  private readonly hiddenPageInput: HiddenPageInput;
 
   constructor(
     private readonly inner: CDPTransport,
-    private readonly onApplied: (sessionId: string) => void
+    private readonly onApplied: (sessionId: string) => void,
+    private readonly hiddenPages: HiddenPageInput
   ) {
     if (inner.onStateChange) this.onStateChange = (listener) => inner.onStateChange!(listener);
-    this.hiddenPageInput = new HiddenPageInput((method, params, sessionId, timeout) =>
-      timeout === undefined
-        ? inner.send(method, params, sessionId)
-        : inner.send(method, params, sessionId, timeout)
-    );
   }
 
   get state(): ConnectionState {
@@ -159,16 +155,9 @@ class AccountedTransport implements CDPTransport {
     sessionId?: string,
     timeout?: number
   ): Promise<CdpPayload> {
-    const pointer = sessionId ? hiddenPagePointerKind(method, params) : null;
-    const result =
-      sessionId && pointer
-        ? await this.hiddenPageInput.run(sessionId, pointer, () =>
-            this.forward(method, params, sessionId, timeout)
-          )
-        : await this.forward(method, params, sessionId, timeout);
-    if (sessionId && method === 'Emulation.setFocusEmulationEnabled') {
-      this.hiddenPageInput.noteExplicit(sessionId, params?.['enabled'] === true);
-    }
+    const result = await this.hiddenPages.route(this.inner, method, params, sessionId, () =>
+      this.forward(method, params, sessionId, timeout)
+    );
     if (sessionId) this.onApplied(sessionId);
     return result;
   }
@@ -231,6 +220,14 @@ export class BrowserAPI implements TabHost {
   private readonly locks = new TabLockManager();
   /** Viewport overrides that survive session replacement; re-apply stays here. */
   private readonly viewports = new ViewportOverrideStore();
+  /**
+   * Focus emulation around pointer input on hidden tabs, per target. Every
+   * facade routes through it; `attemptOnTab` pins a hold for its body.
+   */
+  private readonly hiddenPages = new HiddenPageInput({
+    targetOf: (sessionId) => this.sessions.findBySessionId(sessionId)?.[0],
+    isGone: isStaleSessionError,
+  });
   /**
    * Transport dialing, lazy reconnect, backoff, and superseded /
    * bridge-rejected notification. Session clearing / remote restore stay here.
@@ -314,6 +311,7 @@ export class BrowserAPI implements TabHost {
   private readonly handleDetachedFromTarget = (params: CdpPayload): void => {
     const sessionId = params['sessionId'];
     if (typeof sessionId !== 'string') return;
+    this.hiddenPages.forgetSession(sessionId);
     const hit = this.sessions.findBySessionId(sessionId);
     if (hit) this.forgetSession(hit[0], hit[1]);
   };
@@ -358,7 +356,11 @@ export class BrowserAPI implements TabHost {
     if (transport instanceof AccountedTransport) return transport;
     let facade = this._accountedTransports.get(transport);
     if (!facade) {
-      facade = new AccountedTransport(transport, (sessionId) => this.noteApplied(sessionId));
+      facade = new AccountedTransport(
+        transport,
+        (sessionId) => this.noteApplied(sessionId),
+        this.hiddenPages
+      );
       this._accountedTransports.set(transport, facade);
     }
     return facade;
@@ -536,6 +538,9 @@ export class BrowserAPI implements TabHost {
     throwIfAborted(signal, `about to run a command on tab ${targetId}`);
     const sessionId = tab.sessionId;
     const before = this.sessions.appliedCount(sessionId);
+    // One focus-emulation hold per body: a drag's press and release run inside
+    // it, and the tab is hidden again once the body is done, error or not.
+    const unpin = this.hiddenPages.pin(targetId);
     try {
       return await fn(tab);
     } catch (err) {
@@ -550,6 +555,8 @@ export class BrowserAPI implements TabHost {
           'command(s) had already been applied, so the outcome is unknown. The tab has been ' +
           `re-armed: check the page state before repeating this command. (underlying error: ${reason})`
       );
+    } finally {
+      await unpin();
     }
   }
 

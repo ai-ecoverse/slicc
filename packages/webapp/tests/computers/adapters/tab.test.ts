@@ -2,7 +2,6 @@ import { uint8ToBase64 } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserAPI } from '../../../src/cdp/browser-api.js';
 import type { TabPage } from '../../../src/cdp/tab-handle.js';
-import type { CDPTransport } from '../../../src/cdp/transport.js';
 import type { PageInfo } from '../../../src/cdp/types.js';
 import {
   BridgedTabComputerBackend,
@@ -25,6 +24,7 @@ import {
   resetComputerRegistryForTests,
 } from '../../../src/computers/registry.js';
 import { mapPoint, scaleFromEncoded, toLastShot } from '../../../src/computers/scale.js';
+import { fakeHiddenTab } from '../../helpers/fake-hidden-tab.js';
 
 const JPEG_B64 = uint8ToBase64(MINIMAL_JPEG);
 
@@ -358,73 +358,44 @@ describe('page-side screenshotTab / inputTab', () => {
   });
 });
 
-/**
- * A real {@link BrowserAPI} over a connection to one hidden tab at DPR 2.
- * Like Chrome, the fake never answers a wheel on a hidden tab that is not
- * emulating focus (here: it rejects, so a regression fails fast instead of
- * waiting out the 30 s CDP timeout).
- */
+/** A real {@link BrowserAPI} over a connection to one hidden tab at DPR 2. */
 function hiddenTabBrowser(opts: { emulation: boolean }) {
-  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-  let emulated = false;
-  const send = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
-    calls.push({ method, params });
-    if (method === 'Target.getTargets') {
-      return {
-        targetInfos: [{ targetId: 'T1', type: 'page', title: 'Example', url: EXAMPLE.url }],
-      };
-    }
-    if (method === 'Target.attachToTarget') return { sessionId: 'sess-1' };
-    if (method === 'Emulation.setFocusEmulationEnabled') {
-      if (!opts.emulation) throw new Error("'Emulation.setFocusEmulationEnabled' wasn't found");
-      emulated = params['enabled'] === true;
-      return {};
-    }
-    if (method === 'Runtime.evaluate') {
-      if (params['expression'] === 'window.devicePixelRatio') return { result: { value: 2 } };
-      if (params['expression'] === 'document.visibilityState') {
-        return { result: { value: emulated ? 'visible' : 'hidden' } };
-      }
-      return { result: { value: true } };
-    }
-    if (method === 'Input.dispatchMouseEvent' && params['type'] === 'mouseWheel' && !emulated) {
-      throw new Error('CDP command timed out after 30000ms: Input.dispatchMouseEvent');
-    }
-    return {};
+  const tab = fakeHiddenTab({
+    emulation: opts.emulation,
+    dpr: 2,
+    targets: [{ targetId: 'T1', url: EXAMPLE.url, title: 'Example' }],
   });
-  const client = {
-    state: 'connected',
-    connect: vi.fn(async () => undefined),
-    disconnect: vi.fn(),
-    send,
-    on: vi.fn(),
-    off: vi.fn(),
-    once: vi.fn(async () => ({})),
-  } as unknown as CDPTransport;
-  return { browser: new BrowserAPI(client), calls };
+  return { browser: new BrowserAPI(tab.client), tab };
 }
 
-describe('inputTab scroll on a hidden tab', () => {
-  it('turns the real wheel under focus emulation', async () => {
-    const { browser, calls } = hiddenTabBrowser({ emulation: true });
-    await inputTab(browser, 'T1', [{ type: 'scroll', x: 80, y: 100, dx: 0, dy: 300 }]);
-    const sequence = calls
-      .filter((c) => c.method === 'Input.dispatchMouseEvent' || c.method.startsWith('Emulation'))
-      .map((c) => `${c.method}:${String(c.params['type'] ?? c.params['enabled'])}`);
-    expect(sequence).toEqual([
-      'Emulation.setFocusEmulationEnabled:true',
-      'Input.dispatchMouseEvent:mouseWheel',
-      'Emulation.setFocusEmulationEnabled:false',
+describe('inputTab on a hidden tab', () => {
+  it('runs a batch of moves and a scroll under one focus-emulation hold', async () => {
+    const { browser, tab } = hiddenTabBrowser({ emulation: true });
+    await inputTab(browser, 'T1', [
+      { type: 'mousemove', x: 20, y: 20 },
+      { type: 'mousemove', x: 60, y: 60 },
+      { type: 'scroll', x: 80, y: 100, dx: 0, dy: 300 },
     ]);
-    const wheel = calls.find((c) => c.method === 'Input.dispatchMouseEvent');
+    expect(tab.steps().filter((s) => s !== 'evaluate' && s !== 'Runtime.enable')).toEqual([
+      'probe',
+      'emulate:true',
+      'mouseMoved',
+      'mouseMoved',
+      'mouseWheel',
+      'settle',
+      'emulate:false',
+    ]);
+    const wheel = tab.calls.find((c) => c.step === 'mouseWheel');
     expect(wheel?.params).toMatchObject({ x: 40, y: 50, deltaX: 0, deltaY: 300 });
+    expect(tab.page.scrollY).toBe(300);
+    expect(tab.page.slowMoves).toBe(0);
   });
 
   it('scrolls from the page instead of hanging when the connection cannot emulate focus', async () => {
-    const { browser, calls } = hiddenTabBrowser({ emulation: false });
+    const { browser, tab } = hiddenTabBrowser({ emulation: false });
     await inputTab(browser, 'T1', [{ type: 'scroll', x: 80, y: 100, dx: 0, dy: 300 }]);
-    expect(calls.some((c) => c.method === 'Input.dispatchMouseEvent')).toBe(false);
-    const scroll = calls.find((c) => String(c.params['expression']).includes('scrollBy'));
+    expect(tab.calls.some((c) => c.method === 'Input.dispatchMouseEvent')).toBe(false);
+    const scroll = tab.calls.find((c) => c.step === 'page-scroll');
     // Native pixels mapped to CSS pixels, the same point the wheel would hit.
     expect(String(scroll?.params['expression'])).toContain('elementFromPoint(40, 50)');
     expect(String(scroll?.params['expression'])).toContain('dy = 300');

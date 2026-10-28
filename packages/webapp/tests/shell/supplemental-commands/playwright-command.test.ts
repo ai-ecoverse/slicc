@@ -4331,6 +4331,12 @@ const POINTER_HTML = `<!DOCTYPE html>
       window.__pointer.push('mouseover');
     });
     window.addEventListener('wheel', function () { window.__pointer.push('wheel'); });
+    document.addEventListener('mousedown', function () { window.__pointer.push('mousedown'); });
+    document.addEventListener('mouseup', function () { window.__pointer.push('mouseup'); });
+    window.addEventListener('blur', function () { window.__pointer.push('blur'); });
+    document.addEventListener('visibilitychange', function () {
+      window.__pointer.push(document.visibilityState);
+    });
   </script>
 </body>
 </html>`;
@@ -4655,10 +4661,12 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   }
 
   // A background tab draws no frames, and Chrome answers a mouse move only on
-  // the next frame (~5 s each) and a wheel never, so `hover`/`mousemove` crawled
-  // and a wheel waited out the 30 s CDP timeout. Focus emulation held around
-  // the input answers both in milliseconds and leaves the tab in the background.
-  it('answers playwright-cli mousemove and mousewheel on a background tab in well under a second', async () => {
+  // the next frame (about 5 s each) and a wheel never, so `hover`/`mousemove`
+  // crawled and a wheel waited out the 30 s CDP timeout. With focus emulation
+  // held for the gesture both answer in milliseconds and the tab stays in the
+  // background. The bounds are loose on purpose (a loaded runner is slow) but
+  // sit below what three unanswered moves cost.
+  it('answers playwright-cli mousemove and mousewheel on a background tab', async () => {
     const targetId = await openPointerPage();
     expect((await pointerState(targetId)).visibility).toBe('hidden');
     const cmd = createPlaywrightCommand(
@@ -4666,23 +4674,26 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       browser as BrowserAPI,
       mockFs as VirtualFS
     );
-    const timed = async (argv: string[]) => {
-      const started = performance.now();
-      const result = await withDeadline(
-        cmd.execute([...argv, `--tab=${targetId}`], mockCtx),
-        5_000,
-        argv.join(' ')
-      );
-      return { result, ms: performance.now() - started };
-    };
+    const run = (argv: string[]) => cmd.execute([...argv, `--tab=${targetId}`], mockCtx);
 
-    const move = await timed(['mousemove', '50', '50']);
-    expect(move.result.exitCode).toBe(0);
-    expect(move.ms).toBeLessThan(1_000);
-    const wheel = await timed(['mousewheel', '0', '300']);
+    const moves = withDeadline(
+      (async () => {
+        for (const [x, y] of [
+          [20, 20],
+          [50, 50],
+          [80, 80],
+        ]) {
+          const moved = await run(['mousemove', String(x), String(y)]);
+          expect(moved.exitCode).toBe(0);
+        }
+      })(),
+      10_000,
+      'three mousemove commands'
+    );
+    await moves;
+    const wheel = await withDeadline(run(['mousewheel', '0', '300']), 10_000, 'mousewheel');
     // A real wheel, not the page-scroll fallback (which would add a note).
-    expect(wheel.result).toMatchObject({ exitCode: 0, stderr: '' });
-    expect(wheel.ms).toBeLessThan(1_000);
+    expect(wheel).toMatchObject({ exitCode: 0, stderr: '' });
 
     const after = await pointerState(targetId);
     expect(after.events).toEqual(expect.arrayContaining(['mousemove', 'mouseover', 'wheel']));
@@ -4690,16 +4701,29 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     expect(after.visibility).toBe('hidden');
   });
 
-  it('answers a computer-use scroll on a background tab in well under a second', async () => {
+  it('runs a computer-use drag and scroll on a background tab under one hold', async () => {
     const targetId = await openPointerPage();
-    const started = performance.now();
     await withDeadline(
-      inputTab(browser, targetId, [{ type: 'scroll', x: 50, y: 50, dx: 0, dy: 200 }]),
-      5_000,
-      'computer-use scroll'
+      inputTab(browser, targetId, [
+        { type: 'mousemove', x: 20, y: 20 },
+        { type: 'button', button: 1, down: true, x: 20, y: 20 },
+        { type: 'mousemove', x: 60, y: 60 },
+        { type: 'button', button: 1, down: false, x: 60, y: 60 },
+        { type: 'mousemove', x: 50, y: 50 },
+        { type: 'scroll', x: 50, y: 50, dx: 0, dy: 200 },
+      ]),
+      10_000,
+      'computer-use drag and scroll'
     );
-    expect(performance.now() - started).toBeLessThan(1_000);
     const after = await pointerState(targetId);
+    // The page stayed shown and focused from the press to the release.
+    const gesture = after.events.slice(
+      after.events.indexOf('mousedown'),
+      after.events.indexOf('mouseup') + 1
+    );
+    expect(gesture[0]).toBe('mousedown');
+    expect(gesture).not.toContain('blur');
+    expect(gesture).not.toContain('hidden');
     expect(after.events).toContain('wheel');
     expect(after.scrollY).toBe(200);
     expect(after.visibility).toBe('hidden');
