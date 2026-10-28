@@ -1115,30 +1115,51 @@ under `--headless=new`, so it is no fix.
 
 **The Fix**
 
-Around each move or wheel on a page reporting `document.visibilityState ===
-'hidden'`, the facade turns `Emulation.setFocusEmulationEnabled` on, sends the
-input, waits two animation frames (a wheel is answered before the page
-dispatches it, so dropping emulation at once parks the `wheel` event and its
-scroll), then turns it off, on error and abort too. Moves and wheels answer in
-20-50 ms; the tab is not raised and window focus is not taken. Measured on
-Chrome 156 over the WebSocket CDP and through `chrome.debugger` from an MV3
-extension (no extension change needed). Over the tray, the leader's facade
-drives it; a follower's facade sees the leader's own
-`setFocusEmulationEnabled` and stays out.
+The facade holds `Emulation.setFocusEmulationEnabled` for one **gesture**: from
+the first move or wheel of a `withTab` body on a page that is not visible (or
+cannot be probed) until the body ends, error and abort included. Press and
+release in between run inside the hold, so a drag never sees `blur` or
+`visibilitychange` mid-gesture. Sends outside a body (raw `getTransport()`
+sends) hold until the pointer has been idle for 500 ms. Moves and wheels
+answer in 20-50 ms; the tab is not raised and window focus is not taken.
+Measured on Chrome 156 over the WebSocket CDP and through `chrome.debugger`
+from an MV3 extension (no extension change needed).
+
+- **A wheel waits for its frame.** Chrome answers a wheel before the page
+  dispatches it; dropping emulation then parks the `wheel` event and its scroll
+  until the tab is next shown. The gate waits up to 5 s for two animation
+  frames and otherwise throws `HiddenPageWheelUnsettledError` instead of
+  reporting the wheel as delivered.
+- **Holds are per target, not per session.** Chrome keeps one capture count
+  per CDP session but one focus flag per tab, so every session on a tab shares
+  the hold. A session whose caller sends `setFocusEmulationEnabled` itself (a
+  tray leader's own gate, forwarded by `FollowerRemoteCdp`) is left alone; a
+  caller's enable waits for the gate's restores in flight, and a caller's
+  disable while a hold runs makes the gate show the page again. A page that
+  reads visible only because such a caller shows it gets the gate's own
+  emulation. Another bridge's emulation (page and kernel worker each own a
+  `BrowserAPI`) is not visible here: such a page reads visible and is left
+  alone, so overlapping drivers in two realms can still lose frames.
+- **A failed restore is retried** on the next hold on that tab, before the
+  probe (the leaked emulation would make the page read visible). A detached
+  session owes nothing; Chrome dropped it.
+- **A probe that throws** (destroyed context, the extension shield's unseen
+  context) counts as hidden: a move gets the hold, a wheel takes the fallback.
 
 **Why not for the whole session**: the page notices. `visibilityState` turns
 `visible` (`visibilitychange` fires), `focus`/`blur` fire, `document.hasFocus()`
 turns true, `:focus-visible` matches, a pending autofocus runs, the tab keeps
 rendering, and real fullscreen is blocked (crbug 409579376). On a visible tab
 in an unfocused window it fires `focus`/`blur` too, so visible pages are left
-alone. It is per CDP session: other tabs, the user's visible one included, see
-nothing, and Chrome drops it when the session detaches.
+alone. Other tabs, the user's visible one included, see nothing, and Chrome
+drops it when the session detaches.
 
 **Fallback**: a connection without the method (Cherry's synthetic CDP, an old
-follower) still sends a move (slow) but refuses a wheel with
-`HiddenPageWheelError` instead of hanging. `TabHandle.mouseWheel` then scrolls
-the element under the point from the page (`playwright-cli mousewheel` notes it
-on stderr; computer-use `scroll` does the same). No `wheel` event fires there.
+follower), or a page that cannot be probed, still gets its moves (slow) but a
+wheel is refused with `HiddenPageWheelError` instead of hanging.
+`TabHandle.mouseWheel` then scrolls the element under the point from the page
+(`playwright-cli mousewheel` notes it on stderr; computer-use `scroll` does the
+same). No `wheel` event fires there.
 
 ## Tray bootstrap during a worker deploy
 
