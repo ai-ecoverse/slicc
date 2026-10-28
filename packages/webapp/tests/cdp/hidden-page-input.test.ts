@@ -281,6 +281,49 @@ describe('pointer input on a hidden tab', () => {
     expect(tab.shown()).toBe(false);
   });
 
+  it('settles a wheel on a page that draws only because a restore did not stick', async () => {
+    const tab = fakeHiddenTab();
+    tab.failNext('emulate:false', 'CDP command timed out: Emulation.setFocusEmulationEnabled');
+    const api = new BrowserAPI(tab.client);
+    await api.withTab('t1', (page) => page.send('Input.dispatchMouseEvent', move(1, 1)));
+    expect(tab.shown()).toBe(true);
+    // The retry before the next probe fails too, so the page still reads visible.
+    tab.failNext('emulate:false', 'CDP command timed out: Emulation.setFocusEmulationEnabled');
+    const applied = await api.withTab('t1', (page) => page.mouseWheel(10, 20, 0, 300));
+    expect(applied).toBe('wheel');
+    expect(tab.steps().slice(4)).toEqual([
+      'emulate:false',
+      'probe',
+      'emulate:true',
+      'mouseWheel',
+      'settle',
+      'emulate:false',
+    ]);
+    // The wheel's frame was drawn before emulation went.
+    expect(tab.page.scrollY).toBe(300);
+    expect(tab.shown()).toBe(false);
+  });
+
+  it('still settles that wheel when the new enable fails too', async () => {
+    const tab = fakeHiddenTab();
+    const stuck = 'CDP command timed out: Emulation.setFocusEmulationEnabled';
+    tab.failNext('emulate:false', stuck);
+    const api = new BrowserAPI(tab.client);
+    await api.withTab('t1', (page) => page.send('Input.dispatchMouseEvent', move(1, 1)));
+    tab.failNext('emulate:false', stuck);
+    tab.failNext('emulate:true', stuck);
+    await api.withTab('t1', (page) => page.mouseWheel(10, 20, 0, 300));
+    expect(tab.steps().slice(4)).toEqual([
+      'emulate:false',
+      'probe',
+      'emulate:true',
+      'mouseWheel',
+      'settle',
+      'emulate:false',
+    ]);
+    expect(tab.page.scrollY).toBe(300);
+  });
+
   it('does not retry a restore whose session is gone', async () => {
     const tab = fakeHiddenTab();
     tab.failNext('emulate:false', 'Session with given id not found');

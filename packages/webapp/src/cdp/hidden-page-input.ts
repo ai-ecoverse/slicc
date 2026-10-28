@@ -94,7 +94,10 @@ const DEFAULT_LINGER_MS = 500;
 
 /** What a hold found when it opened. */
 interface HoldState {
-  /** The gate turned focus emulation on for this hold. */
+  /**
+   * The page draws because of the gate's emulation: turned on for this hold,
+   * or left on by a restore that failed. A wheel then waits for its frame.
+   */
   emulated: boolean;
   /** A wheel can be sent: the page draws, or was probed visible. */
   wheel: boolean;
@@ -259,7 +262,11 @@ export class HiddenPageInput {
     }
     // A caller on another session may be what shows the page, and may stop.
     const shownByOthers = [...t.explicit.keys()].some((other) => other !== sessionId);
-    if (visible === true && !shownByOthers) return { emulated: false, wheel: true };
+    // An enable of the gate's own that the retry in `open` could not turn off:
+    // the page reads visible only because of it, and its restore at close must
+    // still wait for a wheel's frame.
+    const leaked = t.owed.size > 0;
+    if (visible === true && !shownByOthers && !leaked) return { emulated: false, wheel: true };
     try {
       await send('Emulation.setFocusEmulationEnabled', { enabled: true }, sessionId);
       t.owed.set(sessionId, send);
@@ -269,7 +276,7 @@ export class HiddenPageInput {
         sessionId,
         error: errorText(err),
       });
-      return { emulated: false, wheel: visible === true };
+      return { emulated: leaked, wheel: visible === true };
     }
   }
 
