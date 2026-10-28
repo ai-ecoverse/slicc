@@ -1,5 +1,6 @@
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BrowserAPI } from '../../../src/cdp/browser-api.js';
 import type { TabPage } from '../../../src/cdp/tab-handle.js';
 import type { PageInfo } from '../../../src/cdp/types.js';
 import {
@@ -23,6 +24,7 @@ import {
   resetComputerRegistryForTests,
 } from '../../../src/computers/registry.js';
 import { mapPoint, scaleFromEncoded, toLastShot } from '../../../src/computers/scale.js';
+import { fakeHiddenTab } from '../../helpers/fake-hidden-tab.js';
 
 const JPEG_B64 = uint8ToBase64(MINIMAL_JPEG);
 
@@ -74,6 +76,10 @@ function makeTab(dpr = 1) {
     send: vi.fn(async (method: string, params?: unknown) => {
       sent.push({ method, params });
       return {};
+    }),
+    mouseWheel: vi.fn(async (x: number, y: number, deltaX: number, deltaY: number) => {
+      sent.push({ method: 'mouseWheel', params: { x, y, deltaX, deltaY } });
+      return 'wheel' as const;
     }),
     screenshot: vi.fn(async (_opts: { format?: string; maxWidth?: number } = {}) => JPEG_B64),
     evaluate: vi.fn(async () => dpr),
@@ -135,10 +141,7 @@ describe('dispatchTabEvent', () => {
         method: 'Input.dispatchMouseEvent',
         params: { type: 'mouseReleased', x: 8, y: 9, button: 'left', clickCount: 2 },
       },
-      {
-        method: 'Input.dispatchMouseEvent',
-        params: { type: 'mouseWheel', x: 8, y: 9, deltaX: 1, deltaY: 2 },
-      },
+      { method: 'mouseWheel', params: { x: 8, y: 9, deltaX: 1, deltaY: 2 } },
       {
         method: 'Input.dispatchKeyEvent',
         params: {
@@ -352,6 +355,50 @@ describe('page-side screenshotTab / inputTab', () => {
     await expect(inputTab(browser as never, 'APP', [])).rejects.toThrow(/refusing/);
     expect(raw.screenshot).not.toHaveBeenCalled();
     expect(browser.withTab).not.toHaveBeenCalled();
+  });
+});
+
+/** A real {@link BrowserAPI} over a connection to one hidden tab at DPR 2. */
+function hiddenTabBrowser(opts: { emulation: boolean }) {
+  const tab = fakeHiddenTab({
+    emulation: opts.emulation,
+    dpr: 2,
+    targets: [{ targetId: 'T1', url: EXAMPLE.url, title: 'Example' }],
+  });
+  return { browser: new BrowserAPI(tab.client), tab };
+}
+
+describe('inputTab on a hidden tab', () => {
+  it('runs a batch of moves and a scroll under one focus-emulation hold', async () => {
+    const { browser, tab } = hiddenTabBrowser({ emulation: true });
+    await inputTab(browser, 'T1', [
+      { type: 'mousemove', x: 20, y: 20 },
+      { type: 'mousemove', x: 60, y: 60 },
+      { type: 'scroll', x: 80, y: 100, dx: 0, dy: 300 },
+    ]);
+    expect(tab.steps().filter((s) => s !== 'evaluate' && s !== 'Runtime.enable')).toEqual([
+      'probe',
+      'emulate:true',
+      'mouseMoved',
+      'mouseMoved',
+      'mouseWheel',
+      'settle',
+      'emulate:false',
+    ]);
+    const wheel = tab.calls.find((c) => c.step === 'mouseWheel');
+    expect(wheel?.params).toMatchObject({ x: 40, y: 50, deltaX: 0, deltaY: 300 });
+    expect(tab.page.scrollY).toBe(300);
+    expect(tab.page.slowMoves).toBe(0);
+  });
+
+  it('scrolls from the page instead of hanging when the connection cannot emulate focus', async () => {
+    const { browser, tab } = hiddenTabBrowser({ emulation: false });
+    await inputTab(browser, 'T1', [{ type: 'scroll', x: 80, y: 100, dx: 0, dy: 300 }]);
+    expect(tab.calls.some((c) => c.method === 'Input.dispatchMouseEvent')).toBe(false);
+    const scroll = tab.calls.find((c) => c.step === 'page-scroll');
+    // Native pixels mapped to CSS pixels, the same point the wheel would hit.
+    expect(String(scroll?.params['expression'])).toContain('elementFromPoint(40, 50)');
+    expect(String(scroll?.params['expression'])).toContain('dy = 300');
   });
 });
 

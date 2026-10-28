@@ -14,6 +14,8 @@ import type { CdpConnectFailureClassifier } from './cdp-reconnect-policy.js';
 import { throwIfAborted } from './command-abort.js';
 import { FrameContextRegistry } from './frame-context-registry.js';
 import { HarRecorder } from './har-recorder.js';
+import type { HiddenPageInput, HiddenPageTransport } from './hidden-page-input.js';
+import { hiddenPagePointerKind } from './hidden-page-scroll.js';
 import { MAX_TAB_SESSIONS, SessionCache, type TabSession } from './session-cache.js';
 import type {
   CdpPayload,
@@ -111,13 +113,27 @@ export type SessionChangeCallback = (
  * sends would replay the first one. One wrapper per real transport, so
  * identity is stable for `on`/`off` bookkeeping and for callers that compare
  * transports.
+ *
+ * It is also the one seam every command's pointer input crosses, raw
+ * `tab.transport.send` included, so it is where a move or wheel on a hidden
+ * page gets focus emulation. The routing is the bridge's, shared by every
+ * facade, because a hold belongs to a tab, not to a transport.
  */
+type SendRoute = (
+  inner: HiddenPageTransport,
+  method: string,
+  params: CdpPayload | undefined,
+  sessionId: string | undefined,
+  forward: () => Promise<CdpPayload>
+) => Promise<CdpPayload>;
+
 class AccountedTransport implements CDPTransport {
   onStateChange?: CDPTransport['onStateChange'];
 
   constructor(
     private readonly inner: CDPTransport,
-    private readonly onApplied: (sessionId: string) => void
+    private readonly onApplied: (sessionId: string) => void,
+    private readonly route: SendRoute
   ) {
     if (inner.onStateChange) this.onStateChange = (listener) => inner.onStateChange!(listener);
   }
@@ -148,15 +164,25 @@ class AccountedTransport implements CDPTransport {
     sessionId?: string,
     timeout?: number
   ): Promise<CdpPayload> {
+    const result = await this.route(this.inner, method, params, sessionId, () =>
+      this.forward(method, params, sessionId, timeout)
+    );
+    if (sessionId) this.onApplied(sessionId);
+    return result;
+  }
+
+  private forward(
+    method: string,
+    params: CdpPayload | undefined,
+    sessionId: string | undefined,
+    timeout: number | undefined
+  ): Promise<CdpPayload> {
     // Arity is preserved, not normalised: a transport that inspects
     // `arguments.length` (and every test that asserts the exact call) must see
     // the same call the caller made, not one padded with `undefined`.
-    const result =
-      timeout === undefined
-        ? await this.inner.send(method, params, sessionId)
-        : await this.inner.send(method, params, sessionId, timeout);
-    if (sessionId) this.onApplied(sessionId);
-    return result;
+    return timeout === undefined
+      ? this.inner.send(method, params, sessionId)
+      : this.inner.send(method, params, sessionId, timeout);
   }
 
   on(event: string, listener: CDPEventListener): void {
@@ -203,6 +229,17 @@ export class BrowserAPI implements TabHost {
   private readonly locks = new TabLockManager();
   /** Viewport overrides that survive session replacement; re-apply stays here. */
   private readonly viewports = new ViewportOverrideStore();
+  /**
+   * Focus emulation around pointer input on hidden tabs, per target
+   * (`hidden-page-input.ts`). Loaded on the first send that needs it, to keep
+   * it off the boot graph; `attemptOnTab` pins a hold for its body.
+   */
+  private hiddenPages: HiddenPageInput | null = null;
+  private hiddenPagesLoad: Promise<HiddenPageInput | null> | null = null;
+  /** `withTab` bodies running per target. */
+  private readonly hiddenPagePins = new Map<string, number>();
+  /** Sessions attached through a facade (a tray leader's), by target. */
+  private readonly facadeSessions = new Map<string, string>();
   /**
    * Transport dialing, lazy reconnect, backoff, and superseded /
    * bridge-rejected notification. Session clearing / remote restore stay here.
@@ -286,6 +323,8 @@ export class BrowserAPI implements TabHost {
   private readonly handleDetachedFromTarget = (params: CdpPayload): void => {
     const sessionId = params['sessionId'];
     if (typeof sessionId !== 'string') return;
+    this.hiddenPages?.forgetSession(sessionId);
+    this.facadeSessions.delete(sessionId);
     const hit = this.sessions.findBySessionId(sessionId);
     if (hit) this.forgetSession(hit[0], hit[1]);
   };
@@ -330,7 +369,12 @@ export class BrowserAPI implements TabHost {
     if (transport instanceof AccountedTransport) return transport;
     let facade = this._accountedTransports.get(transport);
     if (!facade) {
-      facade = new AccountedTransport(transport, (sessionId) => this.noteApplied(sessionId));
+      facade = new AccountedTransport(
+        transport,
+        (sessionId) => this.noteApplied(sessionId),
+        (inner, method, params, sessionId, forward) =>
+          this.routeSend(inner, method, params, sessionId, forward)
+      );
       this._accountedTransports.set(transport, facade);
     }
     return facade;
@@ -508,6 +552,9 @@ export class BrowserAPI implements TabHost {
     throwIfAborted(signal, `about to run a command on tab ${targetId}`);
     const sessionId = tab.sessionId;
     const before = this.sessions.appliedCount(sessionId);
+    // One focus-emulation hold per body: a drag's press and release run inside
+    // it, and the tab is hidden again once the body is done, error or not.
+    this.hiddenPagePins.set(targetId, (this.hiddenPagePins.get(targetId) ?? 0) + 1);
     try {
       return await fn(tab);
     } catch (err) {
@@ -522,7 +569,72 @@ export class BrowserAPI implements TabHost {
           'command(s) had already been applied, so the outcome is unknown. The tab has been ' +
           `re-armed: check the page state before repeating this command. (underlying error: ${reason})`
       );
+    } finally {
+      await this.unpinHiddenPage(targetId);
     }
+  }
+
+  private async unpinHiddenPage(targetId: string): Promise<void> {
+    const pins = (this.hiddenPagePins.get(targetId) ?? 1) - 1;
+    if (pins > 0) {
+      this.hiddenPagePins.set(targetId, pins);
+      return;
+    }
+    this.hiddenPagePins.delete(targetId);
+    await this.hiddenPages?.unpinned(targetId);
+  }
+
+  /**
+   * Route one facade send. Pointer moves and wheels, and a caller's own
+   * `Emulation.setFocusEmulationEnabled`, go through the hidden-page gate;
+   * a facade attach is remembered so its session maps to its target.
+   */
+  private async routeSend(
+    inner: HiddenPageTransport,
+    method: string,
+    params: CdpPayload | undefined,
+    sessionId: string | undefined,
+    forward: () => Promise<CdpPayload>
+  ): Promise<CdpPayload> {
+    if (method === 'Target.attachToTarget') {
+      const result = await forward();
+      const attached = result['sessionId'];
+      const targetId = params?.['targetId'];
+      if (typeof attached === 'string' && typeof targetId === 'string') {
+        this.facadeSessions.set(attached, targetId);
+      }
+      return result;
+    }
+    const gated =
+      sessionId !== undefined &&
+      (method === 'Emulation.setFocusEmulationEnabled' ||
+        hiddenPagePointerKind(method, params) !== null);
+    if (!gated) return forward();
+    const gate = this.hiddenPages ?? (await this.loadHiddenPages());
+    return gate ? gate.route(inner, method, params, sessionId, forward) : forward();
+  }
+
+  private loadHiddenPages(): Promise<HiddenPageInput | null> {
+    this.hiddenPagesLoad ??= import('./hidden-page-input.js').then(
+      ({ HiddenPageInput }) => {
+        this.hiddenPages = new HiddenPageInput({
+          targetOf: (sessionId) =>
+            this.sessions.findBySessionId(sessionId)?.[0] ?? this.facadeSessions.get(sessionId),
+          pinned: (targetId) => this.hiddenPagePins.has(targetId),
+          isGone: isStaleSessionError,
+        });
+        return this.hiddenPages;
+      },
+      (err: unknown) => {
+        // A chunk that will not load (a stale deploy) costs only the speed-up.
+        log.warn('Hidden-page input gate failed to load; pointer input goes out as is', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        this.hiddenPagesLoad = null;
+        return null;
+      }
+    );
+    return this.hiddenPagesLoad;
   }
 
   /**

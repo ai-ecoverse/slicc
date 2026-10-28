@@ -170,6 +170,8 @@ export interface MockTabPage {
   sessionId: string;
   transport: CDPTransport;
   send: ReturnType<typeof vi.fn>;
+  /** `TabHandle.mouseWheel` on a visible tab: the wheel goes down the transport. */
+  mouseWheel: ReturnType<typeof vi.fn>;
   resolveAriaRef: ReturnType<typeof resolveAriaRefMock>;
 }
 
@@ -196,6 +198,14 @@ export function createMockBrowser(opts?: {
     sessionId,
     transport: transport.transport,
     send: sendCDP,
+    mouseWheel: vi.fn(async (x: number, y: number, deltaX: number, deltaY: number) => {
+      await transport.transport.send(
+        'Input.dispatchMouseEvent',
+        { type: 'mouseWheel', x, y, deltaX, deltaY, modifiers: 0 },
+        sessionId
+      );
+      return 'wheel';
+    }),
     resolveAriaRef: resolveAriaRefMock(opts?.nodeIds),
   };
   const browser = {

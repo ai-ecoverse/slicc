@@ -20,6 +20,7 @@
 
 import { createLogger } from '../base/logger.js';
 import { abortableDelay, abortWaiter, throwIfAborted } from './command-abort.js';
+import { HiddenPageWheelError, pageScrollExpression } from './hidden-page-scroll.js';
 import {
   ariaRefLookupExpression,
   ariaRefRectsExpression,
@@ -770,6 +771,41 @@ export class TabHandle {
   async hoverByBackendNodeId(backendNodeId: number): Promise<void> {
     const { x, y } = await this.resolveNodeCenter(backendNodeId);
     await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  }
+
+  /**
+   * Turn the mouse wheel at viewport coordinates. Resolves `'wheel'` when
+   * Chrome took the wheel event, or `'page-scroll'` when the tab is hidden
+   * and its connection cannot emulate focus: Chrome would never answer the
+   * wheel there, so the page scrolls the element under the point itself
+   * (no `wheel` event fires).
+   */
+  async mouseWheel(
+    x: number,
+    y: number,
+    deltaX: number,
+    deltaY: number,
+    modifiers = 0
+  ): Promise<'wheel' | 'page-scroll'> {
+    try {
+      await this.send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel',
+        x,
+        y,
+        deltaX,
+        deltaY,
+        modifiers,
+      });
+      return 'wheel';
+    } catch (err) {
+      if (!(err instanceof HiddenPageWheelError)) throw err;
+    }
+    const scrolled = await this.send('Runtime.evaluate', {
+      expression: pageScrollExpression(x, y, deltaX, deltaY),
+      returnByValue: true,
+    });
+    readEvaluateResult(scrolled, 'Page scroll failed');
+    return 'page-scroll';
   }
 
   /** Select a value on a `<select>` element by its CDP backend node ID. */
