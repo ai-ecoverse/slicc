@@ -54,6 +54,7 @@ import type {
 } from '../transcript/frozen-archive-format.js';
 import {
   carryCurationLedger,
+  damagedSnapshotsToKeep,
   frozenSessionPath,
   readSessionsIndex,
   SESSIONS_DIR,
@@ -480,6 +481,7 @@ async function writeFrozenArchive(
   // renames it), the full chat from the UI store replacing the
   // accumulated transcript, and the `live` marker gone.
   const live = await findLiveConeSnapshot(opts.vfs, coneFolder);
+  const damagedSnapshots = await liveSnapshotDamage(opts.vfs, live);
   // sessionId is generated BEFORE the filename so it is stable across
   // enrichment renames from `pending-…md` to the canonical slug form.
   const sessionId = live?.sessionId ?? crypto.randomUUID();
@@ -535,6 +537,7 @@ async function writeFrozenArchive(
       ...provenance,
       ...(opts.memory === 'skip' ? { memorySkipped: true as const } : {}),
       ...(live?.curatedThrough ? { curatedThrough: live.curatedThrough } : {}),
+      ...(damagedSnapshots.length ? { damagedSnapshots } : {}),
     };
     if (isFeatureEnabled('memory-v2')) {
       // Lazy: keep Memory-v2 JSONL glue out of the eager freezer import graph.
@@ -762,6 +765,33 @@ async function findLiveConeSnapshot(
       error: err instanceof Error ? err.message : String(err),
     });
     return undefined;
+  }
+}
+
+/**
+ * The damaged bytes the live snapshot a freeze completes carries, or is
+ * (#4154). The freeze replaces that file with the UI store's chat, so they
+ * ride along into the new archive, and from there through the enrichment
+ * rename and any delete. Best-effort like the freeze always was: a read fault
+ * other than ENOENT is logged and the freeze goes on without them.
+ */
+async function liveSnapshotDamage(
+  vfs: WritableVfsClient,
+  live: FrozenSessionIndexEntry | undefined
+): Promise<string[]> {
+  if (!live) return [];
+  const path = `${SESSIONS_DIR}/${live.filename}`;
+  try {
+    const raw = await vfs.readFile(path, { encoding: 'utf-8' });
+    return damagedSnapshotsToKeep(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+  } catch (err) {
+    if (!(err instanceof FsError) || err.code !== 'ENOENT') {
+      log.warn('Live snapshot unreadable; freezing without its damaged bytes', {
+        path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return [];
   }
 }
 

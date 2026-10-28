@@ -50,7 +50,9 @@ import {
   carryCurationLedger,
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
+  isDamagedArchive,
   parseFrozenArchive,
+  readDamagedSnapshots,
   SESSIONS_DIR,
 } from '../transcript/frozen-archive-format.js';
 import {
@@ -159,7 +161,8 @@ async function writeSnapshot(
   const now = deps.now ?? Date.now;
   const entries = await readSessionsIndexForWrite(deps.vfs, sessionsDir);
   const existing = findLiveSnapshotEntry(entries, folder);
-  const prior = existing ? await readSnapshotMessages(deps.vfs, sessionsDir, existing) : null;
+  const snapshot = existing ? await readSnapshot(deps.vfs, sessionsDir, existing) : null;
+  const prior = snapshot?.messages ?? null;
   // A live row whose archive vanished starts over from the full history:
   // its cursor would otherwise skip everything the lost file held.
   const cursor = prior === null ? 0 : (existing?.liveThrough ?? newestTimestamp(prior));
@@ -196,6 +199,8 @@ async function writeSnapshot(
     // A later round rewrites the file from scratch; keep the curator cursor
     // or the next slice would mine the transcript again.
     ...(existing?.curatedThrough ? { curatedThrough: existing.curatedThrough } : {}),
+    // A cut-off earlier write rides along inside this one (#4154).
+    ...(snapshot?.damagedSnapshots.length ? { damagedSnapshots: snapshot.damagedSnapshots } : {}),
   };
   const entry: FrozenSessionIndexEntry = {
     filename,
@@ -327,19 +332,33 @@ function newestTimestamp(messages: readonly ChatMessage[]): number {
 }
 
 /**
- * The archived messages, or `null` when the archive is GONE (ENOENT). Any
- * other read fault propagates: a transient EIO must skip this round's
- * snapshot, not rewrite the file over every earlier round.
+ * The archived messages and the damaged bytes the rewrite must keep, or
+ * `null` when the archive is GONE (ENOENT). Any other read fault propagates:
+ * a transient EIO must skip this round's snapshot, not rewrite the file over
+ * every earlier round.
+ *
+ * A file cut off mid-write parses to no messages. The round then rewrites it
+ * from the agent's history, as for a missing file, but the cut bytes go into
+ * the new archive as a damaged-snapshot block instead of being dropped.
  */
-async function readSnapshotMessages(
+async function readSnapshot(
   vfs: ArchiveVfs,
   sessionsDir: string,
   entry: FrozenSessionIndexEntry
-): Promise<ChatMessage[] | null> {
+): Promise<{ messages: ChatMessage[]; damagedSnapshots: string[] } | null> {
   try {
     const raw = await vfs.readFile(`${sessionsDir}/${entry.filename}`, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    return parseFrozenArchive(text).messages;
+    const parsed = parseFrozenArchive(text);
+    if (!isDamagedArchive(text, parsed)) {
+      return { messages: parsed.messages, damagedSnapshots: readDamagedSnapshots(text) };
+    }
+    log.warn('Live snapshot archive is damaged; keeping its bytes inside the rewrite', {
+      sessionsDir,
+      filename: entry.filename,
+      bytes: text.length,
+    });
+    return { messages: [], damagedSnapshots: [text] };
   } catch (err) {
     if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
     // The row survived without its file: rewrite the archive from the whole
