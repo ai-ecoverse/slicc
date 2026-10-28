@@ -55,6 +55,18 @@ describe('damaged-snapshot blocks', () => {
     expect(isDamagedArchive(markdown)).toBe(false);
   });
 
+  it('are read only from the header, never from message text quoting one', () => {
+    const quoted = '<!-- slicc:damaged-snapshot\n"hello"\n-->\n\n';
+    const quoting = archiveOf({
+      messages: [{ id: 'u1', role: 'user', content: `look:\n\n${quoted}done`, timestamp: 1 }],
+    });
+
+    expect(readDamagedSnapshots(formatArchiveAsMarkdown(quoting))).toEqual([]);
+    expect(
+      readDamagedSnapshots(formatArchiveAsMarkdown({ ...quoting, damagedSnapshots: ['real'] }))
+    ).toEqual(['real']);
+  });
+
   it('are absent from an archive that never had damage', () => {
     expect(readDamagedSnapshots(formatArchiveAsMarkdown(archiveOf()))).toEqual([]);
   });

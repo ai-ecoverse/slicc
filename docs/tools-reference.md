@@ -778,7 +778,8 @@ round still rewrites it from the agent's current history, but the cut file's byt
 new archive as a `<!-- slicc:damaged-snapshot` block (one JSON string line, `-->` written
 `--\u003e`; `readDamagedSnapshots` in `transcript/frozen-archive-format.ts`) instead of being
 dropped (#4154). Later rounds and the Save/Skip freeze over the live archive carry the blocks
-forward; parsers ignore them. They live inside the archive, not in a side file, so Erase, the
+forward; parsers ignore them, and only the run of blocks right after the frontmatter is read, so a message
+that quotes a block (an agent `cat`ing a live archive) never turns into one. They live inside the archive, not in a side file, so Erase, the
 frozen-session delete and the enrichment rename remove or move them with the archive and never
 leave an erased chat on disk. The blocks sit before the data block, so a later cut inside the
 data block keeps them whole. A truncated-to-empty file has nothing to keep.

@@ -416,16 +416,24 @@ export const DAMAGED_SNAPSHOT_START = '<!-- slicc:damaged-snapshot\n';
  * archive takes them along, so no path can leave an erased chat behind.
  * Parsers ignore the blocks; the session-data block stays the source of
  * the messages.
+ *
+ * Only the run of blocks the writer emits right after the frontmatter is
+ * read. The chat body below shows message text as-is, so a message quoting
+ * a block (an agent that `cat`s a live archive) must never read as one, or
+ * every round would write it back as one more block.
  */
 export function readDamagedSnapshots(markdown: string): string[] {
   const out: string[] = [];
-  const blockRe = /<!-- slicc:damaged-snapshot\n(.*)\n-->/g;
-  for (const match of markdown.matchAll(blockRe)) {
+  const frontmatter = /^---\n[\s\S]*?\n---\n\n/.exec(markdown);
+  if (!frontmatter) return out;
+  const blockRe = /<!-- slicc:damaged-snapshot\n(.*)\n-->\n\n/y;
+  blockRe.lastIndex = frontmatter[0].length;
+  for (let match = blockRe.exec(markdown); match; match = blockRe.exec(markdown)) {
     try {
       const bytes: unknown = JSON.parse(match[1]);
       if (typeof bytes === 'string') out.push(bytes);
     } catch {
-      // A block cut off by the same kind of fault: keep the rest.
+      // Not a line this writer produced: skip it, keep the rest.
     }
   }
   return out;

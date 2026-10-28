@@ -152,6 +152,17 @@ describe('a compaction round over a cut-off live snapshot', () => {
     ]);
   });
 
+  it('does not turn a message that quotes a block into a block, round after round', async () => {
+    const quoted = '<!-- slicc:damaged-snapshot\n"hello"\n-->\n\n';
+    let path = '';
+    for (let i = 1; i <= 4; i += 1) {
+      const result = await round([agentText('user', `cat says:\n\n${quoted}`, i)]);
+      path = result.transcriptPath;
+      expect(readDamagedSnapshots(await read(path))).toEqual([]);
+    }
+    expect(parseFrozenArchive(await read(path)).messages).toHaveLength(4);
+  });
+
   it('writes no block when the archive is intact', async () => {
     const first = await round([agentText('user', 'q', 1)]);
     await round([agentText('user', 'q2', 2)]);
