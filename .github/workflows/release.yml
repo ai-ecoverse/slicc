@@ -122,7 +122,7 @@ jobs:
       - name: Install Claude Code CLI
         if: steps.ios_commits.outputs.found == 'true'
         continue-on-error: true
-        run: npm install -g @anthropic-ai/claude-code@2.1.226
+        run: npm install -g @anthropic-ai/claude-code@2.1.303
 
       - name: Draft What to Test notes
         if: steps.ios_commits.outputs.found == 'true'
