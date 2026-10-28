@@ -15,7 +15,9 @@
  * keeps rendering (and blocks real fullscreen) while it is on. So it is held
  * for one gesture at a time: from the first move or wheel of a `withTab` body
  * until that body ends (press and release in between run inside it), or, for
- * sends outside a body, until the pointer has been idle for a moment.
+ * sends outside a body, until the pointer has been idle for a moment. This
+ * module loads on the first such send; `hidden-page-scroll.ts` is the eager
+ * part.
  *
  * Chrome keeps one capture count per CDP session but one focus flag per tab,
  * so holds are keyed by TARGET: every session on a tab shares one hold, and a
@@ -29,6 +31,7 @@
 
 import type { CDPPayload } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
+import { HiddenPageWheelError, hiddenPagePointerKind } from './hidden-page-scroll.js';
 
 const log = createLogger('hidden-page-input');
 
@@ -51,21 +54,6 @@ export interface HiddenPageTransport {
 }
 
 /**
- * A wheel on a hidden page that could not be shown (no focus emulation on this
- * connection, or the page could not be probed): Chrome would not answer it, so
- * it was not sent. {@link pageScrollExpression} is the fallback.
- */
-export class HiddenPageWheelError extends Error {
-  override readonly name = 'HiddenPageWheelError';
-  constructor() {
-    super(
-      'The tab is hidden (or could not be checked) and focus emulation is not available, ' +
-        'so Chrome would not answer a wheel event'
-    );
-  }
-}
-
-/**
  * Chrome took a wheel on a hidden page under focus emulation, but the page
  * drew no frame to apply it. Not a success: the scroll may still land when the
  * tab next draws.
@@ -78,17 +66,6 @@ export class HiddenPageWheelUnsettledError extends Error {
         `(${detail}); the scroll may still land when the tab is next shown`
     );
   }
-}
-
-/** The pointer input that needs a page drawing frames, or `null` for any other send. */
-export function hiddenPagePointerKind(
-  method: string,
-  params: CDPPayload | undefined
-): 'move' | 'wheel' | null {
-  if (method !== 'Input.dispatchMouseEvent') return null;
-  if (params?.['type'] === 'mouseMoved') return 'move';
-  if (params?.['type'] === 'mouseWheel') return 'wheel';
-  return null;
 }
 
 const PROBE_EXPRESSION = 'document.visibilityState';
@@ -135,8 +112,6 @@ interface Hold {
 }
 
 interface TargetState {
-  /** `withTab` bodies running on this target. */
-  pins: number;
   hold: Hold | null;
   /** Sessions whose caller turned emulation on itself, with that send. */
   explicit: Map<string, Promise<unknown>>;
@@ -154,6 +129,8 @@ interface TargetState {
 export interface HiddenPageInputOptions {
   /** The target a session belongs to, when the bridge knows it. */
   targetOf(sessionId: string): string | undefined;
+  /** Whether a `withTab` body runs on the target; its hold lasts until {@link HiddenPageInput.unpinned}. */
+  pinned(targetId: string): boolean;
   /** Whether an error means the session is gone (and took its emulation with it). */
   isGone(err: unknown): boolean;
   lingerMs?: number;
@@ -165,8 +142,6 @@ export interface HiddenPageInputOptions {
  */
 export class HiddenPageInput {
   private readonly targets = new Map<string, TargetState>();
-  /** Sessions attached through a facade (a tray leader's), by target. */
-  private readonly learned = new Map<string, string>();
   private readonly lingerMs: number;
 
   constructor(private readonly opts: HiddenPageInputOptions) {
@@ -181,7 +156,6 @@ export class HiddenPageInput {
     sessionId: string | undefined,
     forward: () => Promise<CDPPayload>
   ): Promise<CDPPayload> {
-    if (method === 'Target.attachToTarget') return this.attach(params, forward);
     if (!sessionId) return forward();
     if (method === 'Emulation.setFocusEmulationEnabled') {
       return params?.['enabled'] === true
@@ -193,26 +167,17 @@ export class HiddenPageInput {
   }
 
   /**
-   * Keep a hold on `targetId` open while a `withTab` body runs. The returned
-   * release turns emulation back off once the last body on the target ends;
-   * it never rejects.
+   * The last `withTab` body on `targetId` ended: turn emulation back off for
+   * its hold. Never rejects.
    */
-  pin(targetId: string): () => Promise<void> {
-    const t = this.target(targetId);
-    t.pins += 1;
-    let released = false;
-    return async () => {
-      if (released) return;
-      released = true;
-      t.pins -= 1;
-      await this.idle(targetId, t, true);
-    };
+  async unpinned(targetId: string): Promise<void> {
+    const t = this.targets.get(targetId);
+    if (t) await this.idle(targetId, t, true);
   }
 
   /** A session detached: Chrome dropped its emulation, so nothing is owed on it. */
   forgetSession(sessionId: string): void {
     const key = this.keyOf(sessionId);
-    this.learned.delete(sessionId);
     const t = this.targets.get(key);
     if (!t) return;
     t.owed.delete(sessionId);
@@ -225,19 +190,6 @@ export class HiddenPageInput {
       void this.restoreOwed(key, t);
     }
     this.prune(key, t);
-  }
-
-  private async attach(
-    params: CDPPayload | undefined,
-    forward: () => Promise<CDPPayload>
-  ): Promise<CDPPayload> {
-    const result = await forward();
-    const sessionId = result['sessionId'];
-    const targetId = params?.['targetId'];
-    if (typeof sessionId === 'string' && typeof targetId === 'string') {
-      this.learned.set(sessionId, targetId);
-    }
-    return result;
   }
 
   private async pointer(
@@ -344,7 +296,7 @@ export class HiddenPageInput {
       this.prune(key, t);
       return;
     }
-    if (hold.inflight > 0 || t.pins > 0) return;
+    if (hold.inflight > 0 || this.opts.pinned(key)) return;
     if (unpinned) {
       await this.close(key, t, hold);
       return;
@@ -352,7 +304,9 @@ export class HiddenPageInput {
     this.cancelLinger(hold);
     hold.linger = setTimeout(() => {
       hold.linger = null;
-      if (t.hold === hold && hold.inflight === 0 && t.pins === 0) void this.close(key, t, hold);
+      if (t.hold === hold && hold.inflight === 0 && !this.opts.pinned(key)) {
+        void this.close(key, t, hold);
+      }
     }, this.lingerMs);
   }
 
@@ -462,14 +416,13 @@ export class HiddenPageInput {
   }
 
   private keyOf(sessionId: string): string {
-    return this.opts.targetOf(sessionId) ?? this.learned.get(sessionId) ?? `session:${sessionId}`;
+    return this.opts.targetOf(sessionId) ?? `session:${sessionId}`;
   }
 
   private target(key: string): TargetState {
     let t = this.targets.get(key);
     if (!t) {
       t = {
-        pins: 0,
         hold: null,
         explicit: new Map(),
         owed: new Map(),
@@ -483,7 +436,11 @@ export class HiddenPageInput {
 
   private prune(key: string, t: TargetState): void {
     const idle =
-      t.pins === 0 && !t.hold && t.explicit.size === 0 && t.owed.size === 0 && t.queued === 0;
+      !this.opts.pinned(key) &&
+      !t.hold &&
+      t.explicit.size === 0 &&
+      t.owed.size === 0 &&
+      t.queued === 0;
     if (idle && this.targets.get(key) === t) this.targets.delete(key);
   }
 }
@@ -493,35 +450,6 @@ function sendVia(transport: HiddenPageTransport): HiddenPageSend {
     timeout === undefined
       ? transport.send(method, params, sessionId)
       : transport.send(method, params, sessionId, timeout);
-}
-
-/**
- * Scroll the way a wheel at (x, y) would: the innermost scrollable element under the point
- * that can move in the requested direction, else the document. A point with no element under
- * it (off the viewport, or content that has since moved) scrolls the document too, where a
- * real wheel would hit-test against the rendered layout. No `wheel` event fires.
- */
-export function pageScrollExpression(x: number, y: number, dx: number, dy: number): string {
-  return `(() => {
-  const dx = ${JSON.stringify(dx)}, dy = ${JSON.stringify(dy)};
-  const canScroll = (el) => {
-    const style = getComputedStyle(el);
-    const y = /(auto|scroll|overlay)/.test(style.overflowY) &&
-      (dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight : dy < 0 && el.scrollTop > 0);
-    const x = /(auto|scroll|overlay)/.test(style.overflowX) &&
-      (dx > 0 ? el.scrollLeft + el.clientWidth < el.scrollWidth : dx < 0 && el.scrollLeft > 0);
-    return y || x;
-  };
-  let el = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
-  while (el && el !== document.body && el !== document.documentElement && !canScroll(el)) {
-    el = el.parentElement;
-  }
-  const target = el && el !== document.body && el !== document.documentElement
-    ? el
-    : (document.scrollingElement || document.documentElement);
-  target.scrollBy({ left: dx, top: dy, behavior: 'instant' });
-  return true;
-})()`;
 }
 
 function errorText(err: unknown): string {

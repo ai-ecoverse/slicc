@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserAPI } from '../../src/cdp/browser-api.js';
 import { CommandAbortedError } from '../../src/cdp/command-abort.js';
-import { hiddenPagePointerKind, pageScrollExpression } from '../../src/cdp/hidden-page-input.js';
+import { hiddenPagePointerKind, pageScrollExpression } from '../../src/cdp/hidden-page-scroll.js';
 import { fakeHiddenTab } from '../helpers/fake-hidden-tab.js';
 
 afterEach(() => {

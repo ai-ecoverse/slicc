@@ -20,7 +20,7 @@
 
 import { createLogger } from '../base/logger.js';
 import { abortableDelay, abortWaiter, throwIfAborted } from './command-abort.js';
-import { HiddenPageWheelError, pageScrollExpression } from './hidden-page-input.js';
+import { HiddenPageWheelError, pageScrollExpression } from './hidden-page-scroll.js';
 import {
   ariaRefLookupExpression,
   ariaRefRectsExpression,
