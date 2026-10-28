@@ -4014,7 +4014,7 @@ describe('iframe support', () => {
 // Integration tests — real Chrome + real CDP + real HTML with iframes
 // ---------------------------------------------------------------------------
 
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -4321,6 +4321,33 @@ const chromeIntegrationEnabled =
 const describeIntegration = chromePath && chromeIntegrationEnabled ? describe : describe.skip;
 const INTEGRATION_CDP_LAUNCH_TIMEOUT_MS = Math.max(getDefaultCdpLaunchTimeoutMs(), 60_000);
 
+/**
+ * Renderer processes of the Chrome using `profileDir` that macOS runs in the
+ * background band: every thread at priority 4 or below, as
+ * TASK_BACKGROUND_APPLICATION puts them. `ps -M -o pri` appends each thread's
+ * priority as the last column.
+ */
+function backgroundBandRenderers(profileDir: string): number[] {
+  const renderers = execFileSync('ps', ['-axo', 'pid=,args='], { encoding: 'utf8' })
+    .split('\n')
+    .filter((line) => line.includes(profileDir) && line.includes('--type=renderer'))
+    .map((line) => Number(line.trim().split(/\s+/)[0]));
+  return renderers.filter((pid) => {
+    let out: string;
+    try {
+      out = execFileSync('ps', ['-M', '-o', 'pri', '-p', String(pid)], { encoding: 'utf8' });
+    } catch {
+      return false; // exited between the two ps calls
+    }
+    const priorities = out
+      .split('\n')
+      .slice(1)
+      .map((line) => Number.parseInt(line.trim().split(/\s+/).at(-1) ?? '', 10))
+      .filter((priority) => Number.isFinite(priority));
+    return priorities.length > 0 && priorities.every((priority) => priority <= 4);
+  });
+}
+
 describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   let server: http.Server;
   let serverPort: number;
@@ -4368,11 +4395,18 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       '--disable-crash-reporter',
       // Every fixture tab is a background tab (`createPage` opens with
       // `background: true`), and Chrome deprioritizes a hidden tab's renderer
-      // process: on macOS its JS ran at ~45% of a visible tab's speed (Chrome
-      // 155/156, idle M4). On the loaded 3-vCPU macOS release runner that
-      // starved renderer let single CDP calls outlast the 30 s command timeout
-      // (#4141). SLICC's own Chrome launchers pass the same flag.
+      // process: without this flag its JS ran at ~45% of a visible tab's speed
+      // on macOS (Chrome 155/156, idle M4; #4141). SLICC's own Chrome launchers
+      // pass the same flag.
       '--disable-renderer-backgrounding',
+      // The flag above leaves the performance manager's priority vote in
+      // place, which still moves a renderer with only hidden frames to
+      // TASK_BACKGROUND_APPLICATION on macOS: every thread at priority 4 with
+      // low-priority disk I/O. On the loaded 3-vCPU macOS release runner that
+      // renderer sat runnable but unscheduled for 14 s, so the first `fill`
+      // (the first time it runs its input and editing code) outlasted the 30 s
+      // CDP timeout (#4162). SLICC's launchers disable it too.
+      '--disable-features=PMProcessPriorityPolicy',
       `--user-data-dir=${tmpDir}`,
       'about:blank',
     ]);
@@ -4500,6 +4534,20 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     await waitForFixtureLoaded(targetId);
     return targetId;
   }
+
+  // A background tab's renderer must run at the priority of a visible one:
+  // in macOS's background band a loaded machine starves it past the CDP
+  // timeout (#4162). The check reads macOS thread priorities, so it is
+  // macOS-only.
+  it.skipIf(process.platform !== 'darwin')(
+    'runs the renderer of a background tab outside the background priority band',
+    async () => {
+      await openMainPage();
+      expect(backgroundBandRenderers(tmpDir)).toEqual([]);
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(backgroundBandRenderers(tmpDir)).toEqual([]);
+    }
+  );
 
   // The real page, the real injected script, and real ref resolution: refs
   // read before the page inserted an element still hit their elements, and a
