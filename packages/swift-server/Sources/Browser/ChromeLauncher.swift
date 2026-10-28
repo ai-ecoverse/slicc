@@ -243,7 +243,12 @@ struct ChromeLauncher: Sendable {
             // pair feeds the intervention that targets high-footprint background
             // tabs, and AllowDevtoolsConnectedDiscard removed the DevTools-attached
             // exemption. seedProfilePreferences() writes the matching prefs belt.
-            "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard",
+            // PMProcessPriorityPolicy is the performance manager's priority vote,
+            // which --disable-renderer-backgrounding does not override (Chrome
+            // 155/156): a renderer with only hidden frames still drops to
+            // TASK_BACKGROUND_APPLICATION (priority 4, low-priority disk I/O), and
+            // on a loaded Mac CDP commands on a background tab time out (#4162).
+            "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard,PMProcessPriorityPolicy",
             "--disable-background-timer-throttling",
             "--disable-backgrounding-occluded-windows",
             "--disable-renderer-backgrounding",

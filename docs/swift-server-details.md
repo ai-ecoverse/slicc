@@ -67,7 +67,7 @@ Inbound-pump overflow warnings name the top event methods and how many distinct 
 
 Both launchers (`ChromeLauncher.buildLaunchArgs` here, node-server's
 `chrome-launch.ts` — kept byte-identical) append
-`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard`
+`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard,PMProcessPriorityPolicy`
 plus `--disable-background-timer-throttling`,
 `--disable-backgrounding-occluded-windows`, and
 `--disable-renderer-backgrounding`. Both also seed the profile's
@@ -81,7 +81,10 @@ prompt, and Deny silently breaks CDP + `/api/*`. The rest keep the leader tab
 alive in the background — Memory Saver freezing a backgrounded leader suspends
 its event loop, leaving the tray unreachable and turns stuck on a working turn
 — so the launched Chrome deliberately opts out of background power savings, at
-a real battery cost on portables. See [`docs/pitfalls.md`](pitfalls.md).
+a real battery cost on portables. `PMProcessPriorityPolicy` keeps the
+renderers of background tabs off macOS's background priority band, which
+`--disable-renderer-backgrounding` alone no longer does (#4162). See
+[`docs/pitfalls.md`](pitfalls.md).
 
 ## Keychain trust model — why the prompt recurs
 
