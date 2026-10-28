@@ -61,6 +61,8 @@ Paths + invariants: [`docs/webapp-details.md`](../../docs/webapp-details.md); ro
   `serializeIndexWrite` and update only rows still present (only a freeze creates rows); their baseline
   is `readSessionsIndexForWrite`, which rebuilds a corrupt index from the `*.md` archives, never `[]`
   (#4151); deleting a frozen chat removes its files first and the row LAST (`ui/frozen-session-delete.ts`).
+  A cut-off live archive's bytes ride INSIDE its rewrite (damaged-snapshot block, #4154) — never add a
+  side file a session owns without teaching Erase, delete and the enrichment rename about it.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without queue/watermark loss; user
   `web` bypasses the window. `transcript-limits.ts` caps bridge/event transcripts at 64 KB (not
   `agent-sessions`/compaction).

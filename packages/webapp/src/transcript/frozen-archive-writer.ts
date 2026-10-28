@@ -31,6 +31,7 @@ import {
 } from './archive-redaction.js';
 import { formatChatForClipboard } from './chat-markdown.js';
 import {
+  DAMAGED_SNAPSHOT_START,
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
   frozenSessionRows,
@@ -299,7 +300,30 @@ export function formatArchiveAsMarkdown(rawArchive: FrozenSessionArchive): strin
   // Escape the only sequence that would prematurely close an HTML comment.
   const dataJson = JSON.stringify(stripEphemeral(archive.messages)).replace(/-->/g, '-- >');
   const dataBlock = `${SESSION_DATA_START}${dataJson}${SESSION_DATA_END}\n\n`;
-  return header + dataBlock + title + formatChatForClipboard(archive.messages);
+  const damagedBlocks = formatDamagedSnapshotBlocks(archive.damagedSnapshots, redactState);
+  return header + damagedBlocks + dataBlock + title + formatChatForClipboard(archive.messages);
+}
+
+/**
+ * The damaged-snapshot blocks (`readDamagedSnapshots`). They go BEFORE the
+ * data block: a write cut off inside the data block then still has them
+ * whole, and the next round keeps the cut file, blocks included. Redacted
+ * like the rest of the archive.
+ */
+function formatDamagedSnapshotBlocks(
+  snapshots: readonly string[] | undefined,
+  redactState: ReturnType<typeof newAtRestState>
+): string {
+  if (!snapshots?.length) return '';
+  return snapshots
+    .map((bytes) => {
+      const line = JSON.stringify(redactArchiveText(bytes, redactState)).replace(
+        /-->/g,
+        '--\\u003e'
+      );
+      return `${DAMAGED_SNAPSHOT_START}${line}${SESSION_DATA_END}\n\n`;
+    })
+    .join('');
 }
 
 /** Index path for a sessions directory (`/sessions` or a scoop sandbox). */

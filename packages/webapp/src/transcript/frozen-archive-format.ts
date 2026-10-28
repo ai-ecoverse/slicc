@@ -249,6 +249,12 @@ export interface FrozenSessionArchive {
   compactions?: number;
   /** Curator cursor — see {@link FrozenSessionIndexEntry.curatedThrough}. */
   curatedThrough?: number;
+  /**
+   * Raw bytes of earlier versions of this archive that parsed to no messages
+   * (a write cut off mid-file), kept inside the file that replaced them
+   * (#4154). See {@link readDamagedSnapshots}.
+   */
+  damagedSnapshots?: string[];
 }
 
 /**
@@ -390,6 +396,65 @@ export type FrozenArchiveFrontmatter = Pick<
 export function parseFrozenArchiveFrontmatter(markdown: string): FrozenArchiveFrontmatter {
   const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(markdown)?.[1];
   return frontmatter === undefined ? {} : parseFrontmatterMeta(frontmatter);
+}
+
+/**
+ * Opening line of a damaged-snapshot block. The block's one body line is the
+ * damaged bytes as a JSON string with every `-->` written `-->`, so it
+ * cannot close the comment early and `JSON.parse` returns the bytes exactly.
+ */
+export const DAMAGED_SNAPSHOT_START = '<!-- slicc:damaged-snapshot\n';
+
+/**
+ * The damaged bytes an archive carries in its damaged-snapshot blocks.
+ *
+ * A live snapshot is rewritten from scratch on every compaction round. When
+ * the previous write was cut off (a reload killed the worker), the file
+ * parses to no messages, and rewriting it from the agent's current history
+ * would drop the earlier rounds for good. Those bytes ride inside the new
+ * archive instead of in a side file: whatever deletes, erases or renames the
+ * archive takes them along, so no path can leave an erased chat behind.
+ * Parsers ignore the blocks; the session-data block stays the source of
+ * the messages.
+ */
+export function readDamagedSnapshots(markdown: string): string[] {
+  const out: string[] = [];
+  const blockRe = /<!-- slicc:damaged-snapshot\n(.*)\n-->/g;
+  for (const match of markdown.matchAll(blockRe)) {
+    try {
+      const bytes: unknown = JSON.parse(match[1]);
+      if (typeof bytes === 'string') out.push(bytes);
+    } catch {
+      // A block cut off by the same kind of fault: keep the rest.
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether an archive's bytes lost their transcript: not blank, no messages,
+ * no sidecar, and no intact empty data block. A legacy heading-only archive
+ * with messages is not damaged; neither is an empty file (no bytes to keep).
+ */
+export function isDamagedArchive(
+  markdown: string,
+  parsed: { messages: readonly ChatMessage[]; sidecar?: string } = parseFrozenArchive(markdown)
+): boolean {
+  if (markdown.trim() === '') return false;
+  if (parsed.messages.length > 0 || parsed.sidecar) return false;
+  return !/<!-- slicc:session-data\n\[\]\n-->/.test(markdown);
+}
+
+/**
+ * The damaged bytes a rewrite of this archive has to carry forward: the
+ * whole file when it is itself damaged (earlier blocks inside it included),
+ * otherwise the blocks it already carries.
+ */
+export function damagedSnapshotsToKeep(
+  markdown: string,
+  parsed?: { messages: readonly ChatMessage[]; sidecar?: string }
+): string[] {
+  return isDamagedArchive(markdown, parsed) ? [markdown] : readDamagedSnapshots(markdown);
 }
 
 function parseFrontmatterMeta(frontmatter: string): FrozenArchiveFrontmatter {
