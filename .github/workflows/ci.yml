@@ -2,15 +2,11 @@ name: CI
 run-name: staging-mutation-queue · CI · ${{ github.event.pull_request.number || github.ref_name }}
 
 on:
+  # Any base. Stacked PRs (base = another topic branch) used to get no
+  # verification CI because this was `branches: [main]`. The required check
+  # on `main` is still the `ci` job name; stacked runs report as `ci-stack`
+  # so a simulator-less commit cannot satisfy branch protection.
   pull_request:
-    # Any base except the no-comment benchmark mirror. Stacked PRs (base =
-    # another topic branch) used to get no verification CI because this was
-    # `branches: [main]`. The required check on `main` is still the `ci`
-    # job name; stacked runs report as `ci-stack` so a simulator-less
-    # commit cannot satisfy branch protection.
-    branches-ignore: [no-comment]
-  push:
-    branches: [automation/planning-artifact-cleanup]
   merge_group:
     branches: [main]
 

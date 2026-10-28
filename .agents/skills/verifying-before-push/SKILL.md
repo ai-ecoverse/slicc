@@ -64,8 +64,7 @@ grandfathered debt that lint alone misses. See the section below for details.
 
 Run `npm run lint`. It runs `biome check --write .` over JS/TS/JSON/CSS and
 `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML),
-then `lint:docs` (CLAUDE.md size limits), `lint:no-comments` (no-op on `main`; hard
-fail on the `no-comment` benchmark branch), `lint:skills` (tessl `SKILL.md` lint),
+then `lint:docs` (CLAUDE.md size limits), `lint:skills` (tessl `SKILL.md` lint),
 `lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
 `lint:layer-back-edges` (no new imports pointing up a per-package layer stack —
 baseline-ratcheted; fix the layering, never grow `layer-back-edge-baseline.json` or
@@ -118,9 +117,7 @@ When the gate trips, run the report script and read `dist/jscpd/` to find the cl
 
 The threshold is a **one-way ratchet**, held just above the measured baseline in the same
 spirit as `coverage-thresholds.json`. Lower it as duplication is paid down; never raise it
-to turn a red run green. The nightly `debt:duplication` rotation in
-[`.github/workflows/agentic-debt-triage.yml`](../../../.github/workflows/agentic-debt-triage.yml)
-is the intended driver for paying it down.
+to turn a red run green.
 
 `packages/dev-tools/tools/duplication-config.test.mjs` guards the config itself: it asserts
 every application path is still scanned with a non-zero file count, so an over-broad `ignore`
@@ -351,8 +348,8 @@ prerequisites.
 ## Stacked PRs
 
 A PR whose base is another topic branch (not `main`) now gets verification CI
-on every push. `ci.yml` uses `pull_request.branches-ignore: [no-comment]`, so
-every base except the comment-free benchmark mirror runs the workflow.
+on every push. `ci.yml`'s `pull_request` trigger has no branch filter, so every
+base runs the workflow.
 
 What runs on a stack:
 

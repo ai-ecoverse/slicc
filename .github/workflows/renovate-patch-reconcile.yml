@@ -44,7 +44,7 @@ name: Renovate Patch Reconcile
 #                             anti-recursion guard suppresses workflow runs for
 #                             GITHUB_TOKEN-authored pushes; this is the same
 #                             identity requirement documented in
-#                             coverage-ratchet.yml / planning-artifact-cleanup.yml.
+#                             coverage-ratchet.yml.
 #                             (The "Verify reconciliation" step below is an extra
 #                             fast-fail inside this job.)
 

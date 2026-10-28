@@ -22,7 +22,6 @@ import { lstatSync, readdirSync, readlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { argv } from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isNoCommentTree } from '../no-comment/marker.mjs';
 import { isMainModule } from './is-main-module.mjs';
 
 const Filename = fileURLToPath(import.meta.url);
@@ -122,10 +121,6 @@ export function listPackageNames(packagesDir) {
 // ---------------------------------------------------------------------------
 
 function main() {
-  if (isNoCommentTree(repoRoot)) {
-    process.stdout.write('ok: skipping AGENTS.md symlink gate on no-comment tree\n');
-    return;
-  }
   const pkgNames = listPackageNames(PACKAGES_DIR);
   const violations = findViolations(PACKAGES_DIR, pkgNames);
 

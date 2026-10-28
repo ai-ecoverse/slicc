@@ -73,8 +73,8 @@ jobs:
         if: steps.ratchet.outputs.changed == 'true'
         env:
           # BOT_PAT (not GITHUB_TOKEN) so the resulting pull_request /
-          # merge_group events trigger CI — same anti-recursion constraint
-          # documented in planning-artifact-cleanup.yml.
+          # merge_group events trigger CI: GitHub suppresses workflow runs for
+          # PRs and enqueues made with GITHUB_TOKEN (anti-recursion guard).
           GH_TOKEN: ${{ secrets.BOT_PAT }}
           RATCHET_BRANCH: automation/coverage-ratchet
         run: |

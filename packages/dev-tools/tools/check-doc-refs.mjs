@@ -26,7 +26,6 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { argv } from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isNoCommentTree } from '../no-comment/marker.mjs';
 import { extractCandidates } from './check-doc-refs-lib.mjs';
 import { isMainModule } from './is-main-module.mjs';
 
@@ -139,10 +138,6 @@ function checkDocRefs() {
 
 /** Entry point — runs the check and exits non-zero on any failure. */
 function main() {
-  if (isNoCommentTree(repoRoot)) {
-    process.stdout.write('ok: skipping doc-refs gate on no-comment tree\n');
-    return;
-  }
   const { failures, checked, fileCount } = checkDocRefs();
 
   if (failures.length > 0) {

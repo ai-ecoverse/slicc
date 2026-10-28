@@ -439,7 +439,7 @@ function writeJson(path, value) {
 /**
  * Parse one result record, or `null` when the file is missing/truncated/corrupt.
  * Mirrors `merge.mjs`'s `readRecord`: a bad per-item file is dropped, not fatal —
- * chain-plan and report must not die on one restored-artifact glitch (#3962).
+ * resume and report must not die on one restored-artifact glitch (#3962).
  */
 export function readRecordFile(path, { log = console.error } = {}) {
   try {
@@ -759,7 +759,7 @@ export function previous(opts, r) {
   const where = [opts.out, r.set.benchmark, r.condition.name, r.model, r.task.id, r.repeat];
   const rp = recordPath(...where);
   // Corrupt/truncated records are treated as absent so resumeAction → 'run' (replay),
-  // matching a missing file — never throw and kill chain-plan (#3962).
+  // matching a missing file — never throw and kill the resume (#3962).
   return {
     record: existsSync(rp) ? readRecordFile(rp) : null,
     traceExists: existsSync(tracePath(...where, r.set.encrypted)),
