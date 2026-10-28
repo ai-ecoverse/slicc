@@ -1096,6 +1096,50 @@ and any left by a superseded or departed client — are dropped with a
 replaying them would re-run duplicate-tab commands. Only initial-connect
 buffering (`chromeConnectionId: null`) still flushes.
 
+## Pointer Input on a Hidden Tab Needs Focus Emulation
+
+**File**: `packages/webapp/src/cdp/hidden-page-input.ts`, wired into
+`BrowserAPI`'s transport facade (`AccountedTransport`), which every command's
+session-scoped send crosses, raw `tab.transport.send` included.
+
+**The Problem**
+
+Chrome answers `Input.dispatchMouseEvent` `mouseMoved` only on the page's next
+frame, and a hidden page (a background tab, which is where `open` puts new
+tabs; a minimized or occluded window) draws none: every move took about 5 s
+(`hover`, `drag`, `mousemove`, computer-use moves). A `mouseWheel` was never
+answered and waited out the 30 s CDP timeout; the wheel stays queued and fires
+when the tab is next shown. Clicks, keys and `insertText` answer in
+milliseconds. A tiny `Page.startScreencast` draws nothing for a hidden tab
+under `--headless=new`, so it is no fix.
+
+**The Fix**
+
+Around each move or wheel on a page reporting `document.visibilityState ===
+'hidden'`, the facade turns `Emulation.setFocusEmulationEnabled` on, sends the
+input, waits two animation frames (a wheel is answered before the page
+dispatches it, so dropping emulation at once parks the `wheel` event and its
+scroll), then turns it off, on error and abort too. Moves and wheels answer in
+20-50 ms; the tab is not raised and window focus is not taken. Measured on
+Chrome 156 over the WebSocket CDP and through `chrome.debugger` from an MV3
+extension (no extension change needed). Over the tray, the leader's facade
+drives it; a follower's facade sees the leader's own
+`setFocusEmulationEnabled` and stays out.
+
+**Why not for the whole session**: the page notices. `visibilityState` turns
+`visible` (`visibilitychange` fires), `focus`/`blur` fire, `document.hasFocus()`
+turns true, `:focus-visible` matches, a pending autofocus runs, the tab keeps
+rendering, and real fullscreen is blocked (crbug 409579376). On a visible tab
+in an unfocused window it fires `focus`/`blur` too, so visible pages are left
+alone. It is per CDP session: other tabs, the user's visible one included, see
+nothing, and Chrome drops it when the session detaches.
+
+**Fallback**: a connection without the method (Cherry's synthetic CDP, an old
+follower) still sends a move (slow) but refuses a wheel with
+`HiddenPageWheelError` instead of hanging. `TabHandle.mouseWheel` then scrolls
+the element under the point from the page (`playwright-cli mousewheel` notes it
+on stderr; computer-use `scroll` does the same). No `wheel` event fires there.
+
 ## Tray bootstrap during a worker deploy
 
 **The Problem**
