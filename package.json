@@ -128,7 +128,7 @@
     "@vitest/coverage-v8": "4.1.12",
     "esbuild": "0.28.2",
     "husky": "9.1.7",
-    "jscpd": "5.4.1",
+    "jscpd": "5.4.2",
     "just-bash": "3.6.0",
     "knip": "6.42.1",
     "lint-staged": "17.6.0",
