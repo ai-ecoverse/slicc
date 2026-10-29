@@ -149,7 +149,7 @@
       "undici": "6.29.1"
     },
     "e2b": {
-      "undici8": "npm:undici@8.12.2"
+      "undici8": "npm:undici@8.12.3"
     },
     "guarded-fetch": {
       "undici": "7.30.1"
