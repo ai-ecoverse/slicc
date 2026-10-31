@@ -33,7 +33,7 @@
     "verify": "npm run test -w @slicc/webapp -- kerium-log-cap-patch"
   },
   "knip": {
-    "patchedVersion": "6.42.1",
+    "patchedVersion": "6.43.0",
     "upstream": "https://github.com/webpro-nl/knip",
     "issue": null,
     "reason": "knip's GitHub Actions plugin (dist/plugins/github-actions/index.js) scans each workflow step's `run:` for referenced binaries/dependencies by calling `step.run.replace(...)`. It guards with `if (step.run)`, which is truthy for the YAML boolean `true` — our two no-op `Release staging mutation queue` steps use `run: true` (a valid GitHub Actions no-op). On a boolean `.replace` is not a function, so knip aborts loading ci.yml and worker-staging.yml with `ERROR: step.run.replace is not a function` and exits 2, failing the `deadcode` CI gate. The bug was introduced between 6.34.0 (previously pinned, worked) and 6.39.0. The patch guards with the plugin's own `isString(step.run)` helper so a non-string `run` is skipped instead of crashing — these steps carry no dependency references anyway. We can't quote the workflows to `run: \"true\"` from this PR because the bot token lacks the `workflow` scope.",
