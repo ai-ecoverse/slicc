@@ -83,9 +83,9 @@
     },
     "shared": {
       "lines": 97,
-      "statements": 95,
+      "statements": 96,
       "functions": 96,
-      "branches": 91
+      "branches": 92
     },
     "webcomponents": {
       "lines": 95,
