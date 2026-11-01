@@ -318,8 +318,34 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
 - **Cherry embed (`?cherry=1`):** `frame-ancestors` is set from
   `ALLOWED_CHERRY_HOST_ORIGINS`. A bare `*` also adds any explicit
   `chrome-extension://` origins (CSP `*` does not authorize extension ancestors).
-  Every non-cherry response gets `frame-ancestors 'none'`. Cherry responses set
+  The plain SPA gets `frame-ancestors 'none'`. Cherry responses set
   `Cache-Control: no-store` and `Vary: Sec-Fetch-Dest` to prevent cache mixing.
+- **Framing default** (`framing-policy.ts`, applied in `worker.fetch`): every HTTP
+  response from the hub without a framing policy gets `frame-ancestors 'none'`
+  (appended to an existing CSP that lacks the directive) and `X-Frame-Options:
+DENY`. That covers JSON, HTML, assets, redirects, HEAD, and 4xx/5xx, including
+  errors `recoverWorkerFetch` answers. A new route needs nothing to be covered.
+  - `frame-ancestors` that only denies gets the matching `X-Frame-Options`. Any
+    other value is left alone and gets no `X-Frame-Options`, which would override
+    an allowlist in some browsers.
+  - `X-Frame-Options` on its own counts as a policy and stays as set.
+  - A `101` is returned as is, so it keeps its `webSocket`.
+  - Only headers change, never a status or body.
+- **Pages framed on purpose.** A new one sets its own `frame-ancestors` and the
+  default leaves it alone:
+  - `?cherry=1` on any SPA path: third-party hosts and the extension side panel
+    (`?cherry=1&ui-only=1`). `frame-ancestors` comes from
+    `ALLOWED_CHERRY_HOST_ORIGINS`.
+  - `/upgrade-to-seven.html`: framed by seven's BIOS on the same origin
+    (`frame-ancestors 'self'`, `X-Frame-Options: SAMEORIGIN`).
+  - `/electron` (`ELECTRON_OVERLAY_APP_PATH`): carries no framing policy at all,
+    because a `file://` app's embedder origin is opaque and only omission allows
+    it. It is the one case the default can't infer from headers, so `serveSPA`
+    marks the request in `FRAMING_POLICY_FREE_REQUESTS`. Only that page is exempt:
+    POST, `?json=true`, and `/electron/*` get the default.
+- **Preview worker.** `slicc-preview` (`*.sliccy.now`, `preview-worker.ts`) has its
+  own `fetch` and calls `handlePreviewRequest` directly, so this default doesn't
+  apply there. Preview documents set `frame-ancestors 'none'` themselves.
 - **`/upgrade-to-seven.html`** (`upgrade-to-seven.ts`): six's in-place exporter,
   which seven's BIOS at `/7/` frames (slicc#4051, [`profile-export.md`](profile-export.md)).
   It is the one six page with `frame-ancestors 'self'` (plus `X-Frame-Options:

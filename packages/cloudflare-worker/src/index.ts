@@ -23,6 +23,7 @@ import {
 } from './cloud/handlers.js';
 import { getProxyEndpoint } from './cloud/proxy-config.js';
 import { handleFlagsRequest } from './flags.js';
+import { withDefaultFramingPolicy } from './framing-policy.js';
 import { buildHandoffResponse } from './handoff-page.js';
 import {
   buildInstallCliPowershellResponse,
@@ -274,6 +275,16 @@ async function serveAssetWithArchiveFallback(
   return res;
 }
 
+/**
+ * Requests `serveSPA` answered with the Electron overlay, the one response that
+ * must carry no framing policy at all. Marked on the request because the links
+ * and noindex steps rebuild the response, and marked here rather than matched
+ * on the path in `worker.fetch` so that other answers on that path (POST,
+ * `?json=true`) still get the default. Losing the mark fails closed: the
+ * response gets the default deny.
+ */
+const FRAMING_POLICY_FREE_REQUESTS = new WeakSet<Request>();
+
 async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
   const res = await env.ASSETS.fetch(request);
   const url = new URL(request.url);
@@ -295,6 +306,7 @@ async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
     // whose embedder origin is opaque/null, and `frame-ancestors *` does NOT
     // match an opaque origin — only omission allows a null/opaque embedder.
     out.headers.delete('Content-Security-Policy');
+    FRAMING_POLICY_FREE_REQUESTS.add(request);
     // Mirror cherry cache-safety so a framable /electron response can never
     // share a cache entry with a would-be denied one.
     out.headers.set('Cache-Control', 'no-store');
@@ -1618,13 +1630,18 @@ const worker = {
     env: WorkerEnv,
     ctx: ExecutionContext = NOOP_CTX
   ): Promise<Response> {
+    // The framing default wraps both exits here, not just the applySliccLinks
+    // step in routeWorkerFetch: root redirects and recovered errors skip that.
     try {
-      return await routeWorkerFetch(request, env, ctx);
+      const response = await routeWorkerFetch(request, env, ctx);
+      return FRAMING_POLICY_FREE_REQUESTS.has(request)
+        ? response
+        : withDefaultFramingPolicy(response);
     } catch (error) {
       // A throw outside fetchTrayStub (a missing binding, a header copy) must
       // still be JSON. Cloudflare turns an uncaught worker exception into
       // `error code: 1101`, which the CLI cannot parse.
-      return recoverWorkerFetch(request, env, error);
+      return withDefaultFramingPolicy(recoverWorkerFetch(request, env, error));
     }
   },
 };
