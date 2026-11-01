@@ -21,6 +21,7 @@ must not import each other sideways; helpers (`shared.ts`, `links.ts`, `auth/`, 
   `coneId`
 - `src/turn-credentials.ts` — TURN fetcher; `src/shared.ts` — cap tokens, `reclaimMsForTray`
 - `src/links.ts` — `applySliccLinks` (RFC 8288 `Link` rel set on every response)
+- `src/framing-policy.ts` — `withDefaultFramingPolicy` (deny framing by default)
 - Static-page/OAuth-relay handlers under `src/` (`handoff-page.ts`, `install-cli.ts`,
   `oauth-exchange.ts`, `auth/cloud-callback.ts`, …)
 - `wrangler.jsonc` — bindings (`TRAY_HUB`, `CLOUD_SESSIONS`, `ASSETS`, `ASSET_ARCHIVE`,
@@ -109,6 +110,10 @@ creation per team+key, so per-tray minting broke its floor. Secrets, cap, events
 
 Worker serves `dist/ui/` via Static Assets (`ASSETS`); `?json=true`/POST/WS → API, else SPA.
 `frame-ancestors`/isolation headers branch on cherry (`?cherry=1`) vs electron vs plain SPA.
+**Framing is denied by default:** `worker.fetch` applies `withDefaultFramingPolicy`
+(`src/framing-policy.ts`) to every HTTP response, so a route needs no framing code. To make a page
+frameable, set its own `frame-ancestors` (never `X-Frame-Options` alongside an allowlist).
+[Exemptions](../../docs/cloudflare-worker-details.md#static-assets).
 **25 MiB per-asset cap** (CI `wrangler deploy --dry-run` gates it). `ASSET_ARCHIVE` (R2) retains
 hashed `/assets/*`, including nested gpu-ask model files, across deploys (14-day GC).
 [docs](../../docs/cloudflare-worker-details.md#static-assets).

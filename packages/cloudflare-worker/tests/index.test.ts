@@ -4554,8 +4554,10 @@ describe('asset archive fallback (#1330 retention)', () => {
     expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
     expect(res.headers.get('x-robots-tag')).toBe('noindex');
     expect(res.headers.get('link') ?? '').toContain('rel=');
-    // still no SPA frame-ancestors CSP on an asset
-    expect(res.headers.get('content-security-policy')).toBeNull();
+    // the entry point's framing default, and none of serveSPA's page headers
+    expect(res.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+    expect(res.headers.get('x-frame-options')).toBe('DENY');
+    expect(res.headers.get('document-isolation-policy')).toBeNull();
   });
 });
 
