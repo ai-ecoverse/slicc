@@ -747,6 +747,13 @@ keeps as metadata only); a top-level call's failed update is thrown as `Out of
 sync!`. The async call a `*Sync` method queues runs the backend's own method, since
 the sync method has already updated the mirror.
 
+Since 2.8.0 upstream also makes every top-level call, reads included, wait for the
+queued `*Sync` replays (`_pending`), and skips that wait inside a replay by
+matching `__replay__` in the stack (`isReplay`). The patch keeps the wait on the
+top-level methods and drops the stack test: a replay's backend method runs
+against `unmirrored`, whose nested methods (reads included) never wait, so it
+cannot wait on the queue it is running in.
+
 Never read `error.stack` for control flow in code that runs in the browser: its
 format differs per engine, and async frames may be missing altogether. Test such
 code with `Error.prepareStackTrace` printing other engines' stacks, as the test

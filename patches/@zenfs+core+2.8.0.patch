@@ -1,5 +1,5 @@
 diff --git a/node_modules/@zenfs/core/dist/backends/store/fs.js b/node_modules/@zenfs/core/dist/backends/store/fs.js
-index 307f801..f52c867 100644
+index 9ae5164..f7672cc 100644
 --- a/node_modules/@zenfs/core/dist/backends/store/fs.js
 +++ b/node_modules/@zenfs/core/dist/backends/store/fs.js
 @@ -440,7 +440,9 @@ export class StoreFS extends FileSystem {
@@ -14,7 +14,7 @@ index 307f801..f52c867 100644
                  if (metadata.size < data.byteLength)
                      data.fill(0, metadata.size);
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 50520e8..b073ce5 100644
+index ae71df9..4f4c0cc 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
 @@ -54,7 +54,10 @@ var __disposeResources = (this && this.__disposeResources) || (function (Suppres
@@ -29,7 +29,7 @@ index 50520e8..b073ce5 100644
  import { join } from '../path.js';
  import { _asyncFSKeys } from './shared.js';
  /**
-@@ -137,9 +140,163 @@ export function Async(FS) {
+@@ -154,9 +157,163 @@ export function Async(FS) {
                  throw crit(withErrno('ENOTSUP', 'No sync cache is attached to this async file system'));
              }
          }
@@ -193,7 +193,7 @@ index 50520e8..b073ce5 100644
              this._async(() => this._unpatched.rename(oldPath, newPath));
          }
          statSync(path) {
-@@ -160,11 +317,13 @@ export function Async(FS) {
+@@ -177,11 +334,13 @@ export function Async(FS) {
          unlinkSync(path) {
              this.checkSync();
              this._sync.unlinkSync(path);
@@ -207,7 +207,7 @@ index 50520e8..b073ce5 100644
              this._async(() => this._unpatched.rmdir(path));
          }
          mkdirSync(path, options) {
-@@ -197,10 +356,15 @@ export function Async(FS) {
+@@ -214,10 +373,15 @@ export function Async(FS) {
          }
          readSync(path, buffer, offset, end) {
              this.checkSync();
@@ -223,7 +223,7 @@ index 50520e8..b073ce5 100644
              this._sync.writeSync(path, buffer, offset);
              this._async(() => this._unpatched.write(path, buffer, offset));
          }
-@@ -227,37 +391,76 @@ export function Async(FS) {
+@@ -244,37 +408,76 @@ export function Async(FS) {
          /** @internal @protected */
          _crossCopySemaphore;
          /** @internal */
@@ -313,40 +313,44 @@ index 50520e8..b073ce5 100644
 -            if (path !== '/') {
 -                this._sync.mkdirSync(path, stats);
 -                this._sync.touchSync(path, stats);
--            }
--            const promises = [];
--            for (const file of await this.readdir(path)) {
--                promises.push(this.crossCopy(join(path, file)));
 +            catch (error) {
 +                preload.failure ??= { error };
 +                throw preload.failure.error;
              }
+-            const promises = [];
+-            for (const file of await this.readdir(path)) {
+-                promises.push(this.crossCopy(join(path, file)));
+-            }
 -            await Promise.all(promises);
          }
          /**
           * @internal
-@@ -266,32 +469,74 @@ export function Async(FS) {
+@@ -283,34 +486,89 @@ export function Async(FS) {
+          */
          _patchAsync() {
-             const noPatch = ['read', 'readdir', 'stat', 'exists'];
-             const toPatch = _asyncFSKeys.filter(key => !noPatch.includes(key));
+             const reads = ['read', 'readdir', 'stat', 'exists'];
 +            // PATCH(slicc#3783, upstream zen-fs/core#325): upstream decides from stack traces
-+            // whether a call was nested in another mirrored call (`isInLoop`),
-+            // which depends on the engine's frame format and on async frames
-+            // being captured at all (JavaScriptCore names no arrow wrapper;
-+            // release Firefox records no async frames unless DevTools is
-+            // attached). A nested mirror update that failed was then thrown, and
-+            // every rename of a file failed: IndexFS.rename writes the new path
-+            // before the outer rename has moved the mirror's entry.
++            // whether a call was nested in another mirrored call (`isInLoop`)
++            // or in a queued replay (`isReplay`), which depends on the engine's
++            // frame format and on async frames being captured at all
++            // (JavaScriptCore names no arrow wrapper; release Firefox records no
++            // async frames unless DevTools is attached). A nested mirror update
++            // that failed was then thrown, and every rename of a file failed:
++            // IndexFS.rename writes the new path before the outer rename has
++            // moved the mirror's entry. A replay whose backend method read
++            // through a patched read would wait on the queue it runs in.
 +            //
 +            // No stacks now: whether a call is nested is known from how it was
 +            // made. A backend method runs against `unmirrored`, a view of this
 +            // file system whose patched methods are `nested` ones. A nested call
-+            // updates the mirror best-effort: a failure there is expected while
-+            // the outer call is mid-flight (the rename's write above), and the
-+            // outer call mirrors the whole change when it returns. It still
-+            // mirrors what it can, such as the bytes a replayed rename copies to
-+            // a path the mirror keeps as metadata only. A top-level call's
-+            // update must succeed; a failure is thrown, out of sync.
++            // neither waits for queued operations (the outer call already did,
++            // or it is the replay being waited on) nor needs its update to
++            // succeed: a mirror failure there is expected while the outer call
++            // is mid-flight (the rename's write above), and the outer call
++            // mirrors the whole change when it returns. It still mirrors what it
++            // can, such as the bytes a replayed rename copies to a path the
++            // mirror keeps as metadata only. A top-level call waits for queued
++            // operations; its update must succeed; a failure is thrown, out of sync.
 +            //
 +            // The sync-queue replay (renameSync etc. call `this._unpatched.X`)
 +            // runs the same backend-against-unmirrored original, so a replayed
@@ -371,12 +375,14 @@ index 50520e8..b073ce5 100644
 +                this._sync?.[`${key}Sync`]?.(...args);
 +                this._followMetaOnly(key, args);
 +            };
-             for (const key of toPatch) {
+             for (const key of _asyncFSKeys) {
                  // TS does not narrow the union based on the key
 -                const originalMethod = this[key].bind(this);
 -                const fn = async function __patched__(...args) {
+-                    if (this._pending && !isReplay())
+-                        await this._promise.catch(() => { });
 -                    const result = await originalMethod(...args);
--                    if (isInLoop(key))
+-                    if (reads.includes(key) || isInLoop(key))
 -                        return result;
 -                    if (!this._isInitialized) {
 -                        this._skippedCacheUpdates++;
@@ -384,17 +390,28 @@ index 50520e8..b073ce5 100644
 +                const method = this[key];
 +                originals[key] = (...args) => method.apply(unmirrored, args);
 +                this._unpatched[key] = originals[key];
++                if (reads.includes(key)) {
++                    nested[key] = originals[key];
++                    this[key] = async (...args) => {
++                        if (this._pending)
++                            await this._promise.catch(() => { });
++                        return await originals[key](...args);
++                    };
++                    continue;
++                }
 +                nested[key] = async (...args) => {
 +                    const result = await originals[key](...args);
 +                    try {
 +                        updateMirror(key, args);
-+                    }
+                     }
 +                    catch {
 +                        // The outer call mirrors the whole change.
-                     }
++                    }
 +                    return result;
 +                };
 +                this[key] = async (...args) => {
++                    if (this._pending)
++                        await this._promise.catch(() => { });
 +                    const result = await originals[key](...args);
                      try {
 -                        // @ts-expect-error 2556 - The type of `args` is not narrowed
@@ -413,7 +430,7 @@ index 50520e8..b073ce5 100644
 -                this._unpatched[key] = originalMethod;
 -                this[key] = fn;
              }
-             debug(`Async: patched ${toPatch.length} methods`);
+             debug(`Async: patched ${_asyncFSKeys.length} methods`);
          }
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
 index 45fa76a..321fb14 100644
