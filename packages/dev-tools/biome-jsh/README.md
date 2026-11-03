@@ -13,12 +13,16 @@ and emit a bogus error:
 `biome-jsh` fixes this. For every `.jsh` / `.bsh` file it:
 
 1. wraps the body in `async function __slicc() { … }` (the same shape the
-   runtime uses), so top-level `await`/`return` parse cleanly;
+   runtime uses), so top-level `await`/`return` parse cleanly. A `#!` shebang
+   on the very first line (e.g. `#!/usr/bin/env jsh`, which every jsh runtime
+   accepts) stays above the wrapper, together with the blank lines right after
+   it, because Biome only accepts a hashbang at the start of a file;
 2. writes the wrapped content to a temp `.js` file and runs Biome on it in
    **file mode** with `--reporter=github`;
 3. shifts every diagnostic back onto the real file — the wrapper prefix is one
    newline-terminated line at column 0, so only the line number moves (columns
    are already correct) — and rewrites the temp path to the real `.jsh` path.
+   `format` strips the wrapper again and puts a hoisted shebang back.
 
 `.js` / `.ts` / `.json` / … files pass straight through, unwrapped.
 

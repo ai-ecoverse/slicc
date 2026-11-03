@@ -49,6 +49,7 @@ import {
   JSH_WRAP_SUFFIX,
   shiftBiomeSpans,
   shouldWrapForBiome,
+  splitJshShebang,
   unwrapFormattedJsh,
   wrapJshForBiome,
 } from './jsh-biome-source.js';
@@ -64,6 +65,7 @@ export {
   JSH_WRAP_PREFIX_BYTE_LENGTH,
   shiftBiomeSpans,
   shouldWrapForBiome,
+  splitJshShebang,
   unwrapFormattedJsh,
   wrapJshForBiome,
 };
@@ -566,6 +568,12 @@ const JSH_WRAP_SUFFIX = ${JSON.stringify(JSH_WRAP_SUFFIX)};
 const JSH_WRAP_PREFIX_BYTES = ${JSH_WRAP_PREFIX_BYTE_LENGTH};
 const shiftBiomeSpans = ${shiftBiomeSpans.toString()};
 const unwrapFormattedJsh = ${unwrapFormattedJsh.toString()};
+const splitJshShebang = ${splitJshShebang.toString()};
+// Same shape as wrapJshForBiome: a leading shebang stays above the wrapper.
+function wrapJsh(source) {
+  const { header, body } = splitJshShebang(source);
+  return header + JSH_WRAP_PREFIX + body + JSH_WRAP_SUFFIX;
+}
 const biomeDiagnosticToJson = ${biomeDiagnosticToJson.toString()};
 function supportsFeature(biome, projectKey, path, feature) {
   const workspace = biome.workspace;
@@ -625,7 +633,7 @@ async function main() {
     // (unwrapped) source so line/column point at the real file.
     const wrap = file.wrap === true;
     if (formatEnabled) {
-      const fmtInput = wrap ? (JSH_WRAP_PREFIX + file.source + JSH_WRAP_SUFFIX) : file.source;
+      const fmtInput = wrap ? wrapJsh(file.source) : file.source;
       const fmt = biome.formatContent(projectKey, fmtInput, { filePath: file.biomePath });
       const fmtDiags = fmt.diagnostics || [];
       if (wrap) { for (const d of fmtDiags) shiftBiomeSpans(d, JSH_WRAP_PREFIX_BYTES); }
@@ -651,7 +659,7 @@ async function main() {
           formattedContent = file.source;
         } else {
           const candidate = unwrapFormattedJsh(fmt.content);
-          const reFmt = biome.formatContent(projectKey, JSH_WRAP_PREFIX + candidate + JSH_WRAP_SUFFIX, { filePath: file.biomePath });
+          const reFmt = biome.formatContent(projectKey, wrapJsh(candidate), { filePath: file.biomePath });
           formattedContent = reFmt.content === fmt.content ? candidate : file.source;
         }
       }
@@ -661,7 +669,7 @@ async function main() {
       }
     }
     if (lintEnabled) {
-      const lintInput = wrap ? (JSH_WRAP_PREFIX + file.source + JSH_WRAP_SUFFIX) : file.source;
+      const lintInput = wrap ? wrapJsh(file.source) : file.source;
       const lint = biome.lintContent(projectKey, lintInput, { filePath: file.biomePath });
       const lintDiags = lint.diagnostics || [];
       if (wrap) { for (const d of lintDiags) shiftBiomeSpans(d, JSH_WRAP_PREFIX_BYTES); }

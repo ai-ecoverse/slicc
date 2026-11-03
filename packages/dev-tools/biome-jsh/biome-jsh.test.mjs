@@ -148,4 +148,58 @@ describe.skipIf(!BIOME_BIN)('biome-jsh CLI (integration)', () => {
     expect(annotation.fields.line).toBe('2');
     expect(result.status).toBe(1);
   });
+
+  describe('leading shebang (issue #4200)', () => {
+    const SHEBANG = '#!/usr/bin/env jsh\n';
+
+    it('a shebang .jsh lints and checks clean', () => {
+      writeFileSync(
+        join(dir, 's.jsh'),
+        `${SHEBANG}const a = await Promise.resolve(1);\nconsole.log(a);\n`
+      );
+      for (const subcommand of ['lint', 'check']) {
+        const result = runCli(dir, [subcommand, 's.jsh']);
+        expect(result.stdout.trim()).toBe('');
+        expect(result.stderr).toContain('0 error(s), 0 warning(s)');
+        expect(result.status).toBe(0);
+      }
+    });
+
+    it('reports a real lint finding after the shebang at its real line and column', () => {
+      // `==` sits on line 4, column 7 of the REAL file (shebang + blank line first).
+      const source = `${SHEBANG}\nconst x = 1;\nif (x == 2) {\n\tawait Promise.resolve();\n}\nreturn x;\n`;
+      writeFileSync(join(dir, 'lint.jsh'), source);
+
+      const result = runCli(dir, ['lint', 'lint.jsh']);
+      const annotations = result.stdout.split('\n').map(parseGithubAnnotation).filter(Boolean);
+      expect(annotations).toHaveLength(1);
+      expect(annotations[0].fields.title).toBe('lint/suspicious/noDoubleEquals');
+      expect(annotations[0].fields.file).toBe('lint.jsh');
+      expect(annotations[0].fields.line).toBe('4');
+      expect(annotations[0].fields.endLine).toBe('4');
+      expect(annotations[0].fields.col).toBe('7');
+      expect(result.status).toBe(1);
+    });
+
+    it('format keeps the shebang (stdout and --write)', () => {
+      const messy = `${SHEBANG}\nconst x=1\nawait Promise.resolve()\nif(x){return x}\n`;
+      const expected = `${SHEBANG}\nconst x = 1;\nawait Promise.resolve();\nif (x) {\n\treturn x;\n}\n`;
+      writeFileSync(join(dir, 'messy.jsh'), messy);
+
+      const printed = runCli(dir, ['format', 'messy.jsh']);
+      expect(printed.status).toBe(0);
+      expect(printed.stdout).toBe(expected);
+
+      const check = runCli(dir, ['check', 'messy.jsh']);
+      expect(check.stdout).toMatch(/not formatted/i);
+
+      const write = runCli(dir, ['format', '--write', 'messy.jsh']);
+      expect(write.status).toBe(0);
+      expect(readFileSync(join(dir, 'messy.jsh'), 'utf8')).toBe(expected);
+
+      const recheck = runCli(dir, ['check', 'messy.jsh']);
+      expect(recheck.stdout.trim()).toBe('');
+      expect(recheck.status).toBe(0);
+    });
+  });
 });
