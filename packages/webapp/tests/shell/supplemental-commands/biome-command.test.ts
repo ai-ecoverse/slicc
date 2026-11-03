@@ -19,6 +19,7 @@ import {
   parseBiomeArgs,
   shiftBiomeSpans,
   shouldWrapForBiome,
+  splitJshShebang,
   tryReadBiomeWasmVersion,
   unwrapFormattedJsh,
   wrapJshForBiome,
@@ -331,6 +332,39 @@ describe('unwrapFormattedJsh', () => {
   });
 });
 
+describe('leading shebang (issue #4200)', () => {
+  const SHEBANG = '#!/usr/bin/env jsh\n';
+
+  it('splitJshShebang hoists only a first-line shebang plus the blank lines after it', () => {
+    expect(splitJshShebang(`${SHEBANG}\nx();\n`)).toEqual({
+      header: `${SHEBANG}\n`,
+      body: 'x();\n',
+    });
+    expect(splitJshShebang('x();\n')).toEqual({ header: '', body: 'x();\n' });
+    expect(splitJshShebang(`\n${SHEBANG}x();\n`)).toEqual({
+      header: '',
+      body: `\n${SHEBANG}x();\n`,
+    });
+    expect(splitJshShebang('#!/usr/bin/env jsh')).toEqual({ header: SHEBANG, body: '' });
+  });
+
+  it('wrapJshForBiome keeps the shebang above the wrapper; body bytes shift by the prefix', () => {
+    const source = `${SHEBANG}const a = await f();\n`;
+    const wrapped = wrapJshForBiome(source);
+    expect(wrapped).toBe(`${SHEBANG}async function __slicc() {\nconst a = await f();\n\n}`);
+    expect(wrapped.indexOf('const')).toBe(source.indexOf('const') + JSH_WRAP_PREFIX_BYTE_LENGTH);
+  });
+
+  it('unwrapFormattedJsh puts the shebang back', () => {
+    expect(unwrapFormattedJsh(`${SHEBANG}async function __slicc() {\n\tx();\n}\n`)).toBe(
+      `${SHEBANG}x();\n`
+    );
+    expect(unwrapFormattedJsh(`${SHEBANG}\nasync function __slicc() {\n\tx();\n}\n`)).toBe(
+      `${SHEBANG}\nx();\n`
+    );
+  });
+});
+
 describe('shiftBiomeSpans', () => {
   it('subtracts the prefix byte length from every nested span and clamps at zero', () => {
     const diag = {
@@ -407,6 +441,27 @@ describe('realm-helper embedding safety', () => {
       `return (${unwrapFormattedJsh.toString()});`
     )() as typeof unwrapFormattedJsh;
     expect(rehydrated('async function __slicc() {\n\tconst x = 1;\n}\n')).toBe('const x = 1;\n');
+  });
+
+  it('splitJshShebang re-evaluates from its own source and still works', () => {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const rehydrated = new Function(
+      `return (${splitJshShebang.toString()});`
+    )() as typeof splitJshShebang;
+    expect(rehydrated('#!/usr/bin/env jsh\nx();\n')).toEqual({
+      header: '#!/usr/bin/env jsh\n',
+      body: 'x();\n',
+    });
+  });
+
+  it('unwrapFormattedJsh re-evaluated from its own source keeps a shebang', () => {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const rehydrated = new Function(
+      `return (${unwrapFormattedJsh.toString()});`
+    )() as typeof unwrapFormattedJsh;
+    expect(rehydrated('#!/usr/bin/env jsh\nasync function __slicc() {\n\tx();\n}\n')).toBe(
+      '#!/usr/bin/env jsh\nx();\n'
+    );
   });
 });
 
@@ -1260,6 +1315,52 @@ describeHeavy('biome .jsh/.bsh wrapping against real Biome', () => {
     expect(printed).toContain('/t/real.jsh:2:');
     expect(printed).not.toContain('__slicc');
   });
+
+  it('a leading shebang is not a parse error and formatting keeps it (issue #4200)', () => {
+    const source = '#!/usr/bin/env jsh\nconst a = await Promise.resolve(1);\nconsole.log(a);\n';
+    const lint = biome.lintContent(projectKey, wrapJshForBiome(source), { filePath: '/t/x.js' });
+    expect(lint.diagnostics || []).toHaveLength(0);
+    const messy = '#!/usr/bin/env jsh\n\nconst a=await f()\nreturn a\n';
+    const result = formatWrapped(messy);
+    expect(result.parseDiagnostics).toHaveLength(0);
+    expect(result.content).toBe('#!/usr/bin/env jsh\n\nconst a = await f();\nreturn a;\n');
+  });
+
+  it('maps a lint diagnostic after a shebang back to its REAL line', () => {
+    const source = '#!/usr/bin/env jsh\nconst y = 1;\nconst unusedX = 2;\nreturn y;\n';
+    const lint = biome.lintContent(projectKey, wrapJshForBiome(source), { filePath: '/t/x.js' });
+    const diags = lint.diagnostics || [];
+    expect(parseDiags(diags)).toHaveLength(0);
+    for (const d of diags) shiftBiomeSpans(d, JSH_WRAP_PREFIX_BYTE_LENGTH);
+    const unused = diags.find(
+      (d: { category?: string }) => d.category === 'lint/correctness/noUnusedVariables'
+    );
+    expect(biomeDiagnosticToJson(unused, '/t/real.jsh', source)).toMatchObject({
+      filePath: '/t/real.jsh',
+      line: 3,
+      column: 7,
+    });
+  });
+
+  it('lints and formats a shebang .jsh through the real command helper (issue #4200)', async () => {
+    const ctx = createMockCtx();
+    await stageRealBiomePackages(ctx);
+    const path = '/workspace/tool.jsh';
+    await ctx.fs.writeFile(path, '#!/usr/bin/env jsh\nconst a=await f()\nif (a == 2) {}\n');
+
+    const lint = await createBiomeCommand().execute(['lint', '--json', path], ctx);
+    const { diagnostics } = parseJsonResult(lint);
+    expect(diagnostics.filter((d) => d.category === 'parse')).toEqual([]);
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ category: 'lint/suspicious/noDoubleEquals', line: 3, column: 7 })
+    );
+
+    const write = await createBiomeCommand().execute(['format', '--write', path], ctx);
+    expect(write.exitCode).toBe(0);
+    expect(await ctx.fs.readFile(path)).toBe(
+      '#!/usr/bin/env jsh\nconst a = await f();\nif (a == 2) {\n}\n'
+    );
+  }, 120_000);
 
   it('applies a configuration that disables a lint rule', () => {
     const enabledProject = biome.openProject('/lint-enabled').projectKey;

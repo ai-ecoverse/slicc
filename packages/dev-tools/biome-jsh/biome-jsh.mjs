@@ -58,6 +58,7 @@ Usage:
 
 .jsh/.bsh bodies are wrapped in an async function before Biome sees them, so
 top-level await/return do not raise a false "return outside of function" error.
+A first-line #! shebang stays above the wrapper and survives formatting.
 Diagnostics are shifted back onto the real file. Other extensions pass through.
 
 Env:

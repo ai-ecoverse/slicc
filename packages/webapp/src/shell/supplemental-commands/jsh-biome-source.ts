@@ -101,9 +101,39 @@ export const JSH_WRAP_SUFFIX = '\n}';
  */
 export const JSH_WRAP_PREFIX_BYTE_LENGTH = new TextEncoder().encode(JSH_WRAP_PREFIX).length;
 
-/** Wrap a `.jsh`/`.bsh` body for Biome. Inverse: {@link unwrapFormattedJsh}. */
+/**
+ * Split a leading shebang off a `.jsh`/`.bsh` source so it can be hoisted
+ * above the wrapper. Biome accepts a hashbang only at the very start of a
+ * file, never inside the `async function __slicc() {` body, while every jsh
+ * runtime accepts one (the SLICC executor strips it via `strip-shebang.ts`).
+ *
+ * Only a `#!` on the very FIRST line counts, as in `strip-shebang.ts`.
+ * `header` is that line plus any blank lines right after it, always ending
+ * in a newline (one is added when the file is nothing but a shebang); `body`
+ * is the rest, verbatim. With no shebang, `header` is `''` and `body` is the
+ * whole source. `header` is never put inside the wrapper, so every body line
+ * still shifts by exactly one line and {@link JSH_WRAP_PREFIX_BYTE_LENGTH}
+ * bytes, and Biome formats the header like a plain `.js` hashbang (it keeps
+ * at most one blank line after it).
+ *
+ * NOTE: embedded into the biome-command helper script via `.toString()` —
+ * keep it self-contained (globals only, no closure over module scope).
+ */
+export function splitJshShebang(source: string): { header: string; body: string } {
+  if (!source.startsWith('#!')) return { header: '', body: source };
+  const header = /^#![^\n]*(?:\n[ \t\r]*(?=\n))*\n?/.exec(source)?.[0] ?? source;
+  const body = source.slice(header.length);
+  return { header: header.endsWith('\n') ? header : `${header}\n`, body };
+}
+
+/**
+ * Wrap a `.jsh`/`.bsh` body for Biome; a leading shebang (see
+ * {@link splitJshShebang}) stays above the wrapper. Inverse:
+ * {@link unwrapFormattedJsh}.
+ */
 export function wrapJshForBiome(source: string): string {
-  return JSH_WRAP_PREFIX + source + JSH_WRAP_SUFFIX;
+  const { header, body } = splitJshShebang(source);
+  return header + JSH_WRAP_PREFIX + body + JSH_WRAP_SUFFIX;
 }
 
 /** True when `realPath` is a SLICC shell script whose body needs the
@@ -170,8 +200,16 @@ export function shiftBiomeSpans(root: unknown, delta: number): void {
 export function unwrapFormattedJsh(formatted: string): string {
   const trimmed = formatted.endsWith('\n') ? formatted.slice(0, -1) : formatted;
   const lines = trimmed.split('\n');
+  // A hoisted shebang header (see splitJshShebang) sits above the wrapper:
+  // keep the `#!` line and the blank lines after it verbatim.
+  let headerLength = 0;
+  if (lines.length > 0 && lines[0].startsWith('#!')) {
+    headerLength = 1;
+    while (headerLength < lines.length && lines[headerLength].trim() === '') headerLength++;
+  }
+  const header = lines.splice(0, headerLength);
   lines.shift();
   lines.pop();
   const body = lines.map((line) => (line.startsWith('\t') ? line.slice(1) : line));
-  return body.join('\n') + '\n';
+  return header.concat(body).join('\n') + '\n';
 }
