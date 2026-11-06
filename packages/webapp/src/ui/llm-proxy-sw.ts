@@ -28,6 +28,8 @@
  *   - Non-http(s) protocols (`data:`, `blob:`, `chrome-extension:`)
  *   - Requests carrying an `x-bypass-llm-proxy: 1` opt-out header
  *   - Extension mode never registers this SW (host_permissions handle CORS)
+ *   - Everything, once seven has disarmed this worker (see
+ *     `llm-proxy-sw-disarm.ts`): seven's BIOS on www can't boot through it
  *
  * Built as a standalone IIFE bundle (mirrors `preview-sw.ts`'s build path
  * in `vite.config.ts`).
@@ -66,6 +68,15 @@ import {
   resolveFetchProxyTarget,
   SW_EXTENSION_FETCH_MESSAGE,
 } from './llm-proxy-sw-config.js';
+import {
+  answerUnlessDisarmed,
+  createSixDisarmSwitch,
+  isSixDisarmMessage,
+  maySixDisarm,
+  readSixRetired,
+  type SixDisarmedMessage,
+  SW_SIX_DISARMED_MESSAGE,
+} from './llm-proxy-sw-disarm.js';
 import {
   handleSyncFsRequest,
   parseSyncFsRequest,
@@ -108,6 +119,16 @@ const extensionDelegateCache = new ExtensionDelegateCache();
 /** Max delegated request body we base64-encode before flagging too-large. */
 const DELEGATE_REQUEST_BODY_CAP = 32 * 1024 * 1024;
 
+/**
+ * Seven's off switch for this worker (`llm-proxy-sw-disarm.ts`). Starts
+ * disarmed when seven has retired six in this browser (the
+ * `__Host-slicc-six-retired` cookie), and disarms on seven's message.
+ */
+const sixSwitch = createSixDisarmSwitch(() =>
+  readSixRetired((self as { cookieStore?: { get(name: string): Promise<unknown> } }).cookieStore)
+);
+const passOn = (request: Request): Promise<Response> => fetch(request);
+
 // Pull in preview-sw so its fetch handler runs in this SW's context.
 //
 // Why: this SW is registered at scope `/` so that it controls the main
@@ -145,6 +166,17 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   // clients, so a non-Client sender is either an unrelated message or
   // a future channel we haven't wired up yet.
   if (!source || !('id' in source) || typeof source.id !== 'string') return;
+  if (isSixDisarmMessage(event.data) && maySixDisarm(source)) {
+    // Seven's BIOS asks this worker to stop answering, so its npm downloads
+    // and its own pages reach the network. Answer on the port it sent, or on
+    // the window itself when it sent none.
+    sixSwitch.disarm();
+    const reply: SixDisarmedMessage = { type: SW_SIX_DISARMED_MESSAGE };
+    const port = event.ports[0];
+    if (port) port.postMessage(reply);
+    else (source as Client).postMessage(reply);
+    return;
+  }
   if (isBridgeConfigMessage(event.data) && maySetProxyConfig(source)) {
     bridgeConfigCache.set(source.id, {
       apiBaseUrl: event.data.apiBaseUrl,
@@ -190,7 +222,12 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   // Non-network protocols: nothing for us to do.
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
-  event.respondWith(forwardThroughProxy(req, event.clientId || null));
+  answerUnlessDisarmed(
+    sixSwitch,
+    event,
+    () => forwardThroughProxy(req, event.clientId || null),
+    passOn
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -245,6 +282,8 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
   if (!url.pathname.startsWith(SYNC_FS_ROUTE_PREFIX) && url.pathname !== SYNC_EXEC_ROUTE) return;
+  // Disarmed by seven: these paths are seven's now (`llm-proxy-sw-disarm.ts`).
+  if (sixSwitch.disarmed === true) return;
   event.respondWith(
     (async () => {
       const req = await parseSyncFsRequest(event.request);
