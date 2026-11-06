@@ -521,8 +521,7 @@ describe('Biome configuration resolution', () => {
     const result = await resolveBiomeConfiguration(ctx.fs, ctx.cwd, '/workspace/src', null);
     expect(result).toEqual({
       ok: false,
-      error:
-        'biome: unsupported configuration /workspace/biome.json: path-based plugin "./.biome-plugins/custom.grit" cannot be loaded by @biomejs/js-api@6.0.0',
+      error: `biome: unsupported configuration /workspace/biome.json: path-based plugin "./.biome-plugins/custom.grit" cannot be loaded by @biomejs/js-api@${pinnedVersion('@biomejs/js-api')}`,
       exitCode: 1,
     });
   });
@@ -536,8 +535,7 @@ describe('Biome configuration resolution', () => {
     await ctx.fs.writeFile('/workspace/biome.json', repositoryConfig);
     const sourcePath = '/workspace/packages/webapp/src/shell/file.ts';
     await ctx.fs.writeFile(sourcePath, 'const value = 1;\n');
-    const expectedError =
-      'biome: unsupported configuration /workspace/biome.json: path-based plugin "./.biome-plugins/no-innerhtml-electron-overlay.grit" cannot be loaded by @biomejs/js-api@6.0.0\n';
+    const expectedError = `biome: unsupported configuration /workspace/biome.json: path-based plugin "./.biome-plugins/no-innerhtml-electron-overlay.grit" cannot be loaded by @biomejs/js-api@${pinnedVersion('@biomejs/js-api')}\n`;
 
     for (const subcommand of ['check', 'format']) {
       const result = await createBiomeCommand().execute([subcommand, sourcePath], ctx);
