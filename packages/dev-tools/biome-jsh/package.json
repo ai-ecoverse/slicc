@@ -18,7 +18,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@biomejs/biome": "2.5.15"
+    "@biomejs/biome": "2.6.4"
   },
   "repository": {
     "type": "git",
