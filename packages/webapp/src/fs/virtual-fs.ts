@@ -70,6 +70,31 @@ interface LockManagerLike {
   request<T>(name: string, callback: () => Promise<T>): Promise<T>;
 }
 
+/**
+ * ZenFS `FileSystem.attributes` is a string-keyed bag; we only write
+ * `no_atime` (see {@link disableZenFsAtime}).
+ */
+interface ZenFsAttributeBag {
+  attributes: { set(key: string, value?: unknown): void };
+}
+
+/**
+ * Tell a ZenFS backend not to stamp `atime` on every read.
+ *
+ * ZenFS marks a vnode metadata-dirty when it updates atime, and flushing
+ * that inode through `Inode.update` also bumps `ctimeMs` to `Date.now()`.
+ * isomorphic-git 1.44.9's `compareStats` started comparing ctime/mtime
+ * *nanoseconds*, so a same-second ctime drift from an earlier content
+ * hash (or an ignore-rule read of a tracked `.gitignore`) makes every
+ * worktree file look stale: `status` / `ls-files` re-hash the whole
+ * tree and the #2709 command-scoped read cache sees a second encoding
+ * of `.gitignore` (utf-8 for rules + binary for the oid). Disabling
+ * atime restores stable ctimes across reads without lying about mtime.
+ */
+function disableZenFsAtime(fs: ZenFsAttributeBag): void {
+  fs.attributes.set('no_atime', true);
+}
+
 /** Backend identifier for {@link VirtualFS}. */
 export type VfsBackend = 'memory' | 'opfs';
 
@@ -539,6 +564,7 @@ export class VirtualFS {
         onRepairProgress: vfs.onRepairProgress,
         withWriteLock: (operation) => vfs.withWriteLock(operation),
       });
+      disableZenFsAtime(backendFs as ZenFsAttributeBag);
       try {
         (zenfs.mount as unknown as (p: string, fs: unknown) => void)(mountPoint, backendFs);
       } catch {
@@ -553,6 +579,8 @@ export class VirtualFS {
         sidecarFlushRetryMs: METADATA_SIDECAR_RETRY_MS,
       };
       VirtualFS.opfsBackends.set(vfs.dbName, entry);
+    } else {
+      disableZenFsAtime(entry.backendFs as ZenFsAttributeBag);
     }
     entry.refs += 1;
     vfs.opfsBackendFs = entry.backendFs.index
@@ -604,6 +632,7 @@ export class VirtualFS {
       entry = { store: zenfs.InMemory.create({ label: dbName }), refs: 0 };
       VirtualFS.memoryBackends.set(dbName, entry);
     }
+    disableZenFsAtime(entry.store as ZenFsAttributeBag);
     entry.refs += 1;
     try {
       // ZenFS `mount` expects a `FileSystem`; `InMemory.create` returns
