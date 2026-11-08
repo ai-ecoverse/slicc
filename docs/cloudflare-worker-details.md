@@ -390,8 +390,11 @@ All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route 
 ## <a name="turn-push"></a>TURN Credentials & Follower Push
 
 - **TURN:** fetched with `CLOUDFLARE_TURN_KEY_ID` (`wrangler.jsonc`) +
-  `CLOUDFLARE_TURN_API_TOKEN` (secret). `session-tray.ts` caches ICE servers and refreshes
-  before TTL.
+  `CLOUDFLARE_TURN_API_TOKEN` (secret). `fetchTURNCredentials` (`turn-credentials.ts`)
+  returns Cloudflare's ICE entry plus a leading
+  `stun:stun.cloudflare.com:3478` and, when missing,
+  `turns:turn.cloudflare.com:443?transport=tcp` (TLS on 443 for networks that reset
+  5349). `session-tray.ts` caches ICE servers and refreshes before TTL.
 - **APNS push (`src/apns.ts`):** ES256 JWT minted from `APNS_TEAM_ID` / `APNS_KEY_ID` /
   `APNS_PRIVATE_KEY` (`.p8` PEM) to `api(.sandbox).push.apple.com` with `APNS_TOPIC`. The tray
   DO stores ≤16 `push.register` tokens per tray and fans out leader `push.send` (`turn_end`,

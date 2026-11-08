@@ -692,7 +692,10 @@ describe('tray worker skeleton', () => {
       iceServers?: Array<{ urls: string[]; username: string; credential: string }>;
     };
     expect(firstFollower.iceServers?.[1]).toMatchObject({
-      urls: ['turn:turn-one.example.com:3478?transport=udp'],
+      urls: [
+        'turn:turn-one.example.com:3478?transport=udp',
+        'turns:turn.cloudflare.com:443?transport=tcp',
+      ],
       username: 'user-one',
       credential: 'cred-one',
     });
@@ -710,7 +713,10 @@ describe('tray worker skeleton', () => {
       iceServers?: Array<{ urls: string[]; username: string; credential: string }>;
     };
     expect(secondFollower.iceServers?.[1]).toMatchObject({
-      urls: ['turn:turn-one.example.com:3478?transport=udp'],
+      urls: [
+        'turn:turn-one.example.com:3478?transport=udp',
+        'turns:turn.cloudflare.com:443?transport=tcp',
+      ],
       username: 'user-one',
       credential: 'cred-one',
     });
@@ -734,7 +740,10 @@ describe('tray worker skeleton', () => {
       iceServers?: Array<{ urls: string[]; username: string; credential: string }>;
     };
     expect(refreshedFollower.iceServers?.[1]).toMatchObject({
-      urls: ['turn:turn-two.example.com:3478?transport=udp'],
+      urls: [
+        'turn:turn-two.example.com:3478?transport=udp',
+        'turns:turn.cloudflare.com:443?transport=tcp',
+      ],
       username: 'user-two',
       credential: 'cred-two',
     });
