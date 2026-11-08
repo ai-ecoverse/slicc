@@ -21,7 +21,8 @@
 import { claudeRejectsTemperature } from './claude-model-version.js';
 
 /**
- * Non-Claude Bedrock models that reject `temperature` the same way.
+ * Non-Claude models that reject `temperature` the same way (Bedrock first,
+ * plus the direct OpenAI API below).
  *
  * The newest third-party models on Bedrock have followed Anthropic in
  * dropping the param: `openai.gpt-5.6-*`, `openai.gpt-6-{sol,luna,astra}`,
@@ -45,9 +46,18 @@ import { claudeRejectsTemperature } from './claude-model-version.js';
  * The version is pinned: `gpt-5.5` still accepts `temperature`. GPT-6 is
  * spelled out per variant like the allowlist, and `kimi-k3` must not also
  * match a future `kimi-k3.5` or `kimi-k30` nobody has measured.
+ *
+ * The original GPT-5 reasoning trio rejects it on the direct OpenAI API too.
+ * With an API key on the built-in `openai` provider, `gpt-5-nano` (the
+ * cheapest GPT sibling, so the model `quick-llm` picks for every GPT model)
+ * answers `POST /v1/responses` with `400 "Unsupported parameter: 'temperature'
+ * is not supported with this model."` (seen 2026-11-07). `gpt-5` and
+ * `gpt-5-mini` take only the default value as well. Pinned to those three
+ * ids: `gpt-5-chat-latest` accepts `temperature`, and the `gpt-5.x` releases
+ * are not matched.
  */
 const NON_CLAUDE_REJECTS_TEMPERATURE_RE =
-  /gpt-5[.-]6|gpt-6-(?:sol|luna|astra)|gpt-6[.-]1-sol(?=$|-\()|kimi-k3(?![\d.])|grok-4[.-]7(?![\d])/;
+  /gpt-5[.-]6|gpt-6-(?:sol|luna|astra)|gpt-6[.-]1-sol(?=$|-\()|gpt-5(?:-mini|-nano)?(?=$|-\()|kimi-k3(?![\d.])|grok-4[.-]7(?![\d])/;
 
 function nonClaudeRejectsTemperature(modelId: string, modelName?: string): boolean {
   const values = modelName ? [modelId, modelName] : [modelId];

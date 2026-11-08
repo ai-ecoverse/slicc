@@ -129,6 +129,49 @@ describe('quickLabel', () => {
     expect((model as Model<Api>).id).toBe('gpt-5-nano');
   });
 
+  // The built-in `openai` provider forwards options untouched, and the
+  // cheap sibling it lands on (gpt-5-nano) 400s on any `temperature`.
+  it.each([
+    ['the default temperature', undefined],
+    ['an explicit temperature', 0],
+  ])('drops %s for a cheap sibling that rejects it', async (_label, temperature) => {
+    providerSettings.providerId = 'openai';
+    providerSettings.modelId = 'gpt-6.1-terra';
+    providerSettings.models = [
+      makeModel('gpt-6.1-terra', 2.5, 'openai'),
+      makeModel('gpt-5-mini', 0.25, 'openai'),
+      makeModel('gpt-5-nano', 0.05, 'openai'),
+    ];
+    completeSimple.mockResolvedValue(assistantTextMessage('ok'));
+
+    await quickLabel({ prompt: 'hi', maxTokens: 40, temperature });
+
+    const [model, , options] = completeSimple.mock.calls[0] as [
+      Model<Api>,
+      unknown,
+      { apiKey?: string; maxTokens?: number; temperature?: number },
+    ];
+    expect(model.id).toBe('gpt-5-nano');
+    expect(options).not.toHaveProperty('temperature');
+    expect(options.apiKey).toBe('sk-test');
+    expect(options.maxTokens).toBe(40);
+  });
+
+  it('keeps temperature for a model that accepts it', async () => {
+    providerSettings.models = [makeModel('claude-haiku-4-5', 1)];
+    providerSettings.modelId = 'claude-haiku-4-5';
+    completeSimple.mockResolvedValue(assistantTextMessage('ok'));
+
+    await quickLabel({ prompt: 'hi' });
+
+    const [, , options] = completeSimple.mock.calls[0] as [
+      unknown,
+      unknown,
+      { temperature?: number },
+    ];
+    expect(options.temperature).toBe(0.3);
+  });
+
   it('prefers gemini-flash over gemini-pro', async () => {
     providerSettings.providerId = 'google';
     providerSettings.modelId = 'gemini-2.5-pro';
