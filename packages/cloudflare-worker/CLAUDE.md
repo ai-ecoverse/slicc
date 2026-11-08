@@ -94,10 +94,12 @@ What a seat may _send_ is gated leader-side by `packages/webapp/src/scoops/tray-
 
 ### TURN Credentials & Follower Push
 
-TURN uses `CLOUDFLARE_TURN_KEY_ID` + `CLOUDFLARE_TURN_API_TOKEN`. APNS push (`src/apns.ts`) fans
-out leader `push.send` (metadata only). **Provider JWTs minted by exactly one DO**
-(`src/apns-provider-token.ts`, `idFromName('__apns_provider_token')`) — Apple throttles token
-creation per team+key, so per-tray minting broke its floor. Secrets, cap, events:
+TURN uses `CLOUDFLARE_TURN_KEY_ID` + `CLOUDFLARE_TURN_API_TOKEN`. `fetchTURNCredentials`
+prepends STUN and appends `turns:turn.cloudflare.com:443?transport=tcp` when Cloudflare's
+list lacks it. APNS push (`src/apns.ts`) fans out leader `push.send` (metadata only).
+**Provider JWTs minted by exactly one DO** (`src/apns-provider-token.ts`,
+`idFromName('__apns_provider_token')`) — Apple throttles token creation per team+key, so
+per-tray minting broke its floor. Secrets, cap, events:
 [docs § TURN & Push](../../docs/cloudflare-worker-details.md#turn-push).
 
 ### Tray Kind (desktop / hosted)

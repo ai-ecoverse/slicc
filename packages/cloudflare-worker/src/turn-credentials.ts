@@ -1,11 +1,32 @@
 import type { TurnIceServer } from '@slicc/shared-ts';
 
+/** Cloudflare TURN over TLS on 443 — works on networks that reset 5349. */
+export const TURN_TLS_443_URL = 'turns:turn.cloudflare.com:443?transport=tcp';
+
+interface CloudflareTurnIceServer {
+  urls: string | string[];
+  username: string;
+  credential: string;
+}
+
 interface CloudflareTurnResponse {
-  iceServers: TurnIceServer;
+  iceServers: CloudflareTurnIceServer;
 }
 
 export const TURN_CREDENTIAL_TTL_SECONDS = 86_400;
 export const TURN_CREDENTIAL_TTL_MS = TURN_CREDENTIAL_TTL_SECONDS * 1000;
+
+function withTurnTls443(server: CloudflareTurnIceServer): TurnIceServer {
+  const existing = Array.isArray(server.urls) ? server.urls : [server.urls];
+  const urls = existing.includes(TURN_TLS_443_URL)
+    ? [...existing]
+    : [...existing, TURN_TLS_443_URL];
+  return {
+    urls,
+    username: server.username,
+    credential: server.credential,
+  };
+}
 
 export async function fetchTURNCredentials(
   keyId: string,
@@ -29,6 +50,6 @@ export async function fetchTURNCredentials(
   const data = (await response.json()) as CloudflareTurnResponse;
   return [
     { urls: ['stun:stun.cloudflare.com:3478'], username: '', credential: '' },
-    data.iceServers,
+    withTurnTls443(data.iceServers),
   ];
 }
