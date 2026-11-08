@@ -154,3 +154,50 @@ describe('non-Claude Bedrock models that reject temperature', () => {
     }
   });
 });
+
+/**
+ * Direct OpenAI API. `gpt-5-nano` is the cheapest GPT sibling, so
+ * `quick-llm.ts` picks it for every GPT model on the built-in `openai`
+ * provider, and its `temperature: 0.3` answered `POST /v1/responses` with
+ * `400 "Unsupported parameter: 'temperature' is not supported with this model."`.
+ */
+describe('direct OpenAI GPT-5 models that reject temperature', () => {
+  it.each([
+    ['gpt-5'],
+    ['gpt-5-mini'],
+    ['gpt-5-nano'],
+    // Same models behind gateways that keep the vendor prefix.
+    ['openai/gpt-5-nano'],
+    ['openai/gpt-5-mini'],
+  ])('%s does not support temperature', (id) => {
+    expect(modelSupportsTemperature(id)).toBe(false);
+  });
+
+  it('matches on the display name', () => {
+    expect(modelSupportsTemperature('opaque-routing-id', 'GPT-5 Nano')).toBe(false);
+    expect(modelSupportsTemperature('opaque-routing-id', 'GPT-5 mini (Global)')).toBe(false);
+  });
+
+  // Pinned to the three ids: the chat model accepts `temperature`, and later
+  // GPT-5.x releases (and older mini/nano models) are not matched.
+  it.each([
+    ['gpt-5-chat-latest'],
+    ['gpt-5.1'],
+    ['gpt-5.4-mini'],
+    ['gpt-5.4-nano'],
+    ['gpt-5.5'],
+    ['gpt-4.1-nano'],
+    ['gpt-4o-mini'],
+  ])('%s is not caught by the pinned GPT-5 pattern', (id) => {
+    expect(modelSupportsTemperature(id)).toBe(true);
+  });
+
+  it('strips temperature from options for gpt-5-nano', () => {
+    expect(
+      withSupportedTemperature('gpt-5-nano', 'GPT-5 Nano', {
+        temperature: 0.3,
+        maxTokens: 40,
+      })
+    ).toEqual({ maxTokens: 40 });
+  });
+});

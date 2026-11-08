@@ -26,6 +26,7 @@ import {
   getSelectedModelId,
   getSelectedProvider,
 } from './account-store.js';
+import { withSupportedTemperature } from './temperature-support.js';
 
 const log = createLogger('quick-llm');
 
@@ -91,16 +92,18 @@ export async function quickLabel(opts: QuickLabelOptions): Promise<string | null
   }
 
   try {
+    // Built-in pi-ai providers (plain `openai` with an API key) forward
+    // options as-is, so drop `temperature` here for models that 400 on it.
     const message = await completeSimple(
       model,
       { systemPrompt, messages: [userMessage] },
-      {
+      withSupportedTemperature(model.id, model.name, {
         apiKey,
         maxTokens: opts.maxTokens ?? 60,
         temperature: opts.temperature ?? 0.3,
         signal: opts.signal,
         headers: Object.keys(headers).length > 0 ? headers : undefined,
-      }
+      })
     );
 
     const text = message.content

@@ -2386,6 +2386,14 @@ native id and name. A stored id that has left the catalog falls back to
 like a model that accepts `temperature`. Models that still accept the
 field, such as `grok-4.5`, keep the caller value.
 
+Built-in pi-ai providers with no SLICC wrapper (plain `openai` with an API
+key) forward options untouched, so `quick-llm` also runs its own options
+through `withSupportedTemperature` before `completeSimple`. On
+`api.openai.com` the cheap GPT sibling it picks is `gpt-5-nano`, which
+answers `400 "Unsupported parameter: 'temperature' is not supported with this
+model."`; `gpt-5` and `gpt-5-mini` take only the default too.
+`gpt-5-chat-latest` and the `gpt-5.x` releases are not matched.
+
 ### Proxy Anthropic transports must override native conversation capabilities
 
 pi-ai catalog models can enable `supportsMidConvoEffort`, which inserts
