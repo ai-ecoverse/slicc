@@ -89,7 +89,7 @@
     "@pierre/diffs": "1.3.6",
     "@pierre/trees": "1.0.0-beta.6",
     "@slicc/shared-ts": "*",
-    "@wterm/dom": "0.5.7",
+    "@wterm/dom": "0.5.8",
     "@wterm/ghostty": "0.5.7",
     "lucide": "1.66.0"
   },
