@@ -42,7 +42,7 @@
     "@slicc/cloud-core": "*",
     "@slicc/shared-ts": "*",
     "@slicc/webcomponents": "*",
-    "@zenfs/core": "2.8.3",
+    "@zenfs/core": "2.9.0",
     "@zenfs/dom": "1.2.14",
     "buffer": "6.0.3",
     "bzip2": "0.1.1",
