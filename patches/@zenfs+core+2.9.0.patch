@@ -1,8 +1,55 @@
 diff --git a/node_modules/@zenfs/core/dist/backends/store/fs.js b/node_modules/@zenfs/core/dist/backends/store/fs.js
-index 7731230..64b8136 100644
+index 7731230..1401d4e 100644
 --- a/node_modules/@zenfs/core/dist/backends/store/fs.js
 +++ b/node_modules/@zenfs/core/dist/backends/store/fs.js
-@@ -695,7 +695,9 @@ let StoreFS = (() => {
+@@ -122,18 +122,28 @@ function writeEntry(buffer, offset, name, id, type) {
+ const dirListingMagic = 0xd1;
+ /** The first byte of a directory listing written as JSON by older versions, '{' */
+ const legacyListingMagic = 0x7b;
++/**
++ * Packed header for directory listings. Kept as its own constructor so
++ * `sizeof` / memium's type registry can key off the stable `DirListing`
++ * name even when a subclass declaration is minified (production kernel
++ * worker bundles rename `class DirListing` to `class e`, and
++ * `sizeof(DirListing)` then throws `Unable to resolve size of …`).
++ */
++const DirListingHeader = struct.packed('DirListing', { magic: t.uint8, entry_count: t.uint32 }, { fastFields: true });
++/** Byte length of {@link DirListingHeader}; never `sizeof` the subclass. */
++const dirListingHeaderSize = DirListingHeader.size;
+ /**
+  * A directory listing, followed by `entry_count` variable-length `DirEntry`s.
+  * Listings are immutable, so they can be backed by store memory; changes return a new listing. (RCU)
+  */
+-class DirListing extends struct.packed('DirListing', { magic: t.uint8, entry_count: t.uint32 }, { fastFields: true }) {
++class DirListing extends DirListingHeader {
+     /**
+      * Yields the offset and name length of each entry.
+      * This reads the bytes directly, since struct field access costs too much per entry.
+      */
+     *scan() {
+         const bytes = new Uint8Array(this.buffer, this.byteOffset, this.byteLength);
+-        let offset = sizeof(DirListing);
++        let offset = dirListingHeaderSize;
+         for (let i = 0; i < this.entry_count; i++) {
+             const nameLength = bytes[offset + nameLengthOffset] | (bytes[offset + nameLengthOffset + 1] << 8);
+             yield [offset, nameLength];
+@@ -208,13 +218,13 @@ class DirListing extends struct.packed('DirListing', { magic: t.uint8, entry_cou
+     /** Creates a listing from entries with unique names */
+     static from(entries) {
+         const encoded = Array.from(entries, entry => ({ ...entry, name: encodeName(entry.name) }));
+-        let size = sizeof(DirListing);
++        let size = dirListingHeaderSize;
+         for (const { name } of encoded)
+             size += sizeof(DirEntry) + name.length;
+         const listing = new DirListing(new ArrayBuffer(size));
+         listing.magic = dirListingMagic;
+         listing.entry_count = encoded.length;
+-        let offset = sizeof(DirListing);
++        let offset = dirListingHeaderSize;
+         for (const { name, id, type } of encoded)
+             offset += writeEntry(listing.buffer, offset, name, id, type);
+         return listing;
+@@ -695,7 +705,9 @@ let StoreFS = (() => {
              try {
                  const tx = __addDisposableResource(env_10, this.transaction(), false);
                  const inode = this.findInodeSync(tx, path);
