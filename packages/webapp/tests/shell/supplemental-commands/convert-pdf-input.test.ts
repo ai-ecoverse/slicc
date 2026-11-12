@@ -1,9 +1,7 @@
 import type { IFileSystem } from 'just-bash';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  createConvertCommand,
-  splitSceneSelector,
-} from '../../../src/shell/supplemental-commands/convert-command.js';
+import { splitSceneSelector } from '../../../src/shell/supplemental-commands/convert/run.js';
+import { createConvertCommand } from '../../../src/shell/supplemental-commands/convert-command.js';
 import * as magickWasm from '../../../src/shell/supplemental-commands/magick-wasm.js';
 import { mockCommandContext } from '../helpers/mock-command-context.js';
 

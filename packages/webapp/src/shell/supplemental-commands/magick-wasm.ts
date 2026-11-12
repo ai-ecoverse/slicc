@@ -28,19 +28,21 @@
  * Only the heavy `magick.wasm` binary stays out of the bundle — it is
  * loaded from the VFS ipk install.
  *
+ * This module itself must stay OFF the worker's eager first-load graph:
+ * `convert-command.ts` lazy-imports `convert/run.ts` (which pulls us in)
+ * on first use, and `builtin-shadow-map.ts` reads the install pin from
+ * `magick-version.ts` rather than from here. A Renovate bump of the
+ * glue would otherwise grow cold-boot by the delta of every release.
+ *
  * The glue is imported by NAMED BINDING, never as `import * as ns`. That
  * is a bundle-size contract, not style: since 0.0.43 the package ships the
  * Emscripten glue for BOTH memory models in one module — `x86/magick.js`
  * (~124 kB) behind `initializeImageMagick` and `x64/magick.js` (~130 kB)
  * behind `initializeImageMagickx64`. A namespace import references every
  * export, so Rollup must retain both and the unused 64-bit glue rides
- * along. Because this module sits in the kernel worker's EAGER import
- * closure (`builtin-shadow-map.ts` pulls it in for a version string), that
- * dead glue is cold-boot payload on every single boot: the 0.0.42 -> 0.0.43
- * bump measured +103 kB on the worker first-load graph. Naming the members
- * we actually use lets tree-shaking drop the initializer we never call.
- * If a future release moves a member we need, add it to `MAGICK` below —
- * do NOT go back to a namespace import.
+ * along. Naming the members we actually use lets tree-shaking drop the
+ * initializer we never call. If a future release moves a member we need,
+ * add it to `MAGICK` below — do NOT go back to a namespace import.
  */
 
 import {
@@ -60,7 +62,10 @@ import {
 import { splitPath } from '../../fs/path-utils.js';
 import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
+import { BUNDLED_MAGICK_VERSION } from './magick-version.js';
 import { GLOBAL_IPK_ADD, isNodeRuntime } from './shared.js';
+
+export { BUNDLED_MAGICK_VERSION };
 
 export interface ImageMagickModule {
   initializeImageMagick: (wasmLocation: URL | Uint8Array | WebAssembly.Module) => Promise<void>;
@@ -194,15 +199,11 @@ export interface IpkResolutionContext {
  * browser loader guards against the mismatch (`assertMagickVersionMatch`)
  * and the install guidance pins this exact version.
  *
- * The version is baked from `packages/webapp/package.json` via the Vite /
- * vitest `__MAGICK_WASM_VERSION__` define (range-prefix stripped) — for a
- * `0.0.x` caret range npm locks to exactly that version, which is what the
- * bundled glue resolves to. Deriving it from the manifest means Renovate
- * bumping the dependency automatically updates the install guidance and the
- * version guard with no source literal to drift; a unit test keeps the
- * injected value in lockstep with the actually-installed package.
+ * The version pin lives in `magick-version.ts` (re-exported above) so
+ * boot-critical callers can read it without hoisting this module. A unit
+ * test keeps the injected value in lockstep with the actually-installed
+ * package.
  */
-export const BUNDLED_MAGICK_VERSION = __MAGICK_WASM_VERSION__;
 
 const MAGICK_NOT_INSTALLED = `@imagemagick/magick-wasm is not installed in node_modules: run \`${GLOBAL_IPK_ADD} @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}\` (no network fallback)`;
 
