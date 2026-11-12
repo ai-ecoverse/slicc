@@ -5,10 +5,8 @@ import { createRequire } from 'module';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  createConvertCommand,
-  createIpkContextFromCtx,
-} from '../../../src/shell/supplemental-commands/convert-command.js';
+import { createIpkContextFromCtx } from '../../../src/shell/supplemental-commands/convert/run.js';
+import { createConvertCommand } from '../../../src/shell/supplemental-commands/convert-command.js';
 import * as magickWasm from '../../../src/shell/supplemental-commands/magick-wasm.js';
 import { GLOBAL_IPK_ADD } from '../../../src/shell/supplemental-commands/shared.js';
 import { mockCommandContext } from '../helpers/mock-command-context.js';
@@ -987,12 +985,12 @@ describe('magick-wasm import shape (NS1 / F-C04 regression)', () => {
    * glue for both memory models in a single module: `x86/magick.js` (~124 kB)
    * behind `initializeImageMagick` and `x64/magick.js` (~130 kB) behind
    * `initializeImageMagickx64`. A namespace import references every export,
-   * so Rollup must retain both. This module is in the kernel worker's EAGER
-   * closure (`builtin-shadow-map.ts` reaches it for a version string), so the
-   * unused 64-bit glue would be cold-boot payload on every boot — measured at
-   * +103 kB on the worker first-load graph when the 0.0.43 bump landed.
-   * Like the sibling assertions this is a bundling-shape invariant no runtime
-   * unit test can exercise, so it is pinned at the source level.
+   * so Rollup must retain both. The unused 64-bit glue was cold-boot payload
+   * when this module sat in the eager graph — measured at +103 kB on the
+   * worker first-load graph when the 0.0.43 bump landed. Naming the members
+   * we use still matters inside the lazy convert chunk. Like the sibling
+   * assertions this is a bundling-shape invariant no runtime unit test can
+   * exercise, so it is pinned at the source level.
    */
   it('names its glue imports so the unused 64-bit glue tree-shakes out', () => {
     expect(magickSrc).not.toMatch(/import \* as \w+ from '@imagemagick\/magick-wasm'/);
@@ -1015,6 +1013,42 @@ describe('magick-wasm import shape (NS1 / F-C04 regression)', () => {
       'utf-8'
     );
     expect(ffmpegSrc).not.toMatch(/import\(\s*['"]@ffmpeg\/ffmpeg['"]\s*\)/);
+  });
+
+  /**
+   * First-load invariant: the magick glue must stay out of the worker's
+   * eager closure. `convert-command.ts` is a registration stub that
+   * dynamic-imports `convert/run.ts` on first use (same pattern as
+   * `ffmpeg-command.ts`); `builtin-shadow-map.ts` reads the version pin
+   * from the leaf `magick-version.ts`. A static import of `magick-wasm`
+   * from either eager entry would re-hoist the package and fail the
+   * first-load delta gate on every Renovate bump.
+   */
+  it('keeps magick-wasm off the eager registration / shadow-map path', () => {
+    const convertCmdSrc = readFileSync(
+      resolve(__dirname, '../../../src/shell/supplemental-commands/convert-command.ts'),
+      'utf-8'
+    );
+    const shadowSrc = readFileSync(
+      resolve(__dirname, '../../../src/shell/supplemental-commands/builtin-shadow-map.ts'),
+      'utf-8'
+    );
+    const versionSrc = readFileSync(
+      resolve(__dirname, '../../../src/shell/supplemental-commands/magick-version.ts'),
+      'utf-8'
+    );
+
+    expect(convertCmdSrc).toMatch(/import\(\s*['"]\.\/convert\/run\.js['"]\s*\)/);
+    expect(convertCmdSrc).not.toMatch(/from ['"]\.\/magick-wasm\.js['"]/);
+    expect(convertCmdSrc).not.toMatch(/from ['"]@imagemagick\/magick-wasm['"]/);
+
+    expect(shadowSrc).toMatch(/from ['"]\.\/magick-version\.js['"]/);
+    expect(shadowSrc).not.toMatch(/from ['"]\.\/magick-wasm\.js['"]/);
+    expect(shadowSrc).not.toMatch(/from ['"]@imagemagick\/magick-wasm['"]/);
+
+    expect(versionSrc).not.toMatch(/from ['"]@imagemagick\/magick-wasm['"]/);
+    expect(versionSrc).not.toMatch(/import\(\s*['"]@imagemagick\/magick-wasm['"]\s*\)/);
+    expect(versionSrc).toMatch(/__MAGICK_WASM_VERSION__/);
   });
 
   /**

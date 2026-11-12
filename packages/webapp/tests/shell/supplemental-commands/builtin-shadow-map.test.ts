@@ -10,7 +10,7 @@ import {
 } from '../../../src/shell/supplemental-commands/builtin-shadow-map.js';
 import { ESBUILD_VERSION } from '../../../src/shell/supplemental-commands/esbuild-wasm.js';
 import { BUNDLED_FFMPEG_CORE_VERSION } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
-import { BUNDLED_MAGICK_VERSION } from '../../../src/shell/supplemental-commands/magick-wasm.js';
+import { BUNDLED_MAGICK_VERSION } from '../../../src/shell/supplemental-commands/magick-version.js';
 import { GLOBAL_IPK_ADD } from '../../../src/shell/supplemental-commands/shared.js';
 import { V86_PINNED_VERSION } from '../../../src/shell/supplemental-commands/v86-wasm.js';
 

@@ -1,7 +1,7 @@
 import { INSTALL_PACKAGES } from './biome-command.js';
 import { ESBUILD_VERSION } from './esbuild-wasm.js';
 import { BUNDLED_FFMPEG_CORE_VERSION } from './ffmpeg-wasm.js';
-import { BUNDLED_MAGICK_VERSION } from './magick-wasm.js';
+import { BUNDLED_MAGICK_VERSION } from './magick-version.js';
 import { GLOBAL_IPK_ADD, TYPESCRIPT_VFS_INSTALL_COMMAND } from './shared.js';
 import { V86_PINNED_VERSION } from './v86-wasm.js';
 
