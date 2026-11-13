@@ -37,6 +37,6 @@ The override is stored in the page's localStorage (`slicc_feature_flags`). From 
 
 ## `seven-banner`
 
-Off by default. While it is on, the leader shell shows the "SLICC 7 is at seven.sliccy.ai. Export your profile." banner between the nav and the shell (`packages/webapp/src/ui/wc/wc-seven-banner.ts`). A dismissal is still remembered per origin. Settings → **Export for SLICC 7…** and the `export-profile` command work whether the flag is on or off.
+On by default. While it is on, the leader shell shows the "SLICC 7 is here. **Try the upgrade** · **Export your profile**" banner between the nav and the shell (`packages/webapp/src/ui/wc/wc-seven-banner.ts`). **Try the upgrade** opens `https://www.sliccy.ai/7/`: in the same tab on www, where seven moves the profile in place, and in a new tab anywhere else. A dismissal is remembered per origin (`slicc-seven-upgrade-banner-dismissed`). Settings → **Export for SLICC 7…** and the `export-profile` command work whether the flag is on or off.
 
-Try it locally with `flags set seven-banner on` and a reload. To show it to everyone, add `"seven-banner": "on"` to the worker's `FEATURE_FLAGS` `base`. Open tabs follow that change at their next central refresh (`FEATURE_FLAGS_REFRESH_INTERVAL_MS`): the banner appears when the flag turns on and goes away when it turns off, without counting as a dismissal.
+Hide it locally with `flags set seven-banner off` and a reload. To hide it for everyone, add `"seven-banner": "off"` to the worker's `FEATURE_FLAGS` `base`. Open tabs follow that change at their next central refresh (`FEATURE_FLAGS_REFRESH_INTERVAL_MS`): the banner appears when the flag turns on and goes away when it turns off, without counting as a dismissal.

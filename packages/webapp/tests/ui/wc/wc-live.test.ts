@@ -1140,41 +1140,44 @@ describe('mountSevenBannerInShell', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  it('shows nothing while the seven-banner flag is at its default', async () => {
+  it('mounts the banner before the shell at the default', async () => {
     initFeatureFlags('standalone');
-    stop = mountSevenBannerInShell(fakeLog());
-    await settle();
-    expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
-  });
-
-  it('mounts the banner before the shell once the flag is on', async () => {
-    initFeatureFlags('standalone', { 'seven-banner': 'on' });
     stop = mountSevenBannerInShell(fakeLog());
     await vi.waitFor(() => expect(document.getElementById(SEVEN_BANNER_ID)).not.toBeNull());
     expect(document.getElementById(SEVEN_BANNER_ID)?.nextElementSibling?.localName).toBe(
       'slicc-shell'
     );
+    expect(document.querySelector<HTMLAnchorElement>('a.wcsev__upgrade')?.href).toBe(
+      'https://www.sliccy.ai/7/'
+    );
   });
 
-  it('follows a central refresh in an open tab: on mounts it, off removes it', async () => {
-    initFeatureFlags('standalone');
+  it('shows nothing while the seven-banner flag is off', async () => {
+    initFeatureFlags('standalone', { 'seven-banner': 'off' });
+    stop = mountSevenBannerInShell(fakeLog());
+    await settle();
+    expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
+  });
+
+  it('follows a central refresh in an open tab: off removes it, on mounts it', async () => {
+    initFeatureFlags('standalone', { 'seven-banner': 'off' });
     stop = mountSevenBannerInShell(fakeLog());
     await settle();
     expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
 
-    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    updateCentralFlagValues('standalone', {});
     await vi.waitFor(() => expect(document.getElementById(SEVEN_BANNER_ID)).not.toBeNull());
     updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
     await settle();
     expect(document.querySelectorAll(`#${SEVEN_BANNER_ID}`)).toHaveLength(1);
 
-    updateCentralFlagValues('standalone', {});
+    updateCentralFlagValues('standalone', { 'seven-banner': 'off' });
     expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
     expect(localStorage.getItem(SEVEN_BANNER_DISMISSED_KEY)).toBeNull();
   });
 
   it('stops following refreshes once unsubscribed', async () => {
-    initFeatureFlags('standalone');
+    initFeatureFlags('standalone', { 'seven-banner': 'off' });
     mountSevenBannerInShell(fakeLog())();
     updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
     await settle();

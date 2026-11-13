@@ -1,22 +1,28 @@
 /**
- * The SLICC 7 banner: "SLICC 7 is at seven.sliccy.ai. Export your profile."
+ * The SLICC 7 banner: "SLICC 7 is here. [Try the upgrade] [Export your profile] ×".
  *
  * Sits between the nav and the shell in the app column, so it takes real
- * layout space instead of covering the nav. "Export your profile" opens the
- * Export for SLICC 7 dialog. On www.sliccy.ai, where seven runs at `/7/` on
- * the same origin, "Move to seven in this browser" opens `/7/`, which moves
- * the profile in place (slicc#4051, ai-ecoverse/slicc-bios#648). Shown
- * only while the `seven-banner` flag is on (gated by the caller in
- * `wc-live.ts`). Dismissing it is remembered per
- * origin; the Settings entry stays.
+ * layout space instead of covering the nav. "Try the upgrade" opens seven at
+ * www.sliccy.ai/7/. On www itself, where seven runs on the same origin and
+ * moves the profile in place (slicc#4051, ai-ecoverse/slicc-bios#648), it
+ * opens in this tab; anywhere else (localhost, a custom origin) it opens in a
+ * new tab, and "Export your profile" (the Export for SLICC 7 dialog) is how
+ * that profile gets there. Shown while the `seven-banner` flag is on (on by
+ * default; gated by the caller in `wc-live.ts`). Dismissing it is remembered
+ * per origin; the Settings entry stays.
  */
 
 import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 
 export const SEVEN_BANNER_ID = 'slicc-seven-banner';
 /** Seven's BIOS on www, which runs the in-place upgrade. */
-export const SEVEN_IN_PLACE_PATH = '/7/';
-export const SEVEN_BANNER_DISMISSED_KEY = 'slicc-seven-banner-dismissed';
+export const SEVEN_UPGRADE_URL = `${SLICC_HOSTED_ORIGIN}/7/`;
+/**
+ * Per-origin dismissal. A new key for the "Try the upgrade" banner, so a
+ * dismissal of the earlier "SLICC 7 is at seven.sliccy.ai" banner does not
+ * hide it.
+ */
+export const SEVEN_BANNER_DISMISSED_KEY = 'slicc-seven-upgrade-banner-dismissed';
 
 const STYLE_ID = 'slicc-seven-banner-style';
 const CSS = `
@@ -25,13 +31,12 @@ const CSS = `
   background:color-mix(in srgb,var(--ctx) 12%,var(--canvas));
   border:1px solid color-mix(in srgb,var(--ctx) 35%,var(--line));flex:0 0 auto;}
 .wcsev__text{flex:1;min-width:0;}
-.wcsev a{color:var(--ink);font-weight:600;text-decoration:underline;text-underline-offset:2px;}
 .wcsev__export{font:600 12px var(--ui);color:var(--canvas);background:var(--ink);border:1px solid var(--ink);
   border-radius:8px;padding:4px 10px;cursor:pointer;white-space:nowrap;}
 .wcsev__export:hover{background:color-mix(in srgb,var(--ink) 85%,var(--canvas));}
 .wcsev__export--secondary{color:var(--ink);background:transparent;border-color:color-mix(in srgb,var(--ink) 30%,var(--line));}
 .wcsev__export--secondary:hover{background:var(--ghost);}
-a.wcsev__move{color:var(--canvas);text-decoration:none;font-weight:600;}
+a.wcsev__upgrade{color:var(--canvas);text-decoration:none;font-weight:600;}
 .wcsev__close{font:500 16px/1 var(--ui);color:var(--txt-2);background:transparent;border:0;border-radius:6px;
   width:26px;height:26px;cursor:pointer;flex:0 0 auto;}
 .wcsev__close:hover{background:var(--ghost);color:var(--ink);}
@@ -55,16 +60,16 @@ function isDismissed(storage: Pick<Storage, 'getItem'> | null): boolean {
   }
 }
 
-/** `/7/` on the hosted origin, where seven can move this browser's profile in place; else null. */
-export function sevenInPlaceHref(origin: string): string | null {
-  return origin === SLICC_HOSTED_ORIGIN ? SEVEN_IN_PLACE_PATH : null;
+/** True on www, where seven shares the origin and the upgrade moves this profile in place. */
+export function upgradesInPlace(origin: string): boolean {
+  return origin === SLICC_HOSTED_ORIGIN;
 }
 
 export interface SevenBannerOptions {
   /** Opens the Export for SLICC 7 dialog. */
   onExport(): void;
-  /** Where "Move to seven in this browser" goes; omitted off www. */
-  moveHref?: string | null;
+  /** This page's origin; decides whether "Try the upgrade" opens in this tab. */
+  origin: string;
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
 }
 
@@ -88,28 +93,22 @@ export function mountSevenBanner(
 
   const text = doc.createElement('span');
   text.className = 'wcsev__text';
-  const link = doc.createElement('a');
-  link.href = 'https://seven.sliccy.ai';
-  link.target = '_blank';
-  link.rel = 'noopener';
-  link.textContent = 'seven.sliccy.ai';
-  text.append('SLICC 7 is at ', link, '.');
+  text.textContent = 'SLICC 7 is here.';
+
+  const upgrade = doc.createElement('a');
+  upgrade.className = 'wcsev__export wcsev__upgrade';
+  upgrade.href = SEVEN_UPGRADE_URL;
+  upgrade.textContent = 'Try the upgrade';
+  if (!upgradesInPlace(opts.origin)) {
+    upgrade.target = '_blank';
+    upgrade.rel = 'noopener';
+  }
 
   const exportBtn = doc.createElement('button');
   exportBtn.type = 'button';
-  exportBtn.className = 'wcsev__export';
+  exportBtn.className = 'wcsev__export wcsev__export--secondary';
   exportBtn.textContent = 'Export your profile';
   exportBtn.addEventListener('click', () => opts.onExport());
-
-  const actions: HTMLElement[] = [exportBtn];
-  if (opts.moveHref) {
-    const move = doc.createElement('a');
-    move.className = 'wcsev__export wcsev__move';
-    move.href = opts.moveHref;
-    move.textContent = 'Move to seven in this browser';
-    exportBtn.classList.add('wcsev__export--secondary');
-    actions.unshift(move);
-  }
 
   const close = doc.createElement('button');
   close.type = 'button';
@@ -125,7 +124,7 @@ export function mountSevenBanner(
     banner.remove();
   });
 
-  banner.append(text, ...actions, close);
+  banner.append(text, upgrade, exportBtn, close);
   host.insertBefore(banner, before && before.parentNode === host ? before : null);
   return banner;
 }
