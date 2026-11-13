@@ -147,13 +147,13 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     id: 'seven-banner',
     label: 'SLICC 7 banner',
     description:
-      'Show a banner above the chat saying SLICC 7 is at seven.sliccy.ai, with a button to export your profile.',
-    // Off until SLICC 7 is ready to announce. Settings → Export for SLICC 7
-    // and `export-profile` do not depend on it. Turn it on for everyone with
-    // a `base` entry in the worker's `FEATURE_FLAGS`.
-    defaultValue: 'off',
+      'Show a banner above the chat inviting you to try the upgrade to SLICC 7, with a button to export your profile.',
+    // On: SLICC 7 is announced. Settings → Export for SLICC 7 and
+    // `export-profile` do not depend on it. Turn it off for everyone with a
+    // `"seven-banner": "off"` `base` entry in the worker's `FEATURE_FLAGS`.
+    defaultValue: 'on',
     userToggleable: true,
-    since: '2026-10-20',
+    since: '2026-11-13',
   }),
 ]);
 

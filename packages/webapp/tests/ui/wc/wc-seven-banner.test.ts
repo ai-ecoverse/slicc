@@ -4,9 +4,12 @@ import {
   mountSevenBanner,
   SEVEN_BANNER_DISMISSED_KEY,
   SEVEN_BANNER_ID,
-  SEVEN_IN_PLACE_PATH,
-  sevenInPlaceHref,
+  SEVEN_UPGRADE_URL,
+  upgradesInPlace,
 } from '../../../src/ui/wc/wc-seven-banner.js';
+
+const LOCAL = 'http://localhost:5710';
+const WWW = 'https://www.sliccy.ai';
 
 function memoryStorage(initial: { [key: string]: string } = {}) {
   const store = new Map(Object.entries(initial));
@@ -28,35 +31,49 @@ function shell(): { appCol: HTMLElement; nav: HTMLElement; main: HTMLElement } {
 describe('mountSevenBanner', () => {
   afterEach(() => document.body.replaceChildren());
 
-  it('says SLICC 7 is at seven.sliccy.ai between the nav and the shell', () => {
+  it('invites you to try the upgrade at www.sliccy.ai/7 between the nav and the shell', () => {
     const { appCol, nav, main } = shell();
     const banner = mountSevenBanner(document, appCol, main, {
       onExport: vi.fn(),
+      origin: LOCAL,
       storage: memoryStorage(),
     });
     expect(banner?.id).toBe(SEVEN_BANNER_ID);
-    expect(banner?.textContent).toContain('SLICC 7 is at seven.sliccy.ai.');
+    expect(banner?.textContent).toContain('SLICC 7 is here.');
     expect(banner?.textContent).toContain('Export your profile');
-    expect(banner?.querySelector('a')?.getAttribute('href')).toBe('https://seven.sliccy.ai');
+    const upgrade = banner?.querySelector<HTMLAnchorElement>('a.wcsev__upgrade');
+    expect(upgrade?.textContent).toBe('Try the upgrade');
+    expect(upgrade?.getAttribute('href')).toBe('https://www.sliccy.ai/7/');
+    expect(SEVEN_UPGRADE_URL).toBe('https://www.sliccy.ai/7/');
     expect([...appCol.children]).toEqual([nav, banner, main]);
   });
 
   it('opens the export from its button', () => {
     const { appCol, main } = shell();
     const onExport = vi.fn();
-    const banner = mountSevenBanner(document, appCol, main, { onExport, storage: memoryStorage() });
-    banner?.querySelector<HTMLButtonElement>('.wcsev__export')?.click();
+    const banner = mountSevenBanner(document, appCol, main, {
+      onExport,
+      origin: LOCAL,
+      storage: memoryStorage(),
+    });
+    banner?.querySelector<HTMLButtonElement>('button.wcsev__export')?.click();
     expect(onExport).toHaveBeenCalledOnce();
   });
 
   it('remembers a dismissal and stays away afterwards', () => {
     const { appCol, main } = shell();
     const storage = memoryStorage();
-    const banner = mountSevenBanner(document, appCol, main, { onExport: vi.fn(), storage });
+    const banner = mountSevenBanner(document, appCol, main, {
+      onExport: vi.fn(),
+      origin: LOCAL,
+      storage,
+    });
     banner?.querySelector<HTMLButtonElement>('.wcsev__close')?.click();
     expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
     expect(storage.setItem).toHaveBeenCalledWith(SEVEN_BANNER_DISMISSED_KEY, '1');
-    expect(mountSevenBanner(document, appCol, main, { onExport: vi.fn(), storage })).toBeNull();
+    expect(
+      mountSevenBanner(document, appCol, main, { onExport: vi.fn(), origin: LOCAL, storage })
+    ).toBeNull();
   });
 
   it('is idempotent and appends when the anchor is elsewhere', () => {
@@ -64,11 +81,16 @@ describe('mountSevenBanner', () => {
     const stray = document.createElement('div');
     const first = mountSevenBanner(document, appCol, stray, {
       onExport: vi.fn(),
+      origin: LOCAL,
       storage: memoryStorage(),
     });
     expect(appCol.lastElementChild).toBe(first);
     expect(
-      mountSevenBanner(document, appCol, null, { onExport: vi.fn(), storage: memoryStorage() })
+      mountSevenBanner(document, appCol, null, {
+        onExport: vi.fn(),
+        origin: LOCAL,
+        storage: memoryStorage(),
+      })
     ).toBeNull();
   });
 
@@ -82,43 +104,71 @@ describe('mountSevenBanner', () => {
         throw new Error('denied');
       },
     };
-    const banner = mountSevenBanner(document, appCol, main, { onExport: vi.fn(), storage: broken });
+    const banner = mountSevenBanner(document, appCol, main, {
+      onExport: vi.fn(),
+      origin: LOCAL,
+      storage: broken,
+    });
     expect(banner).not.toBeNull();
     banner?.querySelector<HTMLButtonElement>('.wcsev__close')?.click();
     expect(document.getElementById(SEVEN_BANNER_ID)).toBeNull();
-    const again = mountSevenBanner(document, appCol, main, { onExport: vi.fn(), storage: null });
+    const again = mountSevenBanner(document, appCol, main, {
+      onExport: vi.fn(),
+      origin: LOCAL,
+      storage: null,
+    });
     expect(again).not.toBeNull();
     again?.remove();
-    expect(mountSevenBanner(document, appCol, main, { onExport: vi.fn() })).not.toBeNull();
+    expect(
+      mountSevenBanner(document, appCol, main, { onExport: vi.fn(), origin: LOCAL })
+    ).not.toBeNull();
   });
 
-  it('offers Move to seven in this browser, opening /7/ in this tab, when given a move href', () => {
+  it('opens the upgrade in this tab on www, where seven moves the profile in place', () => {
     const { appCol, main } = shell();
     const onExport = vi.fn();
     const banner = mountSevenBanner(document, appCol, main, {
       onExport,
-      moveHref: SEVEN_IN_PLACE_PATH,
+      origin: WWW,
       storage: memoryStorage(),
     });
-    const move = banner?.querySelector<HTMLAnchorElement>('a.wcsev__move');
-    expect(move?.textContent).toBe('Move to seven in this browser');
-    expect(move?.getAttribute('href')).toBe('/7/');
-    expect(move?.target).toBe('');
+    const upgrade = banner?.querySelector<HTMLAnchorElement>('a.wcsev__upgrade');
+    expect(upgrade?.getAttribute('href')).toBe('https://www.sliccy.ai/7/');
+    expect(upgrade?.target).toBe('');
     banner?.querySelector<HTMLButtonElement>('button.wcsev__export')?.click();
     expect(onExport).toHaveBeenCalledOnce();
-    expect(banner?.textContent).toContain('SLICC 7 is at seven.sliccy.ai.');
   });
 
-  it('keeps the visual order the tab order: text, move, export, dismiss', () => {
+  it('opens the upgrade in a new tab off www', () => {
     const { appCol, main } = shell();
     const banner = mountSevenBanner(document, appCol, main, {
       onExport: vi.fn(),
-      moveHref: SEVEN_IN_PLACE_PATH,
+      origin: LOCAL,
+      storage: memoryStorage(),
+    });
+    const upgrade = banner?.querySelector<HTMLAnchorElement>('a.wcsev__upgrade');
+    expect(upgrade?.target).toBe('_blank');
+    expect(upgrade?.rel).toBe('noopener');
+  });
+
+  it('does not stay hidden by a dismissal of the earlier seven.sliccy.ai banner', () => {
+    const { appCol, main } = shell();
+    const storage = memoryStorage({ 'slicc-seven-banner-dismissed': '1' });
+    expect(
+      mountSevenBanner(document, appCol, main, { onExport: vi.fn(), origin: LOCAL, storage })
+    ).not.toBeNull();
+  });
+
+  it('keeps the visual order the tab order: text, upgrade, export, dismiss', () => {
+    const { appCol, main } = shell();
+    const banner = mountSevenBanner(document, appCol, main, {
+      onExport: vi.fn(),
+      origin: WWW,
       storage: memoryStorage(),
     });
     expect([...banner!.children].map((c) => c.className)).toEqual([
       'wcsev__text',
-      'wcsev__export wcsev__move',
+      'wcsev__export wcsev__upgrade',
       'wcsev__export wcsev__export--secondary',
       'wcsev__close',
     ]);
@@ -127,23 +177,13 @@ describe('mountSevenBanner', () => {
       /\border:/
     );
   });
-
-  it('has no move action without a move href', () => {
-    const { appCol, main } = shell();
-    const banner = mountSevenBanner(document, appCol, main, {
-      onExport: vi.fn(),
-      moveHref: null,
-      storage: memoryStorage(),
-    });
-    expect(banner?.querySelector('.wcsev__move')).toBeNull();
-  });
 });
 
-describe('sevenInPlaceHref', () => {
-  it('is /7/ on www only', () => {
-    expect(sevenInPlaceHref('https://www.sliccy.ai')).toBe('/7/');
-    expect(sevenInPlaceHref('http://localhost:5710')).toBeNull();
-    expect(sevenInPlaceHref('https://seven.sliccy.ai')).toBeNull();
-    expect(sevenInPlaceHref('chrome-extension://abc')).toBeNull();
+describe('upgradesInPlace', () => {
+  it('is true on www only', () => {
+    expect(upgradesInPlace('https://www.sliccy.ai')).toBe(true);
+    expect(upgradesInPlace('http://localhost:5710')).toBe(false);
+    expect(upgradesInPlace('https://seven.sliccy.ai')).toBe(false);
+    expect(upgradesInPlace('chrome-extension://abc')).toBe(false);
   });
 });

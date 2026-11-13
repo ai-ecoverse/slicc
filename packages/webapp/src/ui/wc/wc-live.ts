@@ -1089,7 +1089,7 @@ function openProfileExportDialog(log: Pick<BootStageLogger, 'error'>): void {
 
 /**
  * Show the SLICC 7 banner between the nav and the shell while the
- * `seven-banner` flag is on, and follow central flag refreshes: an operator
+ * `seven-banner` flag is on (the default), and follow central flag refreshes: an operator
  * turning it on or off reaches tabs that are already open. Lazy; never blocks
  * boot. Returns the unsubscribe.
  */
@@ -1107,7 +1107,7 @@ export function mountSevenBannerInShell(log: Pick<BootStageLogger, 'error'>): ()
         if (!appCol || !isFeatureEnabled('seven-banner')) return;
         mod.mountSevenBanner(document, appCol, appCol.querySelector(':scope > slicc-shell'), {
           onExport: () => openProfileExportDialog(log),
-          moveHref: mod.sevenInPlaceHref(location.origin),
+          origin: location.origin,
         });
       })
       .catch((err) => log.error('SLICC 7 banner failed', err));

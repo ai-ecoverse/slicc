@@ -104,7 +104,7 @@ describe('feature flag registry', () => {
       expect.objectContaining({
         id: 'seven-banner',
         label: 'SLICC 7 banner',
-        defaultValue: 'off',
+        defaultValue: 'on',
         userToggleable: true,
       }),
     ]);
@@ -269,7 +269,7 @@ describe('feature flag registry', () => {
       'memory-v2': 'off',
       'live-model-catalog': 'on',
       'no-default-skills': 'off',
-      'seven-banner': 'off',
+      'seven-banner': 'on',
     });
     expect(
       resolveFlags(
@@ -286,7 +286,7 @@ describe('feature flag registry', () => {
       'memory-v2': 'off',
       'live-model-catalog': 'on',
       'no-default-skills': 'off',
-      'seven-banner': 'off',
+      'seven-banner': 'on',
     });
   });
 
@@ -421,11 +421,11 @@ describe('onCentralFlagValuesUpdated', () => {
   it('runs after each central refresh, sees the new values, and stops on unsubscribe', () => {
     const seen: boolean[] = [];
     const stop = onCentralFlagValuesUpdated(() => seen.push(isFeatureEnabled('seven-banner')));
-    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
+    updateCentralFlagValues('standalone', { 'seven-banner': 'off' });
     updateCentralFlagValues('standalone', {});
     stop();
-    updateCentralFlagValues('standalone', { 'seven-banner': 'on' });
-    expect(seen).toEqual([true, false]);
+    updateCentralFlagValues('standalone', { 'seven-banner': 'off' });
+    expect(seen).toEqual([false, true]);
   });
 
   it('keeps refreshing and notifying when one listener throws', () => {
@@ -434,9 +434,9 @@ describe('onCentralFlagValuesUpdated', () => {
       throw new Error('broken');
     });
     const stopAfter = onCentralFlagValuesUpdated(after);
-    expect(() => updateCentralFlagValues('standalone', { 'seven-banner': 'on' })).not.toThrow();
+    expect(() => updateCentralFlagValues('standalone', { 'seven-banner': 'off' })).not.toThrow();
     expect(after).toHaveBeenCalledOnce();
-    expect(isFeatureEnabled('seven-banner')).toBe(true);
+    expect(isFeatureEnabled('seven-banner')).toBe(false);
     stopBroken();
     stopAfter();
   });
