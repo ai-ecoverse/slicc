@@ -103,6 +103,8 @@ SLICC is for you if:
 
 ## Getting started
 
+Sliccstart optionally offers [Sliccy](https://github.com/ai-ecoverse/sliccy-app/releases/latest), its native Mac successor, on macOS 27 or newer with Apple silicon. Choose **Learn More…** in the launcher or **Settings → Sliccy** to review the requirements and release notes before downloading. The main-window offer can be dismissed permanently and restored in Settings. Install Sliccy separately from its DMG; Sliccstart stays installed and keeps its normal updates. Settings are not imported, features differ, and Sliccy screen capture is currently disabled.
+
 ### 1. Quick start with npx
 
 The fastest way to try SLICC — no clone, no install:

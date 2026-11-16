@@ -84,3 +84,7 @@ Sliccstart can hold the macOS http/https handler role (Settings → Startup): `M
 ## Updates
 
 **Full-app-only**, driven by the external `AppUpdater` SPM package; the 2 s timer defers restart while `/api/agent-activity` shows work (`AgentActivityProbe` fails open after 1 s). Host: `--update-host` / `SLICC_UPDATE_HOST`. Load-bearing (translocation, pagination stop, reattach ordering in [details](../../docs/swift-launcher-details.md#updates)): `TolerantGithubReleaseProvider` skips releases lacking a `Sliccstart-<version>.zip`/`.tar` asset and pages via RFC 8288 `Link`; `LaunchRecordStore` persists `bridgeToken` but **no PID** (reattach re-forwards it, probes `CDPLiveProbe`); `reattachPersistedRecords()` **spawns only the thin-bridge `slicc-server`, no `--static-root`/overlay.**
+
+## Optional Sliccy Offer
+
+`Models/SliccyOffer.swift` is independent of `AppUpdater`: a dismissible main-window card on macOS 27+ / Apple silicon (including Rosetta), with persistent details in Settings → Sliccy. Only an explicit supported-Mac action opens the trusted GitHub latest-release page; no download/install or settings migration runs in Sliccstart. The permanent `sliccySuccessorOfferDismissed` preference has no version or timer reset; Settings can restore the card. Unsupported Macs get requirements without a download action. Keep installation instructions and limitations in `SliccyOffer` aligned with the released app.

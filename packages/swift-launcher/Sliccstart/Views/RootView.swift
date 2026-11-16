@@ -11,6 +11,8 @@ import SwiftUI
 struct RootView: View {
     @Bindable var model: LauncherModel
     @ObservedObject var appUpdater: AppUpdater
+    var sliccyOffer = SliccyOffer()
+    @State private var showSliccyDetails = false
     /// Injected so a test renders the same footer a packaged build shows;
     /// a test process is never a bundled `.app`.
     var isBundledBuild: Bool = SliccBootstrapper.isBundled
@@ -28,6 +30,14 @@ struct RootView: View {
 
     var body: some View {
         content
+            .sheet(isPresented: $showSliccyDetails) {
+                VStack(alignment: .trailing, spacing: 0) {
+                    SliccyOfferView(offer: sliccyOffer)
+                    Button("Done") { showSliccyDetails = false }
+                        .keyboardShortcut(.cancelAction)
+                        .padding([.horizontal, .bottom], 20)
+                }
+            }
             .task { await model.initialize() }
             .onAppear { model.permission.startWatchingForGrant() }
             .onDisappear { model.permission.stopWatchingForGrant() }
@@ -89,24 +99,27 @@ struct RootView: View {
                 onRetry: {}
             )
         } else {
-            AppListView(
-                targets: model.targets,
-                sliccProcess: model.process,
-                sessionStore: model.sessionStore,
-                appManagementPermission: model.permission,
-                appUpdater: appUpdater,
-                updateCheckStatus: model.updateCheckStatus,
-                hasRecentAgentActivity: model.hasRecentAgentActivity,
-                onCheckForUpdates: { model.checkForUpdates() },
-                onLaunchStandalone: { model.launchStandalone($0) },
-                onLaunchBrowserFollower: { model.launchBrowserFollower($0, joinUrl: $1) },
-                onLaunchElectron: { model.handleElectronLaunch($0) },
-                onCreateDebugBuild: { model.requestDebugBuild(for: $0) },
-                onUpdate: { Task { await model.updateRuntime() } },
-                onBeginUpdate: { model.beginAppUpdate() },
-                onRescan: { model.rescan() },
-                isBundledBuild: isBundledBuild
-            )
+            VStack(spacing: 0) {
+                SliccyOfferBanner(offer: sliccyOffer, onLearnMore: { showSliccyDetails = true })
+                AppListView(
+                    targets: model.targets,
+                    sliccProcess: model.process,
+                    sessionStore: model.sessionStore,
+                    appManagementPermission: model.permission,
+                    appUpdater: appUpdater,
+                    updateCheckStatus: model.updateCheckStatus,
+                    hasRecentAgentActivity: model.hasRecentAgentActivity,
+                    onCheckForUpdates: { model.checkForUpdates() },
+                    onLaunchStandalone: { model.launchStandalone($0) },
+                    onLaunchBrowserFollower: { model.launchBrowserFollower($0, joinUrl: $1) },
+                    onLaunchElectron: { model.handleElectronLaunch($0) },
+                    onCreateDebugBuild: { model.requestDebugBuild(for: $0) },
+                    onUpdate: { Task { await model.updateRuntime() } },
+                    onBeginUpdate: { model.beginAppUpdate() },
+                    onRescan: { model.rescan() },
+                    isBundledBuild: isBundledBuild
+                )
+            }
         }
     }
 

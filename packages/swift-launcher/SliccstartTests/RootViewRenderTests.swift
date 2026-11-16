@@ -154,6 +154,25 @@ final class RootViewRenderTests: XCTestCase {
         )
     }
 
+    func testReadyWindowShowsTheOfferUntilDismissed() {
+        let ready = model()
+        ready.isReady = true
+        let offer = SliccyOffer(
+            defaults: UserDefaults(suiteName: suiteName)!,
+            osVersion: .init(majorVersion: 27, minorVersion: 0, patchVersion: 0),
+            isAppleSilicon: true,
+            openURL: { _ in
+                XCTFail("Rendering must never open a browser")
+                return false
+            }
+        )
+        var content = view(ready)
+        content.sliccyOffer = offer
+        let visible = ViewHosting.digest(of: content, width: 340, height: 520)
+        offer.setDismissed(true)
+        XCTAssertNotEqual(visible, ViewHosting.digest(of: content, width: 340, height: 520))
+    }
+
     func testTheDebugBuildScreenFallsBackToADefaultMessage() {
         let named = model()
         named.isReady = true

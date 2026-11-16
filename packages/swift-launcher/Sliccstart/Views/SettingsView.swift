@@ -47,6 +47,7 @@ enum SecretNameValidator {
 
 struct SettingsView: View {
     var fileProviderCoordinator: FileProviderCoordinator
+    var sliccyOffer = SliccyOffer()
 
     var body: some View {
         TabView {
@@ -58,6 +59,8 @@ struct SettingsView: View {
                 .tabItem { Label("Mounts", systemImage: "externaldrive") }
             SecretsSettingsView()
                 .tabItem { Label("Secrets", systemImage: "key.fill") }
+            SliccyOfferView(offer: sliccyOffer)
+                .tabItem { Label("Sliccy", systemImage: "info.circle") }
         }
     }
 }
