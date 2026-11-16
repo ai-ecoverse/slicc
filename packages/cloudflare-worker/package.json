@@ -11,7 +11,7 @@
   "dependencies": {
     "@slicc/cloud-core": "*",
     "@slicc/shared-ts": "*",
-    "jose": "6.2.15"
+    "jose": "6.2.16"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261108.1",
