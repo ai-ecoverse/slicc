@@ -4,7 +4,7 @@ import XCTest
 
 @testable import Sliccstart
 
-/// The four Settings tabs, driven through real (off-screen) SwiftUI renders.
+/// The Settings tabs, driven through real (off-screen) SwiftUI renders.
 ///
 /// Each tab is mostly conditional `body`: the mount table's empty overlay and
 /// its per-row validation warning, the startup tab's default-browser section,
@@ -47,7 +47,7 @@ final class SettingsViewRenderTests: XCTestCase {
 
     // MARK: - Tab container
 
-    func testSettingsRendersAllFourTabs() {
+    func testSettingsRendersAllTabs() {
         let view = SettingsView(fileProviderCoordinator: FileProviderCoordinator())
         XCTAssertFalse(ViewHosting.digest(of: view, width: 640, height: 460).isEmpty)
     }

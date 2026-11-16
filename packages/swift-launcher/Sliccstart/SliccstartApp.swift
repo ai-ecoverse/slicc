@@ -60,6 +60,11 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
         self.appUpdater = appUpdater
         super.init()
     }
+    @MainActor lazy var sliccyOffer = SliccyOffer(
+        onRouteError: { LauncherErrorReport.report(.sliccyRoute, $0) },
+        onInstallError: { LauncherErrorReport.report(.sliccyInstall, $0) }
+    )
+
     /// Feeds the Cones & Scoops widget. Dials the leader only when a widget is
     /// actually installed — see `WidgetTrayObserver`. `@MainActor` and lazy so
     /// the delegate's own (nonisolated) init does not have to build it.
@@ -128,9 +133,12 @@ struct SliccstartApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(model: appDelegate.model, appUpdater: appDelegate.appUpdater)
-                .frame(width: 340)
-                .optelAutoInstrument(appID: optelAppID)
+            RootView(
+                model: appDelegate.model, appUpdater: appDelegate.appUpdater,
+                sliccyOffer: appDelegate.sliccyOffer
+            )
+            .frame(width: 340)
+            .optelAutoInstrument(appID: optelAppID)
         }
         .defaultSize(width: 340, height: 100)
         // Links routed to us as the default browser go to the delegate's
@@ -148,7 +156,11 @@ struct SliccstartApp: App {
         }
 
         Settings {
-            SettingsView(fileProviderCoordinator: appDelegate.fileProviderCoordinator)
+            SettingsView(
+                fileProviderCoordinator: appDelegate.fileProviderCoordinator,
+                sliccyOffer: appDelegate.sliccyOffer
+            )
+            .task { await appDelegate.sliccyOffer.refreshInstalledApp() }
         }
     }
 }

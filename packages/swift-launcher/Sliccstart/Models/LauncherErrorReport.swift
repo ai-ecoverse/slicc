@@ -17,6 +17,8 @@ enum LauncherErrorReport {
     /// Stable `source` values. Keep them in sync with the dashboards that
     /// filter on them.
     enum Operation: String {
+        case sliccyInstall = "sliccy-install"
+        case sliccyRoute = "sliccy-route"
         case updateCheck = "update-check"
         case updateDetach = "update-detach"
         case bootstrap = "bootstrap"

@@ -32,6 +32,7 @@ final class LauncherErrorReportTests: XCTestCase {
 
     func testOperationKeysAreUniqueAndDashed() {
         let keys: [LauncherErrorReport.Operation] = [
+            .sliccyInstall, .sliccyRoute,
             .updateCheck, .updateDetach, .bootstrap, .bootstrapUpdate,
             .launchStandalone, .launchElectron, .autoLaunch, .debugBuild,
             .terminalFollower, .reattach, .secretsUnlock, .secretsPersist,
