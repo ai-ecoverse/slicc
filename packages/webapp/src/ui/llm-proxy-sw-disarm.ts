@@ -60,11 +60,20 @@ export interface SixDisarmedMessage {
 /** Where seven's pages and workers live on a shared origin (slicc-bios). */
 export const SEVEN_CLIENT_PATHS = ['/7/', '/os/', '/node_modules/', '/opt/'] as const;
 
-/** Whether `url` is a client of seven's on `origin`. */
+/**
+ * Whether `url` is a client of seven's on `origin`. A same-origin `blob:`
+ * worker counts too: seven's kernel starts its process and driver workers
+ * from blob URLs (slicc-kernel's `pinScript`), and a blob URL doesn't say who
+ * made it. Six's own blob workers (the freeze watchdog, the worker triage
+ * probe) make no cross-origin requests, so they lose nothing. Opaque
+ * `about:srcdoc` / `about:blank` frames aren't matched: six's sprinkles run
+ * there and still need the proxy.
+ */
 export function isSevenClientUrl(url: string | undefined, origin: string): boolean {
   if (!url) return false;
   try {
     const parsed = new URL(url);
+    if (parsed.protocol === 'blob:') return parsed.origin === origin;
     return (
       parsed.origin === origin &&
       SEVEN_CLIENT_PATHS.some((path) => parsed.pathname.startsWith(path))
