@@ -28,6 +28,16 @@
  *    disarmed, so an evicted-and-restarted worker can't come back armed.
  *    A worker started without the cookie is disarmed only by the message,
  *    for its own lifetime — six keeps working in a browser that hasn't moved.
+ *  - **Seven's own clients.** Armed or not, the worker never proxies for a
+ *    client of seven's (`isSevenClientUrl`): the BIOS and its installer under
+ *    `/7/`, the UI under `/os/`, and the kernel's and the agent's workers
+ *    under `/node_modules/` and `/opt/`. A six tab registers this worker
+ *    again on every load (the extension's pinned leader tab included) and
+ *    claims every client, so a disarm alone doesn't last: a restarted worker
+ *    is armed again, and an installer it claims keeps it. Through the
+ *    extension delegate, which has no timeout, seven's npm downloads would
+ *    hang, and their unsettled fetch events keep Chromium from activating
+ *    seven's `sw.js` over this worker.
  */
 
 import { maySetProxyConfig } from './llm-proxy-sw-config.js';
@@ -45,6 +55,41 @@ export interface SixDisarmMessage {
 
 export interface SixDisarmedMessage {
   type: typeof SW_SIX_DISARMED_MESSAGE;
+}
+
+/** Where seven's pages and workers live on a shared origin (slicc-bios). */
+export const SEVEN_CLIENT_PATHS = ['/7/', '/os/', '/node_modules/', '/opt/'] as const;
+
+/** Whether `url` is a client of seven's on `origin`. */
+export function isSevenClientUrl(url: string | undefined, origin: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.origin === origin &&
+      SEVEN_CLIENT_PATHS.some((path) => parsed.pathname.startsWith(path))
+    );
+  } catch {
+    return false;
+  }
+}
+
+interface ClientsLike {
+  get(id: string): Promise<{ url: string } | undefined | null>;
+}
+
+/** Whether the client behind `clientId` is seven's. No id, or no such client, reads as no. */
+export async function fromSeven(
+  clients: ClientsLike,
+  clientId: string | null | undefined,
+  origin: string
+): Promise<boolean> {
+  if (!clientId) return false;
+  try {
+    return isSevenClientUrl((await clients.get(clientId))?.url, origin);
+  } catch {
+    return false;
+  }
 }
 
 /** Exactly `{ type: 'slicc-six-disarm' }`, nothing more. */

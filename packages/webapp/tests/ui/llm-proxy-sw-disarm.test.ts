@@ -11,6 +11,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   answerUnlessDisarmed,
   createSixDisarmSwitch,
+  fromSeven,
+  isSevenClientUrl,
   isSixDisarmMessage,
   maySixDisarm,
   readSixRetired,
@@ -163,5 +165,68 @@ describe('answerUnlessDisarmed', () => {
     answer(false);
     expect(await respondWith.mock.calls[0][0]).toBe(proxied);
     expect(passOn).not.toHaveBeenCalled();
+  });
+});
+
+describe("seven's clients", () => {
+  const origin = 'https://www.sliccy.ai';
+
+  it("are the BIOS, its installer, the UI and seven's workers on the same origin", () => {
+    for (const path of [
+      '/7/',
+      '/7/installer.js',
+      '/os/',
+      '/os/tailscale-worker.js',
+      '/node_modules/@ai-ecoverse/slicc-kernel/dist/kernel-worker.js',
+      '/opt/agent/dist/worker.js',
+    ]) {
+      expect(isSevenClientUrl(`${origin}${path}`, origin)).toBe(true);
+    }
+  });
+
+  it("aren't six's pages, other origins or nothing", () => {
+    for (const url of [
+      `${origin}/`,
+      `${origin}/?slicc=leader&ext=abc`,
+      `${origin}/preview/x.html`,
+      `${origin}/assets/kernel-worker-1a2b.js`,
+      `${origin}/upgrade-to-seven.html`,
+      `${origin}/7`,
+      `${origin}/osx/`,
+      'https://seven.sliccy.ai/os/',
+      'not a url',
+      undefined,
+    ]) {
+      expect(isSevenClientUrl(url, origin)).toBe(false);
+    }
+  });
+
+  it('are looked up by client id, and no id or an unknown client is not seven', async () => {
+    const clients = {
+      get: vi.fn(async (id: string) =>
+        id === 'installer'
+          ? { url: `${origin}/7/installer.js` }
+          : id === 'six'
+            ? { url: `${origin}/` }
+            : undefined
+      ),
+    };
+    expect(await fromSeven(clients, 'installer', origin)).toBe(true);
+    expect(await fromSeven(clients, 'six', origin)).toBe(false);
+    expect(await fromSeven(clients, 'gone', origin)).toBe(false);
+    expect(await fromSeven(clients, '', origin)).toBe(false);
+    expect(await fromSeven(clients, null, origin)).toBe(false);
+    expect(
+      await fromSeven(
+        {
+          get: async () => {
+            throw new Error('no clients');
+          },
+        },
+        'installer',
+        origin
+      )
+    ).toBe(false);
+    expect(clients.get).not.toHaveBeenCalledWith('');
   });
 });
