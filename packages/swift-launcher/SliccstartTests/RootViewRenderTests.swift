@@ -74,9 +74,12 @@ final class RootViewRenderTests: XCTestCase {
     }
 
     private func view(_ model: LauncherModel) -> RootView {
-        RootView(
+        var route = SliccyAppRoute.Services()
+        route.discover = { [] }
+        return RootView(
             model: model,
             appUpdater: AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart"),
+            sliccyOffer: SliccyOffer(appRoute: SliccyAppRoute(services: route)),
             isBundledBuild: true
         )
     }
@@ -157,6 +160,8 @@ final class RootViewRenderTests: XCTestCase {
     func testReadyWindowShowsTheOfferUntilDismissed() {
         let ready = model()
         ready.isReady = true
+        var route = SliccyAppRoute.Services()
+        route.discover = { [] }
         let offer = SliccyOffer(
             defaults: UserDefaults(suiteName: suiteName)!,
             osVersion: .init(majorVersion: 27, minorVersion: 0, patchVersion: 0),
@@ -164,7 +169,8 @@ final class RootViewRenderTests: XCTestCase {
             openURL: { _ in
                 XCTFail("Rendering must never open a browser")
                 return false
-            }
+            },
+            appRoute: SliccyAppRoute(services: route)
         )
         var content = view(ready)
         content.sliccyOffer = offer

@@ -58,7 +58,7 @@ final class SliccyOfferTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: autoLaunchAppIdKey), "/Applications/Existing Browser.app")
     }
 
-    func testExplicitActionOpensOnlyTrustedLatestReleasePage() {
+    func testExplicitActionOpensOnlySelectedReleaseNotes() {
         var opened: [URL] = []
         let subject = offer {
             opened.append($0)
@@ -66,7 +66,7 @@ final class SliccyOfferTests: XCTestCase {
         }
         XCTAssertTrue(opened.isEmpty)
         subject.openReleases()
-        XCTAssertEqual(opened.map(\.absoluteString), ["https://github.com/ai-ecoverse/sliccy-app/releases/latest"])
+        XCTAssertEqual(opened.map(\.absoluteString), ["https://github.com/ai-ecoverse/sliccy-app/releases/tag/v7.1.0"])
         XCTAssertFalse(subject.openFailed)
         XCTAssertFalse(subject.isDismissed)
         subject.setDismissed(true)
@@ -116,4 +116,95 @@ final class SliccyOfferTests: XCTestCase {
             width: 420, height: 520
         )
     }
+    func testExplicitInstallationDoesNotOpenAppAndDismissesOnlyAfterSuccess() async {
+        var opened: [URL] = []
+        let destination = URL(fileURLWithPath: "/tmp/test-only/Sliccy.app")
+        var routeServices = SliccyAppRoute.Services()
+        routeServices.validate = { SliccyApplication(url: $0, version: "7.0.0") }
+        routeServices.launch = {
+            opened.append($0)
+            return true
+        }
+        routeServices.isRunning = { _ in true }
+        let subject = SliccyOffer(
+            defaults: defaults, osVersion: .init(majorVersion: 27, minorVersion: 0, patchVersion: 0),
+            isAppleSilicon: true,
+            openURL: {
+                opened.append($0)
+                return true
+            },
+            appRoute: SliccyAppRoute(services: routeServices),
+            install: { progress in
+                await progress("Installing…")
+                return destination
+            }
+        )
+        XCTAssertNil(subject.installedURL)
+        let task = subject.startInstallation()
+        XCTAssertNotNil(task)
+        XCTAssertTrue(subject.isInstalling)
+        XCTAssertNil(subject.startInstallation(), "double click must not start another download")
+        await task?.value
+        XCTAssertFalse(subject.isInstalling)
+        XCTAssertEqual(subject.installedURL, destination)
+        XCTAssertTrue(subject.isDismissed)
+        XCTAssertTrue(opened.isEmpty, "installation must not launch or switch apps")
+        XCTAssertNil(subject.startInstallation())
+        await subject.openInstalledApp()?.value
+        XCTAssertEqual(opened, [destination])
+        XCTAssertTrue(subject.launchSucceeded)
+    }
+
+    func testInstallFailurePreservesOfferAndCanRetry() async {
+        var attempts = 0
+        let subject = SliccyOffer(
+            defaults: defaults, osVersion: .init(majorVersion: 27, minorVersion: 0, patchVersion: 0),
+            isAppleSilicon: true,
+            openURL: { _ in
+                XCTFail("must not launch")
+                return false
+            },
+            install: { _ in
+                attempts += 1
+                if attempts == 1 { throw SliccyInstallError.invalidDownload }
+                return URL(fileURLWithPath: "/tmp/test-only/Sliccy.app")
+            }
+        )
+        await subject.startInstallation()?.value
+        XCTAssertNotNil(subject.installError)
+        XCTAssertFalse(subject.isDismissed)
+        XCTAssertNil(subject.installedURL)
+        await subject.startInstallation()?.value
+        XCTAssertNil(subject.installError)
+        XCTAssertNotNil(subject.installedURL)
+    }
+
+    func testUnsupportedMacNeverStartsInstallation() {
+        XCTAssertNil(offer(major: 26).startInstallation())
+        XCTAssertNil(offer(silicon: false).startInstallation())
+    }
+
+    func testCancelClearsProgressWithoutDismissingOffer() async {
+        let began = expectation(description: "install started")
+        let subject = SliccyOffer(
+            defaults: defaults, osVersion: .init(majorVersion: 27, minorVersion: 0, patchVersion: 0),
+            isAppleSilicon: true,
+            install: { _ in
+                began.fulfill()
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+                return URL(fileURLWithPath: "/tmp/test-only/Sliccy.app")
+            }
+        )
+        let idle = ViewHosting.digest(of: SliccyOfferView(offer: subject), width: 420, height: 560)
+        let task = subject.startInstallation()
+        await fulfillment(of: [began], timeout: 2)
+        XCTAssertNotEqual(idle, ViewHosting.digest(of: SliccyOfferView(offer: subject), width: 420, height: 560))
+        subject.cancelInstallation()
+        await task?.value
+        XCTAssertNil(subject.installError)
+        XCTAssertNil(subject.installedURL)
+        XCTAssertFalse(subject.isInstalling)
+        XCTAssertFalse(subject.isDismissed)
+    }
+
 }

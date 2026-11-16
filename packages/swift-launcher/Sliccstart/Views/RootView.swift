@@ -38,7 +38,11 @@ struct RootView: View {
                         .padding([.horizontal, .bottom], 20)
                 }
             }
-            .task { await model.initialize() }
+            .task {
+                async let discovery: Void = sliccyOffer.refreshInstalledApp()
+                await model.initialize()
+                await discovery
+            }
             .onAppear { model.permission.startWatchingForGrant() }
             .onDisappear { model.permission.stopWatchingForGrant() }
             .onReceive(runtimeRefreshTimer) { _ in
@@ -49,6 +53,7 @@ struct RootView: View {
                     for: NSApplication.didBecomeActiveNotification)
             ) { _ in
                 model.refreshRuntimeStatesOnActivate()
+                Task { await sliccyOffer.refreshInstalledApp() }
             }
             .onChange(of: model.process.leaderJoinUrl) { oldValue, newValue in
                 model.leaderJoinUrlChanged(newValue, previous: oldValue)

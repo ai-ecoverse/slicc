@@ -60,7 +60,10 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
         self.appUpdater = appUpdater
         super.init()
     }
-    @MainActor lazy var sliccyOffer = SliccyOffer()
+    @MainActor lazy var sliccyOffer = SliccyOffer(
+        onRouteError: { LauncherErrorReport.report(.sliccyRoute, $0) },
+        onInstallError: { LauncherErrorReport.report(.sliccyInstall, $0) }
+    )
 
     /// Feeds the Cones & Scoops widget. Dials the leader only when a widget is
     /// actually installed — see `WidgetTrayObserver`. `@MainActor` and lazy so
@@ -157,6 +160,7 @@ struct SliccstartApp: App {
                 fileProviderCoordinator: appDelegate.fileProviderCoordinator,
                 sliccyOffer: appDelegate.sliccyOffer
             )
+            .task { await appDelegate.sliccyOffer.refreshInstalledApp() }
         }
     }
 }

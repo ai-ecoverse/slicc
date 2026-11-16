@@ -7,10 +7,11 @@ import Observation
 @Observable
 final class SliccyOffer {
     static let dismissalKey = "sliccySuccessorOfferDismissed"
-    static let releasesURL = URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/latest")!
+    static let releasesURL = SliccyRelease.notesURL
     static let requirements = "Requires macOS 27 or newer and Apple silicon."
     static let installation =
-        "Download the DMG from the release page, open it, and drag Sliccy to Applications. Sliccstart stays installed and usable with its own updates."
+        "Download and install Sliccy \(SliccyRelease.version) from GitHub into ~/Applications. The signed app is verified before installation. "
+        + "Sliccstart stays installed and usable with its own updates."
     static let limitations =
         "Sliccy is a separate app. Settings are not imported. Features differ; "
         + "screen capture in Sliccy is currently disabled. Review the release notes before deciding."
@@ -18,6 +19,22 @@ final class SliccyOffer {
     let isSupported: Bool
     private(set) var isDismissed: Bool
     private(set) var openFailed = false
+    private(set) var installStatus: String?
+    private(set) var installError: String?
+    private(set) var installedURL: URL?
+    private(set) var installedVersion: String?
+    private(set) var discoveryError: String?
+    private(set) var routeError: String?
+    private(set) var isCheckingInstalled = false
+    private(set) var isLaunching = false
+    private(set) var launchSucceeded = false
+    private(set) var removalInstruction: String?
+    @ObservationIgnored private let appRoute: SliccyAppRoute
+    @ObservationIgnored private var installTask: Task<Void, Never>?
+    typealias InstallAction = (@escaping @Sendable (String) async -> Void) async throws -> URL
+    @ObservationIgnored private let install: InstallAction
+    @ObservationIgnored private let onInstallError: (Error) -> Void
+    @ObservationIgnored private let onRouteError: (Error) -> Void
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let openURL: (URL) -> Bool
 
@@ -25,10 +42,18 @@ final class SliccyOffer {
         defaults: UserDefaults = .standard,
         osVersion: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion,
         isAppleSilicon: Bool = SliccyOffer.hostIsAppleSilicon,
-        openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
+        openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
+        appRoute: SliccyAppRoute = SliccyAppRoute(),
+        onRouteError: @escaping (Error) -> Void = { _ in },
+        onInstallError: @escaping (Error) -> Void = { _ in },
+        install: @escaping InstallAction = { try await SliccyInstaller().install(progress: $0) }
     ) {
         self.defaults = defaults
         self.openURL = openURL
+        self.install = install
+        self.onInstallError = onInstallError
+        self.appRoute = appRoute
+        self.onRouteError = onRouteError
         isSupported = osVersion.majorVersion >= 27 && isAppleSilicon
         isDismissed = defaults.bool(forKey: Self.dismissalKey)
     }
@@ -40,10 +65,124 @@ final class SliccyOffer {
         defaults.set(dismissed, forKey: Self.dismissalKey)
     }
 
-    /// Only an explicit button action opens a page; no install, migration, or quit.
+    var isInstalling: Bool { installStatus != nil }
+
+    /// Called only after explicit install confirmation. Keep the task here so
+    /// sheet closure does not abandon a download and cancellation is shared.
+    @discardableResult
+    func startInstallation() -> Task<Void, Never>? {
+        guard isSupported, !isInstalling, !isCheckingInstalled, discoveryError == nil, installedURL == nil else { return nil }
+        installError = nil
+        installStatus = "Preparing installation…"
+        let action = install
+        let task = Task { [weak self] in
+            defer {
+                self?.installStatus = nil
+                self?.installTask = nil
+            }
+            do {
+                try Task.checkCancellation()
+                let url = try await action { [weak self] status in
+                    await self?.updateProgress(status)
+                }
+                self?.installedURL = url
+                self?.installedVersion = SliccyRelease.version
+                self?.setDismissed(true)
+            } catch is CancellationError {
+                // Cancelled before publishing: retry stays available.
+            } catch {
+                self?.installError = error.localizedDescription
+                self?.onInstallError(error)
+            }
+        }
+        installTask = task
+        return task
+    }
+
+    private func updateProgress(_ status: String) { installStatus = status }
+
+    func cancelInstallation() {
+        guard isInstalling else { return }
+        installStatus = "Cancelling…"
+        installTask?.cancel()
+    }
+
+    func refreshInstalledApp() async {
+        guard isSupported, !isInstalling, !isLaunching, !isCheckingInstalled else { return }
+        isCheckingInstalled = true
+        defer { isCheckingInstalled = false }
+        do {
+            let discovered = try await appRoute.discover()
+            let app: SliccyApplication?
+            if let discovered {
+                app = discovered
+            } else if let installedURL, await appRoute.exists(installedURL) {
+                app = try await appRoute.validate(installedURL)
+            } else {
+                app = nil
+            }
+            if app?.url != installedURL {
+                launchSucceeded = false
+                removalInstruction = nil
+            }
+            installedURL = app?.url
+            installedVersion = app?.version
+            discoveryError = nil
+        } catch {
+            installedURL = nil
+            installedVersion = nil
+            launchSucceeded = false
+            discoveryError = SliccyRouteError.unsuitableApp.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func openInstalledApp() -> Task<Void, Never>? {
+        guard isSupported, !isLaunching, let installedURL else { return nil }
+        isLaunching = true
+        launchSucceeded = false
+        removalInstruction = nil
+        routeError = nil
+        let route = appRoute
+        return Task { [weak self] in
+            defer { self?.isLaunching = false }
+            do {
+                let app = try await route.open(installedURL)
+                self?.installedURL = app.url
+                self?.installedVersion = app.version
+                self?.launchSucceeded = true
+            } catch is CancellationError {
+            } catch {
+                self?.routeError = error.localizedDescription
+                self?.onRouteError(error)
+            }
+        }
+    }
+
+    /// Called only after a separate removal confirmation. Finder owns Trash;
+    /// this flow never terminates either app or removes any files itself.
+    func revealSliccstartForRemoval() async {
+        guard isSupported, launchSucceeded, let installedURL else {
+            routeError = SliccyRouteError.notRunning.localizedDescription
+            return
+        }
+        routeError = nil
+        do {
+            let oldApp = try await appRoute.revealOldApp(afterLaunching: installedURL)
+            removalInstruction =
+                "Finder selected \(oldApp.path). Quit Sliccstart yourself, then move only that selected app to Trash. "
+                + "Settings and profiles remain. Default-browser settings are unchanged; choose your preferred default before removing Sliccstart."
+        } catch {
+            routeError = error.localizedDescription
+            onRouteError(error)
+        }
+    }
+
+    /// Release notes remain an optional secondary browser action.
     func openReleases() {
         guard isSupported else { return }
-        openFailed = !openURL(Self.releasesURL)
+        let notes = installedVersion.flatMap { URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/tag/v\($0)") } ?? Self.releasesURL
+        openFailed = !openURL(notes)
     }
 
     /// Detect the hardware, including an Intel build running under Rosetta.
