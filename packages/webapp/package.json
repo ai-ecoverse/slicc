@@ -84,7 +84,7 @@
     "fake-indexeddb": "6.2.8",
     "jsdom": "30.1.3",
     "puppeteer-core": "25.16.0",
-    "quickjs-wasi": "3.6.3",
+    "quickjs-wasi": "3.6.4",
     "v86": "0.5.473"
   }
 }
