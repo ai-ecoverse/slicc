@@ -31,7 +31,8 @@
  *   - Everything, once seven has disarmed this worker (see
  *     `llm-proxy-sw-disarm.ts`): seven's BIOS on www can't boot through it
  *   - Every request of seven's own clients (`/7/`, `/os/`, `/node_modules/`,
- *     `/opt/`), armed or not: they go to the network unchanged
+ *     `/opt/`, same-origin `blob:` workers), armed or not: they go to the
+ *     network unchanged
  *
  * Built as a standalone IIFE bundle (mirrors `preview-sw.ts`'s build path
  * in `vite.config.ts`).

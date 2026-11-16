@@ -184,6 +184,14 @@ describe("seven's clients", () => {
     }
   });
 
+  it("include the kernel's blob workers on the same origin, not another origin's", () => {
+    expect(isSevenClientUrl(`blob:${origin}/3b0c1e2a-9f4d-4c1e-8a7b-2f6d5e4c3b2a`, origin)).toBe(
+      true
+    );
+    expect(isSevenClientUrl('blob:https://evil.example/3b0c1e2a', origin)).toBe(false);
+    expect(isSevenClientUrl('blob:null/3b0c1e2a', origin)).toBe(false);
+  });
+
   it("aren't six's pages, other origins or nothing", () => {
     for (const url of [
       `${origin}/`,
@@ -193,6 +201,8 @@ describe("seven's clients", () => {
       `${origin}/upgrade-to-seven.html`,
       `${origin}/7`,
       `${origin}/osx/`,
+      'about:srcdoc',
+      'about:blank',
       'https://seven.sliccy.ai/os/',
       'not a url',
       undefined,
