@@ -27,7 +27,7 @@ enum SliccyInstallError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedMac:
-            "Sliccy requires macOS 26 or newer and Apple silicon."
+            "Sliccy requires macOS \(SliccyRelease.minimumOSMajor) or newer and Apple silicon."
         case .alreadyInstalled(let url):
             "An app already exists at \(url.path). It was preserved. Open it in Finder and use Sliccy’s own updater if needed."
         case .invalidDownload:

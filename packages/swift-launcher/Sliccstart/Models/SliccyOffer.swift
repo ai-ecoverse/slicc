@@ -8,7 +8,7 @@ import Observation
 final class SliccyOffer {
     static let dismissalKey = "sliccySuccessorOfferDismissed"
     static let releasesURL = SliccyRelease.notesURL
-    static let requirements = "Requires macOS 26 or newer and Apple silicon."
+    static let requirements = "Requires macOS \(SliccyRelease.minimumOSMajor) or newer and Apple silicon."
     static let installation =
         "Download and install Sliccy \(SliccyRelease.version) from GitHub into ~/Applications. The signed app is verified before installation. "
         + "Sliccstart stays installed and usable with its own updates."
