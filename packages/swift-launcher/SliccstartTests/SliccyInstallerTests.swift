@@ -22,7 +22,7 @@ final class SliccyInstallerTests: XCTestCase {
         raceDestination = false
         metadata = [
             "CFBundleIdentifier": "ai.sliccy.mac", "CFBundleShortVersionString": SliccyRelease.version,
-            "CFBundleExecutable": "Sliccy", "LSMinimumSystemVersion": "27.0",
+            "CFBundleExecutable": "Sliccy", "LSMinimumSystemVersion": "26.0",
         ]
     }
 
@@ -59,7 +59,7 @@ final class SliccyInstallerTests: XCTestCase {
     private func installer(
         services: SliccyInstaller.Services? = nil,
         hash: String? = nil,
-        major: Int = 27,
+        major: Int = 26,
         silicon: Bool = true
     ) -> SliccyInstaller {
         SliccyInstaller(
@@ -107,7 +107,7 @@ final class SliccyInstallerTests: XCTestCase {
     }
 
     func testUnsupportedHostsNeverDownload() async throws {
-        for (major, silicon) in [(26, true), (27, false)] {
+        for (major, silicon) in [(25, true), (26, false)] {
             do {
                 _ = try await installer(major: major, silicon: silicon).install()
                 XCTFail("unsupported host")
@@ -165,7 +165,7 @@ final class SliccyInstallerTests: XCTestCase {
     func testRejectsWrongIdentityVersionExecutableAndMinimumOS() async throws {
         for (key, badValue) in [
             ("CFBundleIdentifier", "com.slicc.sliccstart"), ("CFBundleShortVersionString", "0.2.0"),
-            ("CFBundleExecutable", "../Other"), ("LSMinimumSystemVersion", "28.0"), ("LSMinimumSystemVersion", ""),
+            ("CFBundleExecutable", "../Other"), ("LSMinimumSystemVersion", "27.0"), ("LSMinimumSystemVersion", ""),
         ] {
             let original = metadata[key]
             metadata[key] = badValue
@@ -182,14 +182,14 @@ final class SliccyInstallerTests: XCTestCase {
     }
 
     func testInstalledValidationAcceptsLaterCompatibleReleaseButInstallerStaysPinned() async throws {
-        metadata["CFBundleShortVersionString"] = "7.2.0"
+        metadata["CFBundleShortVersionString"] = "7.4.0"
         let mount = root.appendingPathComponent("metadata-check")
         try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
         let service = services()
         try await service.run("/usr/bin/hdiutil", ["attach", "-mountpoint", mount.path])
         let app = try await SliccyApplicationValidator.validate(
             mount.appendingPathComponent("Sliccy.app"), osVersion: .init(majorVersion: 27, minorVersion: 0, patchVersion: 0), run: service.run)
-        XCTAssertEqual(app.version, "7.2.0")
+        XCTAssertEqual(app.version, "7.4.0")
         try FileManager.default.removeItem(at: mount)
         do {
             _ = try await installer().install()

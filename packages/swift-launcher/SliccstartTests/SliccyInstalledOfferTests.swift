@@ -36,7 +36,7 @@ final class SliccyInstalledOfferTests: XCTestCase {
         service.exists = { [self] _ in installed }
         service.validate = { [self] url in
             guard valid else { throw SliccyRouteError.unsuitableApp }
-            return SliccyApplication(url: url, version: "7.1.0")
+            return SliccyApplication(url: url, version: "7.4.0")
         }
         service.launch = { [self] url in
             opened.append(url)
@@ -52,7 +52,7 @@ final class SliccyInstalledOfferTests: XCTestCase {
             return true
         }
         return SliccyOffer(
-            defaults: defaults, osVersion: .init(majorVersion: supported ? 27 : 26, minorVersion: 0, patchVersion: 0),
+            defaults: defaults, osVersion: .init(majorVersion: supported ? 26 : 25, minorVersion: 0, patchVersion: 0),
             isAppleSilicon: true,
             openURL: { [self] url in
                 notes.append(url)
@@ -69,7 +69,7 @@ final class SliccyInstalledOfferTests: XCTestCase {
         let subject = offer()
         await subject.refreshInstalledApp()
         XCTAssertEqual(subject.installedURL, sliccy)
-        XCTAssertEqual(subject.installedVersion, "7.1.0")
+        XCTAssertEqual(subject.installedVersion, "7.4.0")
         XCTAssertNil(subject.startInstallation())
         XCTAssertFalse(subject.launchSucceeded)
         XCTAssertTrue(opened.isEmpty)
@@ -109,7 +109,7 @@ final class SliccyInstalledOfferTests: XCTestCase {
         let subject = offer()
         await subject.refreshInstalledApp()
         subject.openReleases()
-        XCTAssertEqual(notes.map(\.absoluteString), ["https://github.com/ai-ecoverse/sliccy-app/releases/tag/v7.1.0"])
+        XCTAssertEqual(notes.map(\.absoluteString), ["https://github.com/ai-ecoverse/sliccy-app/releases/tag/v7.4.0"])
         XCTAssertTrue(opened.isEmpty)
     }
 

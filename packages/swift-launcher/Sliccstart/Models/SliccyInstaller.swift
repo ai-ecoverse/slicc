@@ -5,10 +5,11 @@ import Foundation
 
 /// A reviewed, compatible release, independent of both apps' updater feeds.
 enum SliccyRelease {
-    static let version = "7.1.0"
+    static let version = "7.3.0"
+    static let minimumOSMajor = 26
     static let notesURL = URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/tag/v\(version)")!
-    static let downloadURL = URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/download/v7.1.0/Sliccy-7.1.0.dmg")!
-    static let sha256 = "63c1efa937b723a735fbe6372f3f53097ba0bef81f07a6271f05114e1d7400bc"
+    static let downloadURL = URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/download/v7.3.0/Sliccy-7.3.0.dmg")!
+    static let sha256 = "6ca28a51454a1d7ca63c99538775d4a2f4a948c241e1f8972825dd4ae390f12a"
     static let signingRequirement =
         "=anchor apple generic and identifier \"ai.sliccy.mac\" "
         + "and certificate leaf[field.1.2.840.113635.100.6.1.13] exists "
@@ -26,7 +27,7 @@ enum SliccyInstallError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedMac:
-            "Sliccy requires macOS 27 or newer and Apple silicon."
+            "Sliccy requires macOS 26 or newer and Apple silicon."
         case .alreadyInstalled(let url):
             "An app already exists at \(url.path). It was preserved. Open it in Finder and use Sliccy’s own updater if needed."
         case .invalidDownload:
@@ -82,7 +83,7 @@ actor SliccyInstaller {
     }
 
     func install(progress: @escaping @Sendable (String) async -> Void = { _ in }) async throws -> URL {
-        guard osVersion.majorVersion >= 27, isAppleSilicon else { throw SliccyInstallError.unsupportedMac }
+        guard osVersion.majorVersion >= SliccyRelease.minimumOSMajor, isAppleSilicon else { throw SliccyInstallError.unsupportedMac }
         guard !isInstalling else { throw SliccyInstallError.commandFailed("another installation is in progress") }
         isInstalling = true
         defer { isInstalling = false }
