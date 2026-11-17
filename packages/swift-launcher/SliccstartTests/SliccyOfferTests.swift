@@ -19,7 +19,7 @@ final class SliccyOfferTests: XCTestCase {
     }
 
     private func offer(
-        major: Int = 27,
+        major: Int = 26,
         silicon: Bool = true,
         open: @escaping (URL) -> Bool = { _ in
             XCTFail("must not open a page implicitly")
@@ -35,10 +35,10 @@ final class SliccyOfferTests: XCTestCase {
     }
 
     func testEligibilityRequiresBothSupportedOSAndHardware() {
-        for major in [14, 26, 27, 28] {
+        for major in [14, 25, 26, 27, 28] {
             for silicon in [false, true] {
                 let subject = offer(major: major, silicon: silicon)
-                XCTAssertEqual(subject.isSupported, major >= 27 && silicon)
+                XCTAssertEqual(subject.isSupported, major >= 26 && silicon)
                 XCTAssertEqual(subject.shouldShowBanner, subject.isSupported)
             }
         }
@@ -54,7 +54,7 @@ final class SliccyOfferTests: XCTestCase {
         XCTAssertFalse(relaunched.shouldShowBanner)
         relaunched.setDismissed(false)
         XCTAssertTrue(offer().shouldShowBanner)
-        XCTAssertFalse(offer(major: 26).shouldShowBanner)
+        XCTAssertFalse(offer(major: 25).shouldShowBanner)
         XCTAssertEqual(defaults.string(forKey: autoLaunchAppIdKey), "/Applications/Existing Browser.app")
     }
 
@@ -66,7 +66,7 @@ final class SliccyOfferTests: XCTestCase {
         }
         XCTAssertTrue(opened.isEmpty)
         subject.openReleases()
-        XCTAssertEqual(opened.map(\.absoluteString), ["https://github.com/ai-ecoverse/sliccy-app/releases/tag/v7.1.0"])
+        XCTAssertEqual(opened.map(\.absoluteString), ["https://github.com/ai-ecoverse/sliccy-app/releases/tag/v7.3.0"])
         XCTAssertFalse(subject.openFailed)
         XCTAssertFalse(subject.isDismissed)
         subject.setDismissed(true)
@@ -75,7 +75,7 @@ final class SliccyOfferTests: XCTestCase {
     }
 
     func testUnsupportedMachinesCannotOpenDownloadAction() {
-        offer(major: 26).openReleases()
+        offer(major: 25).openReleases()
         offer(silicon: false).openReleases()
     }
 
@@ -100,7 +100,7 @@ final class SliccyOfferTests: XCTestCase {
         )
         XCTAssertEqual(
             ViewHosting.digest(of: SliccyOfferBanner(offer: dismissed), width: 340, height: 140),
-            ViewHosting.digest(of: SliccyOfferBanner(offer: offer(major: 26)), width: 340, height: 140)
+            ViewHosting.digest(of: SliccyOfferBanner(offer: offer(major: 25)), width: 340, height: 140)
         )
     }
 
@@ -180,7 +180,7 @@ final class SliccyOfferTests: XCTestCase {
     }
 
     func testUnsupportedMacNeverStartsInstallation() {
-        XCTAssertNil(offer(major: 26).startInstallation())
+        XCTAssertNil(offer(major: 25).startInstallation())
         XCTAssertNil(offer(silicon: false).startInstallation())
     }
 
