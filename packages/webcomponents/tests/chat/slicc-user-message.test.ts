@@ -90,7 +90,8 @@ describe('slicc-user-message', () => {
     const row = el.shadowRoot?.querySelector('.msg.user') as HTMLElement;
     const cs = getComputedStyle(row);
     expect(cs.display).toBe('flex');
-    expect(cs.justifyContent).toBe('flex-end');
+    // Chromium (Playwright ≥1.65) serializes flex-end as flow-end.
+    expect(['flex-end', 'flow-end']).toContain(cs.justifyContent);
   });
 
   it('paints the inverted bubble: white text, asymmetric radius, 80% cap (light)', () => {
@@ -160,7 +161,8 @@ describe('slicc-user-message', () => {
       el.setAttachments([{ name: 'p.png', kind: 'image', src: 'data:image/png;base64,AAAA' }]);
       const row = el.shadowRoot?.querySelector('.attachments') as HTMLElement;
       expect(row).not.toBeNull();
-      expect(getComputedStyle(row).justifyContent).toBe('flex-end');
+      // Chromium (Playwright ≥1.65) serializes flex-end as flow-end.
+      expect(['flex-end', 'flow-end']).toContain(getComputedStyle(row).justifyContent);
       const img = row.querySelector('.attachment-chip--image img') as HTMLImageElement;
       expect(img.getAttribute('src')).toBe('data:image/png;base64,AAAA');
       // The attachment row precedes the bubble in the stack.
