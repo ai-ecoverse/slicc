@@ -140,7 +140,11 @@ The guarantee is a pair:
   ([`check-lockfile-sync.mjs`](../packages/dev-tools/tools/check-lockfile-sync.mjs))
   compares every exact pin in the root and workspace `package.json` files
   against `package-lock.json` and fails with a readable message instead of an
-  `npm ci` stack. It reads no `node_modules`, so it runs in `npm run lint`.
+  `npm ci` stack. It also checks exact `overrides` pins — including registry
+  aliases such as `undici8: "npm:undici@8.12.4"` — because Renovate can delete
+  `node_modules/<overrideName>` while leaving dependency pins looking in sync
+  (#4290, #4293, #4178, #4119). It reads no `node_modules`, so it runs in
+  `npm run lint`.
 - [`.github/workflows/renovate-lockfile-reconcile.yml`](../.github/workflows/renovate-lockfile-reconcile.yml)
   runs that guard on every Renovate PR and, only when it trips, runs
   `npm install --ignore-scripts` and pushes `package-lock.json` (nothing else)

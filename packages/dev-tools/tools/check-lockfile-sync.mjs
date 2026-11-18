@@ -7,8 +7,12 @@
 // Renovate is the reason this exists: its Mend-hosted lockfile artifact update
 // intermittently produces a `package.json`-only commit (PRs #2848, #2882,
 // #2903, #2922, #2957, #2979 — all born red, all repaired by hand with a plain
-// `npm install`). `skipInstalls: false` (PR #2926) did not stop it. This guard
-// is the deterministic detector, and
+// `npm install`). `skipInstalls: false` (PR #2926) did not stop it. A second
+// failure mode drops `node_modules/<dep>` for packages named only in
+// `overrides` (including alias specs like `undici8: "npm:undici@X"`) while
+// leaving exact dependency pins in sync — #4178 / #4119 / #4290 / #4293 — so
+// `npm ci` fails with "Missing: undici8@… from lock file" and the old
+// pin-only check still reported "in sync". This guard covers both.
 // `.github/workflows/renovate-lockfile-reconcile.yml` is the repair that runs
 // off it.
 //
@@ -17,7 +21,9 @@
 //
 // Only EXACT declared versions are checked. `rangeStrategy: "pin"` means every
 // dependency/devDependency is exact anyway (see docs/development.md), and a
-// range genuinely can be satisfied by a different locked version.
+// range genuinely can be satisfied by a different locked version. Override
+// `$name` references and version-selector remap keys (`undici@8.10.2`) are
+// skipped — they do not name an installable lock entry the same way.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -69,6 +75,67 @@ export function resolvedVersion(lock, dir, dep) {
 }
 
 /**
+ * True when `key` is an overrides version-selector remap (`undici@8.10.2`,
+ * `@scope/pkg@^1.0.0`) rather than a package name (`undici`, `@scope/pkg`).
+ */
+export function isOverrideVersionSelectorKey(key) {
+  if (typeof key !== 'string' || key.length === 0) return false;
+  if (key.startsWith('@')) {
+    const slash = key.indexOf('/');
+    if (slash < 0) return false;
+    return key.slice(slash + 1).includes('@');
+  }
+  return key.includes('@');
+}
+
+/**
+ * Flatten `package.json` `overrides` into exact `{ dep, version, spec }` pins.
+ * Nested objects are walked; `$name` references and version-selector remap
+ * keys are skipped. Duplicate dep@version pairs are returned once.
+ */
+export function exactOverridePins(overrides) {
+  const pins = [];
+  const seen = new Set();
+
+  function walk(node) {
+    if (node == null || typeof node !== 'object' || Array.isArray(node)) return;
+    for (const [key, value] of Object.entries(node)) {
+      if (isOverrideVersionSelectorKey(key)) continue;
+      if (value != null && typeof value === 'object' && !Array.isArray(value)) {
+        walk(value);
+        continue;
+      }
+      if (typeof value !== 'string' || value.startsWith('$')) continue;
+      const version = exactVersion(value);
+      if (version == null) continue;
+      const id = `${key}@${version}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      pins.push({ dep: key, version, spec: value });
+    }
+  }
+
+  walk(overrides);
+  return pins;
+}
+
+/**
+ * Whether the lockfile carries `dep` at `version` anywhere npm might unpack
+ * it — the hoisted `node_modules/<dep>` or a nested `…/node_modules/<dep>`
+ * (e.g. `@actions/http-client`'s older undici override).
+ */
+export function overrideSatisfied(lock, dep, version) {
+  const packages = lock?.packages ?? {};
+  const rootKey = `node_modules/${dep}`;
+  if (packages[rootKey]?.version === version) return true;
+  const suffix = `/node_modules/${dep}`;
+  for (const [key, node] of Object.entries(packages)) {
+    if (key !== rootKey && key.endsWith(suffix) && node?.version === version) return true;
+  }
+  return false;
+}
+
+/**
  * Compare every exact pin in every package file against the lockfile.
  *
  * `packageFiles` is `[{ dir, manifest }]` — `dir` is the lockfile-relative
@@ -79,8 +146,13 @@ export function resolvedVersion(lock, dir, dep) {
  * behind: the lockfile's own copy of the workspace manifest
  * (`packages.<dir>.dependencies`, what `npm ci` compares) and the installed
  * package entry (`node_modules/<dep>.version`, what actually gets unpacked).
+ *
+ * `overrides` is the root `package.json` `overrides` object. Exact override
+ * pins (including registry aliases) must also appear in the lockfile — that
+ * is the undici8 / undici drop Renovate leaves behind when it only deletes
+ * `node_modules/<overrideName>`.
  */
-export function checkLockfileSync({ packageFiles, lock }) {
+export function checkLockfileSync({ packageFiles, lock, overrides }) {
   const problems = [];
   let checked = 0;
 
@@ -101,6 +173,15 @@ export function checkLockfileSync({ packageFiles, lock }) {
         const problem = checkPin({ lock, lockNode, dir, where, section, dep, spec, version });
         if (problem) problems.push(problem);
       }
+    }
+  }
+
+  for (const { dep, version, spec } of exactOverridePins(overrides)) {
+    checked += 1;
+    if (!overrideSatisfied(lock, dep, version)) {
+      problems.push(
+        `package.json overrides: ${dep}@${spec} has no matching package-lock.json entry (node_modules/${dep} @ ${version}). Run \`npm install\` and commit package-lock.json.`
+      );
     }
   }
 
@@ -155,6 +236,7 @@ function main() {
   const { problems, checked } = checkLockfileSync({
     packageFiles: readPackageFiles(repoRoot, rootManifest),
     lock,
+    overrides: rootManifest.overrides,
   });
 
   if (problems.length > 0) {
@@ -163,7 +245,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`check-lockfile-sync: ${checked} exact pin(s) match package-lock.json`);
+  console.log(`check-lockfile-sync: ${checked} exact pin(s) / override(s) match package-lock.json`);
 }
 
 if (isMainModule(import.meta.url, argv[1])) main();
