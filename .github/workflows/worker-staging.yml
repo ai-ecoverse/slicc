@@ -121,7 +121,7 @@ jobs:
       # is disabled. Turnstyle waits for every older matching run instead.
       - name: Wait for staging mutation turn
         if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4 # v3.3.3
+        uses: softprops/turnstyle@ec9869921df7799d5afea364f4026770f3760342 # v3.3.5
         with:
           queue-name: staging-mutation-queue
           same-branch-only: false
