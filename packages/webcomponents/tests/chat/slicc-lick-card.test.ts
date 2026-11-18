@@ -423,7 +423,8 @@ describe('slicc-lick-card', () => {
       const el = mount();
       const cs = getComputedStyle(el);
       expect(cs.display).toBe('flex');
-      expect(cs.justifyContent).toBe('flex-end');
+      // Chromium (Playwright ≥1.65) serializes flex-end as flow-end.
+      expect(['flex-end', 'flow-end']).toContain(cs.justifyContent);
     });
 
     it('keeps the card pinned to the right edge across collapse / expand', () => {
