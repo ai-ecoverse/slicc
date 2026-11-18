@@ -47,6 +47,11 @@ final class SliccyInstallerTests: XCTestCase {
                 try PropertyListSerialization.data(fromPropertyList: metadata, format: .xml, options: 0)
                     .write(to: app.appendingPathComponent("Contents/Info.plist"))
                 try Data().write(to: app.appendingPathComponent("Contents/MacOS/Sliccy"))
+                // Contents of a mounted quarantined image inherit quarantine.
+                for path in [app.path, app.appendingPathComponent("Contents/MacOS/Sliccy").path] {
+                    let value = "0083;00000000;Sliccstart;"
+                    _ = value.withCString { setxattr(path, "com.apple.quarantine", $0, value.utf8.count, 0, 0) }
+                }
             }
             if raceDestination, executable == "/usr/sbin/spctl", args.last?.contains(".sliccy-install-") == true {
                 try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
@@ -94,7 +99,10 @@ final class SliccyInstallerTests: XCTestCase {
         XCTAssertEqual(commands.last?.1.first, "detach")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["Applications"])
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["Sliccy.app"])
-        XCTAssertGreaterThan(getxattr(installed.path, "com.apple.quarantine", nil, 0, 0, 0), 0)
+        // A quarantined copy would launch translocated, where Sparkle refuses to update.
+        for path in [installed.path, installed.appendingPathComponent("Contents/MacOS/Sliccy").path] {
+            XCTAssertLessThan(getxattr(path, "com.apple.quarantine", nil, 0, 0, 0), 0, path)
+        }
     }
 
     func testWrongDownloadHashNeverMountsOrInstalls() async throws {
@@ -230,12 +238,12 @@ final class SliccyInstallerTests: XCTestCase {
         try assertClean()
     }
 
-    func testQuarantineFailureNeverPublishesAnUnquarantinedApp() async throws {
+    func testQuarantineReleaseFailureNeverPublishes() async throws {
         var service = services()
-        service.quarantine = { _ in throw CocoaError(.fileWriteNoPermission) }
+        service.releaseFromQuarantine = { _ in throw CocoaError(.fileWriteNoPermission) }
         do {
             _ = try await installer(services: service).install()
-            XCTFail("quarantine failure")
+            XCTFail("quarantine release failure")
         } catch {}
         XCTAssertEqual(commands.last?.1.first, "detach")
         try assertClean()

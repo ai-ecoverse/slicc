@@ -51,7 +51,7 @@ actor SliccyInstaller {
         var existingApplication: () async -> URL? = {
             await MainActor.run { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "ai.sliccy.mac") }
         }
-        var quarantine: (URL) throws -> Void = SliccyInstaller.quarantine
+        var releaseFromQuarantine: (URL) throws -> Void = SliccyInstaller.releaseFromQuarantine
     }
 
     static var applicationsDirectory: URL {
@@ -122,7 +122,7 @@ actor SliccyInstaller {
             try fm.createDirectory(at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
             let stagedApp = staging.appendingPathComponent("Sliccy.app", isDirectory: true)
             try fm.copyItem(at: source, to: stagedApp)
-            try services.quarantine(stagedApp)
+            try services.releaseFromQuarantine(stagedApp)
             try await validate(stagedApp)
             try await services.run("/usr/bin/hdiutil", ["detach", "-quiet", mount.path])
             mountAttempted = false
@@ -181,9 +181,20 @@ actor SliccyInstaller {
         try FileManager.default.moveItem(at: file, to: destination)
     }
 
-    private static func quarantine(_ app: URL) throws {
-        let value = "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));Sliccstart;"
-        let result = value.withCString { setxattr(app.path, "com.apple.quarantine", $0, value.utf8.count, 0, 0) }
-        guard result == 0 else { throw CocoaError(.fileWriteUnknown) }
+    /// A quarantined app that was not moved by Finder is launched from a
+    /// randomized read-only App Translocation mount, where Sparkle refuses to
+    /// update it ("can't be updated if it's running from the location it was
+    /// downloaded to"). Like Sparkle's own installer, publish the copy without
+    /// quarantine; the pinned hash, Developer ID requirement and `spctl`
+    /// assessment run before and after this step instead of first-launch
+    /// Gatekeeper.
+    static func releaseFromQuarantine(_ app: URL) throws {
+        var paths = [app.path]
+        if let enumerator = FileManager.default.enumerator(atPath: app.path) {
+            for case let relative as String in enumerator { paths.append(app.appendingPathComponent(relative).path) }
+        }
+        for path in paths where removexattr(path, "com.apple.quarantine", XATTR_NOFOLLOW) != 0 && errno != ENOATTR {
+            throw CocoaError(.fileWriteNoPermission)
+        }
     }
 }
