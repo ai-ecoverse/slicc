@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/ai-ecoverse/go-optel v0.0.0
-	github.com/pion/ice/v4 v4.4.8
+	github.com/pion/ice/v4 v4.4.9
 	github.com/pion/logging v0.2.4
 	github.com/pion/webrtc/v4 v4.2.26
 	golang.org/x/sys v0.47.0
