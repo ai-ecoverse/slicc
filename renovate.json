@@ -41,7 +41,9 @@
     {
       "customType": "regex",
       "description": "Sliccstart's pinned Sliccy installer release (SliccyRelease in packages/swift-launcher/Sliccstart/Models/SliccyInstaller.swift). The tag and the DMG's SHA-256 must move together or the installer rejects the download. github-release-attachments resolves the new digest: it finds the current hash in the release's SHA256SUMS and reads the renamed Sliccy-<version>.dmg line from the new release. Paired with the ai-ecoverse/sliccy-app package rule below.",
-      "managerFilePatterns": ["/(^|/)packages/swift-launcher/Sliccstart/Models/SliccyInstaller\\.swift$/"],
+      "managerFilePatterns": [
+        "/(^|/)packages/swift-launcher/Sliccstart/Models/SliccyInstaller\\.swift$/"
+      ],
       "matchStrings": [
         "static let tag = \"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\"\\s*\\n\\s*static let sha256 = \"(?<currentDigest>[0-9a-f]{64})\""
       ],
