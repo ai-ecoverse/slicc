@@ -5,11 +5,15 @@ import Foundation
 
 /// A reviewed, compatible release, independent of both apps' updater feeds.
 enum SliccyRelease {
-    static let version = "7.3.0"
-    static let minimumOSMajor = 26
-    static let notesURL = URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/tag/v\(version)")!
-    static let downloadURL = URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/download/v7.3.0/Sliccy-7.3.0.dmg")!
+    // Renovate's sliccy-app custom manager (renovate.json) bumps `tag` and
+    // `sha256` together, reading the DMG hash from the release's SHA256SUMS.
+    // Keep both literals on adjacent lines so its regex still matches.
+    static let tag = "v7.3.0"
     static let sha256 = "6ca28a51454a1d7ca63c99538775d4a2f4a948c241e1f8972825dd4ae390f12a"
+    static let version = String(tag.dropFirst())
+    static let minimumOSMajor = 26
+    static let notesURL = URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/tag/\(tag)")!
+    static let downloadURL = URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/download/\(tag)/Sliccy-\(version).dmg")!
     static let signingRequirement =
         "=anchor apple generic and identifier \"ai.sliccy.mac\" "
         + "and certificate leaf[field.1.2.840.113635.100.6.1.13] exists "

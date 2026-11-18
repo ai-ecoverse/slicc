@@ -66,7 +66,7 @@ final class SliccyOfferTests: XCTestCase {
         }
         XCTAssertTrue(opened.isEmpty)
         subject.openReleases()
-        XCTAssertEqual(opened.map(\.absoluteString), ["https://github.com/ai-ecoverse/sliccy-app/releases/tag/v7.3.0"])
+        XCTAssertEqual(opened.map(\.absoluteString), ["https://github.com/ai-ecoverse/sliccy-app/releases/tag/v\(SliccyRelease.version)"])
         XCTAssertFalse(subject.openFailed)
         XCTAssertFalse(subject.isDismissed)
         subject.setDismissed(true)

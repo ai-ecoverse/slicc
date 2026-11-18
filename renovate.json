@@ -37,6 +37,17 @@
       "matchStrings": ["ipk add -g v86@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
       "datasourceTemplate": "npm",
       "depNameTemplate": "v86"
+    },
+    {
+      "customType": "regex",
+      "description": "Sliccstart's pinned Sliccy installer release (SliccyRelease in packages/swift-launcher/Sliccstart/Models/SliccyInstaller.swift). The tag and the DMG's SHA-256 must move together or the installer rejects the download. github-release-attachments resolves the new digest: it finds the current hash in the release's SHA256SUMS and reads the renamed Sliccy-<version>.dmg line from the new release. Paired with the ai-ecoverse/sliccy-app package rule below.",
+      "managerFilePatterns": ["/(^|/)packages/swift-launcher/Sliccstart/Models/SliccyInstaller\\.swift$/"],
+      "matchStrings": [
+        "static let tag = \"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\"\\s*\\n\\s*static let sha256 = \"(?<currentDigest>[0-9a-f]{64})\""
+      ],
+      "depNameTemplate": "ai-ecoverse/sliccy-app",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
@@ -137,6 +148,15 @@
       "matchPackageNames": ["v86"],
       "groupName": "v86",
       "addLabels": ["skill-pin"]
+    },
+    {
+      "description": "Sliccy releases offered by Sliccstart's installer. Never automerge: a release can raise LSMinimumSystemVersion past SliccyRelease.minimumOSMajor or change signing, and the installer must never point at an unreviewed asset (see packages/swift-launcher/CLAUDE.md). Both repos are ours, so skip the default release cooldown; review is the gate.",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["ai-ecoverse/sliccy-app"],
+      "addLabels": ["sliccy-release"],
+      "commitMessageTopic": "Sliccy installer release",
+      "minimumReleaseAge": "0 days",
+      "automerge": false
     },
     {
       "description": "go-optel is a sibling module resolved through a `replace` directive in packages/slicc-cli/go.mod, so it is never published to a proxy and every run reports it under 'Package lookup failures' on the Dependency Dashboard. Disable it so that banner only ever means a real lookup failure.",
