@@ -151,10 +151,17 @@ describe('CI critical-path routing', () => {
     expect(header).not.toContain('worker-staging-e2b-slicc-staging');
     expect(workerStagingWorkflow).not.toContain('worker-staging-e2b-slicc-staging');
 
+    // Read the pin from ci.yml so Renovate bumps of softprops/turnstyle do not
+    // break this test; still require a full commit SHA (not a floating tag).
+    const turnstyleUses = worker.match(
+      /uses: softprops\/turnstyle@[0-9a-f]{40}(?: # [^\n]+)?/
+    )?.[0];
+    expect(turnstyleUses, 'staging deploy should pin turnstyle to a full commit SHA').toMatch(
+      /^uses: softprops\/turnstyle@[0-9a-f]{40}/
+    );
+
     for (const source of [worker, workerStagingWorkflow]) {
-      expect(source).toContain(
-        'uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4 # v3.3.3'
-      );
+      expect(source).toContain(turnstyleUses);
       expect(source).toContain('queue-name: staging-mutation-queue');
       expect(source).toContain('same-branch-only: false');
       expect(source).toContain('job-to-wait-for: Cloudflare staging deploy');

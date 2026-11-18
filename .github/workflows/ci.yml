@@ -1028,7 +1028,7 @@ jobs:
       - name: Wait for staging mutation turn
         id: turn
         if: env.RUN_CLOUDFLARE_STAGING == 'true'
-        uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4 # v3.3.3
+        uses: softprops/turnstyle@ec9869921df7799d5afea364f4026770f3760342 # v3.3.5
         with:
           continue-after-seconds: ${{ steps.deadline.outputs.seconds }}
           queue-name: staging-mutation-queue
