@@ -87,7 +87,7 @@
   "dependencies": {
     "@ai-ecoverse/spoon": "*",
     "@pierre/diffs": "1.3.6",
-    "@pierre/trees": "1.0.0-beta.6",
+    "@pierre/trees": "1.0.0",
     "@slicc/shared-ts": "*",
     "@wterm/dom": "0.5.10",
     "@wterm/ghostty": "0.5.10",
