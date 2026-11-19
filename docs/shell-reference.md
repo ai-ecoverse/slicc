@@ -689,8 +689,10 @@ A toolchain package declares what it holds in its manifest:
   target's standard library can be split across packages (to stay under the
   package size cap). The driver takes the union; where two parts hold the same
   package, the first wins.
-- The package must not list `go`, `compile` or `link` among its
-  `slicc.commands`. `go` is the driver.
+- If a package lists `go`, `compile` or `link` among its `slicc.commands`,
+  the webapp ignores those entries (`SUPPLEMENTAL_DRIVER_COMMANDS` in
+  `ipk/wasm-programs.ts`): `go` is always the driver, in the shell and for a
+  wasm program's child alike.
 - `unsafe` has no archive (the compiler provides it).
 
 ### `hf download` fetches several files at once

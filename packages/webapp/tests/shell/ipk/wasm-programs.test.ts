@@ -6,6 +6,7 @@ import {
   commandsFromManifest,
   isInstalledProgramPath,
   isProgramFs,
+  SUPPLEMENTAL_DRIVER_COMMANDS,
   scanWasmCommands,
 } from '../../../src/shell/ipk/wasm-programs.js';
 
@@ -278,6 +279,32 @@ describe('scanWasmCommands', () => {
     await install(fs, 'b-pkg', decl('b'));
     await install(fs, 'a-pkg', decl('a'));
     expect((await scanWasmCommands(fs, GLOBAL_NODE_MODULES)).get('dup')?.pkg).toBe('a-pkg');
+  });
+
+  it('leaves out go, compile and link: the webapp’s Go driver owns them', async () => {
+    expect([...SUPPLEMENTAL_DRIVER_COMMANDS].sort()).toEqual(['compile', 'go', 'link']);
+    await install(fs, '@ai-ecoverse/wasm-go', {
+      slicc: {
+        abi: 'wasi',
+        go: { version: 'go1.27.4', goroot: 'goroot' },
+        commands: {
+          go: { wasm: 'bin/go.wasm' },
+          compile: { wasm: 'goroot/pkg/tool/wasip1_wasm/compile' },
+          link: { wasm: 'goroot/pkg/tool/wasip1_wasm/link' },
+          gofmt: { wasm: 'bin/gofmt.wasm' },
+        },
+      },
+    });
+    // The bin-pair fallback cannot bring it back either.
+    await install(fs, '@ai-ecoverse/wasm-go-fallback', {}, [
+      'bin/go',
+      'bin/go.wasm',
+      'bin/vet',
+      'bin/vet.wasm',
+    ]);
+    const commands = await scanWasmCommands(fs, GLOBAL_NODE_MODULES);
+    expect([...commands.keys()].sort()).toEqual(['gofmt', 'vet']);
+    expect(commands.get('gofmt')?.pkg).toBe('@ai-ecoverse/wasm-go');
   });
 
   it('skips a package with an unreadable package.json', async () => {
