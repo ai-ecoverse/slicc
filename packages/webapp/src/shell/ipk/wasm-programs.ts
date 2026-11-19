@@ -317,8 +317,20 @@ async function packageDirs(fs: ProgramFs, modulesDir: string): Promise<string[]>
 }
 
 /**
+ * Names the webapp's own supplemental drivers own, which no package can
+ * claim: `go` is SLICC's Go driver (`supplemental-commands/go/`, registered
+ * by `createGoCommand`), and `compile` / `link` are the toolchain programs it
+ * runs by path. Dropping them from the catalog keeps every resolver (the
+ * shell, a wasm program's child spawn, `wasm NAME`) on the driver, even when a
+ * toolchain package lists them in `slicc.commands`
+ * (docs/shell-reference.md, "Go").
+ */
+export const SUPPLEMENTAL_DRIVER_COMMANDS: ReadonlySet<string> = new Set(['go', 'compile', 'link']);
+
+/**
  * Every wasm command the packages under `modulesDir` provide, by name. When
- * two packages claim a name, the first in package order keeps it.
+ * two packages claim a name, the first in package order keeps it. Names in
+ * {@link SUPPLEMENTAL_DRIVER_COMMANDS} are left out.
  */
 export async function scanWasmCommands(
   fs: ProgramFs,
@@ -328,6 +340,7 @@ export async function scanWasmCommands(
   if (!(await fs.exists(modulesDir))) return out;
   for (const pkgDir of await packageDirs(fs, modulesDir)) {
     for (const command of await packageCommands(fs, pkgDir)) {
+      if (SUPPLEMENTAL_DRIVER_COMMANDS.has(command.name)) continue;
       if (!out.has(command.name)) out.set(command.name, command);
     }
   }

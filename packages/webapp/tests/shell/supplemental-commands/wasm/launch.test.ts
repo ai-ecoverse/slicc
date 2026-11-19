@@ -216,6 +216,29 @@ describe('WasmSession', () => {
     expect(await session.resolve('sed', 'sed', '/w')).toBeUndefined();
   });
 
+  it('leaves a child’s go to the shell’s Go driver, even when a package lists go', async () => {
+    const GO = '/shared/lib/node_modules/@ai-ecoverse/wasm-go';
+    const files = {
+      [`${GO}/package.json`]: JSON.stringify({
+        name: '@ai-ecoverse/wasm-go',
+        slicc: {
+          abi: 'wasi',
+          commands: { go: { wasm: 'bin/go.wasm' }, gofmt: { wasm: 'bin/gofmt.wasm' } },
+        },
+      }),
+      [`${GO}/bin/go.wasm`]: 'W',
+      [`${GO}/bin/gofmt.wasm`]: 'W',
+    };
+    const session = new WasmSession(ctx(files), undefined, () => {});
+    expect((await session.commands()).has('go')).toBe(false);
+    expect(await session.resolve('go', 'go', '/w')).toBeUndefined();
+    expect(await session.resolve('/usr/bin/go', 'go', '/w')).toBeUndefined();
+    expect(await session.interpreted({ file: 'go', argv: ['go', 'build'], cwd: '/w' })).toBe(
+      undefined
+    );
+    expect((await session.resolve('gofmt', 'gofmt', '/w'))?.module).toBe(`${GO}/bin/gofmt.wasm`);
+  });
+
   it('prepends fixed arguments when a child spawns an installed command', async () => {
     fakeProcesses();
     const files = {
