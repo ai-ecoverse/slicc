@@ -141,10 +141,15 @@ The guarantee is a pair:
   compares every exact pin in the root and workspace `package.json` files
   against `package-lock.json` and fails with a readable message instead of an
   `npm ci` stack. It also checks exact `overrides` pins — including registry
-  aliases such as `undici8: "npm:undici@8.12.4"` — because Renovate can delete
+  aliases such as the former `e2b` override `undici8: "npm:undici@8.12.4"` —
+  because Renovate can delete
   `node_modules/<overrideName>` while leaving dependency pins looking in sync
   (#4290, #4293, #4178, #4119). It reads no `node_modules`, so it runs in
-  `npm run lint`.
+  `npm run lint`. An override must name a package the parent still depends
+  on: npm never installs an override target by itself, so an override for a
+  dependency the parent dropped can never be satisfied. e2b 2.63 dropped its
+  optional `undici8` alias for a plain `undici` dependency, so the override is
+  now `e2b: { undici: "8.12.4" }` (#4330).
 - [`.github/workflows/renovate-lockfile-reconcile.yml`](../.github/workflows/renovate-lockfile-reconcile.yml)
   runs that guard on every Renovate PR and, only when it trips, runs
   `npm install --ignore-scripts` and pushes `package-lock.json` (nothing else)
