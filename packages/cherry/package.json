@@ -38,7 +38,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "html2canvas-pro": "2.5.2"
+    "html2canvas-pro": "2.6.4"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-preview-bootstrap.mjs",
