@@ -48,7 +48,7 @@
     "bzip2": "0.1.1",
     "croner": "10.0.1",
     "esbuild-wasm": "0.28.2",
-    "esptool-js": "0.6.1",
+    "esptool-js": "0.7.1",
     "fflate": "0.8.3",
     "gpu-time": "0.5.0",
     "isomorphic-dompurify": "3.23.0",
