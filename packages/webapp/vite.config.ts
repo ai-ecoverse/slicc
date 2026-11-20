@@ -4,6 +4,10 @@ import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { gpuAskAssetBasePath, gpuAskAssetsPlugin } from './vite-plugins/gpu-ask-assets';
 import { piAiModelDataGeneratedAt } from './vite-plugins/pi-ai-model-data';
+import {
+  curatedShikiBundlePlugin,
+  omitPierreHighlightsPlugin,
+} from './vite-plugins/pierre-diffs-size-guards';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
 import { stripFfmpegCoreCdnLiteralPlugin } from './vite-plugins/strip-ffmpeg-core-cdn-literal';
 import { stripOrtWasmAssetPlugin } from './vite-plugins/strip-ort-wasm-asset';
@@ -41,29 +45,6 @@ const electronOverlayEntry = resolve(workspaceRoot, 'packages/spoon/src/overlay-
 const sliccEditorEntry = resolve(Dirname, 'src/ui/slicc-editor-entry.ts');
 const sliccDiffEntry = resolve(Dirname, 'src/ui/slicc-diff-entry.ts');
 const lucideIconsEntry = resolve(Dirname, 'src/ui/lucide-icons.ts');
-
-/**
- * Vite plugin: serve `@pierre/diffs` a curated Shiki language bundle.
- *
- * `@pierre/diffs` imports `bundledLanguages` from `shiki`, i.e. all 332
- * grammars. Rolldown code-splits every one, so they are fetched lazily but
- * still SHIPPED — ~10 MB over the total-JS-payload budget. `src/shims/
- * shiki-bundle.ts` re-exports Shiki's `bundle/web` subset plus the languages
- * this repo is written in.
- *
- * Matching is exact: `shiki/bundle/web`, `shiki/langs/*`, `shiki/core` and the
- * engine subpaths must keep resolving to the real package, or the shim would
- * recurse into itself.
- */
-function curatedShikiBundlePlugin() {
-  return {
-    name: 'curated-shiki-bundle',
-    enforce: 'pre' as const,
-    resolveId(source: string) {
-      return source === 'shiki' ? resolve(Dirname, 'src/shims/shiki-bundle.ts') : undefined;
-    },
-  };
-}
 
 /**
  * edit-diff.js reads files through Node's fs for pi's own edit tool; SLICC
@@ -509,6 +490,7 @@ export default defineConfig(({ mode }) => ({
     stripBiomeWasmAssetPlugin(),
     stripOrtWasmAssetPlugin(),
     curatedShikiBundlePlugin(),
+    omitPierreHighlightsPlugin(),
     stubPiNodeInternalsPlugin(),
     buildWebappRuntimeAssetsPlugin(),
     // Sanitize the unpkg ffmpeg-core URL literal that @ffmpeg/ffmpeg bakes
@@ -599,6 +581,7 @@ export default defineConfig(({ mode }) => ({
     format: 'es',
     plugins: () => [
       curatedShikiBundlePlugin(),
+      omitPierreHighlightsPlugin(),
       stubPiNodeInternalsPlugin(),
       stubPageRealmSpeechPlugin(),
     ],

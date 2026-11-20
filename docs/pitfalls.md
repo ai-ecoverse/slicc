@@ -2731,6 +2731,23 @@ regression here fails the PR rather than the release deploy.
 wired in both `vite.config.ts` files, then run `npm run build -w @slicc/webapp` and
 verify `dist/ui/` contains no `biome_wasm_bg.wasm` before pushing.
 
+## `@pierre/diffs` Upgrades: Lazy Grammars Still Ship
+
+Rolldown code-splits every lazily-imported Shiki grammar and theme into its own
+chunk. They are fetched on demand, but each one still counts against
+`total-js-budget.json`. `@pierre/diffs` resolves languages against Shiki's FULL
+`bundledLanguages` map (332 grammars). `vite-plugins/pierre-diffs-size-guards.ts`
+redirects that map to `src/shims/shiki-bundle.ts` (Shiki's `bundle/web` subset
+plus Go/Rust/Swift/TOML/diff) and stubs out the optional `@pierre/highlights`
+WASM backend, which SLICC never selects.
+
+The redirect matches **specifiers**. 1.6 moved the map from `shiki` to
+`shiki/langs`, the redirect missed it, and bundle-size reported +5.3 MB of lazy
+chunks. `tests/build/pierre-diffs-size-guards.test.ts` scans the installed
+`@pierre/diffs` dist and fails if it imports a Shiki or `@pierre/highlights`
+specifier that neither plugin covers. When an upgrade trips that test, extend the
+plugin; do not raise the budget.
+
 ## Speech: Never Import the Barrel in DOM-less Realms
 
 Always import `ComposerSpeech` from the **deep subpath**:

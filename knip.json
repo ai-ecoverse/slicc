@@ -36,6 +36,7 @@
         "src/ui/rum.js!",
         "src/shims/empty.ts!",
         "src/shims/shiki-bundle.ts!",
+        "src/shims/pierre-highlights.ts!",
         "src/shims/stream.ts!",
         "src/shims/http.ts!",
         "src/shims/https.ts!",
