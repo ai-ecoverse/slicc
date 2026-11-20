@@ -8,8 +8,8 @@ enum SliccyRelease {
     // Renovate's sliccy-app custom manager (renovate.json) bumps `tag` and
     // `sha256` together, reading the DMG hash from the release's SHA256SUMS.
     // Keep both literals on adjacent lines so its regex still matches.
-    static let tag = "v7.3.0"
-    static let sha256 = "6ca28a51454a1d7ca63c99538775d4a2f4a948c241e1f8972825dd4ae390f12a"
+    static let tag = "v7.6.0"
+    static let sha256 = "b40ac36de5e83b84ff0df12911be8d0f34d93f1115d0ac6e52665ee375d1ee44"
     static let version = String(tag.dropFirst())
     static let minimumOSMajor = 26
     static let notesURL = URL(string: "https://github.com/ai-ecoverse/sliccy-app/releases/tag/\(tag)")!
