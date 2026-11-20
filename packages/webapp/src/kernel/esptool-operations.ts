@@ -11,7 +11,10 @@
  *
  * Heavy by design — only ever reached through a dynamic `import()` so
  * esptool-js (and its pako/firmware payloads) stays out of every eager
- * bundle and out of the kernel worker entirely.
+ * bundle. The kernel-worker build swaps this module for
+ * `stubs/esptool-page-realm-stub.ts` (`stubPageRealmEsptoolPlugin` in
+ * `vite.config.ts`) so the worker never ships a second copy; keep the
+ * stub's exports in sync with this file's.
  */
 
 import { ESPLoader, type FlashOptions, type IEspLoaderTerminal, Transport } from 'esptool-js';

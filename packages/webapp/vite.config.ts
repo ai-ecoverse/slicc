@@ -128,6 +128,32 @@ function stubPageRealmSpeechPlugin() {
   };
 }
 
+/**
+ * Vite plugin (WORKER BUILD ONLY): replace the page-realm esptool-js
+ * operations with a throwing stub.
+ *
+ * `esptool-backends.ts` keeps its local (page) and bridged (worker) backends
+ * in one module, so the worker build emitted the local branch's
+ * `import('../../kernel/esptool-operations.js')` too: a second copy of
+ * esptool-js plus every per-chip stub-flasher chunk the page graph already
+ * ships, unreachable in a worker (the local backend is gated on
+ * `hasLocalDom()`, false in a DedicatedWorker).
+ *
+ * Pass this to `worker.plugins` ONLY — in the page build the real module must
+ * resolve.
+ */
+function stubPageRealmEsptoolPlugin() {
+  return {
+    name: 'stub-page-realm-esptool',
+    enforce: 'pre' as const,
+    resolveId(source: string) {
+      return /(^|\/)kernel\/esptool-operations\.js$/.test(source)
+        ? resolve(Dirname, 'src/stubs/esptool-page-realm-stub.ts')
+        : undefined;
+    },
+  };
+}
+
 /** esbuild plugin: strip ?raw suffix and load .svg files as text (matches Vite's ?raw). */
 function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
   return {
@@ -584,6 +610,7 @@ export default defineConfig(({ mode }) => ({
       omitPierreHighlightsPlugin(),
       stubPiNodeInternalsPlugin(),
       stubPageRealmSpeechPlugin(),
+      stubPageRealmEsptoolPlugin(),
     ],
   },
   build: {

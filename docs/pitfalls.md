@@ -1780,6 +1780,9 @@ between them, so a single import edge can duplicate megabytes:
   chunks the page graph already shipped, in a realm with no Web Audio.
 - `say` / `hear` keep their page and panel-RPC branches in one module, so the
   worker build carried the page branch too.
+- `esptool-backends.ts` keeps `LocalEsptoolBackend` (gated on `hasLocalDom()`)
+  next to the panel-RPC backend, so the worker build shipped a second copy of
+  esptool-js and its per-chip stub flashers (~300 KB with esptool-js 0.7).
 - `dist/ui/slicc-diff.js` was an esbuild IIFE. esbuild INLINES dynamic imports
   where Rollup code-splits them, so the curated Shiki grammar set (5.1 MB)
   landed eagerly in one file — a second copy of chunks the app already had.
@@ -1798,13 +1801,15 @@ from the change's merge-base, with absolute ceilings in
 - Import cross-realm constants from a dependency-free module
   (`speech/model-ids.ts`), never from the module that implements them.
 - Stub page-only modules in the worker build (`stubPageRealmSpeechPlugin`,
-  passed to `worker.plugins` — which is NOT derived from `plugins`).
+  `stubPageRealmEsptoolPlugin`, passed to `worker.plugins` — which is NOT
+  derived from `plugins`).
 - Make a browser-loaded bundle a Rollup entry (`build.rollupOptions.input`) plus
   a stable-name loader shim, rather than a parallel esbuild bundle, whenever it
   shares dependencies with the app.
 
-`packages/webapp/tests/speech/worker-realm-boundary.test.ts` guards the first
-two; `npm run size -w @slicc/webapp` guards the total.
+`packages/webapp/tests/speech/worker-realm-boundary.test.ts` and
+`packages/webapp/tests/shell/supplemental-commands/esptool-worker-realm-boundary.test.ts`
+guard the first two; `npm run size -w @slicc/webapp` guards the total.
 
 ## IndexedDB Database Names
 
