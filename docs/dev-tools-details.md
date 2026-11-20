@@ -569,6 +569,15 @@ the lock entry's `name`, not its install directory — this repo has
 `node_modules/undici8` for `undici`, and asking the registry for `undici8`
 would fetch a different package.
 
+A realigned package also gets the **base commit's patch-package patches**
+(`patches/<pkg>+<base version>.patch`, applied with `git apply` by
+`applyBasePatches`), because a real install of the base runs patch-package in
+`postinstall` and `npm pack` fetches the vanilla tarball. Without them the
+baseline is unpatched while HEAD is patched, and the gate counts the whole
+patch overlay as growth: just-bash 3.6.0 → 3.6.1 (PR #4324) read +13.5 kB of
+worker first-load, of which ~10 kB was the SLICC patch; patched-to-patched it
+is +3.4 kB. A base patch that does not apply fails the realignment.
+
 The two corrections are not symmetric. A **version bump** is required: not
 fixing it is the silently-wrong +0.0 kB, so a failed fetch aborts. A package
 the change **removes** is best effort: HEAD's mirror has no copy, and if the

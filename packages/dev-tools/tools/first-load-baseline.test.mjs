@@ -16,11 +16,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  applyBasePatches,
   approvedLargeDependencyDrift,
   dependencyDrift,
   discoverWorkspacePackages,
   linkNodeModules,
   materializeLinkedParents,
+  patchFilePrefix,
   prerequisiteWorkspaceBuilds,
   realignDriftedDependencies,
   resolveBaselineRef,
@@ -738,6 +740,76 @@ describe('realignDriftedDependencies', () => {
     ).toBe(true);
     expect(notes.join(' ')).toMatch(/could not restore/);
   }, 60_000);
+});
+
+describe('patchFilePrefix', () => {
+  it('names hoisted, scoped and nested packages the way patch-package does', () => {
+    expect(patchFilePrefix('node_modules/just-bash', '3.6.0')).toBe('just-bash+3.6.0');
+    expect(patchFilePrefix('node_modules/@zenfs/core', '2.9.0')).toBe('@zenfs+core+2.9.0');
+    expect(patchFilePrefix('node_modules/a/node_modules/@s/b', '1.0.0')).toBe('a++@s+b+1.0.0');
+  });
+});
+
+/**
+ * `npm pack` fetches the vanilla tarball while a base install runs
+ * patch-package, so an unpatched baseline credits the whole patch overlay to
+ * the change (just-bash 3.6.0 -> 3.6.1 read +13.5 kB instead of +3.4 kB).
+ */
+describe('applyBasePatches', () => {
+  let tree;
+  const pkgFile = () => join(tree, 'node_modules/pkg/index.js');
+  const writePatch = (file, from, to) => {
+    mkdirSync(join(tree, 'patches'), { recursive: true });
+    writeFileSync(
+      join(tree, 'patches', file),
+      [
+        'diff --git a/node_modules/pkg/index.js b/node_modules/pkg/index.js',
+        '--- a/node_modules/pkg/index.js',
+        '+++ b/node_modules/pkg/index.js',
+        '@@ -1 +1 @@',
+        `-${from}`,
+        `+${to}`,
+        '',
+      ].join('\n')
+    );
+  };
+  const drift = { path: 'node_modules/pkg', name: 'pkg', from: '1.0.0', to: '2.0.0' };
+
+  beforeEach(() => {
+    tree = mkdtempSync(join(tmpdir(), 'first-load-patch-'));
+    execFileSync('git', ['init', '-q', tree]);
+    writeFileSync(join(tree, '.gitignore'), 'node_modules\n');
+    mkdirSync(join(tree, 'node_modules/pkg'), { recursive: true });
+    writeFileSync(pkgFile(), 'upstream\n');
+  });
+  afterEach(() => rmSync(tree, { recursive: true, force: true }));
+
+  it('applies the base version patch to the realigned package', () => {
+    writePatch('pkg+1.0.0.patch', 'upstream', 'patched');
+    const notes = [];
+    expect(applyBasePatches(tree, drift, (m) => notes.push(m))).toBe(true);
+    expect(readFileSync(pkgFile(), 'utf8')).toBe('patched\n');
+    expect(notes.join(' ')).toMatch(/applied the base patch pkg\+1\.0\.0\.patch/);
+  });
+
+  it("ignores another version's patch and other packages' patches", () => {
+    writePatch('pkg+2.0.0.patch', 'upstream', 'head');
+    writePatch('pkg-extra+1.0.0.patch', 'upstream', 'other');
+    expect(applyBasePatches(tree, drift)).toBe(true);
+    expect(readFileSync(pkgFile(), 'utf8')).toBe('upstream\n');
+  });
+
+  it('succeeds when the base has no patches directory', () => {
+    expect(applyBasePatches(tree, drift)).toBe(true);
+    expect(readFileSync(pkgFile(), 'utf8')).toBe('upstream\n');
+  });
+
+  it('fails the realignment when the base patch does not apply', () => {
+    writePatch('pkg+1.0.0.patch', 'something-else', 'patched');
+    const notes = [];
+    expect(applyBasePatches(tree, drift, (m) => notes.push(m))).toBe(false);
+    expect(notes.join(' ')).toMatch(/could not apply the base patch/);
+  });
 });
 
 describe('materializeLinkedParents', () => {
