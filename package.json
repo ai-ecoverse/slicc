@@ -129,7 +129,7 @@
     "esbuild": "0.28.2",
     "husky": "9.1.7",
     "jscpd": "5.4.3",
-    "just-bash": "3.6.0",
+    "just-bash": "3.6.1",
     "knip": "6.45.1",
     "lint-staged": "17.6.0",
     "patch-package": "8.0.1",
