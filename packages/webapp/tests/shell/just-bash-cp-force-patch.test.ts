@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Bash } from 'just-bash';
@@ -81,17 +82,55 @@ describe.each([
   });
 });
 
+const chunksDir = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../../node_modules/just-bash/dist/bundle/chunks'
+);
+
+/** Constructors of the node bundle's error classes, found by their `name` field. */
+async function importErrorClasses<const N extends string>(
+  ...names: N[]
+): Promise<Record<N, new (...args: string[]) => Error>> {
+  const marker = `name="${names[0]}"`;
+  const file = readdirSync(chunksDir).find(
+    (f) => f.endsWith('.js') && readFileSync(join(chunksDir, f), 'utf8').includes(marker)
+  );
+  if (!file) throw new Error(`no just-bash chunk defines ${names[0]}`);
+  const src = readFileSync(join(chunksDir, file), 'utf8');
+  const exportList = /export\{([^}]*)\}/.exec(src)?.[1] ?? '';
+  const exported = new Map(
+    exportList.split(',').map((pair) => {
+      const [local, , alias] = pair.trim().split(/\s+/);
+      return [local, alias ?? local] as const;
+    })
+  );
+  const mod = await import(pathToFileURL(join(chunksDir, file)).href);
+  const out = {} as Record<N, new (...args: string[]) => Error>;
+  for (const name of names) {
+    const local = new RegExp(`([\\w$]+)=class extends [\\w$]+\\{[^}]*?name="${name}"`).exec(
+      src
+    )?.[1];
+    const alias = local === undefined ? undefined : exported.get(local);
+    if (alias === undefined || typeof mod[alias] !== 'function') {
+      throw new Error(`${file} does not export ${name}`);
+    }
+    out[name] = mod[alias];
+  }
+  return out;
+}
+
 describe('just-bash cp -f patch (node abort/limit)', () => {
   it('does not unlink the dest when copy aborts or hits a quota limit', async () => {
     // The node bundle's limit/abort classes are not package-exported. Import
     // the chunk `cp` instanceof-checks so the test throws the same constructors.
-    const errorsUrl = pathToFileURL(
-      join(
-        dirname(fileURLToPath(import.meta.url)),
-        '../../../../node_modules/just-bash/dist/bundle/chunks/chunk-EFORKKSH.js'
-      )
-    ).href;
-    const { l: ExecutionLimitError, m: ExecutionAbortedError } = await import(errorsUrl);
+    // Chunk file names and export letters change with every just-bash release
+    // (3.6.0 shipped them in chunk-EFORKKSH.js, 3.6.1 in chunk-IQGNPH54.js), so
+    // locate the chunk by the classes' `name` fields and read the letters from
+    // its export list instead of hardcoding either.
+    const { ExecutionLimitError, ExecutionAbortedError } = await importErrorClasses(
+      'ExecutionLimitError',
+      'ExecutionAbortedError'
+    );
 
     for (const makeErr of [
       () => new ExecutionAbortedError('cp', 'test'),

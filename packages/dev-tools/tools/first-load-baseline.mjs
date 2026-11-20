@@ -27,7 +27,9 @@
  *
  * So drifted packages are now REALIGNED: every hoisted `node_modules/<name>`
  * whose version differs between the base lockfile and HEAD's is replaced in
- * the baseline worktree with the BASE version, fetched via `npm pack`. The
+ * the baseline worktree with the BASE version, fetched via `npm pack`, and
+ * the base commit's `patches/<pkg>+<version>.patch` files are applied to it
+ * the way its `postinstall` patch-package would (`applyBasePatches`). The
  * delta then measures the dependency change instead of hiding it. When the
  * drift cannot be realigned — a registry failure, or a lockfile refresh
  * too large to be one change — the baseline is reported as unmeasurable
@@ -491,7 +493,7 @@ const MAX_REALIGNABLE_DRIFT = 25;
  * @param {string} staging scratch dir for tarballs
  * @param {Drift} drift
  * @param {(m: string) => void} log
- * @returns {boolean} true when the package is in place
+ * @returns {boolean} true when the package is in place (with the base patches applied)
  */
 function installBaseVersion(tree, staging, { path, name, from }, log) {
   const spec = `${name}@${from}`;
@@ -531,6 +533,67 @@ function installBaseVersion(tree, staging, { path, name, from }, log) {
   // not its target, and drop the base version in its place.
   rmSync(dest, { force: true, recursive: true });
   renameSync(pkgDir, dest);
+  return applyBasePatches(tree, { path, name, from }, log);
+}
+
+/**
+ * patch-package file-name prefix for an installed package path:
+ * `node_modules/@scope/pkg` -> `@scope+pkg+<version>`, nested
+ * `node_modules/a/node_modules/b` -> `a++b+<version>`.
+ *
+ * @param {string} path lockfile install path
+ * @param {string} version
+ */
+export function patchFilePrefix(path, version) {
+  const rel = path
+    .slice('node_modules/'.length)
+    .split('/node_modules/')
+    .map((segment) => segment.replace(/\//g, '+'))
+    .join('++');
+  return `${rel}+${version}`;
+}
+
+/**
+ * Apply the BASE commit's patch-package patches for a realigned package.
+ *
+ * `npm pack` fetches the vanilla tarball, but a real install of the base
+ * commit runs `patch-package` in `postinstall`, so the base build ships the
+ * patched bytes. Measuring the unpatched tarball credits the whole patch
+ * overlay to the change under test: just-bash 3.6.0 -> 3.6.1 (PR #4324)
+ * measured +13.5 kB of worker first-load against an unpatched 3.6.0, while
+ * patched-to-patched it measures +3.4 kB. The patch files are read from
+ * the base worktree, so they are the ones that commit applied. A patch that
+ * does not apply means the base tree is not what a base install produced,
+ * so the realignment fails rather than measure something in between.
+ *
+ * @param {string} tree base worktree
+ * @param {Drift} drift
+ * @param {(m: string) => void} log
+ * @returns {boolean} true when every matching patch applied (or none exist)
+ */
+export function applyBasePatches(tree, { path, name, from }, log) {
+  const patchesDir = join(tree, 'patches');
+  if (!existsSync(patchesDir)) return true;
+  const prefix = patchFilePrefix(path, from);
+  const patches = readdirSync(patchesDir)
+    .filter(
+      (file) =>
+        file.endsWith('.patch') &&
+        (file === `${prefix}.patch` ||
+          file.startsWith(`${prefix}+`) ||
+          file.startsWith(`${prefix}.`))
+    )
+    .sort();
+  for (const file of patches) {
+    const applied = run('git', ['apply', '--whitespace=nowarn', join('patches', file)], {
+      cwd: tree,
+    });
+    if (applied === null) {
+      log(`could not apply the base patch ${file} to ${name}@${from} for the baseline`);
+      return false;
+    }
+    log(`applied the base patch ${file} to ${name}@${from}`);
+  }
   return true;
 }
 
