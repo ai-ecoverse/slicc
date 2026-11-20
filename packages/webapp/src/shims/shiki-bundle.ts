@@ -1,23 +1,23 @@
 /**
  * A curated Shiki language bundle for the file previewer.
  *
- * `@pierre/diffs` imports `bundledLanguages` from `shiki`, which is the FULL
- * grammar set — 332 languages. Both bundlers here ship all of them: Vite
- * code-splits them into ~400 lazily-fetched chunks, and the esbuild IIFE that
- * builds `<slicc-diff>` for sprinkle iframes inlines them into a single 9.7 MB
- * file. Together that blew the total-JS-payload budget in
- * `packages/webapp/package.json`.
+ * `@pierre/diffs` resolves languages against Shiki's `bundledLanguages`, the
+ * FULL grammar set — 332 languages. Up to 1.3.x it imported that map from
+ * `shiki`; since 1.6 it imports it lazily from `shiki/langs`. Left alone, Vite
+ * code-splits all of them into ~400 lazily-fetched chunks that still ship,
+ * which blows the total-JS-payload budget in `packages/webapp/package.json`.
  *
- * Both builds are pointed here instead (`curatedShikiBundlePlugin` and
- * `curatedShikiEsbuildPlugin` in `vite.config.ts`). The set is Shiki's own
+ * `curatedShikiBundlePlugin` in `vite.config.ts` points BOTH specifiers here,
+ * in the page, worker and sprinkle-entry builds alike. The set is Shiki's own
  * `bundle/web` subset — 78 languages, every web and scripting language a
  * preview realistically hits — plus the handful this repo would otherwise have
  * LOST, since SLICC itself is written in them: Go, Rust and Swift are shipped
  * packages here, `.toml` is everyday config, and `diff` renders patch files.
  *
  * Everything else Shiki exports is re-exported untouched, so this is a drop-in
- * for the parts of the API `@pierre/diffs` actually calls (`createHighlighter`,
- * `codeToHtml`, the regex engines, the CSS-variables theme helpers).
+ * for the parts of the API `@pierre/diffs` actually calls (`bundledLanguages`,
+ * plus `createHighlighter`, `codeToHtml`, the regex engines and the
+ * CSS-variables theme helpers that 1.3.x took from the package root).
  *
  * ## Adding a language
  *
