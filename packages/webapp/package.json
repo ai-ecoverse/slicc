@@ -17,7 +17,7 @@
     }
   ],
   "dependencies": {
-    "@adobe/helix-rum-js": "2.15.3",
+    "@adobe/helix-rum-js": "2.17.0",
     "@ai-ecoverse/gpu-ask.js": "0.1.0",
     "@ai-ecoverse/spoon": "*",
     "@ai-ecoverse/wasm-tls-engine": "4.2.0-12",
