@@ -4,7 +4,7 @@
  * action when it has none), and the kernel's alarm and repeated-signal
  * escalation. Real programs: `../wasix-programs.test.ts`.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FdTable } from '../../../../src/kernel/wasm-realm/fd-table.js';
 import { WasmProcess } from '../../../../src/kernel/wasm-realm/process.js';
 import { SIG, sigbit } from '../../../../src/kernel/wasm-realm/signals.js';
@@ -101,31 +101,51 @@ describe('WasiSignals', () => {
 });
 
 describe('the kernel: alarms and a repeated signal', () => {
+  // The alarm clock is the kernel's setTimeout/setInterval: drive it with fake
+  // timers so "after N ms" means exactly N ms. Real sleeps raced the event
+  // loop: a worker descheduled for a few ms on a loaded runner fired the
+  // first alarm and the test's own wake-up in the same timers phase, so a
+  // repeating 10 ms alarm had fired once after a 35 ms sleep (#4343).
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('proc-alarm raises its signal after the interval, again if repeating, never after a cancel', async () => {
     const raised: number[] = [];
     const p = new WasmProcess(3300, new FdTable(), { raise: (sig) => void raised.push(sig) });
     await p.syscall({ op: 'proc-alarm', sig: SIG.ALRM, ms: 10, repeat: true });
-    await new Promise((r) => setTimeout(r, 35));
+    vi.advanceTimersByTime(9);
+    expect(raised).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(raised).toEqual([SIG.ALRM]);
+    vi.advanceTimersByTime(25); // 20 ms and 30 ms
+    expect(raised).toEqual([SIG.ALRM, SIG.ALRM, SIG.ALRM]);
     await p.syscall({ op: 'proc-alarm', sig: SIG.ALRM, ms: 0, repeat: false });
-    const n = raised.length;
-    expect(n).toBeGreaterThanOrEqual(2);
-    await new Promise((r) => setTimeout(r, 30));
-    expect(raised.length).toBe(n);
+    vi.advanceTimersByTime(100);
+    expect(raised).toHaveLength(3);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('proc-alarm with firstMs: a one-shot fires once; a repeating one first after firstMs, then every ms', async () => {
     const raised: number[] = [];
     const p = new WasmProcess(3302, new FdTable(), { raise: (sig) => void raised.push(sig) });
     await p.syscall({ op: 'proc-alarm', sig: SIG.ALRM, ms: 0, firstMs: 10, repeat: false });
-    await new Promise((r) => setTimeout(r, 40));
+    vi.advanceTimersByTime(40);
     expect(raised).toEqual([SIG.ALRM]);
     raised.length = 0;
     await p.syscall({ op: 'proc-alarm', sig: SIG.ALRM, ms: 5, firstMs: 40, repeat: true });
-    await new Promise((r) => setTimeout(r, 20));
+    vi.advanceTimersByTime(39);
     expect(raised).toEqual([]); // not before the first
-    await new Promise((r) => setTimeout(r, 50));
-    expect(raised.length).toBeGreaterThanOrEqual(2);
+    vi.advanceTimersByTime(1);
+    expect(raised).toEqual([SIG.ALRM]);
+    vi.advanceTimersByTime(10); // then every 5 ms
+    expect(raised).toHaveLength(3);
     await p.exit();
+    vi.advanceTimersByTime(100);
+    expect(raised).toHaveLength(3);
   });
 
   it('a terminating signal that arrives while the same one still waits for the program ends it', async () => {
