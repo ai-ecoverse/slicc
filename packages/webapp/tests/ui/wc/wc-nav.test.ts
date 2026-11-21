@@ -57,6 +57,13 @@ import { setLeaderTrayRuntimeStatus } from '../../../src/scoops/tray-leader.js';
 import type { WorkUnitModel } from '../../../src/scoops/types.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { GroupedModels } from '../../../src/ui/provider-settings.js';
+// `wireWcNav` reaches `provider-settings.js` through `await import()`, so
+// without this static import the FIRST test to call it pays for transforming
+// and evaluating that whole provider/model graph inside its 5s budget (it timed
+// out on a loaded release runner, #4343). Loading it here moves that cost to
+// collection, which no per-test timeout covers; the dynamic import then
+// resolves from the module cache.
+import '../../../src/ui/provider-settings.js';
 import { accountIdentity, modelListForMeta, wireWcNav } from '../../../src/ui/wc/wc-nav.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 import type { WorkUnitClient, WorkUnitSummary } from '../../../src/work-unit/client/types.js';
