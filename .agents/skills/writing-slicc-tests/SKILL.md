@@ -490,6 +490,17 @@ Rules for changing this:
 - Never enable retries locally. `CI_RETRIES` in `vitest.config.ts` resolves to `0` without
   `CI`, so `npm run test` on a laptop reports the first failure.
 
+## Count Timer Firings With Fake Timers
+
+Never assert how often a `setTimeout`/`setInterval` fired after a real sleep
+(`await new Promise((r) => setTimeout(r, 35))` then `expect(n).toBeGreaterThanOrEqual(2)`).
+A worker descheduled for a few ms makes the first timer and the test's own wake-up due in
+the same timers phase, so the count comes up short (#4343, `wasix-5f` `proc-alarm`). Use
+`vi.useFakeTimers()` + `vi.advanceTimersByTime(ms)` and assert exact counts. Reproduce the
+race deterministically by blocking the worker inside the sleep with
+`Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40)`; fake timers cannot
+intercept it, so the same stall also proves the fixed test no longer depends on real time.
+
 ## Keep Tests Inside the Timeout Budget
 
 `testTimeout` is vitest's default **5000ms**; the root config never raises it. A test that
@@ -520,6 +531,14 @@ import { VirtualFS } from '../../../src/fs/index.js';
 Keep the dynamic form only where the test needs a genuinely fresh module instance, i.e. it
 calls `vi.resetModules()` (see `tests/ui/wc/wc-follower.test.ts`). Give those an explicit
 per-test timeout instead.
+
+The same applies when the _code under test_ does the `await import()`: `wireWcNav` lazily
+loads `provider-settings.js`, so the first `wireWcNav` test cost ~220ms idle and timed out
+on a loaded release runner (#4343). Add a static side-effect import of that module to the
+test file (`import '../../../src/ui/provider-settings.js';`) so the lazy import resolves
+from the module cache. Reproduce on an idle laptop by running the file with a
+`--testTimeout` just above the real test cost (e.g. `150`): the first test fails before
+the fix and passes after it.
 
 **2. Real production backoff in a test that is not testing backoff.** Retry schedules are
 injectable for exactly this reason: `setupStandalonePrelude` takes `sleep`, and
