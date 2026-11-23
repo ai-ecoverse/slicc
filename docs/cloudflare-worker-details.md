@@ -343,9 +343,14 @@ DENY`. That covers JSON, HTML, assets, redirects, HEAD, and 4xx/5xx, including
     it. It is the one case the default can't infer from headers, so `serveSPA`
     marks the request in `FRAMING_POLICY_FREE_REQUESTS`. Only that page is exempt:
     POST, `?json=true`, and `/electron/*` get the default.
-- **Preview worker.** `slicc-preview` (`*.sliccy.now`, `preview-worker.ts`) has its
+- **Preview worker.** `slicc-preview` (`preview-worker.ts`) has its
   own `fetch` and calls `handlePreviewRequest` directly, so this default doesn't
-  apply there. Preview documents set `frame-ancestors 'none'` themselves.
+  apply there. Preview documents set `frame-ancestors 'none'` themselves. Since
+  2026-11-23 the `*.sliccy.now/*` route belongs to seven's `sliccy-ai` worker
+  (ai-ecoverse/sliccy-ai#167), which forwards every label in six's formats to
+  `slicc-preview` over a service binding, so `wrangler-preview.jsonc` lists no
+  production route (and `workers_dev: false`); its staging route on `*.sliccy.dev`
+  is unchanged.
 - **`/upgrade-to-seven.html`** (`upgrade-to-seven.ts`): six's in-place exporter,
   which seven's BIOS at `/7/` frames (slicc#4051, [`profile-export.md`](profile-export.md)).
   It is the one six page with `frame-ancestors 'self'` (plus `X-Frame-Options:
