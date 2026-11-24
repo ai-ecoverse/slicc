@@ -90,7 +90,7 @@
     "@pierre/trees": "1.0.0",
     "@slicc/shared-ts": "*",
     "@wterm/dom": "0.6.0",
-    "@wterm/ghostty": "0.5.10",
+    "@wterm/ghostty": "0.6.0",
     "lucide": "1.73.0"
   },
   "devDependencies": {
