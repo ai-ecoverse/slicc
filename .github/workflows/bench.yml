@@ -325,7 +325,7 @@ jobs:
 
       # The runner drives the leaders with `new-session` and `model`, which ship with this ref's
       # CLI and not necessarily with the last release: build it from the checkout.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: packages/slicc-cli/go.mod
           cache-dependency-path: packages/slicc-cli/go.sum
