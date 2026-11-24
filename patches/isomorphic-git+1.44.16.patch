@@ -1,8 +1,8 @@
 diff --git a/node_modules/isomorphic-git/index.js b/node_modules/isomorphic-git/index.js
-index 57e6192..9032b24 100644
+index fa3e178..b223465 100644
 --- a/node_modules/isomorphic-git/index.js
 +++ b/node_modules/isomorphic-git/index.js
-@@ -3895,11 +3895,21 @@ async function readObjectPacked({
+@@ -3968,11 +3968,21 @@ async function readObjectPacked({
        // === Packfile Integrity Verification ===
        // Performance optimization: verify only once per packfile.
        // Concurrent reads share the same verification promise.
@@ -26,7 +26,7 @@ index 57e6192..9032b24 100644
        const result = await p.read({ oid, getExternalRefDelta });
        result.format = 'content';
        result.source = `objects/pack/${filename.replace(/idx$/, 'pack')}`;
-@@ -3910,7 +3920,15 @@ async function readObjectPacked({
+@@ -3983,7 +3993,15 @@ async function readObjectPacked({
    return null
  }
  
@@ -43,7 +43,7 @@ index 57e6192..9032b24 100644
    // 1. Fast Check: Verify packfile trailer matches index record
    // Use subarray instead of slice to avoid memory copy (zero-copy for large packfiles)
    const packTrailer = pack.subarray(-20);
-@@ -3925,14 +3943,20 @@ async function verifyPackfile(pack, expectedShaFromIndex) {
+@@ -3998,14 +4016,20 @@ async function verifyPackfile(pack, expectedShaFromIndex) {
  
    // 2. Deep Integrity Check: Calculate actual SHA-1 of packfile payload.
    // The Node package build swaps in a chunked implementation for large packs.
