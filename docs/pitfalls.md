@@ -1811,6 +1811,19 @@ from the change's merge-base, with absolute ceilings in
 `packages/webapp/tests/shell/supplemental-commands/esptool-worker-realm-boundary.test.ts`
 guard the first two; `npm run size -w @slicc/webapp` guards the total.
 
+Built-in provider chunks are a blind spot of the first-load gate:
+`registerProviders()` (`providers/index.ts`) awaits EVERY `built-in/*.ts` chunk
+during page and kernel-worker boot, so the lazy glob does not make them lazy,
+and `check-first-load-size.mjs` follows static imports only. Import a provider's
+SDK inside its stream path, never at module top: `built-in/azure-openai.ts`
+loads `openai` with `await import('openai')` on the first request (the
+`AzureOpenAI` client instantiates every SDK resource, ~275 kB at openai 7.19);
+`tests/providers/built-in/azure-openai.test.ts` guards it. Keep `openai` on
+the exact version `@earendil-works/pi-ai` pins (`renovate.json` caps it): a
+different pin installs a second SDK copy beside pi-ai's (#4373).
+`tests/build/openai-single-copy.test.ts` fails when the pins drift; move the
+webapp pin and the cap to pi-ai's version together.
+
 ## IndexedDB Database Names
 
 Five databases exist:

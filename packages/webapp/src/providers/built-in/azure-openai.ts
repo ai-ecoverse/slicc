@@ -4,6 +4,14 @@
  * Uses AzureOpenAI client from the openai SDK which handles deployment
  * routing, api-version query params, and api-key auth automatically.
  *
+ * The SDK is loaded with a dynamic `import('openai')` on the first
+ * request, never statically. `registerProviders()` awaits every
+ * built-in provider chunk during page and kernel-worker boot, and the
+ * `AzureOpenAI` constructor instantiates every SDK resource, so nothing
+ * tree-shakes: a static import put the whole SDK (~275 kB minified at
+ * openai 7.19, ~400 kB at 7.59) on both boot paths for users who never
+ * pick Azure.
+ *
  * LOCAL TESTING ONLY — not committed.
  */
 
@@ -24,7 +32,7 @@ import {
 } from '@earendil-works/pi-ai/compat';
 import { buildBaseOptions } from '@earendil-works/pi-ai/dist/api/simple-options.js';
 import { transformMessages } from '@earendil-works/pi-ai/dist/api/transform-messages.js';
-import { AzureOpenAI } from 'openai';
+import type { AzureOpenAI } from 'openai';
 import type {
   ChatCompletionChunk,
   ChatCompletionMessageParam,
@@ -212,10 +220,10 @@ function createInitialOutput(model: Model<Api>): AssistantMessage {
   };
 }
 
-function buildAzureClient(
+async function buildAzureClient(
   model: Model<Api>,
   options: SimpleStreamOptions & { apiKey?: string }
-): { client: AzureOpenAI; deployment: string } {
+): Promise<{ client: AzureOpenAI; deployment: string }> {
   const apiKey = options.apiKey;
   if (!apiKey) throw new Error('Azure API key is required');
   const endpoint = model.baseUrl;
@@ -228,6 +236,8 @@ function buildAzureClient(
   const apiVersion = getApiVersionForProvider(PROVIDER_ID) || API_VERSION;
   // model.id = deployment name (selected from the chat dropdown, one per deployment)
   const deployment = model.id;
+  // Lazy: keeps the SDK out of the boot-loaded provider chunk (see header).
+  const { AzureOpenAI } = await import('openai');
   const client = new AzureOpenAI({
     endpoint: endpoint.replace(/\/+$/, ''),
     apiKey,
@@ -384,7 +394,7 @@ async function runAzureStream(
   context: Context,
   options: SimpleStreamOptions & { apiKey?: string }
 ): Promise<void> {
-  const { client, deployment } = buildAzureClient(model, options);
+  const { client, deployment } = await buildAzureClient(model, options);
   const tools = convertTools(context.tools);
   // Match the Azure Portal SDK snippet:
   //   new AzureOpenAI({ endpoint, apiKey, deployment, apiVersion })
