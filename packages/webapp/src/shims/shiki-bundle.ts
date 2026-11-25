@@ -27,8 +27,17 @@
  * because the weight is Shiki's engine and theme machinery rather than the
  * grammars themselves.
  *
- * A file whose language is absent still previews; it renders unhighlighted
- * rather than failing.
+ * ## Languages outside the set
+ *
+ * `@pierre/diffs` does NOT degrade on its own when a file's language is absent
+ * here (`.abap`, `.cs`, `.h`, `.conf`, …): `resolveLanguage` throws "not found",
+ * the highlighter never initializes, and the view renders nothing at all. So
+ * every SLICC surface that hands a file to the library — `<slicc-diff>` and
+ * Quick Look — first passes it through `withPlainTextFallback`
+ * (`@slicc/webcomponents/quick-look/highlight-language`), which forces such a
+ * file to `lang: 'text'`. It then renders as the ordinary unhighlighted view:
+ * adding a language here buys color, never whether the file shows. A new
+ * surface must use the same guard.
  */
 
 import { bundledLanguages as webLanguages } from 'shiki/bundle/web';

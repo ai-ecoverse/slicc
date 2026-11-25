@@ -20,12 +20,29 @@
  *   el.patch = unifiedDiffString;
  */
 
-import { type FileContents, FileDiff, parsePatchFiles, type ThemeTypes } from '@pierre/diffs';
+import {
+  type FileContents,
+  FileDiff,
+  type FileDiffMetadata,
+  getFiletypeFromFileName,
+  parsePatchFiles,
+  resolveLanguage,
+  type ThemeTypes,
+} from '@pierre/diffs';
+import { withPlainTextFallback } from '@slicc/webcomponents/quick-look/highlight-language';
 import { upgradeOwnProperties } from './upgrade-own-properties.js';
 
 // The <diffs-container> web component and core CSS are provided by the IIFE
 // bundle (slicc-diff-entry.ts → web-components.js). For the renderInline path,
 // the IIFE is loaded via a <script> tag from sprinkle-renderer.ts.
+
+/** The `@pierre/diffs` language API the plain-text fallback probes with. */
+const diffsLanguages = { getFiletypeFromFileName, resolveLanguage };
+
+/** What one `FileDiff.render` call shows: a parsed patch, or two files to diff. */
+type RenderInput =
+  | { fileDiff: FileDiffMetadata }
+  | { oldFile: FileContents; newFile: FileContents };
 
 /** Detect dark/light theme from inherited CSS or class. */
 function detectThemeType(): ThemeTypes {
@@ -169,6 +186,11 @@ export class SliccDiffElement extends HTMLElement {
   }
 
   private renderTimeout: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Bumped per render. The plain-text fallback awaits a grammar probe, so two
+   * quick updates can resolve out of order; only the latest one may paint.
+   */
+  private renderGeneration = 0;
 
   private scheduleRender(): void {
     if (this.renderTimeout) return;
@@ -180,43 +202,60 @@ export class SliccDiffElement extends HTMLElement {
 
   private async doRender(): Promise<void> {
     if (!this.connected || !this.container) return;
-
-    const themeType = detectThemeType();
-
-    // Create or update the FileDiff instance
-    if (!this.diff) {
-      this.diff = new FileDiff({
-        diffStyle: this._options.diffStyle ?? 'split',
-        overflow: this._options.overflow ?? 'scroll',
-        theme: { dark: 'pierre-dark', light: 'pierre-light' },
-        themeType,
-        disableFileHeader: this._options.disableFileHeader ?? false,
-      });
-    } else {
-      this.diff.setThemeType(themeType);
-    }
+    const generation = ++this.renderGeneration;
 
     try {
-      if (this._patch) {
-        // Patch mode — parsePatchFiles returns ParsedPatch[] with .files arrays
-        const patches = parsePatchFiles(this._patch);
-        if (patches.length > 0 && patches[0].files.length > 0) {
-          this.diff.render({
-            fileDiff: patches[0].files[0],
-            fileContainer: this.container,
-          });
-        }
-      } else if (this._oldFile && this._newFile) {
-        // Two-file mode — pass files directly and let FileDiff handle diffing
-        this.diff.render({
-          oldFile: this._oldFile,
-          newFile: this._newFile,
-          fileContainer: this.container,
-        });
-      }
+      const input = await this.resolveRenderInput();
+      // A newer render started, or the element left the DOM, while the probe ran.
+      if (!input || generation !== this.renderGeneration || !this.container) return;
+      this.ensureDiff().render({ ...input, fileContainer: this.container });
     } catch (err) {
       console.error('[slicc-diff] render error:', err);
     }
+  }
+
+  /**
+   * What to render, passed through the plain-text fallback first.
+   *
+   * `@pierre/diffs` infers each grammar from the file name, and a grammar
+   * outside the curated Shiki bundle (`.abap`, `.cs`, `.h`, …) makes it throw
+   * "not found" and render NOTHING — not even the header. Such a file renders
+   * as an ordinary unhighlighted diff instead.
+   */
+  private async resolveRenderInput(): Promise<RenderInput | null> {
+    if (this._patch) {
+      // Patch mode — parsePatchFiles returns ParsedPatch[] with .files arrays
+      const parsed = parsePatchFiles(this._patch)[0]?.files[0];
+      if (!parsed) return null;
+      const [fileDiff] = await withPlainTextFallback(diffsLanguages, [parsed]);
+      return fileDiff ? { fileDiff } : null;
+    }
+    if (this._oldFile && this._newFile) {
+      // Two-file mode — pass files directly and let FileDiff handle diffing
+      const [oldFile, newFile] = await withPlainTextFallback(diffsLanguages, [
+        this._oldFile,
+        this._newFile,
+      ]);
+      return oldFile && newFile ? { oldFile, newFile } : null;
+    }
+    return null;
+  }
+
+  /** The `FileDiff` instance, created on first use and re-themed after. */
+  private ensureDiff(): FileDiff {
+    const themeType = detectThemeType();
+    if (this.diff) {
+      this.diff.setThemeType(themeType);
+      return this.diff;
+    }
+    this.diff = new FileDiff({
+      diffStyle: this._options.diffStyle ?? 'split',
+      overflow: this._options.overflow ?? 'scroll',
+      theme: { dark: 'pierre-dark', light: 'pierre-light' },
+      themeType,
+      disableFileHeader: this._options.disableFileHeader ?? false,
+    });
+    return this.diff;
   }
 }
 

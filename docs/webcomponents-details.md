@@ -199,8 +199,19 @@ Non-obvious rules:
 - **Quick Look renders text twice on purpose**: a synchronous `<pre>` first, then
   the `@pierre/diffs` view once that lazily-imported chunk arrives (~628 KB, so
   it must never block the overlay). If the import fails the `<pre>` stays — a
-  degraded preview, not a broken one. A `#generation` counter drops an upgrade
-  that resolves after the overlay moved to another file.
+  degraded preview, not a broken one. A `#generation` counter (bumped on every
+  open AND view switch) drops an upgrade that resolves after the overlay moved to
+  another file or view.
+- **Every file reaches `@pierre/diffs` through `withPlainTextFallback`**
+  (`quick-look/highlight-language.ts`, also the `<slicc-diff>` path via the
+  `@slicc/webcomponents/quick-look/highlight-language` entry). The library infers
+  a grammar from the file name, and when the shipped Shiki map lacks it (the
+  webapp's is curated: `.abap`, `.cs`, `.h`, …) it throws "not found" and
+  renders an EMPTY view, which would then replace the readable `<pre>`. The guard
+  probes with the library's own `resolveLanguage` and, on a miss, forces `lang:
+'text'`. The browser tests alias `shiki/langs` to `shiki/bundle/web`
+  (`vitest.config.ts`) so that path is reachable; reset the shared highlighter
+  (`disposeHighlighter`) to test it, since only a cold one renders nothing.
 - **Quick Look converts nothing.** A `rendered` payload arrives as HTML from the
   host: `inline` must already be sanitized (the webapp runs markdown through
   `message-renderer.ts`) and mounts via `createContextualFragment`, the same

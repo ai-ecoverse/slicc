@@ -25,6 +25,17 @@ export default defineConfig({
   // lifecycle callbacks never fire, and every tree/preview test fails in a way
   // that looks like a component bug.
   optimizeDeps: { include: ['@pierre/trees', '@pierre/diffs'] },
+  resolve: {
+    alias: [
+      // Give `@pierre/diffs` the reduced grammar set it ships with. The webapp
+      // build points `shiki/langs` at a curated subset whose base is Shiki's
+      // `bundle/web` (`curatedShikiBundlePlugin`, packages/webapp/src/shims/
+      // shiki-bundle.ts); against the FULL set every extension the library
+      // knows would resolve here, and a test could never see the "language not
+      // found" path that blanked previews of `.abap`/`.cs`/`.h` in production.
+      { find: /^shiki\/langs$/, replacement: 'shiki/bundle/web' },
+    ],
+  },
   test: {
     name: 'webcomponents',
     globals: true,

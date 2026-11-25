@@ -274,7 +274,7 @@ editor.setGutterMarkers({
 
 ## Diff Viewer
 
-`<slicc-diff>` — Pre-bundled diff viewer custom element ([@pierre/diffs](https://diffs.com)). Use for showing code changes, migration previews, before/after comparisons. Includes Shiki syntax highlighting and auto dark/light theming.
+`<slicc-diff>` — Pre-bundled diff viewer custom element ([@pierre/diffs](https://diffs.com)). Use for showing code changes, migration previews, before/after comparisons. Includes Shiki syntax highlighting and auto dark/light theming. A file in a language outside the bundled grammar set (e.g. `.abap`) still renders, as an unhighlighted diff.
 
 **Two-file mode** (compare old vs new):
 
