@@ -2753,6 +2753,16 @@ chunks. `tests/build/pierre-diffs-size-guards.test.ts` scans the installed
 specifier that neither plugin covers. When an upgrade trips that test, extend the
 plugin; do not raise the budget.
 
+A trimmed map has a second edge: `@pierre/diffs` does NOT degrade when a file
+infers a grammar that is absent (`.abap`, `.cs`, `.h`, `.conf`). Its
+`resolveLanguage` throws "not found" and the view renders nothing — on a cold
+highlighter not even the header. Hand every file to the library through
+`withPlainTextFallback` (`@slicc/webcomponents/quick-look/highlight-language`),
+which forces such a file to `lang: 'text'`; `<slicc-diff>` and Quick Look both
+do. Its webcomponents browser tests alias `shiki/langs` to `shiki/bundle/web` so
+the missing-grammar path is reachable there, which it is not against Shiki's
+full set.
+
 ## Speech: Never Import the Barrel in DOM-less Realms
 
 Always import `ComposerSpeech` from the **deep subpath**:
