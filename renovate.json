@@ -87,7 +87,7 @@
       "allowedVersions": "<7"
     },
     {
-      "description": "Keep openai on the exact version @earendil-works/pi-ai pins (1.1.0 pins openai 7.19.0) so npm dedupes one SDK copy for our Azure OpenAI provider and pi-ai's OpenAI-compatible providers. A newer webapp pin installs a second, larger copy beside pi-ai's: openai 7.59.0 (PR #4373) added +443.8 KiB of total JS, because AzureOpenAI instantiates every SDK resource and nothing tree-shakes. Lift this cap together with pi-ai's own openai pin, to the version pi-ai then pins.",
+      "description": "Keep openai on the exact version @earendil-works/pi-ai pins (1.1.0 pins openai 7.19.0) so npm dedupes one SDK copy for our Azure OpenAI provider and pi-ai's OpenAI-compatible providers. A newer webapp pin installs a second, larger copy beside pi-ai's: openai 7.59.0 (PR #4373) added +443.8 KiB of total JS, because AzureOpenAI instantiates every SDK resource and nothing tree-shakes. Lift this cap together with pi-ai's own openai pin, to the version pi-ai then pins; packages/webapp/tests/build/openai-single-copy.test.ts fails until the webapp pin and this cap match pi-ai's.",
       "matchPackageNames": ["openai"],
       "allowedVersions": "<=7.19.0"
     },

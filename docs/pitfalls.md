@@ -1821,6 +1821,8 @@ loads `openai` with `await import('openai')` on the first request (the
 `tests/providers/built-in/azure-openai.test.ts` guards it. Keep `openai` on
 the exact version `@earendil-works/pi-ai` pins (`renovate.json` caps it): a
 different pin installs a second SDK copy beside pi-ai's (#4373).
+`tests/build/openai-single-copy.test.ts` fails when the pins drift; move the
+webapp pin and the cap to pi-ai's version together.
 
 ## IndexedDB Database Names
 
