@@ -38,6 +38,7 @@ Co-located `src/**/<name>.stories.ts` (dist-excluded) + `tests/**/<name>.test.ts
 
 - **Hierarchy comes from PATHS, not `children` nesting** — `FileTreeItem` ids must be full paths, **stripped of the leading slash** before `@pierre/trees` (`toTreePath`) or the tree renders one blank row. `selectFile()` echoes back — guard with `#selecting` or one click emits two `file-select`s.
 - **Quick Look converts nothing**: `rendered` HTML must arrive pre-sanitized; `inline` mounts via `createContextualFragment`, `sandbox` in an empty-`sandbox` iframe.
+- **Files reach `@pierre/diffs` through `withPlainTextFallback`** (`quick-look/highlight-language.ts`; webapp `<slicc-diff>` too) — a grammar missing from the shipped Shiki map otherwise renders an EMPTY view.
 - **`@pierre/trees` `sideEffects` is mispathed** — import `FileTree` from package root, not `/web-components`; keep both libs in `optimizeDeps.include` or a mid-run Vite reload unbinds them.
 
 ## Conventions (every component MUST follow)

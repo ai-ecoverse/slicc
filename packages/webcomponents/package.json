@@ -26,6 +26,10 @@
       "types": "./src/quick-look/mime-label.ts",
       "default": "./src/quick-look/mime-label.ts"
     },
+    "./quick-look/highlight-language": {
+      "types": "./src/quick-look/highlight-language.ts",
+      "default": "./src/quick-look/highlight-language.ts"
+    },
     "./panel/center-ops": {
       "types": "./src/panel/center-ops.ts",
       "default": "./src/panel/center-ops.ts"

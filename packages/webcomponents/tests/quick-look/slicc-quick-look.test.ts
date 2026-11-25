@@ -467,5 +467,64 @@ describe('slicc-quick-look', () => {
       expect(ql.shadowRoot?.querySelector('.header')?.textContent).toContain('second.ts');
       expect(ql.shadowRoot?.textContent).not.toContain('const a = 1');
     });
+
+    /** Syntax-colored token spans in the rich view; 0 for a plain-text render. */
+    const tokenSpans = (ql: SliccQuickLook): number =>
+      ql.shadowRoot
+        ?.querySelector('diffs-container')
+        ?.shadowRoot?.querySelectorAll('[data-line] span[style*="--diffs-token"]').length ?? 0;
+
+    describe('a language outside the shipped grammar set', () => {
+      // `vitest.config.ts` serves `@pierre/diffs` the reduced grammar set the
+      // webapp ships, so ABAP is missing here exactly as it is in production.
+      // The failure shows on a COLD highlighter (the first render in a session;
+      // a warm one paints plain text and only logs), so every case starts cold.
+      beforeEach(async () => {
+        const { disposeHighlighter } = await import('@pierre/diffs');
+        await disposeHighlighter();
+      });
+
+      const ABAP_BASE = "REPORT zhello.\nWRITE 'Hello'.\n";
+      const ABAP = "REPORT zhello.\nWRITE 'Hello, world'.\n";
+
+      it('still renders the lines of the file, unhighlighted', async () => {
+        SliccQuickLook.open({ path: '/repo/report.abap', content: ABAP, mimeType: 'text/plain' });
+        const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+
+        expect(await waitForRichText(ql, "WRITE 'Hello, world'.")).toContain('REPORT zhello.');
+        expect(tokenSpans(ql)).toBe(0);
+      });
+
+      it('still renders the lines of a diff', async () => {
+        SliccQuickLook.open({
+          path: '/repo/report.abap',
+          content: ABAP,
+          mimeType: 'text/plain',
+          baseContent: ABAP_BASE,
+          gitStatus: 'modified',
+        });
+        const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+
+        const text = await waitForRichText(ql, "WRITE 'Hello, world'.");
+        expect(text).toContain("WRITE 'Hello'.");
+        expect(text).toContain("WRITE 'Hello, world'.");
+      });
+
+      it('still highlights a language the set does carry', async () => {
+        SliccQuickLook.open({
+          path: '/repo/main.ts',
+          content: 'const greeting: string = "hello";\n',
+          mimeType: 'text/typescript',
+        });
+        const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+
+        expect(await waitForRichText(ql, 'greeting')).toContain('greeting');
+        const deadline = Date.now() + 15_000;
+        while (tokenSpans(ql) === 0 && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        expect(tokenSpans(ql)).toBeGreaterThan(0);
+      });
+    });
   });
 });

@@ -49,6 +49,7 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { withPlainTextFallback } from './highlight-language.js';
 import { shortMimeLabel } from './mime-label.js';
 
 export interface QuickLookOptions {
@@ -435,7 +436,11 @@ function currentThemeType(): 'dark' | 'light' {
 export class SliccQuickLook extends HTMLElement {
   #root: ShadowRoot;
   #blobUrls: string[] = [];
-  /** Bumped on every open so a late async upgrade can tell it is stale. */
+  /**
+   * Bumped on every open AND every view switch, so a late async upgrade can
+   * tell it is stale: the import and the grammar probe in `#enhance` both
+   * yield, and a toggle landing in between must not be painted over.
+   */
   #generation = 0;
   #options: QuickLookOptions | null = null;
   #contentBox: HTMLElement | null = null;
@@ -457,7 +462,6 @@ export class SliccQuickLook extends HTMLElement {
     SliccQuickLook.close();
     const el = document.createElement('slicc-quick-look') as SliccQuickLook;
     el.#options = opts;
-    el.#generation += 1;
     el.#mode = initialMode(opts);
 
     const filename = opts.path.split('/').pop() || opts.path;
@@ -551,6 +555,7 @@ export class SliccQuickLook extends HTMLElement {
     const box = this.#contentBox;
     if (!opts || !box) return;
 
+    this.#generation += 1;
     box.replaceChildren(this.#buildContent(opts));
     // Only a full-bleed view (a sandboxed document, or the `@pierre/diffs`
     // mount once it lands) drops the content box's padding; inline prose keeps
@@ -599,8 +604,8 @@ export class SliccQuickLook extends HTMLElement {
   /**
    * Swap the synchronous baseline for the `@pierre/diffs` view.
    *
-   * `generation` guards against a slow import resolving after the overlay has
-   * been closed and reopened on a different file.
+   * `generation` guards against a slow import or grammar probe resolving after
+   * the overlay has been reopened on a different file or switched views.
    */
   async #enhance(generation: number): Promise<void> {
     const opts = this.#options;
@@ -614,10 +619,18 @@ export class SliccQuickLook extends HTMLElement {
       return; // keep the <pre>; a plain preview beats an error
     }
     registerSliccExtensions(mod);
-    if (generation !== this.#generation || !this.isConnected) return;
 
     const name = opts.path.split('/').pop() || opts.path;
-    const contents = decode(opts.content);
+    const base = this.#mode === 'diff' ? opts.baseContent : undefined;
+    // A grammar outside the shipped Shiki bundle (`.abap`, `.cs`, …) makes the
+    // library render NOTHING, and that empty mount would replace the readable
+    // baseline — so such a file goes in as plain text instead.
+    const [file, baseFile] = await withPlainTextFallback(mod, [
+      { name, contents: decode(opts.content) },
+      ...(base === undefined ? [] : [{ name, contents: base }]),
+    ]);
+    if (!file || generation !== this.#generation || !this.isConnected) return;
+
     const codeOptions = {
       themeType: currentThemeType(),
       theme: { dark: 'github-dark', light: 'github-light' } as const,
@@ -627,13 +640,9 @@ export class SliccQuickLook extends HTMLElement {
 
     const mount = h('div');
     try {
-      if (this.#mode === 'diff' && opts.baseContent !== undefined) {
+      if (baseFile) {
         const diff = new mod.FileDiff({ ...codeOptions, diffStyle: 'unified' });
-        diff.render({
-          oldFile: { name, contents: opts.baseContent },
-          newFile: { name, contents },
-          containerWrapper: mount,
-        });
+        diff.render({ oldFile: baseFile, newFile: file, containerWrapper: mount });
         // A `path:42` mention opens on the DIFF whenever the file is modified,
         // so the line has to be honoured here too — otherwise the advertised
         // path (clicking `main.ts:42`) silently loses its highlight on exactly
@@ -644,12 +653,12 @@ export class SliccQuickLook extends HTMLElement {
           diff.setSelectedLines({ start: opts.line, end: opts.line, side: 'additions' });
         }
       } else {
-        const file = new mod.File(codeOptions);
-        file.render({ file: { name, contents }, containerWrapper: mount });
-        if (opts.line !== undefined) file.setSelectedLines({ start: opts.line, end: opts.line });
+        const view = new mod.File(codeOptions);
+        view.render({ file, containerWrapper: mount });
+        if (opts.line !== undefined) view.setSelectedLines({ start: opts.line, end: opts.line });
       }
     } catch {
-      return; // malformed input or an unsupported grammar — keep the baseline
+      return; // malformed input — keep the baseline
     }
 
     if (generation !== this.#generation || !this.isConnected) return;
