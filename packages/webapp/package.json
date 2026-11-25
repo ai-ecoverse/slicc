@@ -65,7 +65,7 @@
     "mri": "1.2.0",
     "nanotar": "0.3.0",
     "onnxruntime-web": "1.31.1",
-    "openai": "7.5.0",
+    "openai": "7.59.0",
     "pako": "3.0.3",
     "semver": "7.8.6",
     "shiki": "4.4.3",
