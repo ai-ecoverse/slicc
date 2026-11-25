@@ -91,7 +91,7 @@
     "@slicc/shared-ts": "*",
     "@wterm/dom": "0.6.0",
     "@wterm/ghostty": "0.6.0",
-    "lucide": "1.74.0"
+    "lucide": "1.75.0"
   },
   "devDependencies": {
     "@storybook/web-components-vite": "10.6.7",
