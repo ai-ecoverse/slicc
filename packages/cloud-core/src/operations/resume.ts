@@ -247,8 +247,10 @@ async function ensureHostedLeader(handle: SandboxHandle): Promise<boolean> {
   const probe = await handle.run(LEADER_PROBE_CMD);
   if (probe.stdout.trim() === 'up') return false;
   if (!handle.spawn) {
+    // The sandbox itself is up and responsive at this point; only the leader
+    // is missing, which is what LEADER_NOT_READY means everywhere else.
     throw new CloudError(
-      'SANDBOX_UNRESPONSIVE',
+      'LEADER_NOT_READY',
       `Sandbox ${handle.sandboxId} was cold-booted from its disk, but the ${handle.substrate} ` +
         'substrate cannot restart its hosted leader',
       { sandboxId: handle.sandboxId }

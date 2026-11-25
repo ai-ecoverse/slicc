@@ -53,8 +53,12 @@ callers can tell apart from `INTERNAL`. Who opts in:
   config, which `start.sh` would decode over the newer files). A fresh
   node-server boots the leader itself, so the proxy reload and kick are skipped
   and the freshness poll gets 120s.
-- **`killCone`** — yes, so such a sandbox stays killable and "kill and start a
-  new cone" remains a real recovery.
+- **`killCone`** — does not connect at all when the substrate has
+  `killById` (e2b: static `Sandbox.kill(id)`, `DELETE /sandboxes/{id}`), which
+  removes a running or paused sandbox without resuming it. A sandbox whose cold
+  boot fails too is therefore still killable, and "kill and start a new cone"
+  stays a real recovery. Substrates without `killById` connect first, with the
+  opt-in.
 - **`pauseCone`** — no; it reports `SANDBOX_UNRESPONSIVE` rather than rebooting
   a sandbox just to pause it.
 

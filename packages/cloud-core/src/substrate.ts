@@ -85,6 +85,13 @@ export interface SandboxSubstrate {
    * substrates that don't support this concept, implement as a no-op.
    */
   extendTimeout(sandboxId: string, ttlMs: number): Promise<void>;
+  /**
+   * Delete a sandbox by ID without connecting to it, from any state. Resolves
+   * `false` when the substrate does not know the sandbox. Optional: without it
+   * `killCone` connects first, which resumes a paused sandbox just to kill it
+   * and fails when the sandbox cannot be resumed at all.
+   */
+  killById?(sandboxId: string): Promise<boolean>;
 }
 
 export type SubstrateFactory = (id: SubstrateId, cfg: SubstrateConfig) => SandboxSubstrate;

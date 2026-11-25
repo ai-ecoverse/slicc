@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ConnectOpts, SandboxHandle, SubstrateId } from '../src/index.js';
+import type { ConnectOpts, SandboxHandle, SandboxSubstrate, SubstrateId } from '../src/index.js';
 import { CloudError, killCone } from '../src/index.js';
 import { MemRegistry, makeFakeSubstrate } from './fixtures/index.js';
 
@@ -168,7 +168,7 @@ describe('killCone', () => {
     expect(registry.entries).toEqual([]);
   });
 
-  it('opts in to the cold-boot retry so an unresponsive-guest sandbox stays killable', async () => {
+  it('without killById, connects with the cold-boot opt-in so the sandbox stays killable', async () => {
     const registry = new MemRegistry();
     await registry.append({
       sandboxId: 'sbx-1',
@@ -187,7 +187,7 @@ describe('killCone', () => {
     expect(registry.entries).toEqual([]);
   });
 
-  it('keeps the registry entry when even the cold boot fails (SANDBOX_UNRESPONSIVE)', async () => {
+  it('without killById, keeps the registry entry when even the cold boot fails', async () => {
     const registry = new MemRegistry();
     await registry.append({
       sandboxId: 'sbx-1',
@@ -209,5 +209,73 @@ describe('killCone', () => {
       message: expect.stringContaining('Registry entry NOT removed'),
     });
     expect(registry.entries).toHaveLength(1);
+  });
+
+  describe('with a by-ID delete (killById)', () => {
+    async function pausedEntry(): Promise<MemRegistry> {
+      const registry = new MemRegistry();
+      await registry.append({
+        sandboxId: 'sbx-1',
+        substrate: 'e2b',
+        createdAt: new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
+        joinUrl: '',
+        state: 'paused',
+      });
+      return registry;
+    }
+
+    it('deletes without connecting, so an unresumable sandbox is still removed', async () => {
+      const registry = await pausedEntry();
+      const connectCalls: Array<{ sandboxId: string; opts?: ConnectOpts }> = [];
+      const killed: string[] = [];
+      const substrate: SandboxSubstrate = {
+        // connect would fail exactly like an unresponsive guest whose cold boot fails.
+        ...makeFakeSubstrate({
+          connectCalls,
+          connectError: new CloudError('SANDBOX_UNRESPONSIVE', 'cold boot failed too'),
+        }),
+        killById: async (id: string) => {
+          killed.push(id);
+          return true;
+        },
+      };
+
+      const result = await killCone({ substrate, registry }, 'sbx-1');
+
+      expect(result).toEqual({ sandboxId: 'sbx-1', alreadyDead: false });
+      expect(killed).toEqual(['sbx-1']);
+      expect(connectCalls).toEqual([]);
+      expect(registry.entries).toEqual([]);
+    });
+
+    it('reports alreadyDead and cleans up when the substrate does not know the sandbox', async () => {
+      const registry = await pausedEntry();
+      const substrate: SandboxSubstrate = {
+        ...makeFakeSubstrate(),
+        killById: async () => false,
+      };
+
+      const result = await killCone({ substrate, registry }, 'sbx-1');
+
+      expect(result.alreadyDead).toBe(true);
+      expect(registry.entries).toEqual([]);
+    });
+
+    it('keeps the registry entry when the delete itself fails', async () => {
+      const registry = await pausedEntry();
+      const substrate: SandboxSubstrate = {
+        ...makeFakeSubstrate(),
+        killById: async () => {
+          throw new Error('500: internal server error');
+        },
+      };
+
+      await expect(killCone({ substrate, registry }, 'sbx-1')).rejects.toMatchObject({
+        code: 'INTERNAL',
+        message: expect.stringContaining('Registry entry NOT removed'),
+      });
+      expect(registry.entries).toHaveLength(1);
+    });
   });
 });

@@ -165,7 +165,7 @@ describe('resumeCone after an unresponsive-guest snapshot', () => {
     expect(runs.some((c) => c.includes('leader-restart'))).toBe(true);
   });
 
-  it('fails as SANDBOX_UNRESPONSIVE when a cold-booted handle cannot restart the leader', async () => {
+  it('fails as LEADER_NOT_READY when a cold-booted handle cannot restart the leader', async () => {
     const { handle } = makeHandle({ coldBooted: true, withSpawn: false });
     const registry = await pausedRegistry();
 
@@ -174,7 +174,7 @@ describe('resumeCone after an unresponsive-guest snapshot', () => {
         { substrate: makeFakeSubstrate({ handle }), registry },
         { query: 'sbx-1', localSliccVersion: 'test' }
       )
-    ).rejects.toMatchObject({ name: 'CloudError', code: 'SANDBOX_UNRESPONSIVE' });
+    ).rejects.toMatchObject({ name: 'CloudError', code: 'LEADER_NOT_READY' });
     expect(registry.entries[0]?.state).toBe('paused');
   });
 

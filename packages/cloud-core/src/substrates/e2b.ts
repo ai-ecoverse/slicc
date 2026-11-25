@@ -91,6 +91,12 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
     async extendTimeout(sandboxId: string, ttlMs: number): Promise<void> {
       await Sandbox.setTimeout(sandboxId, ttlMs, { apiKey });
     },
+    async killById(sandboxId: string): Promise<boolean> {
+      // `DELETE /sandboxes/{id}`: kills a running or paused sandbox without
+      // resuming it, so one whose memory snapshot cannot be restored (and
+      // whose cold boot may fail too) is still removable. `false` = not found.
+      return Sandbox.kill(sandboxId, { apiKey, requestTimeoutMs: REQUEST_TIMEOUT_MS });
+    },
   };
 }
 

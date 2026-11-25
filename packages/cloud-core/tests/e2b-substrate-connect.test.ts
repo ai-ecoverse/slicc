@@ -3,14 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CloudError, isCloudError } from '../src/index.js';
 import { createE2bSubstrate } from '../src/substrates/e2b.js';
 
-// Only `Sandbox.connect` is mocked; the error classes stay the SDK's real
+// Only `Sandbox.connect` and `Sandbox.kill` are mocked; the error classes stay the SDK's real
 // ones, so these tests exercise the same `instanceof` checks production does.
 // No network, no API key: every connect resolves or rejects from the mock.
-const { connectMock } = vi.hoisted(() => ({ connectMock: vi.fn() }));
+const { connectMock, killMock } = vi.hoisted(() => ({ connectMock: vi.fn(), killMock: vi.fn() }));
 
 vi.mock('e2b', async (importOriginal) => {
   const actual = await importOriginal<typeof import('e2b')>();
-  return { ...actual, Sandbox: { connect: connectMock } };
+  return { ...actual, Sandbox: { connect: connectMock, kill: killMock } };
 });
 
 /** The message e2b 2.63+ builds for a 409 `sandbox_snapshot_guest_agent_unresponsive`. */
@@ -156,5 +156,32 @@ describe('e2b substrate handle.spawn', () => {
       timeoutMs: 0,
     });
     expect(sbx.proc.disconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('e2b substrate killById', () => {
+  const substrate = createE2bSubstrate({ apiKey: 'test-key' });
+
+  beforeEach(() => {
+    connectMock.mockReset();
+    killMock.mockReset();
+  });
+
+  it('deletes by ID through Sandbox.kill and never connects (no resume, no cold boot)', async () => {
+    killMock.mockResolvedValueOnce(true);
+
+    await expect(substrate.killById?.('sbx-1')).resolves.toBe(true);
+
+    expect(killMock).toHaveBeenCalledWith('sbx-1', {
+      apiKey: 'test-key',
+      requestTimeoutMs: 120_000,
+    });
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('passes through false for a sandbox e2b does not know', async () => {
+    killMock.mockResolvedValueOnce(false);
+
+    await expect(substrate.killById?.('sbx-gone')).resolves.toBe(false);
   });
 });
