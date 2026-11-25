@@ -114,45 +114,27 @@ export async function resumeCone(
   const baselineUpdatedAt = entry.lastJoinUpdatedAt;
   const baselineTrayId = entry.trayId;
 
-  const handle = await deps.substrate.connect(entry.sandboxId);
-
-  let resumeIndex: ConeConfigIndex | undefined;
-
-  // New: coneConfigDelta takes precedence — read existing files, merge, write both.
-  if (opts.coneConfigDelta) {
-    const existingConeConfig = await readIfPresent(handle, '/slicc/cone-config.json');
-    const existingSecretsEnv = (await readIfPresent(handle, '/slicc/secrets.env')) ?? '';
-    const applied = applyConeConfigDelta(
-      existingConeConfig,
-      existingSecretsEnv,
-      opts.coneConfigDelta
-    );
-    await handle.writeFile('/slicc/secrets.env', applied.secretsEnv);
-    await handle.writeFile('/slicc/cone-config.json', applied.coneConfigJson);
-    // Reload the fetch-proxy masking so changed flat secrets take effect. Must
-    // succeed before the leader Page.reload — a silent failure here would leave
-    // the running cone with stale flat secrets while reporting resume success.
-    await reloadSecretsProxyUntilReady(handle);
-    resumeIndex = applied.index;
-  } else if (opts.refreshSecretsContents !== undefined) {
-    // Legacy path: both CLI and worker pass this now to inject a fresh IMS bearer.
-    // Write to /slicc/secrets.env BEFORE the kick loop.
-    await handle.writeFile('/slicc/secrets.env', opts.refreshSecretsContents);
+  // Opt in to e2b's one cold-boot retry: a sandbox paused while its guest was
+  // unresponsive can only come back from its disk (see ConnectOpts). It is
+  // never the first attempt, and it is surfaced as `coldBooted`, not hidden.
+  const handle = await deps.substrate.connect(entry.sandboxId, { rebootIfUnresponsive: true });
+  const coldBooted = handle.coldBooted === true;
+  if (coldBooted) {
+    console.warn('[cloud-core] resume cold-booted sandbox from disk (memory snapshot unusable)', {
+      sandboxId: entry.sandboxId,
+    });
   }
 
-  // Kick the leader to recover from a possible onReconnectGaveUp state.
-  // The URL prefix fix (085522542) makes the kick succeed on first attempt;
-  // the retry only covers the node-server cold-start window after resume.
-  const kicked = await kickLeaderUntilReady(handle);
-  if (!kicked) {
-    throw new CloudError(
-      'LEADER_NOT_READY',
-      `Failed to kick leader after ${RESUME_MAX_RETRIES} retries (sandbox may not be healthy)`
-    );
-  }
+  // Files first, so a hosted leader restarted after a cold boot reads them.
+  const resumeIndex = await writeResumeConfig(handle, opts);
+
+  // A fresh node-server loads secrets and boots the leader by itself; only a
+  // leader that was already running needs the proxy reload and the kick.
+  const leaderRestarted = coldBooted && (await ensureHostedLeader(handle));
+  if (!leaderRestarted) await refreshRunningLeader(handle, opts);
 
   const refreshed = await pollForRefreshedStatus(handle, baselineUpdatedAt, {
-    timeoutMs: opts.pollTimeoutMs ?? 60_000,
+    timeoutMs: opts.pollTimeoutMs ?? (coldBooted ? COLD_BOOT_POLL_TIMEOUT_MS : 60_000),
     intervalMs: opts.pollIntervalMs ?? 500,
   });
 
@@ -182,7 +164,98 @@ export async function resumeCone(
     trayRebuilt,
     ...(versionMismatch ? { versionMismatch } : {}),
     coneConfigIndex: resumeIndex,
+    ...(coldBooted ? { coldBooted: true } : {}),
   };
+}
+
+/**
+ * Write the resume-time cone config: merge `coneConfigDelta` into the files on
+ * disk (returns the new names index), or overwrite secrets.env with
+ * `refreshSecretsContents` (the legacy path both consumers still use for a
+ * fresh IMS bearer). Neither reloads the running node-server; see
+ * {@link refreshRunningLeader}.
+ */
+async function writeResumeConfig(
+  handle: SandboxHandle,
+  opts: ResumeConeOpts
+): Promise<ConeConfigIndex | undefined> {
+  if (opts.coneConfigDelta) {
+    const existingConeConfig = await readIfPresent(handle, '/slicc/cone-config.json');
+    const existingSecretsEnv = (await readIfPresent(handle, '/slicc/secrets.env')) ?? '';
+    const applied = applyConeConfigDelta(
+      existingConeConfig,
+      existingSecretsEnv,
+      opts.coneConfigDelta
+    );
+    await handle.writeFile('/slicc/secrets.env', applied.secretsEnv);
+    await handle.writeFile('/slicc/cone-config.json', applied.coneConfigJson);
+    return applied.index;
+  }
+  if (opts.refreshSecretsContents !== undefined) {
+    await handle.writeFile('/slicc/secrets.env', opts.refreshSecretsContents);
+  }
+  return undefined;
+}
+
+/**
+ * Make an already-running node-server pick up the resume: reload the
+ * fetch-proxy masking when the delta may have changed flat secrets, then kick
+ * the leader to recover from a possible onReconnectGaveUp state.
+ */
+async function refreshRunningLeader(handle: SandboxHandle, opts: ResumeConeOpts): Promise<void> {
+  // The reload must succeed before the leader Page.reload — a silent failure
+  // here would leave the running cone with stale flat secrets while reporting
+  // resume success.
+  if (opts.coneConfigDelta) await reloadSecretsProxyUntilReady(handle);
+
+  // The URL prefix fix (085522542) makes the kick succeed on first attempt;
+  // the retry only covers the node-server cold-start window after resume.
+  const kicked = await kickLeaderUntilReady(handle);
+  if (!kicked) {
+    throw new CloudError(
+      'LEADER_NOT_READY',
+      `Failed to kick leader after ${RESUME_MAX_RETRIES} retries (sandbox may not be healthy)`
+    );
+  }
+}
+
+// A cold boot restarts the OS, then node-server, Chromium and the leader page
+// before the leader re-registers its tray, so give the freshness poll more room.
+const COLD_BOOT_POLL_TIMEOUT_MS = 120_000;
+
+// Anything answering HTTP on :5710 (even a 404) means node-server is up; curl
+// fails only when nothing listens or the probe times out. The verdict goes to
+// stdout and the command itself always exits 0, because e2b's commands.run
+// throws CommandExitError on a non-zero exit instead of returning it.
+const LEADER_PROBE_CMD =
+  'curl -s -o /dev/null --max-time 5 http://localhost:5710/ && echo up || echo down';
+
+// The template's start command. The sandbox's create-time env vars still carry
+// the cone's ORIGINAL secrets/config, which start.sh would decode over the
+// newer files on disk; strip them so the files written above win.
+const LEADER_START_CMD =
+  'env -u SLICC_SECRETS_ENV_B64 -u SLICC_CONE_CONFIG_B64 -u ADOBE_IMS_TOKEN ' +
+  '-u ADOBE_IMS_TOKEN_DOMAINS /usr/local/bin/slicc-start';
+
+/**
+ * After a cold boot the hosted node-server is gone: e2b documents that a
+ * reboot terminates running processes, and the template's start command "runs
+ * once during template build". Start it again unless something already serves
+ * :5710. Returns true when it was (re)started.
+ */
+async function ensureHostedLeader(handle: SandboxHandle): Promise<boolean> {
+  const probe = await handle.run(LEADER_PROBE_CMD);
+  if (probe.stdout.trim() === 'up') return false;
+  if (!handle.spawn) {
+    throw new CloudError(
+      'SANDBOX_UNRESPONSIVE',
+      `Sandbox ${handle.sandboxId} was cold-booted from its disk, but the ${handle.substrate} ` +
+        'substrate cannot restart its hosted leader',
+      { sandboxId: handle.sandboxId }
+    );
+  }
+  await handle.spawn(LEADER_START_CMD);
+  return true;
 }
 
 const RESUME_MAX_RETRIES = 5;

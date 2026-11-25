@@ -24,7 +24,11 @@ export async function killCone(deps: KillConeDeps, query: string): Promise<KillC
 
   let alreadyDead = false;
   try {
-    const handle = await deps.substrate.connect(entry.sandboxId);
+    // Opt in to the cold-boot retry: a sandbox whose memory snapshot can't be
+    // restored (guest unresponsive at pause) must stay killable, or "kill and
+    // start a new cone" — the recovery SANDBOX_UNRESPONSIVE points to — would
+    // be impossible. Booting it from disk loses nothing the kill keeps.
+    const handle = await deps.substrate.connect(entry.sandboxId, { rebootIfUnresponsive: true });
     await handle.kill();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -1,5 +1,7 @@
-import { Sandbox } from 'e2b';
+import { GuestUnresponsiveError, Sandbox, SandboxNotFoundError } from 'e2b';
+import { CloudError } from '../errors.js';
 import type {
+  ConnectOpts,
   CreateOpts,
   RunResult,
   SandboxHandle,
@@ -46,12 +48,17 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
       });
       return wrap(sbx);
     },
-    async connect(sandboxId: string): Promise<SandboxHandle> {
-      const sbx = await Sandbox.connect(sandboxId, {
-        apiKey,
-        requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      });
-      return wrap(sbx);
+    async connect(sandboxId: string, opts?: ConnectOpts): Promise<SandboxHandle> {
+      const connectOpts = { apiKey, requestTimeoutMs: REQUEST_TIMEOUT_MS };
+      try {
+        // Always a plain memory restore first: a reboot drops running
+        // processes and unflushed writes, so it is never the default.
+        return wrap(await Sandbox.connect(sandboxId, connectOpts));
+      } catch (err) {
+        if (!isGuestUnresponsive(err)) throw err;
+        if (!opts?.rebootIfUnresponsive) throw unresponsiveError(sandboxId);
+      }
+      return rebootConnect(sandboxId, connectOpts);
     },
     async list(opts?: import('../substrate.js').ListOpts): Promise<SandboxSummary[]> {
       // The e2b SDK accepts query.metadata for server-side filtering.
@@ -87,10 +94,72 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
   };
 }
 
-function wrap(sbx: Sandbox): SandboxHandle {
+/**
+ * e2b refuses a memory restore with `GuestUnresponsiveError` (HTTP 409,
+ * `sandbox_snapshot_guest_agent_unresponsive`) when the paused sandbox's
+ * snapshot was taken while its guest agent (envd) was not responding. The
+ * SDK sets `name = 'GuestUnresponsiveError'`; matching on it as well covers a
+ * second copy of the SDK in a bundle, where `instanceof` would miss.
+ */
+function isGuestUnresponsive(err: unknown): boolean {
+  if (err instanceof GuestUnresponsiveError) return true;
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { name?: unknown }).name === 'GuestUnresponsiveError'
+  );
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The distinct "sandbox unresponsive" state callers can tell apart from a
+ * generic failure. `reboot` carries the cold-boot retry's error when that
+ * retry was attempted and failed too.
+ */
+function unresponsiveError(sandboxId: string, reboot?: { error: unknown }): CloudError {
+  const head =
+    `Sandbox ${sandboxId} is unresponsive: e2b cannot restore its memory snapshot because ` +
+    'the snapshot was taken while the sandbox guest agent was not responding.';
+  const tail = reboot
+    ? ` Cold-booting it from its disk failed too (${errText(reboot.error)}). The sandbox stays paused ` +
+      'with its disk and snapshot intact, so the resume can be retried; if it keeps failing, ' +
+      'kill the sandbox and start a new cone (this discards its disk).'
+    : ' Its disk is intact: resuming it cold-boots it from disk (running processes restart and ' +
+      'writes not flushed before the pause are lost), or kill it and start a new cone.';
+  return new CloudError('SANDBOX_UNRESPONSIVE', head + tail, { sandboxId });
+}
+
+/**
+ * The one retry after a `GuestUnresponsiveError`. Per e2b, `onResume: 'reboot'`
+ * "ignores any memory in the snapshot and cold-boots from disk state alone":
+ * the persisted filesystem survives, running processes do not, and "writes not
+ * flushed before the pause may be lost". A reboot that fails "leaves the
+ * sandbox paused with its snapshot intact", so a failure here is reported as
+ * SANDBOX_UNRESPONSIVE rather than a generic error. A sandbox that vanished in
+ * between keeps its not-found error so `killCone` can still clean up.
+ */
+async function rebootConnect(
+  sandboxId: string,
+  connectOpts: { apiKey: string; requestTimeoutMs: number }
+): Promise<SandboxHandle> {
+  let sbx: Sandbox;
+  try {
+    sbx = await Sandbox.connect(sandboxId, { ...connectOpts, onResume: 'reboot' });
+  } catch (err) {
+    if (err instanceof SandboxNotFoundError) throw err;
+    throw unresponsiveError(sandboxId, { error: err });
+  }
+  return wrap(sbx, true);
+}
+
+function wrap(sbx: Sandbox, coldBooted = false): SandboxHandle {
   return {
     sandboxId: sbx.sandboxId,
     substrate: 'e2b',
+    ...(coldBooted ? { coldBooted: true } : {}),
     async pause(): Promise<void> {
       await sbx.pause();
     },
@@ -122,6 +191,13 @@ function wrap(sbx: Sandbox): SandboxHandle {
         stderr: result.stderr,
         exitCode: result.exitCode,
       };
+    },
+    async spawn(cmd): Promise<void> {
+      // `background: true` returns once the process starts; `timeoutMs: 0`
+      // lifts the 60s default command timeout so a server can keep running.
+      // Disconnecting only stops the event stream; e2b keeps the process alive.
+      const proc = await sbx.commands.run(cmd, { background: true, timeoutMs: 0 });
+      await proc.disconnect();
     },
   };
 }

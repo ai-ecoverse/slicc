@@ -91,6 +91,13 @@ export interface ResumeResult {
   trayRebuilt: boolean;
   versionMismatch?: { running: string; local: string };
   coneConfigIndex?: ConeConfigIndex;
+  /**
+   * `true` when the sandbox's memory snapshot could not be restored (its guest
+   * was unresponsive when it was paused) and it was cold-booted from its disk:
+   * files flushed before the pause survived, but running work restarted and
+   * writes not flushed before the pause were lost. Callers must tell the user.
+   */
+  coldBooted?: boolean;
 }
 
 /**

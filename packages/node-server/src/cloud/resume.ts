@@ -29,3 +29,29 @@ export async function runResume(opts: RunResumeOpts): Promise<ResumeResult> {
     }
   );
 }
+
+/**
+ * Warnings `slicc --cloud resume` prints before the join URL. A cold boot is
+ * listed first: the user has to know that the sandbox came back from its disk
+ * and that in-flight work and unflushed writes did not survive.
+ */
+export function resumeWarnings(result: ResumeResult): string[] {
+  const warnings: string[] = [];
+  if (result.coldBooted) {
+    warnings.push(
+      'Warning: the sandbox could not be resumed with its memory (its guest was unresponsive ' +
+        'when it was paused), so it was cold-booted from its disk. Files saved before the pause ' +
+        'are intact, but running work restarted and writes not flushed before the pause were lost.'
+    );
+  }
+  if (result.versionMismatch) {
+    warnings.push(
+      `Warning: running sandbox is sliccVersion=${result.versionMismatch.running}, ` +
+        `local CLI is ${result.versionMismatch.local}. Proceeding anyway.`
+    );
+  }
+  if (result.trayRebuilt) {
+    warnings.push('Tray was rebuilt; existing followers must re-attach to the new join URL.');
+  }
+  return warnings;
+}

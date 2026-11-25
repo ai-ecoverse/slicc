@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SandboxHandle, SubstrateId } from '../src/index.js';
-import { type CloudError, killCone } from '../src/index.js';
+import type { ConnectOpts, SandboxHandle, SubstrateId } from '../src/index.js';
+import { CloudError, killCone } from '../src/index.js';
 import { MemRegistry, makeFakeSubstrate } from './fixtures/index.js';
 
 // Specialized handle for kill tests: allows controlled throw on kill.
@@ -166,5 +166,48 @@ describe('killCone', () => {
     const result = await killCone({ substrate, registry }, 'sbx-1');
     expect(result.alreadyDead).toBe(true);
     expect(registry.entries).toEqual([]);
+  });
+
+  it('opts in to the cold-boot retry so an unresponsive-guest sandbox stays killable', async () => {
+    const registry = new MemRegistry();
+    await registry.append({
+      sandboxId: 'sbx-1',
+      substrate: 'e2b',
+      createdAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      joinUrl: '',
+      state: 'paused',
+    });
+    const connectCalls: Array<{ sandboxId: string; opts?: ConnectOpts }> = [];
+    const substrate = makeFakeSubstrate({ handle: makeKillTestHandle(), connectCalls });
+
+    await killCone({ substrate, registry }, 'sbx-1');
+
+    expect(connectCalls).toEqual([{ sandboxId: 'sbx-1', opts: { rebootIfUnresponsive: true } }]);
+    expect(registry.entries).toEqual([]);
+  });
+
+  it('keeps the registry entry when even the cold boot fails (SANDBOX_UNRESPONSIVE)', async () => {
+    const registry = new MemRegistry();
+    await registry.append({
+      sandboxId: 'sbx-1',
+      substrate: 'e2b',
+      createdAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      joinUrl: '',
+      state: 'paused',
+    });
+    const substrate = makeFakeSubstrate({
+      connectError: new CloudError(
+        'SANDBOX_UNRESPONSIVE',
+        'Sandbox sbx-1 is unresponsive: cold-booting it from its disk failed too (boot timed out).'
+      ),
+    });
+
+    await expect(killCone({ substrate, registry }, 'sbx-1')).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.stringContaining('Registry entry NOT removed'),
+    });
+    expect(registry.entries).toHaveLength(1);
   });
 });
