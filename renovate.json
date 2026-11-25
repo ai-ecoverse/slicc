@@ -87,6 +87,11 @@
       "allowedVersions": "<7"
     },
     {
+      "description": "Keep openai on the exact version @earendil-works/pi-ai pins (1.1.0 pins openai 7.19.0) so npm dedupes one SDK copy for our Azure OpenAI provider and pi-ai's OpenAI-compatible providers. A newer webapp pin installs a second, larger copy beside pi-ai's: openai 7.59.0 (PR #4373) added +443.8 KiB of total JS, because AzureOpenAI instantiates every SDK resource and nothing tree-shakes. Lift this cap together with pi-ai's own openai pin, to the version pi-ai then pins.",
+      "matchPackageNames": ["openai"],
+      "allowedVersions": "<=7.19.0"
+    },
+    {
       "description": "Packages we carry a patch-package patch for (see patches/ and patches/patches.json). A bump orphans the version-pinned patch, so route these into one group, label them, and never automerge — the renovate-patch-reconcile workflow regenerates or removes the patch first, and the lint:patches guard blocks the merge until the patch matches the installed version. Keep this list in sync with patches/.",
       "matchPackageNames": [
         "@zenfs/core",
