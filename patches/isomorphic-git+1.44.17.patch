@@ -1,5 +1,5 @@
 diff --git a/node_modules/isomorphic-git/index.js b/node_modules/isomorphic-git/index.js
-index fa3e178..b223465 100644
+index 6b62bcd..11c9374 100644
 --- a/node_modules/isomorphic-git/index.js
 +++ b/node_modules/isomorphic-git/index.js
 @@ -3968,11 +3968,21 @@ async function readObjectPacked({
