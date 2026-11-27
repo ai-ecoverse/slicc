@@ -12,6 +12,7 @@ export type CloudErrorCode =
   | 'ALREADY_RUNNING'
   | 'LEADER_NOT_READY'
   | 'SANDBOX_NOT_READY'
+  | 'SANDBOX_UNRESPONSIVE'
   | 'CDP_NOT_READY'
   | 'CDP_ERROR'
   | 'DO_UNREACHABLE'

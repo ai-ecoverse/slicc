@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FileRegistry } from '../../src/cloud/registry-file.js';
-import { runResume } from '../../src/cloud/resume.js';
+import { resumeWarnings, runResume } from '../../src/cloud/resume.js';
 import { FakeSubstrate } from './fake-substrate.js';
 
 let dir: string;
@@ -295,5 +295,33 @@ describe('slicc --cloud resume', () => {
       path: '/slicc/secrets.env',
       contents: refreshBody,
     });
+  });
+});
+
+describe('resumeWarnings (what slicc --cloud resume prints)', () => {
+  const base = { sandboxId: 'fake-1', joinUrl: 'https://w/join/new', trayRebuilt: false };
+
+  it('prints nothing for a clean memory restore', () => {
+    expect(resumeWarnings(base)).toEqual([]);
+  });
+
+  it('tells the user first when the sandbox was cold-booted from its disk', () => {
+    const warnings = resumeWarnings({ ...base, coldBooted: true, trayRebuilt: true });
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toMatch(/cold-booted from its disk/);
+    expect(warnings[0]).toMatch(/writes not flushed before the pause were lost/);
+    expect(warnings[1]).toMatch(/Tray was rebuilt/);
+  });
+
+  it('keeps the version-mismatch and tray-rebuilt warnings', () => {
+    const warnings = resumeWarnings({
+      ...base,
+      trayRebuilt: true,
+      versionMismatch: { running: '3.2.2', local: '3.3.0' },
+    });
+    expect(warnings).toEqual([
+      'Warning: running sandbox is sliccVersion=3.2.2, local CLI is 3.3.0. Proceeding anyway.',
+      'Tray was rebuilt; existing followers must re-attach to the new join URL.',
+    ]);
   });
 });

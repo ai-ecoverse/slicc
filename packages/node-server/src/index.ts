@@ -66,7 +66,7 @@ import { runKill } from './cloud/kill.js';
 import { runList } from './cloud/list.js';
 import { runPause } from './cloud/pause.js';
 import { FileRegistry } from './cloud/registry-file.js';
-import { runResume } from './cloud/resume.js';
+import { resumeWarnings, runResume } from './cloud/resume.js';
 import { runStart } from './cloud/start.js';
 import { registerCloudStatusEndpoint, resolveJoinFilePath } from './cloud-status.js';
 import {
@@ -1767,15 +1767,7 @@ async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
         query: parsed.args.query,
         localSliccVersion,
       });
-      if (result.versionMismatch) {
-        console.warn(
-          `Warning: running sandbox is sliccVersion=${result.versionMismatch.running}, ` +
-            `local CLI is ${result.versionMismatch.local}. Proceeding anyway.`
-        );
-      }
-      if (result.trayRebuilt) {
-        console.warn('Tray was rebuilt; existing followers must re-attach to the new join URL.');
-      }
+      for (const warning of resumeWarnings(result)) console.warn(warning);
       console.log(`Resumed. Open: ${result.joinUrl}`);
       break;
     }

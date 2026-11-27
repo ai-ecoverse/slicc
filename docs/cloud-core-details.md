@@ -21,6 +21,54 @@ The template image itself is defined in `packages/dev-tools/e2b-template/`.
 Cloud-core orchestrates it but does not build it; template changes are shipped
 independently and pinned by alias.
 
+## <a name="unresponsive-guest"></a>Unresponsive guest — cold-boot resume
+
+e2b pauses a sandbox even when its guest agent (envd) is not answering (the
+default non-`strict` pause, and every timeout auto-pause that stays wedged), and
+marks the snapshot `envdUnresponsiveAtPause`. From SDK 2.63 a plain
+`Sandbox.connect` of such a sandbox throws `GuestUnresponsiveError` (HTTP 409,
+`sandbox_snapshot_guest_agent_unresponsive`): restoring that memory would bring
+the hung guest back. The only way back is `onResume: 'reboot'`, which per e2b
+"ignores any memory in the snapshot and cold-boots from disk state alone" —
+files written and flushed before the pause survive, running processes do not,
+and "writes not flushed before the pause may be lost". A reboot that fails
+"leaves the sandbox paused with its snapshot intact".
+
+`connect(id, { rebootIfUnresponsive: true })` (see `ConnectOpts` in
+`src/substrate.ts`) always tries a normal memory restore first, then retries
+**once** with `onResume: 'reboot'` and marks the handle `coldBooted`. Without
+the opt-in, or when the reboot fails too, it throws
+`CloudError('SANDBOX_UNRESPONSIVE')` with `details.sandboxId` — a distinct code
+callers can tell apart from `INTERNAL`. Who opts in:
+
+- **`resumeCone`** — yes. The memory is already unusable, so the disk is the
+  most state there is to keep. The cold boot is surfaced as
+  `ResumeResult.coldBooted` (the CLI prints a warning; cloud-core also logs a
+  `console.warn`). Because the template's start command "runs once during
+  template build", nothing is running after the boot: resume writes the config
+  files first, then probes `:5710` and, when nothing answers, starts
+  `/usr/local/bin/slicc-start` through `SandboxHandle.spawn` with the
+  create-time `SLICC_SECRETS_ENV_B64` / `SLICC_CONE_CONFIG_B64` /
+  `ADOBE_IMS_TOKEN*` vars stripped (they hold the cone's _original_ secrets and
+  config, which `start.sh` would decode over the newer files). A fresh
+  node-server boots the leader itself, so the proxy reload and kick are skipped
+  and the freshness poll gets 120s.
+- **`killCone`** — does not connect at all when the substrate has
+  `killById` (e2b: static `Sandbox.kill(id)`, `DELETE /sandboxes/{id}`), which
+  removes a running or paused sandbox without resuming it. A sandbox whose cold
+  boot fails too is therefore still killable, and "kill and start a new cone"
+  stays a real recovery. Substrates without `killById` connect first, with the
+  opt-in.
+- **`pauseCone`** — no; it reports `SANDBOX_UNRESPONSIVE` rather than rebooting
+  a sandbox just to pause it.
+
+After a cold boot e2b recommends pausing again to record a healthy snapshot; a
+rebooted sandbox that reaches its timeout without a pause reverts to the old
+snapshot. Cones use timeout auto-pause by default, and `--cloud pause` pauses
+explicitly. The worker does not yet forward `coldBooted` to the web client, and
+its `errCodeToStatus` maps `SANDBOX_UNRESPONSIVE` to 500 (the code itself does
+reach the error envelope).
+
 ## <a name="stable-contracts"></a>Stable Contracts — rationale
 
 ### `ConeEntry.state = 'reserved'`

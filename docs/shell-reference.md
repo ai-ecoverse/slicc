@@ -3431,7 +3431,7 @@ Laptop-side orchestration of cloud SLICC sandboxes via e2b.dev. Mutually exclusi
 - **`start [--name <label>] [--env-file <path>] [--substrate <id>]`** — create a sandbox, upload secrets, wait for join URL. Prints the tray join URL once the leader is ready.
 - **`list`** — show all known cloud sessions (registry + live state from e2b).
 - **`pause <sandboxId|name>`** — pause the sandbox; state preserved on e2b storage. The sandbox can be resumed later from the same state.
-- **`resume <sandboxId|name>`** — resume a paused sandbox; kicks `/api/leader-restart`, polls for refreshed join URL. Returns the new join URL.
+- **`resume <sandboxId|name>`** — resume a paused sandbox; kicks `/api/leader-restart`, polls for refreshed join URL. Returns the new join URL. If e2b cannot restore the sandbox's memory (its guest was unresponsive when it was paused), the sandbox is cold-booted from its disk once and a warning says so: files saved before the pause are kept, running work restarts, unflushed writes are lost. If that boot fails too, the error code is `SANDBOX_UNRESPONSIVE`.
 - **`kill <sandboxId|name>`** — destroy the sandbox; remove from registry. Irreversible.
 
 ### Registry

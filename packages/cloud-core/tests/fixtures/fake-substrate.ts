@@ -1,4 +1,5 @@
 import type {
+  ConnectOpts,
   CreateOpts,
   RunResult,
   SandboxHandle,
@@ -68,6 +69,8 @@ export interface FakeSubstrateOpts {
   handle?: SandboxHandle;
   /** If set, connect() throws this. Useful for not-found tests. */
   connectError?: Error;
+  /** Captures every connect() call, including the ConnectOpts it was given. */
+  connectCalls?: Array<{ sandboxId: string; opts?: ConnectOpts }>;
   /** Override create(); default returns the same handle. */
   onCreate?: (opts: CreateOpts) => Promise<SandboxHandle>;
   /** Captures all create() calls. */
@@ -91,7 +94,8 @@ export function makeFakeSubstrate(opts: FakeSubstrateOpts = {}): SandboxSubstrat
       if (opts.onCreate) return opts.onCreate(createOpts);
       return handle;
     },
-    async connect(_id: string) {
+    async connect(sandboxId: string, connectOpts?: ConnectOpts) {
+      opts.connectCalls?.push({ sandboxId, opts: connectOpts });
       if (opts.connectError) throw opts.connectError;
       return handle;
     },

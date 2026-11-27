@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { RunResult, SandboxHandle, SandboxInfo, SubstrateId } from '../src/index.js';
+import type {
+  ConnectOpts,
+  RunResult,
+  SandboxHandle,
+  SandboxInfo,
+  SubstrateId,
+} from '../src/index.js';
 import { CloudError, pauseCone } from '../src/index.js';
 import { MemRegistry, makeFakeSubstrate } from './fixtures/index.js';
 
@@ -182,5 +188,31 @@ describe('pauseCone', () => {
     const cloudErr = thrownErr as CloudError;
     expect(cloudErr.code).toBe('ALREADY_RUNNING');
     expect(cloudErr.message).toContain('being started/resumed');
+  });
+
+  it('does not cold-boot to pause: an unresponsive-guest sandbox fails as SANDBOX_UNRESPONSIVE', async () => {
+    const registry = new MemRegistry();
+    await registry.append({
+      sandboxId: 's-1',
+      substrate: 'e2b',
+      createdAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      state: 'running',
+      joinUrl: 'https://example.com/join',
+    });
+    const connectCalls: Array<{ sandboxId: string; opts?: ConnectOpts }> = [];
+    const substrate = makeFakeSubstrate({
+      connectCalls,
+      connectError: new CloudError('SANDBOX_UNRESPONSIVE', 'Sandbox s-1 is unresponsive', {
+        sandboxId: 's-1',
+      }),
+    });
+
+    await expect(pauseCone({ substrate, registry }, 's-1')).rejects.toMatchObject({
+      code: 'SANDBOX_UNRESPONSIVE',
+    });
+    // No opt-in: rebooting a sandbox only to pause it would be a silent restart.
+    expect(connectCalls).toEqual([{ sandboxId: 's-1', opts: undefined }]);
+    expect((await registry.findByNameOrId('s-1'))?.state).toBe('running');
   });
 });

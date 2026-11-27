@@ -24,8 +24,7 @@ export async function killCone(deps: KillConeDeps, query: string): Promise<KillC
 
   let alreadyDead = false;
   try {
-    const handle = await deps.substrate.connect(entry.sandboxId);
-    await handle.kill();
+    alreadyDead = !(await killSandbox(deps.substrate, entry.sandboxId));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // Only proceed with registry cleanup if substrate reports "not found".
@@ -44,4 +43,20 @@ export async function killCone(deps: KillConeDeps, query: string): Promise<KillC
   }
   await deps.registry.remove(entry.sandboxId);
   return { sandboxId: entry.sandboxId, alreadyDead };
+}
+
+/**
+ * Kill the sandbox; resolves `false` when the substrate reports it gone.
+ * Prefers the by-ID delete, which never resumes the sandbox: that keeps a
+ * sandbox whose memory snapshot cannot be restored killable even when its
+ * cold boot fails, so "kill and start a new cone" (the recovery
+ * SANDBOX_UNRESPONSIVE points to) always works, and no boot is paid for just
+ * to delete. Substrates without it must connect first; opting in to the
+ * cold-boot retry there loses nothing the kill would keep.
+ */
+async function killSandbox(substrate: SandboxSubstrate, sandboxId: string): Promise<boolean> {
+  if (substrate.killById) return substrate.killById(sandboxId);
+  const handle = await substrate.connect(sandboxId, { rebootIfUnresponsive: true });
+  await handle.kill();
+  return true;
 }
